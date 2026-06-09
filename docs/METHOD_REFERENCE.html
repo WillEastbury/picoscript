@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PicoScript Method Reference</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      color: #333;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      overflow: hidden;
+      display: flex;
+      min-height: 80vh;
+    }
+    .sidebar {
+      width: 250px;
+      background: #f5f5f5;
+      border-right: 1px solid #ddd;
+      overflow-y: auto;
+      padding: 20px;
+    }
+    .sidebar h3 {
+      font-size: 14px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+      margin-top: 20px;
+    }
+    .sidebar h3:first-child {
+      margin-top: 0;
+    }
+    .sidebar a {
+      display: block;
+      padding: 8px 12px;
+      color: #667eea;
+      text-decoration: none;
+      font-size: 13px;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      transition: all 0.2s;
+    }
+    .sidebar a:hover {
+      background: #e0e0e0;
+      color: #764ba2;
+    }
+    .sidebar a.active {
+      background: #667eea;
+      color: white;
+    }
+    .main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 40px;
+    }
+    h1 {
+      color: #667eea;
+      margin-bottom: 10px;
+      font-size: 32px;
+    }
+    .version {
+      color: #999;
+      font-size: 13px;
+      margin-bottom: 30px;
+    }
+    h2 {
+      color: #764ba2;
+      margin-top: 40px;
+      margin-bottom: 20px;
+      font-size: 24px;
+      border-bottom: 2px solid #667eea;
+      padding-bottom: 10px;
+    }
+    h2:first-of-type {
+      margin-top: 0;
+    }
+    .namespace-meta {
+      display: flex;
+      gap: 20px;
+      margin-bottom: 20px;
+      font-size: 13px;
+    }
+    .conformance {
+      padding: 4px 8px;
+      background: #e3f2fd;
+      color: #1976d2;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 30px;
+      font-size: 13px;
+    }
+    th {
+      background: #f5f5f5;
+      border: 1px solid #ddd;
+      padding: 12px;
+      text-align: left;
+      font-weight: 600;
+      color: #333;
+    }
+    td {
+      border: 1px solid #eee;
+      padding: 10px 12px;
+      vertical-align: top;
+    }
+    tr:hover {
+      background: #fafafa;
+    }
+    code {
+      background: #f5f5f5;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
+      font-size: 12px;
+      color: #d63384;
+    }
+    .method-name {
+      font-weight: 600;
+      color: #333;
+    }
+    .hook-code {
+      font-family: monospace;
+      background: #f0f0f0;
+      padding: 2px 6px;
+      border-radius: 3px;
+      color: #666;
+    }
+    .summary-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+      gap: 20px;
+      margin: 20px 0;
+    }
+    .summary-item {
+      background: #f9f9f9;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 15px;
+    }
+    .summary-item h3 {
+      color: #667eea;
+      margin-bottom: 10px;
+      font-size: 14px;
+    }
+    .summary-item ul {
+      list-style: none;
+      font-size: 12px;
+    }
+    .summary-item li {
+      padding: 4px 0;
+      color: #666;
+    }
+    .summary-item li code {
+      color: #764ba2;
+    }
+    pre {
+      background: #f5f5f5;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 12px;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.5;
+      margin: 15px 0;
+    }
+    .nav-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid #ddd;
+    }
+    button {
+      padding: 8px 16px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background: #f5f5f5;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.2s;
+    }
+    button:hover {
+      background: #e0e0e0;
+      border-color: #999;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <h3>Namespaces</h3>
+      <div id="namespace-links"></div>
+      <h3>Conformance</h3>
+      <div id="conformance-links"></div>
+    </div>
+    <div class="main">
+      <h1>PicoScript Method Reference</h1>
+      <p class="version">Version v0.3 (Lease-first, Case-insensitive v2 Language)</p>
+      
+      <p style="color: #666; margin-bottom: 20px;">
+        Comprehensive reference for all PicoScript methods. Choose a namespace from the left sidebar or search below.
+      </p>
+      
+      <input type="text" id="search" placeholder="Search methods..." 
+        style="width: 300px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; margin-bottom: 20px;">
+      
+      <div id="content"></div>
+    </div>
+  </div>
+
+  <script>
+    const data = [["Descriptor", "CopyBatch", 85, "L4"], ["Descriptor", "GetFlags", 84, "L4"], ["Descriptor", "GetLen", 83, "L4"], ["Descriptor", "GetPtr", 82, "L4"], ["Descriptor", "Make", 80, "L4"], ["Descriptor", "SetFlags", 81, "L4"], ["Dsp", "Concat", null, "L0"], ["Dsp", "Dequant", null, "L0"], ["Dsp", "Dot", null, "L0"], ["Dsp", "Embed", null, "L0"], ["Dsp", "Gelu", null, "L0"], ["Dsp", "Mask", null, "L0"], ["Dsp", "MatMul", null, "L0"], ["Dsp", "Norm", null, "L0"], ["Dsp", "Quant", null, "L0"], ["Dsp", "Relu", null, "L0"], ["Dsp", "Scale", null, "L0"], ["Dsp", "Softmax", null, "L0"], ["Dsp", "Split", null, "L0"], ["Dsp", "TopK", null, "L0"], ["Dsp", "Transpose", null, "L0"], ["Dsp", "VAdd", null, "L0"], ["Flow", "Branch", null, "L1"], ["Flow", "Call", null, "L1"], ["Flow", "Jump", null, "L1"], ["Flow", "Return", null, "L1"], ["Kernel", "FireSWIRQ", 3, "L6"], ["Kernel", "ProfileEnd", 5, "L6"], ["Kernel", "ProfileStart", 4, "L6"], ["Kernel", "TracePoint", 6, "L6"], ["Kernel", "WaitIRQ", 1, "L6"], ["Kernel", "WaitSWIRQ", 2, "L6"], ["Lease", "Acquire", 88, "L4"], ["Lease", "CachedValidate", 91, "L4"], ["Lease", "GetSpan", 92, "L4"], ["Lease", "GetTypeHint", 93, "L4"], ["Lease", "Release", 89, "L4"], ["Lease", "Validate", 90, "L4"], ["Math", "Add", null, "L1"], ["Math", "Div", null, "L1"], ["Math", "Inc", null, "L1"], ["Math", "Mul", null, "L1"], ["Math", "Sub", null, "L1"], ["Memory", "ArenaAlloc", 49, "L4"], ["Memory", "ArenaInit", 48, "L4"], ["Memory", "ArenaReset", 50, "L4"], ["Memory", "ArenaStats", 51, "L4"], ["Memory", "Peek", 52, "L4"], ["Memory", "Poke", 53, "L4"], ["Net", "Body", null, "L1"], ["Net", "Close", null, "L1"], ["Net", "Header", null, "L1"], ["Net", "Status", null, "L1"], ["Net", "Type", null, "L1"], ["Queue", "Depth", 18, "L5"], ["Queue", "Dequeue", 16, "L5"], ["Queue", "DequeueBatch", 19, "L5"], ["Queue", "Enqueue", 17, "L5"], ["Queue", "EnqueueBatch", 20, "L5"], ["Random", "U32", 32, "L4"], ["Span", "Make", 64, "L4"], ["Span", "Slice", 65, "L4"], ["Storage", "AddCard", 98, "L5"], ["Storage", "DeleteCard", 100, "L5"], ["Storage", "GetSchemaForPack", 96, "L5"], ["Storage", "Load", null, "L5"], ["Storage", "PatchCard", 101, "L5"], ["Storage", "Pipe", null, "L5"], ["Storage", "QueryCard", 103, "L5"], ["Storage", "ReadCard", 102, "L5"], ["Storage", "Save", null, "L5"], ["Storage", "SetSchemaForPack", 97, "L5"], ["Storage", "UpdateCard", 99, "L5"], ["Thread", "Raise", null, "L5"], ["Thread", "Skip", null, "L5"], ["Thread", "Wait", null, "L5"], ["Thread", "YieldCounted", 112, "L5"]];
+    
+    function renderNamespaces() {
+      const namespaces = [...new Set(data.map(m => m[0]))].sort();
+      const sidebar = document.getElementById('namespace-links');
+      namespaces.forEach(ns => {
+        const a = document.createElement('a');
+        a.href = '#' + ns.toLowerCase();
+        a.textContent = ns;
+        a.onclick = (e) => {
+          e.preventDefault();
+          showNamespace(ns);
+          document.querySelectorAll('.sidebar a').forEach(x => x.classList.remove('active'));
+          a.classList.add('active');
+        };
+        sidebar.appendChild(a);
+      });
+    }
+    
+    function renderConformance() {
+      const levels = ['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6'];
+      const sidebar = document.getElementById('conformance-links');
+      levels.forEach(level => {
+        const count = data.filter(m => m[3] === level).length;
+        if (count > 0) {
+          const a = document.createElement('a');
+          a.href = '#';
+          a.textContent = level + ' (' + count + ')';
+          a.onclick = (e) => {
+            e.preventDefault();
+            showConformance(level);
+          };
+          sidebar.appendChild(a);
+        }
+      });
+    }
+    
+    function showNamespace(ns) {
+      const methods = data.filter(m => m[0] === ns);
+      const content = document.getElementById('content');
+      const conformance = methods.length > 0 ? methods[0][3] : 'L0';
+      
+      let html = '<h2>' + ns + '</h2>';
+      html += '<div class="namespace-meta">';
+      html += '<div>Methods: <strong>' + methods.length + '</strong></div>';
+      html += '<div class="conformance">' + conformance + '</div>';
+      html += '</div>';
+      html += '<table><thead><tr><th>Method</th><th>Hook Code</th><th>v2 Example</th></tr></thead><tbody>';
+      
+      methods.forEach(m => {
+        const [nsName, method, hook, conf] = m;
+        const hookStr = hook !== null ? ('0x7' + hook.toString(16).padStart(3, '0').toUpperCase()) : '-';
+        html += '<tr><td class="method-name">' + method + '</td>';
+        html += '<td><code class="hook-code">' + hookStr + '</code></td>';
+        html += '<td><code>' + nsName + '.' + method + '(...)</code></td></tr>';
+      });
+      
+      html += '</tbody></table>';
+      content.innerHTML = html;
+    }
+    
+    function showConformance(level) {
+      const methods = data.filter(m => m[3] === level);
+      const content = document.getElementById('content');
+      const byNs = {};
+      
+      methods.forEach(m => {
+        if (!byNs[m[0]]) byNs[m[0]] = [];
+        byNs[m[0]].push(m);
+      });
+      
+      let html = '<h2>Conformance Level ' + level + '</h2>';
+      html += '<p>' + methods.length + ' methods</p>';
+      html += '<div class="summary-list">';
+      
+      Object.keys(byNs).sort().forEach(ns => {
+        html += '<div class="summary-item">';
+        html += '<h3>' + ns + '</h3>';
+        html += '<ul>';
+        byNs[ns].forEach(m => {
+          html += '<li><code>' + m[1] + '</code></li>';
+        });
+        html += '</ul></div>';
+      });
+      
+      html += '</div>';
+      content.innerHTML = html;
+    }
+    
+    document.getElementById('search').addEventListener('input', (e) => {
+      const query = e.target.value.toLowerCase();
+      const filtered = data.filter(m => 
+        m[0].toLowerCase().includes(query) || 
+        m[1].toLowerCase().includes(query)
+      );
+      
+      if (filtered.length === 0) {
+        document.getElementById('content').innerHTML = '<p style="color: #999;">No methods found.</p>';
+        return;
+      }
+      
+      const byNs = {};
+      filtered.forEach(m => {
+        if (!byNs[m[0]]) byNs[m[0]] = [];
+        byNs[m[0]].push(m);
+      });
+      
+      let html = '<p>' + filtered.length + ' methods found</p>';
+      Object.keys(byNs).sort().forEach(ns => {
+        html += '<h3>' + ns + '</h3><table><thead><tr><th>Method</th><th>Hook</th></tr></thead><tbody>';
+        byNs[ns].forEach(m => {
+          const hookStr = m[2] !== null ? ('0x7' + m[2].toString(16).padStart(3, '0').toUpperCase()) : '-';
+          html += '<tr><td>' + m[1] + '</td><td><code>' + hookStr + '</code></td></tr>';
+        });
+        html += '</tbody></table>';
+      });
+      
+      document.getElementById('content').innerHTML = html;
+    });
+    
+    renderNamespaces();
+    renderConformance();
+    showNamespace('Kernel');
+    document.querySelectorAll('.sidebar a')[0].classList.add('active');
+  </script>
+</body>
+</html>

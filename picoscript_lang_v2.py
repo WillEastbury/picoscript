@@ -96,6 +96,31 @@ NAMESPACE_MAP = {
     "Locale": {"GetCurrent": OP_NOOP, "SetCurrent": OP_NOOP,
                "Format": OP_NOOP, "Parse": OP_NOOP, "GetLanguage": OP_NOOP,
                "GetRegion": OP_NOOP, "ToLocalTime": OP_NOOP},
+    # NEW: Environment and Context (lazy/on-demand)
+    "Environment": {"GetEnvVar": OP_NOOP, "GetSystemTime": OP_NOOP,
+                    "GetMemoryAvailable": OP_NOOP, "GetCpuLoad": OP_NOOP,
+                    "GetProcessId": OP_NOOP, "GetHostname": OP_NOOP,
+                    "GetTimezone": OP_NOOP, "GetVersion": OP_NOOP,
+                    "GetDebugMode": OP_NOOP},
+    "Context": {"GetUser": OP_NOOP, "GetStoredRequest": OP_NOOP,
+                "GetScratchBucket": OP_NOOP, "GetPermissions": OP_NOOP,
+                "GetHeaders": OP_NOOP, "GetPort": OP_NOOP, "GetHost": OP_NOOP,
+                "GetVerb": OP_NOOP, "GetPath": OP_NOOP, "GetQueryString": OP_NOOP,
+                "SetScratchValue": OP_NOOP, "GetScratchValue": OP_NOOP,
+                "GetRemoteAddr": OP_NOOP, "GetContentType": OP_NOOP,
+                "GetContentLength": OP_NOOP},
+    # NEW: Cryptography (userland hashing, kernel-wrapped keyed ops)
+    "Crypto": {
+        # Userland hashing (no secrets, hardware-accelerated)
+        "Sha256": OP_NOOP, "Sha512": OP_NOOP, "Blake2b": OP_NOOP, "Blake3": OP_NOOP,
+        "Sha1": OP_NOOP, "Md5": OP_NOOP,  # Legacy hashes (compat)
+        # Kernel-wrapped keyed operations (secure key material)
+        "HmacSha256": OP_NOOP, "HmacSha512": OP_NOOP,
+        "Sign": OP_NOOP, "Verify": OP_NOOP,
+        "Encrypt": OP_NOOP, "Decrypt": OP_NOOP,
+        # Incremental hashing for large data
+        "DigestInit": OP_NOOP, "DigestUpdate": OP_NOOP, "DigestFinal": OP_NOOP,
+    },
 }
 
 # Host hooks (v1, stable)
@@ -155,7 +180,41 @@ for i, (ns, method) in enumerate([
 ], 0xC0):
     HOST_HOOK_CODES[(ns, method)] = i
 
+# Environment.* (system info) - lazy/on-demand accessors
+for i, (ns, method) in enumerate([
+    ("Environment", "GetEnvVar"), ("Environment", "GetSystemTime"),
+    ("Environment", "GetMemoryAvailable"), ("Environment", "GetCpuLoad"),
+    ("Environment", "GetProcessId"), ("Environment", "GetHostname"),
+    ("Environment", "GetTimezone"), ("Environment", "GetVersion"),
+    ("Environment", "GetDebugMode"),
+], 0xD0):
+    HOST_HOOK_CODES[(ns, method)] = i
 
+# Context.* (execution context) - lazy/on-demand lazy accessors for expensive data
+for i, (ns, method) in enumerate([
+    ("Context", "GetUser"), ("Context", "GetStoredRequest"),
+    ("Context", "GetScratchBucket"), ("Context", "GetPermissions"),
+    ("Context", "GetHeaders"), ("Context", "GetPort"), ("Context", "GetHost"),
+    ("Context", "GetVerb"), ("Context", "GetPath"), ("Context", "GetQueryString"),
+    ("Context", "SetScratchValue"), ("Context", "GetScratchValue"),
+    ("Context", "GetRemoteAddr"), ("Context", "GetContentType"),
+    ("Context", "GetContentLength"),
+], 0xE0):
+    HOST_HOOK_CODES[(ns, method)] = i
+
+# Crypto.* (userland hashing + kernel-wrapped keyed ops)
+for i, (ns, method) in enumerate([
+    # Userland hashing (stateless, hardware-accelerated, no secret keys)
+    ("Crypto", "Sha256"), ("Crypto", "Sha512"), ("Crypto", "Blake2b"), ("Crypto", "Blake3"),
+    ("Crypto", "Sha1"), ("Crypto", "Md5"),
+    # Kernel-wrapped (secure key material, audit logging)
+    ("Crypto", "HmacSha256"), ("Crypto", "HmacSha512"),
+    ("Crypto", "Sign"), ("Crypto", "Verify"),
+    ("Crypto", "Encrypt"), ("Crypto", "Decrypt"),
+    # Incremental hashing for streaming large data
+    ("Crypto", "DigestInit"), ("Crypto", "DigestUpdate"), ("Crypto", "DigestFinal"),
+], 0xF0):
+    HOST_HOOK_CODES[(ns, method)] = i
 # ═══════════════════════════════════════════════════════════════════════
 # Tokenizer: case-insensitive, whitespace-ignorant
 # ═══════════════════════════════════════════════════════════════════════
@@ -535,27 +594,41 @@ class Parser:
 # ═══════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # Test case-insensitive, whitespace-ignorant parsing
+    # Test case-insensitive, whitespace-ignorant parsing with new namespaces
     source = """
-IF R0 EQ 42 THEN
-    String.Concat(R1, R2, R3)
-    Number.Format(R4, R3, 2)
-ELSE
-    Maths.Sqrt(R5, R6)
+// Cheap path: query and verb are pre-cached in CPU registers
+VERB = Context.GetVerb()
+PATH = Context.GetPath()
+REMOTE = Context.GetRemoteAddr()
+
+IF VERB EQ "POST" THEN
+    // Only decode expensive data when needed
+    USER_ID = Context.GetUser()
+    PERMS = Context.GetPermissions()
+    String.Concat(USER_ID, PERMS, R1)
 ENDIF
 
-WHILE R9 LT 100
-    Maths.Add(R9, R9, 1)
-ENDWHILE
+// System info and environment
+NOW = Environment.GetSystemTime()
+PID = Environment.GetProcessId()
+MEM = Environment.GetMemoryAvailable()
+
+// Math and number formatting
+Math.Sqrt(R5, 16)
+Number.Format(R6, 3, 2)
+
+// Scratch bucket for state passing
+Context.SetScratchValue("request_id", R7)
+REQ_ID = Context.GetScratchValue("request_id")
 """
 
-    print("=== PicoScript v2 Parser Demo ===\n")
+    print("=== PicoScript v2: Lazy Context + Environment Demo ===\n")
     print("Source:")
     print(source)
-    print("\n=== Tokenization ===")
+    print("\n=== Tokenization (first 50 tokens) ===")
     tokenizer = Tokenizer(source)
     tokens = tokenizer.tokenize()
-    for i, tok in enumerate(tokens[:30]):  # Show first 30
+    for i, tok in enumerate(tokens[:50]):
         print(f"{i}: {tok}")
     
     print("\n=== Parsing ===")

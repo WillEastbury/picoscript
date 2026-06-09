@@ -193,6 +193,8 @@ NAMESPACE_MAP = {
         "ArenaAlloc": OP_NOOP,
         "ArenaReset": OP_NOOP,
         "ArenaStats": OP_NOOP,
+        "Peek":       OP_NOOP,  # Read typed memory at offset
+        "Poke":       OP_NOOP,  # Write typed memory at offset
     },
     "Span": {
         "Make":  OP_NOOP,
@@ -248,6 +250,8 @@ HOST_HOOK_CODES = {
     ("Memory", "ArenaAlloc"):   0x31,
     ("Memory", "ArenaReset"):   0x32,
     ("Memory", "ArenaStats"):   0x33,
+    ("Memory", "Peek"):         0x34,
+    ("Memory", "Poke"):         0x35,
     # Span hooks
     ("Span", "Make"):           0x40,
     ("Span", "Slice"):          0x41,
