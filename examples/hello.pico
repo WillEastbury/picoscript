@@ -1,0 +1,6 @@
+// hello.pico -- Serve a static HTML page
+Net.Status(200);
+Net.Type("text/html");
+Net.Body();
+Storage.Pipe(0, 1, 0, R0);
+Flow.Return();

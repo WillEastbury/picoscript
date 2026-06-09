@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run PicoScript demos
+        run: |
+          python3 picoscript_lang.py
+          python3 picoscript.py
+          python3 picoscript_opcodes.py
