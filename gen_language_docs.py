@@ -1,0 +1,629 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Generate comprehensive METHOD_DOCS.html with examples and tree view"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+import picoscript_lang as lang
+
+# Method documentation with signatures, descriptions, examples
+METHOD_DOCS = {
+    'Memory.Peek': {
+        'signature': 'Memory.Peek(lease_handle, offset, type_hint) -> value',
+        'level': 'L4',
+        'description': 'Read typed memory from a leased arena at given offset. Returns value according to type_hint (INT8, INT32, INT64, FLOAT32, FLOAT64, POINTER, OBJECT, JSON, BINARY).',
+        'parameters': [
+            {'name': 'lease_handle', 'type': 'handle', 'desc': 'Valid lease handle from Memory.Allocate'},
+            {'name': 'offset', 'type': 'int', 'desc': 'Byte offset within leased memory'},
+            {'name': 'type_hint', 'type': 'TypeHint', 'desc': 'Expected type: INT8, INT32, INT64, FLOAT32, FLOAT64, POINTER, OBJECT, JSON, BINARY'},
+        ],
+        'returns': 'Typed value at offset (cast to type_hint)',
+        'v1_example': 'Memory.Peek(handle, 0, TypeHint.INT32);',
+        'v2_example': '''LET value = Memory.Peek(handle, 0, TypeHint.INT32)
+IF value > 100 THEN
+  // Process high value
+ENDIF''',
+        'how_to_use': 'Use Peek to read structured data from leased memory without copying. Type hints ensure correct interpretation. Offset validation is host-enforced via lease.',
+    },
+    'Memory.Poke': {
+        'signature': 'Memory.Poke(lease_handle, offset, type_hint, value) -> void',
+        'level': 'L4',
+        'description': 'Write typed value to leased memory at given offset. Host enforces lease bounds and type compatibility.',
+        'parameters': [
+            {'name': 'lease_handle', 'type': 'handle', 'desc': 'Valid lease handle from Memory.Allocate'},
+            {'name': 'offset', 'type': 'int', 'desc': 'Byte offset within leased memory'},
+            {'name': 'type_hint', 'type': 'TypeHint', 'desc': 'Value type: INT8, INT32, INT64, FLOAT32, FLOAT64, POINTER, OBJECT, JSON, BINARY'},
+            {'name': 'value', 'type': 'any', 'desc': 'Value to write (must match type_hint)'},
+        ],
+        'returns': 'void',
+        'v1_example': 'Memory.Poke(handle, 0, TypeHint.INT32, 42);',
+        'v2_example': '''LET result = 0
+FOREACH item AS x IN items THEN
+  LET result = result + x
+ENDFOREACH
+Memory.Poke(handle, 0, TypeHint.INT32, result)''',
+        'how_to_use': 'Use Poke to write struct fields or counters back to leased memory. Host validates offset and bounds at runtime. No intermediate buffer copies needed.',
+    },
+    'String.Concat': {
+        'signature': 'String.Concat(s1, s2, ...) -> string',
+        'level': 'L4',
+        'description': 'Concatenate one or more strings into a single result. Variadic; accepts 2+ arguments.',
+        'parameters': [
+            {'name': 's1, s2, ...', 'type': 'string', 'desc': 'Strings to concatenate (2 or more)'},
+        ],
+        'returns': 'Concatenated string',
+        'v1_example': 'String.Concat("Hello", " ", "World");',
+        'v2_example': '''LET first = "John"
+LET last = "Doe"
+LET full_name = String.Concat(first, " ", last)
+Queue.Enqueue(full_name)''',
+        'how_to_use': 'Use Concat to build messages or format output. Zero-copy when possible; host may optimize adjacent literals at compile time.',
+    },
+    'String.Length': {
+        'signature': 'String.Length(s) -> int',
+        'level': 'L4',
+        'description': 'Return byte length of a string (UTF-8 aware). O(1) operation.',
+        'parameters': [
+            {'name': 's', 'type': 'string', 'desc': 'String to measure'},
+        ],
+        'returns': 'Byte length',
+        'v1_example': 'String.Length("hello");',
+        'v2_example': '''LET name = "Alice"
+LET len = String.Length(name)
+IF len > 20 THEN
+  LET truncated = String.Substring(name, 0, 20)
+ENDIF''',
+        'how_to_use': 'Check string bounds before substring operations. Always O(1) since host pre-caches lengths.',
+    },
+    'Queue.Enqueue': {
+        'signature': 'Queue.Enqueue(message) -> void',
+        'level': 'L1',
+        'description': 'Push a message onto the outbound task queue. Non-blocking; host buffers until space runs out.',
+        'parameters': [
+            {'name': 'message', 'type': 'string|object', 'desc': 'Message to enqueue (typically JSON or binary descriptor)'},
+        ],
+        'returns': 'void',
+        'v1_example': 'Queue.Enqueue("task_complete");',
+        'v2_example': '''LET result = String.Concat("status:", status_code)
+Queue.Enqueue(result)''',
+        'how_to_use': 'Use Enqueue to emit results back to the kernel. Multiple calls fill the queue; if queue overflows, script is blocked until kernel drains.',
+    },
+    'Queue.Dequeue': {
+        'signature': 'Queue.Dequeue() -> message | null',
+        'level': 'L1',
+        'description': 'Pop the oldest message from inbound queue. Blocks if queue is empty; unblocked when kernel enqueues new work.',
+        'parameters': [],
+        'returns': 'Message from queue, or null if queue was closed',
+        'v1_example': 'Queue.Dequeue();',
+        'v2_example': '''WHILE true THEN
+  LET msg = Queue.Dequeue()
+  IF msg == null THEN
+    BREAK
+  ENDIF
+  // Process msg
+ENDWHILE''',
+        'how_to_use': 'Call Dequeue in a loop to pull work items. Host ensures fairness and prevents starvation.',
+    },
+    'Lease.Acquire': {
+        'signature': 'Lease.Acquire(span, type_hint) -> handle',
+        'level': 'L4',
+        'description': 'Acquire a lease (capability) for typed access to a span. Returns opaque handle. Host validates type_hint against access context.',
+        'parameters': [
+            {'name': 'span', 'type': 'Span', 'desc': 'Span (offset+length) to lease'},
+            {'name': 'type_hint', 'type': 'TypeHint', 'desc': 'Declared type: INT32, OBJECT, JSON, etc.'},
+        ],
+        'returns': 'Lease handle (opaque)',
+        'v1_example': 'Lease.Acquire(my_span, TypeHint.JSON);',
+        'v2_example': '''LET span = Span.Make(0, 1024)
+LET handle = Lease.Acquire(span, TypeHint.JSON)
+Lease.Validate(handle)
+LET data = Memory.Peek(handle, 0, TypeHint.OBJECT)
+Lease.Release(handle)''',
+        'how_to_use': 'Use Acquire to get safe, typed access to memory regions. Always validate and release to prevent resource exhaustion.',
+    },
+    'Context.GetUser': {
+        'signature': 'Context.GetUser() -> user_id',
+        'level': 'L5',
+        'description': 'Get current request user ID. Lazy-decoded on first call; subsequent calls return cached value.',
+        'parameters': [],
+        'returns': 'User identifier (string)',
+        'v1_example': 'Context.GetUser();',
+        'v2_example': '''LET user = Context.GetUser()
+LET msg = String.Concat("Processing for user: ", user)
+Queue.Enqueue(msg)''',
+        'how_to_use': 'Use GetUser once at script start and cache the result. Avoids repeated FIFO decode overhead.',
+    },
+    'Context.GetVerb': {
+        'signature': 'Context.GetVerb() -> string',
+        'level': 'L5',
+        'description': 'Get HTTP verb (GET, POST, PUT, DELETE, etc.). Pre-cached; O(1) access.',
+        'parameters': [],
+        'returns': 'HTTP method (GET, POST, etc.)',
+        'v1_example': 'Context.GetVerb();',
+        'v2_example': '''LET verb = Context.GetVerb()
+IF verb == "POST" THEN
+  // Handle POST
+ELSE
+  IF verb == "GET" THEN
+    // Handle GET
+  ENDIF
+ENDIF''',
+        'how_to_use': 'Cached in registers; use freely. Branch on verb to route request to appropriate handler.',
+    },
+    'Crypto.HmacSha256': {
+        'signature': 'Crypto.HmacSha256(key, message) -> signature',
+        'level': 'L6',
+        'description': 'Compute HMAC-SHA256. If key is script-owned, executes in userland (fast). If key is system handle, goes via kernel FIFO (audit-logged).',
+        'parameters': [
+            {'name': 'key', 'type': 'string|handle', 'desc': 'Secret key (string=userland, handle=kernel)'},
+            {'name': 'message', 'type': 'string', 'desc': 'Message to sign'},
+        ],
+        'returns': 'Signature (hex string or binary)',
+        'v1_example': 'Crypto.HmacSha256("my_secret", "data");',
+        'v2_example': '''LET session_token = "abc123token"
+LET request_data = "user=alice&action=read"
+LET sig = Crypto.HmacSha256(session_token, request_data)
+LET result = String.Concat("X-Signature: ", sig)
+Queue.Enqueue(result)''',
+        'how_to_use': 'Use userland HMAC for session token signing (fast path). Use kernel HMAC for infrastructure keys (audit trail, key protection).',
+    },
+    'Environment.GetSystemTime': {
+        'signature': 'Environment.GetSystemTime() -> timestamp',
+        'level': 'L5',
+        'description': 'Get current system time in milliseconds since epoch. Returns deterministic value within dispatch window.',
+        'parameters': [],
+        'returns': 'Milliseconds since 1970-01-01 00:00:00 UTC',
+        'v1_example': 'Environment.GetSystemTime();',
+        'v2_example': '''LET start_time = Environment.GetSystemTime()
+// Do work
+LET end_time = Environment.GetSystemTime()
+LET elapsed = end_time - start_time
+Queue.Enqueue(String.Format("Elapsed: {}ms", elapsed))''',
+        'how_to_use': 'Use for elapsed-time measurement and audit logging. Value is frozen at script start for determinism.',
+    },
+    'Storage.ReadCard': {
+        'signature': 'Storage.ReadCard(pack_id, card_id) -> card_data',
+        'level': 'L5',
+        'description': 'Read a card (record) from persistent storage. Backend is swappable (Picowal, S3, etc.). Blocks until host retrieves data.',
+        'parameters': [
+            {'name': 'pack_id', 'type': 'string', 'desc': 'Pack/collection identifier'},
+            {'name': 'card_id', 'type': 'string', 'desc': 'Card/record identifier'},
+        ],
+        'returns': 'Card data (JSON or binary)',
+        'v1_example': 'Storage.ReadCard("users", "user_42");',
+        'v2_example': '''LET user_id = Context.GetUser()
+LET card = Storage.ReadCard("users", user_id)
+IF card != null THEN
+  LET name = card.name
+  Queue.Enqueue(String.Concat("Hello, ", name))
+ENDIF''',
+        'how_to_use': 'Use ReadCard for user profile lookups and audit data retrieval. Host validates permissions before exposing data.',
+    },
+    'DateTime.GetNow': {
+        'signature': 'DateTime.GetNow() -> datetime',
+        'level': 'L4',
+        'description': 'Get current date/time as structured object (year, month, day, hour, minute, second).',
+        'parameters': [],
+        'returns': 'DateTime object',
+        'v1_example': 'DateTime.GetNow();',
+        'v2_example': '''LET now = DateTime.GetNow()
+LET year = now.year
+LET month = now.month
+LET formatted = String.Format("{}-{:02d}-{:02d}", year, month, now.day)
+Queue.Enqueue(formatted)''',
+        'how_to_use': 'Use to timestamp log entries and events. Avoid wall-clock logic in deterministic profiles.',
+    },
+    'Thread.YieldCounted': {
+        'signature': 'Thread.YieldCounted(count) -> void',
+        'level': 'L3',
+        'description': 'Yield after N operations to allow preemption. Hint to scheduler; non-blocking.',
+        'parameters': [
+            {'name': 'count', 'type': 'int', 'desc': 'Operations since last yield'},
+        ],
+        'returns': 'void',
+        'v1_example': 'Thread.YieldCounted(1000);',
+        'v2_example': '''LET op_count = 0
+FOREACH item AS x IN large_array THEN
+  // Process item
+  LET op_count = op_count + 1
+  IF op_count > 1000 THEN
+    Thread.YieldCounted(op_count)
+    LET op_count = 0
+  ENDIF
+ENDFOREACH''',
+        'how_to_use': 'Use in tight loops to prevent starvation. Scheduler may pre-empt or continue based on load.',
+    },
+}
+
+# Generate comprehensive HTML with tree view
+html = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PicoScript Language Documentation</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, monospace;
+      color: #333;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container {
+      max-width: 1600px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      overflow: hidden;
+      display: flex;
+      min-height: 90vh;
+    }
+    .sidebar {
+      width: 300px;
+      background: #f5f5f5;
+      border-right: 1px solid #ddd;
+      overflow-y: auto;
+      padding: 20px;
+    }
+    .sidebar h2 {
+      font-size: 16px;
+      color: #667eea;
+      margin-bottom: 15px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .tree-item {
+      margin-bottom: 3px;
+    }
+    .tree-toggle {
+      cursor: pointer;
+      user-select: none;
+      display: block;
+      padding: 8px 12px;
+      color: #666;
+      text-decoration: none;
+      border-radius: 4px;
+      transition: all 0.2s;
+      font-size: 13px;
+    }
+    .tree-toggle:hover {
+      background: #e0e0e0;
+      color: #333;
+    }
+    .tree-toggle.active {
+      background: #667eea;
+      color: white;
+    }
+    .tree-children {
+      display: none;
+      margin-left: 10px;
+      border-left: 1px solid #ddd;
+      padding-left: 5px;
+    }
+    .tree-children.open {
+      display: block;
+    }
+    .tree-toggle span.arrow {
+      display: inline-block;
+      margin-right: 6px;
+      transition: transform 0.2s;
+      font-size: 11px;
+    }
+    .tree-toggle.collapsed span.arrow {
+      transform: rotate(-90deg);
+    }
+    .main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 40px;
+    }
+    h1 {
+      color: #667eea;
+      margin-bottom: 30px;
+      font-size: 36px;
+    }
+    .doc-header {
+      margin-bottom: 30px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid #667eea;
+    }
+    .doc-header h2 {
+      color: #764ba2;
+      font-size: 28px;
+      margin-bottom: 10px;
+    }
+    .meta {
+      display: flex;
+      gap: 20px;
+      font-size: 13px;
+      color: #666;
+      flex-wrap: wrap;
+    }
+    .meta-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .conformance {
+      padding: 4px 12px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border-radius: 20px;
+      font-weight: 600;
+      font-size: 12px;
+    }
+    .section {
+      margin-bottom: 30px;
+    }
+    .section-title {
+      color: #667eea;
+      font-size: 14px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 12px;
+      margin-top: 20px;
+    }
+    .signature {
+      background: #f5f5f5;
+      border-left: 4px solid #667eea;
+      padding: 12px;
+      border-radius: 4px;
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+      font-size: 13px;
+      color: #333;
+      margin-bottom: 15px;
+      line-height: 1.6;
+    }
+    .description {
+      color: #555;
+      line-height: 1.7;
+      margin-bottom: 15px;
+      font-size: 14px;
+    }
+    .parameters {
+      background: #f9f9f9;
+      border: 1px solid #eee;
+      border-radius: 4px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+    .param {
+      margin-bottom: 12px;
+      font-size: 13px;
+    }
+    .param:last-child {
+      margin-bottom: 0;
+    }
+    .param-name {
+      font-family: monospace;
+      color: #d63384;
+      font-weight: 600;
+    }
+    .param-type {
+      color: #667eea;
+      font-weight: 600;
+    }
+    .param-desc {
+      color: #666;
+      margin-top: 4px;
+      line-height: 1.5;
+    }
+    code {
+      background: #f5f5f5;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 12px;
+      color: #d63384;
+    }
+    .code-block {
+      background: #2d2d2d;
+      color: #f8f8f2;
+      border-radius: 6px;
+      padding: 15px;
+      overflow-x: auto;
+      margin-bottom: 15px;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .code-label {
+      color: #999;
+      font-size: 11px;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .kw { color: #66d9ef; }
+    .str { color: #e6db74; }
+    .num { color: #ae81ff; }
+    .fn { color: #a6e22e; }
+    .cmt { color: #75715e; }
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #999;
+    }
+    .empty-state h3 {
+      margin-bottom: 10px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <h2>Language Features</h2>
+      <div id="tree"></div>
+    </div>
+    <div class="main">
+      <h1>PicoScript v2 Documentation</h1>
+      <div id="content">
+        <div class="empty-state">
+          <h3>Select a method from the tree on the left</h3>
+          <p>Click to view documentation, examples, and code samples</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const docs = ''' + __import__('json').dumps(METHOD_DOCS) + ''';
+    
+    function buildTree() {
+      const namespaces = {};
+      for (const key in docs) {
+        const [ns, method] = key.split('.');
+        if (!namespaces[ns]) namespaces[ns] = [];
+        namespaces[ns].push(method);
+      }
+      
+      const tree = document.getElementById('tree');
+      Object.keys(namespaces).sort().forEach(ns => {
+        const nsDiv = document.createElement('div');
+        nsDiv.className = 'tree-item';
+        
+        const toggle = document.createElement('a');
+        toggle.className = 'tree-toggle collapsed';
+        toggle.textContent = '▶ ' + ns;
+        toggle.onclick = (e) => {
+          e.preventDefault();
+          toggle.classList.toggle('collapsed');
+          children.classList.toggle('open');
+        };
+        nsDiv.appendChild(toggle);
+        
+        const children = document.createElement('div');
+        children.className = 'tree-children';
+        
+        namespaces[ns].sort().forEach(method => {
+          const methodLink = document.createElement('a');
+          methodLink.className = 'tree-toggle';
+          methodLink.textContent = '• ' + method;
+          methodLink.onclick = (e) => {
+            e.preventDefault();
+            showDoc(ns + '.' + method);
+            document.querySelectorAll('.tree-toggle').forEach(x => x.classList.remove('active'));
+            methodLink.classList.add('active');
+          };
+          children.appendChild(methodLink);
+        });
+        
+        nsDiv.appendChild(children);
+        tree.appendChild(nsDiv);
+      });
+    }
+    
+    function showDoc(key) {
+      const doc = docs[key];
+      if (!doc) {
+        document.getElementById('content').innerHTML = '<div class="empty-state"><h3>Not found</h3></div>';
+        return;
+      }
+      
+      const [ns, method] = key.split('.');
+      let html = '<div class="doc-header">';
+      html += '<h2>' + key + '</h2>';
+      html += '<div class="meta">';
+      html += '<div class="meta-item"><span class="conformance">' + doc.level + '</span></div>';
+      html += '</div></div>';
+      
+      html += '<div class="section">';
+      html += '<div class="section-title">Signature</div>';
+      html += '<div class="signature">' + escapeHtml(doc.signature) + '</div>';
+      html += '</div>';
+      
+      html += '<div class="section">';
+      html += '<div class="section-title">Description</div>';
+      html += '<div class="description">' + escapeHtml(doc.description) + '</div>';
+      html += '</div>';
+      
+      if (doc.parameters && doc.parameters.length > 0) {
+        html += '<div class="section">';
+        html += '<div class="section-title">Parameters</div>';
+        html += '<div class="parameters">';
+        doc.parameters.forEach(p => {
+          html += '<div class="param">';
+          html += '<div><span class="param-name">' + escapeHtml(p.name) + '</span> <span class="param-type">(' + escapeHtml(p.type) + ')</span></div>';
+          html += '<div class="param-desc">' + escapeHtml(p.desc) + '</div>';
+          html += '</div>';
+        });
+        html += '</div></div>';
+      }
+      
+      html += '<div class="section">';
+      html += '<div class="section-title">Returns</div>';
+      html += '<div class="description"><code>' + escapeHtml(doc.returns) + '</code></div>';
+      html += '</div>';
+      
+      html += '<div class="section">';
+      html += '<div class="section-title">How to Use</div>';
+      html += '<div class="description">' + escapeHtml(doc.how_to_use) + '</div>';
+      html += '</div>';
+      
+      html += '<div class="section">';
+      html += '<div class="section-title">v1 Syntax</div>';
+      html += '<div class="code-block"><div class="code-label">v1 Example</div>' + syntaxHighlight(doc.v1_example, 'v1') + '</div>';
+      html += '</div>';
+      
+      html += '<div class="section">';
+      html += '<div class="section-title">v2 Syntax</div>';
+      html += '<div class="code-block"><div class="code-label">v2 Example (Case-Insensitive, Block-Structured)</div>' + syntaxHighlight(doc.v2_example, 'v2') + '</div>';
+      html += '</div>';
+      
+      document.getElementById('content').innerHTML = html;
+    }
+    
+    function escapeHtml(text) {
+      const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+      };
+      return text.replace(/[&<>"']/g, m => map[m]);
+    }
+    
+    function syntaxHighlight(code, lang) {
+      let html = escapeHtml(code);
+      
+      // Keywords
+      const keywords = ['LET', 'IF', 'THEN', 'ELSE', 'ENDIF', 'WHILE', 'ENDWHILE', 'FOREACH', 'AS', 'IN', 'ENDFOREACH', 'SWITCH', 'CASE', 'ENDSWITCH', 'BREAK', 'RETURN'];
+      keywords.forEach(kw => {
+        html = html.replace(new RegExp('\\b' + kw + '\\b', 'g'), '<span class="kw">' + kw + '</span>');
+      });
+      
+      // Strings
+      html = html.replace(/"([^"]*)"/g, '<span class="str">"$1"</span>');
+      
+      // Numbers
+      html = html.replace(/\b(\d+)\b/g, '<span class="num">$1</span>');
+      
+      // Comments
+      html = html.replace(/\/\/.*/g, '<span class="cmt">$&</span>');
+      
+      return html;
+    }
+    
+    buildTree();
+  </script>
+</body>
+</html>
+'''
+
+html_path = Path('docs/LANGUAGE_DOCS.html')
+html_path.write_text(html, encoding='utf-8')
+print(f"[OK] {html_path}")
+print(f"  Methods documented: {len(METHOD_DOCS)}")
