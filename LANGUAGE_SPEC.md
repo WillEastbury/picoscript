@@ -237,8 +237,101 @@ Recommended host hook primitive surface (all namespaces compile to `NOOP` + rese
 - `Maths.Sqrt/Pow/Sin/Cos/Tan/Log/Exp/Abs/Min/Max/Gcd/Lcm(...)` for mathematical operations.
 - `DateTime.GetNow/GetYear/GetMonth/GetDay/GetHour/GetMinute/GetSecond/ToTimestamp/FromTimestamp/AddDays/Format(...)` for datetime manipulation.
 - `Locale.GetCurrent/SetCurrent/Format/Parse/GetLanguage/GetRegion/ToLocalTime(...)` for locale-aware formatting.
+- `Environment.GetEnvVar/GetSystemTime/GetMemoryAvailable/GetCpuLoad/GetProcessId/GetHostname/GetTimezone/GetVersion/GetDebugMode(...)` for system state/info queries.
+- `Context.GetUser/GetStoredRequest/GetScratchBucket/GetPermissions/GetHeaders(...)` (expensive, **lazy-decoded**) and `Context.GetPort/GetHost/GetVerb/GetPath/GetQueryString(...)` (cheap, cached) for request context.
+- `Context.SetScratchValue/GetScratchValue(...)` for scratch bucket pass-through.
+- `Crypto.Sha256/Sha512/Blake2b/Blake3/Sha1/Md5(...)` for **userland hashing** (stateless, hardware-accelerated, no secrets needed).
+- `Crypto.HmacSha256/HmacSha512(...)` for **kernel-wrapped HMAC** (secure key material, audit logging).
+- `Crypto.Sign/Verify/Encrypt/Decrypt(...)` for **kernel-wrapped asymmetric/symmetric crypto** (key material never exposed to userland).
+- `Crypto.DigestInit/DigestUpdate/DigestFinal(...)` for incremental hashing of streaming/large data.
 - `Thread.YieldCounted(iterations)` for preemption hint in tight loops.
 - All host hook calls return explicit status/error codes via registers/flags; no silent fallback.
+
+### 6.4 Lazy/On-Demand Context Decoding
+
+Performance critical: avoid decoding all request metadata (user, permissions, headers, stored request) on every entry. Instead:
+
+- **Expensive accessors (lazy-decoded):** `Context.GetUser()`, `Context.GetPermissions()`, `Context.GetHeaders()`, `Context.GetStoredRequest()` 
+  - Only decode and deserialize when explicitly called
+  - Host caches result per dispatch (first call pays cost, subsequent calls hit cache)
+  - Returns lease/handle if data is large; script calls `Lease.GetSpan()` to materialize on demand
+
+- **Cheap accessors (always available):** `Context.GetPort()`, `Context.GetHost()`, `Context.GetVerb()`, `Context.GetPath()`, `Context.GetQueryString()`, `Context.GetRemoteAddr()`, `Context.GetContentType()`, `Context.GetContentLength()`
+  - Pre-decoded and in CPU registers
+  - Return immediately without allocation/parsing
+
+- **Scratch bucket:** `Context.SetScratchValue(key, value)`, `Context.GetScratchValue(key)`
+  - Per-dispatch key-value store for passing state through call chain
+  - Host provides storage; script manages keys/eviction
+
+**Example (avoid middleware overhead):**
+
+```basic
+// Cheap path: most requests only need these
+HTTP_VERB = Context.GetVerb()     // Cached register
+HTTP_PATH = Context.GetPath()     // Cached register
+REMOTE = Context.GetRemoteAddr()  // Cached register
+
+IF HTTP_VERB EQ 200 THEN
+    // Only if needed: decode expensive data
+    USER_ID = Context.GetUser()   // Lazy decode (first call pays cost)
+    PERMS = Context.GetPermissions() // Lazy decode
+    ...
+ENDIF
+```
+
+### 6.5 Cryptographic operations: userland vs kernel-wrapped
+
+**Key management rule (security boundary):**
+
+- **Userland keys (own, session, non-system):** script can execute crypto directly in userland. Fast path, no kernel overhead.
+- **System keys (root, service, shared infrastructure):** script can only request crypto via kernel. Always kernel-mediated, FIFO-routed, audit-logged.
+
+**Userland hashing and crypto with script-owned keys:**
+
+PicoScript scripts can directly call stateless hashing and keyed operations when they own the key material:
+
+- `Crypto.Sha256(Rdata_ptr, Rdata_len, Rhash_out)` — SHA-256 hash (hardware-accelerated, no secrets)
+- `Crypto.Sha512(...)`, `Crypto.Blake2b(...)`, `Crypto.Blake3(...)` — modern hashes (hardware-accelerated)
+- `Crypto.Sha1(...)`, `Crypto.Md5(...)` — legacy hashes (compatibility, hardware-accelerated)
+- `Crypto.DigestInit/Update/Final(...)` — incremental hashing for streaming/large data
+
+When script owns the key (e.g., session token, user password hash):
+
+- `Crypto.HmacSha256(Rkey_ptr, Rkey_len, Rdata_ptr, Rdata_len, Rhmac_out)` — HMAC with script-owned key (fast path, direct execution)
+- `Crypto.HmacSha512(...)` — script-owned HMAC
+
+**Kernel-mediated keyed operations (system keys, audit trail):**
+
+Scripts cannot directly access system cryptographic key material. All system key operations are kernel-routed via FIFO with audit logging:
+
+- `Crypto.Sign(Rkey_handle, Rdata_ptr, Rdata_len, Rsig_out)` — asymmetric signature (kernel manages private key, FIFO-routed, audit-logged)
+- `Crypto.Verify(Rcert_handle, Rdata_ptr, Rdata_len, Rsig_ptr, Rsig_len, Rresult_out)` — verification against kernel certificate store (FIFO-routed)
+- `Crypto.Encrypt(Rkey_handle, Rdata_ptr, Rdata_len, Rcipher_out)` — symmetric encryption with system key (FIFO-routed, audit-logged)
+- `Crypto.Decrypt(Rkey_handle, Rcipher_ptr, Rcipher_len, Rplain_out)` — symmetric decryption with system key (FIFO-routed, audit-logged)
+- `Crypto.HmacSha256(Rkey_handle, Rdata_ptr, Rdata_len, Rhmac_out)` — HMAC with system key (FIFO-routed, audit-logged)
+- `Crypto.HmacSha512(...)` — system key HMAC (FIFO-routed)
+
+System key access:
+
+- Script cannot directly create key handles; kernel provides them via context initialization or environment queries
+- Key handles are opaque; raw key material is never exposed to userland
+- All system key operations return status codes indicating success, permission error, or key not available
+
+**Performance implications:**
+
+- **Userland hashing:** O(1) latency, hardware-accelerated (AES-NI, SHA-256 extensions)
+- **Userland HMAC with script key:** O(data_size) latency, hardware-accelerated
+- **Kernel crypto (system keys):** IPC/FIFO round-trip latency (µs-ms range) + kernel context switch + audit logging (overhead ~100-1000µs depending on kernel queue depth)
+
+**Security guarantees:**
+
+1. **No system key leakage:** userland never sees raw system key material (only opaque handles)
+2. **Audit trail:** kernel logs all system key operations (Sign, Verify, Encrypt, Decrypt, HmacSha256/512)
+3. **Hardware acceleration:** both userland and kernel-mediated ops use CPU crypto extensions (AES-NI, SHA-256 extensions, etc.)
+4. **Key rotation:** kernel manages lifecycle; scripts always get current valid keys via handles (transparent to script)
+5. **Permission boundary:** scripts can request system crypto but kernel verifies authorization before granting access
+
 
 ## 7. Performance model
 
@@ -322,14 +415,17 @@ Compilation note: Both v1 (namespace/method) and v2 (block-structured) source sy
 - **L1 (Queue host):** inbound queue drain + outbound queue emit integration.
 - **L2 (Kernel-coupled):** IRQ/SW_IRQ wake-fire lifecycle integrated with FIFO ownership transfer.
 - **L3 (Profiling & amortization):** optional performance hooks (batching, profiling, fast-path validation).
-- **L4 (v2 syntax):** case-insensitive, block-structured source syntax (IF/THEN/ENDIF, WHILE/ENDWHILE, etc.) + library namespaces (String, Number, Maths, DateTime, Locale).
+- **L4 (v2 syntax):** case-insensitive, block-structured source syntax + library namespaces (String, Number, Maths, DateTime, Locale).
+- **L5 (Context & environment):** lazy/on-demand context decoding (Environment.*, Context.* with cheap/expensive split + scratch bucket).
+- **L6 (Cryptography):** userland hashing (hardware-accelerated) + kernel-wrapped keyed operations (HMAC, Sign, Verify, Encrypt, Decrypt) with audit logging and handle-based key access.
 
 ## 12. Open items for v0.3
 
 - v2 parser completion and round-trip decompiler (bytecode → v2 syntax)
 - fixed descriptor binary schema (header fields, endian, size limits)
-- host hook namespace hardening and ABI freeze with performance + library hooks
+- host hook namespace hardening and ABI freeze with crypto + context + library hooks
 - formal memory model for shared RAM windows
 - trace/event format for deterministic replay and audit
 - profiling hook payload schema and buffer management
 - v2 language completions and diagnostics in editor
+- crypto key handle encoding and kernel key store interface
