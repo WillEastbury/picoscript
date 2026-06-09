@@ -1,0 +1,25 @@
+[project]
+name = "picoscript"
+version = "0.1.0"
+description = "PicoScript bytecode ISA, compiler, opcode reference, and editor specifications"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "Will Eastbury" }
+]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Software Development :: Compilers",
+]
+
+[project.urls]
+Homepage = "https://github.com/WillEastbury/picoscript"
+Repository = "https://github.com/WillEastbury/picoscript"
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py"]

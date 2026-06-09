@@ -1,0 +1,12 @@
+// filter.pico -- Loop over cards, emit matching ones
+Math.Add(R0, R0, 100);
+Math.Add(R1, R1, 110);
+Math.Add(R2, R2, 50);
+:loop
+Storage.Load(0, 3, 0, R3);
+Flow.Branch(LE, R3, R2, :next);
+Storage.Pipe(0, 3, 0, R3);
+:next
+Math.Inc(R0);
+Flow.Branch(LT, R0, R1, :loop);
+Flow.Return();
