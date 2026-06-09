@@ -81,19 +81,19 @@ Namespaces are language-facing names for hardware capabilities:
 
 | Namespace | Purpose |
 |-----------|---------|
-| `Storage` | Card load, save, pipe |
-| `Thread` | Skip, wait, raise |
+| `Storage` | Card load, save, pipe, and storage backend ops |
+| `Thread` | Skip, wait, raise, and performance hints |
 | `Math` | Integer arithmetic |
 | `Flow` | Jump, branch, call, return |
 | `Dsp` | DSP envelope operations |
 | `Net` | HTTP response metadata |
-| `Kernel` | Host IRQ/SW_IRQ control hooks |
-| `Queue` | Host queue descriptor hooks |
+| `Kernel` | Host IRQ/SW_IRQ control and profiling hooks |
+| `Queue` | Host queue descriptor and batching hooks |
 | `Random` | Host RNG hooks |
 | `Memory` | Host arena allocator hooks |
 | `Span` | Host pointer/span hooks |
-| `Descriptor` | Host descriptor hooks |
-| `Lease` | Lease/type-hint access hooks |
+| `Descriptor` | Host descriptor and bulk transfer hooks |
+| `Lease` | Lease/type-hint access and validation hooks |
 
 These names are editor-facing. The compiler maps them to opcode fields described in `docs/picoscript-hardware.md`.
 
@@ -138,18 +138,18 @@ The editor can derive completions from the language namespace table:
 |---------|-------------|
 | start of statement | `Storage`, `Thread`, `Math`, `Flow`, `Dsp`, `Net`, `Kernel`, `Queue`, `Random`, `Memory`, `Span`, `Descriptor`, `Lease` |
 | `Storage.` | `Load`, `Save`, `Pipe`, `GetSchemaForPack`, `SetSchemaForPack`, `AddCard`, `UpdateCard`, `DeleteCard`, `PatchCard`, `ReadCard`, `QueryCard` |
-| `Thread.` | `Skip`, `Wait`, `Raise` |
+| `Thread.` | `Skip`, `Wait`, `Raise`, `YieldCounted` |
 | `Math.` | `Add`, `Sub`, `Mul`, `Div`, `Inc` |
 | `Flow.` | `Jump`, `Branch`, `Call`, `Return` |
 | `Dsp.` | `MatMul`, `Softmax`, `Dot`, `Scale`, `Relu`, `Norm`, `TopK`, `Gelu`, `Transpose`, `VAdd`, `Embed`, `Quant`, `Dequant`, `Mask`, `Concat`, `Split` |
 | `Net.` | `Status`, `Header`, `Type`, `Body`, `Close` |
-| `Kernel.` | `WaitIRQ`, `WaitSWIRQ`, `FireSWIRQ` |
-| `Queue.` | `Dequeue`, `Enqueue`, `Depth` |
+| `Kernel.` | `WaitIRQ`, `WaitSWIRQ`, `FireSWIRQ`, `ProfileStart`, `ProfileEnd`, `TracePoint` |
+| `Queue.` | `Dequeue`, `Enqueue`, `Depth`, `DequeueBatch`, `EnqueueBatch` |
 | `Random.` | `U32` |
 | `Memory.` | `ArenaInit`, `ArenaAlloc`, `ArenaReset`, `ArenaStats` |
 | `Span.` | `Make`, `Slice` |
-| `Descriptor.` | `Make`, `SetFlags`, `GetPtr`, `GetLen`, `GetFlags` |
-| `Lease.` | `Acquire`, `Release`, `Validate`, `GetSpan`, `GetTypeHint` |
+| `Descriptor.` | `Make`, `SetFlags`, `GetPtr`, `GetLen`, `GetFlags`, `CopyBatch` |
+| `Lease.` | `Acquire`, `Release`, `Validate`, `CachedValidate`, `GetSpan`, `GetTypeHint` |
 
 Register completions should offer `R0` through `R15`, with `R15` marked read-only/context.
 
@@ -181,12 +181,29 @@ Avoid adding features that hide unpredictable work from the hardware. PicoScript
 
 To support queue-driven runtimes across non-identical hosts, PicoScript exposes a reserved hook surface compiled as `NOOP` with reserved metadata encodings:
 
+### Control & IRQ
+
 - `Kernel.WaitIRQ([Rmask]);`
 - `Kernel.WaitSWIRQ([Rmask]);`
 - `Kernel.FireSWIRQ(Rpid);` (permission-gated in host/kernel policy)
+
+### Batching & Amortization (Performance)
+
 - `Queue.Dequeue(queueId, Rdest);`
 - `Queue.Enqueue(queueId, Rsrc);`
 - `Queue.Depth(queueId, Rdest);`
+- `Queue.DequeueBatch(queueId, Rcount, RspanOut);` — drain N items, return span of descriptors
+- `Queue.EnqueueBatch(queueId, Rspan);` — enqueue from span atomically
+
+### Profiling & Tracing (Performance)
+
+- `Kernel.ProfileStart(Rslot);`
+- `Kernel.ProfileEnd(Rslot, RtickOut);` — return elapsed ticks in Rslot
+- `Kernel.TracePoint(ReventId, Rdata);`
+
+### Other hooks
+
+- `Thread.YieldCounted(Riterations);` — hint for batch preemption
 - `Random.U32(Rdest);`
 - `Memory.ArenaInit(Rbase, Rsize, Rarena);`
 - `Memory.ArenaAlloc(Rarena, Rbytes, RptrOut);`
@@ -199,9 +216,11 @@ To support queue-driven runtimes across non-identical hosts, PicoScript exposes 
 - `Descriptor.GetPtr(Rdesc, Rout);`
 - `Descriptor.GetLen(Rdesc, Rout);`
 - `Descriptor.GetFlags(Rdesc, Rout);`
+- `Descriptor.CopyBatch(RsrcSpan, RdstSpan, Rcount);` — bulk span transfer
 - `Lease.Acquire(Rtype, Rspan, RleaseOut);`
 - `Lease.Release(Rlease);`
 - `Lease.Validate(Rlease, Rout);`
+- `Lease.CachedValidate(Rlease, Rout);` — O(1) fast-path for hot leases
 - `Lease.GetSpan(Rlease, RoutSpan);`
 - `Lease.GetTypeHint(Rlease, RoutType);`
 - `Storage.GetSchemaForPack(RpackCtx, Rout);`
@@ -216,6 +235,8 @@ To support queue-driven runtimes across non-identical hosts, PicoScript exposes 
 These are language-stable and host-fillable. They preserve bytecode compatibility while allowing runtime-specific implementation behind the contract.
 
 Access model rule: all runtime data access should be lease-mediated (`Lease.*`) using a type hint plus span/pointer `(offset,length)`.
+
+Performance hooks (`Queue.*Batch`, `Descriptor.CopyBatch`, `Lease.CachedValidate`, `Kernel.Profile*`, `Kernel.TracePoint`, `Thread.YieldCounted`) are optional and do not affect determinism when omitted.
 
 ## Parser Boundaries
 

@@ -165,14 +165,25 @@ NAMESPACE_MAP = {
         "Close":   OP_NOOP,  # Close connection
     },
     "Kernel": {
-        "WaitIRQ":    OP_NOOP,  # Host hook surface
-        "WaitSWIRQ":  OP_NOOP,  # Host hook surface
-        "FireSWIRQ":  OP_NOOP,  # Permission-gated wake request
+        "WaitIRQ":       OP_NOOP,  # Host hook surface
+        "WaitSWIRQ":     OP_NOOP,  # Host hook surface
+        "FireSWIRQ":     OP_NOOP,  # Permission-gated wake request
+        "ProfileStart":  OP_NOOP,  # Profiling hook (performance)
+        "ProfileEnd":    OP_NOOP,  # Profiling hook (performance)
+        "TracePoint":    OP_NOOP,  # Trace event hook (performance)
+    },
+    "Thread": {
+        "Skip":         OP_NOOP,
+        "Wait":         OP_WAIT,
+        "Raise":        OP_RAISE,
+        "YieldCounted": OP_NOOP,  # Batch preemption hint (performance)
     },
     "Queue": {
-        "Dequeue": OP_NOOP,  # Host hook surface
-        "Enqueue": OP_NOOP,  # Host hook surface
-        "Depth":   OP_NOOP,  # Host hook surface
+        "Dequeue":      OP_NOOP,  # Host hook surface
+        "Enqueue":      OP_NOOP,  # Host hook surface
+        "Depth":        OP_NOOP,  # Host hook surface
+        "DequeueBatch": OP_NOOP,  # Batch drain (performance)
+        "EnqueueBatch": OP_NOOP,  # Batch enqueue (performance)
     },
     "Random": {
         "U32": OP_NOOP,      # Host RNG hook surface
@@ -188,18 +199,20 @@ NAMESPACE_MAP = {
         "Slice": OP_NOOP,
     },
     "Descriptor": {
-        "Make":     OP_NOOP,
-        "SetFlags": OP_NOOP,
-        "GetPtr":   OP_NOOP,
-        "GetLen":   OP_NOOP,
-        "GetFlags": OP_NOOP,
+        "Make":      OP_NOOP,
+        "SetFlags":  OP_NOOP,
+        "GetPtr":    OP_NOOP,
+        "GetLen":    OP_NOOP,
+        "GetFlags":  OP_NOOP,
+        "CopyBatch": OP_NOOP,  # Batch span transfer (performance)
     },
     "Lease": {
-        "Acquire":    OP_NOOP,
-        "Release":    OP_NOOP,
-        "Validate":   OP_NOOP,
-        "GetSpan":    OP_NOOP,
-        "GetTypeHint":OP_NOOP,
+        "Acquire":        OP_NOOP,
+        "Release":        OP_NOOP,
+        "Validate":       OP_NOOP,
+        "CachedValidate": OP_NOOP,  # Fast-path validation (performance)
+        "GetSpan":        OP_NOOP,
+        "GetTypeHint":    OP_NOOP,
     },
 }
 
@@ -215,37 +228,54 @@ NET_CLOSE_MARKER = 0xC000
 # These are language-level stable placeholders that host runtimes can bind.
 HOST_HOOK_BASE = 0x7000
 HOST_HOOK_CODES = {
-    ("Kernel", "WaitIRQ"):   0x01,
-    ("Kernel", "WaitSWIRQ"): 0x02,
-    ("Kernel", "FireSWIRQ"): 0x03,
-    ("Queue", "Dequeue"):    0x10,
-    ("Queue", "Enqueue"):    0x11,
-    ("Queue", "Depth"):      0x12,
-    ("Random", "U32"):       0x20,
-    ("Memory", "ArenaInit"): 0x30,
-    ("Memory", "ArenaAlloc"):0x31,
-    ("Memory", "ArenaReset"):0x32,
-    ("Memory", "ArenaStats"):0x33,
-    ("Span", "Make"):        0x40,
-    ("Span", "Slice"):       0x41,
-    ("Descriptor", "Make"):  0x50,
-    ("Descriptor", "SetFlags"):0x51,
-    ("Descriptor", "GetPtr"):0x52,
-    ("Descriptor", "GetLen"):0x53,
-    ("Descriptor", "GetFlags"):0x54,
-    ("Lease", "Acquire"):0x58,
-    ("Lease", "Release"):0x59,
-    ("Lease", "Validate"):0x5A,
-    ("Lease", "GetSpan"):0x5B,
-    ("Lease", "GetTypeHint"):0x5C,
-    ("Storage", "GetSchemaForPack"):0x60,
-    ("Storage", "SetSchemaForPack"):0x61,
-    ("Storage", "AddCard"):0x62,
-    ("Storage", "UpdateCard"):0x63,
-    ("Storage", "DeleteCard"):0x64,
-    ("Storage", "PatchCard"):0x65,
-    ("Storage", "ReadCard"):0x66,
-    ("Storage", "QueryCard"):0x67,
+    # Kernel hooks
+    ("Kernel", "WaitIRQ"):      0x01,
+    ("Kernel", "WaitSWIRQ"):    0x02,
+    ("Kernel", "FireSWIRQ"):    0x03,
+    ("Kernel", "ProfileStart"): 0x04,
+    ("Kernel", "ProfileEnd"):   0x05,
+    ("Kernel", "TracePoint"):   0x06,
+    # Queue hooks
+    ("Queue", "Dequeue"):       0x10,
+    ("Queue", "Enqueue"):       0x11,
+    ("Queue", "Depth"):         0x12,
+    ("Queue", "DequeueBatch"):  0x13,
+    ("Queue", "EnqueueBatch"):  0x14,
+    # Random hooks
+    ("Random", "U32"):          0x20,
+    # Memory hooks
+    ("Memory", "ArenaInit"):    0x30,
+    ("Memory", "ArenaAlloc"):   0x31,
+    ("Memory", "ArenaReset"):   0x32,
+    ("Memory", "ArenaStats"):   0x33,
+    # Span hooks
+    ("Span", "Make"):           0x40,
+    ("Span", "Slice"):          0x41,
+    # Descriptor hooks
+    ("Descriptor", "Make"):     0x50,
+    ("Descriptor", "SetFlags"): 0x51,
+    ("Descriptor", "GetPtr"):   0x52,
+    ("Descriptor", "GetLen"):   0x53,
+    ("Descriptor", "GetFlags"): 0x54,
+    ("Descriptor", "CopyBatch"):0x55,
+    # Lease hooks
+    ("Lease", "Acquire"):       0x58,
+    ("Lease", "Release"):       0x59,
+    ("Lease", "Validate"):      0x5A,
+    ("Lease", "CachedValidate"):0x5B,
+    ("Lease", "GetSpan"):       0x5C,
+    ("Lease", "GetTypeHint"):   0x5D,
+    # Storage hooks
+    ("Storage", "GetSchemaForPack"): 0x60,
+    ("Storage", "SetSchemaForPack"): 0x61,
+    ("Storage", "AddCard"):     0x62,
+    ("Storage", "UpdateCard"):  0x63,
+    ("Storage", "DeleteCard"):  0x64,
+    ("Storage", "PatchCard"):   0x65,
+    ("Storage", "ReadCard"):    0x66,
+    ("Storage", "QueryCard"):   0x67,
+    # Thread hints
+    ("Thread", "YieldCounted"): 0x70,
 }
 HOST_HOOK_NAMES = {v: k for k, v in HOST_HOOK_CODES.items()}
 

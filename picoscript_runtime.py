@@ -189,3 +189,98 @@ class HostStorageApi:
 
     def query_card(self, pack_ctx: int, query_desc: Descriptor):
         raise NotImplementedError
+
+
+class ProfilingSlot:
+    """Profiling bracket: start timestamp, label, state."""
+
+    def __init__(self, slot_id: int):
+        self.slot_id = slot_id
+        self.start_tick = 0
+        self.end_tick = 0
+        self.elapsed = 0
+        self.active = False
+
+
+class ProfileManager:
+    """Simple profiling manager for Kernel.ProfileStart/End hooks."""
+
+    def __init__(self, slot_count: int = 16):
+        self.slots = [ProfilingSlot(i) for i in range(slot_count)]
+        self.trace_buffer: list[tuple[int, int, int]] = []  # (event_id, data, tick)
+
+    def start(self, slot: int, current_tick: int = 0) -> None:
+        if 0 <= slot < len(self.slots):
+            self.slots[slot].start_tick = current_tick
+            self.slots[slot].active = True
+
+    def end(self, slot: int, current_tick: int = 0) -> int:
+        if 0 <= slot < len(self.slots) and self.slots[slot].active:
+            self.slots[slot].end_tick = current_tick
+            self.slots[slot].active = False
+            self.slots[slot].elapsed = current_tick - self.slots[slot].start_tick
+            return self.slots[slot].elapsed
+        return 0
+
+    def trace_point(self, event_id: int, data: int, current_tick: int = 0) -> None:
+        self.trace_buffer.append((event_id, data, current_tick))
+
+    def get_trace(self) -> list[tuple[int, int, int]]:
+        return self.trace_buffer.copy()
+
+    def clear_trace(self) -> None:
+        self.trace_buffer.clear()
+
+
+class QueueDescriptor:
+    """Queue item wrapper (for DequeueBatch, EnqueueBatch operations)."""
+
+    def __init__(self, ptr: int, length: int, flags: int = 0, type_id: int = 0):
+        self.ptr = ptr
+        self.length = length
+        self.flags = flags
+        self.type_id = type_id
+
+    def to_descriptor(self) -> Descriptor:
+        return Descriptor(self.ptr, self.length, self.flags)
+
+
+class SimpleQueue:
+    """Simple FIFO queue for testing batch operations."""
+
+    def __init__(self, capacity: int = 256):
+        self.items: list[QueueDescriptor] = []
+        self.capacity = capacity
+
+    def enqueue(self, item: QueueDescriptor) -> bool:
+        if len(self.items) >= self.capacity:
+            return False
+        self.items.append(item)
+        return True
+
+    def dequeue(self) -> QueueDescriptor | None:
+        if not self.items:
+            return None
+        return self.items.pop(0)
+
+    def enqueue_batch(self, items: list[QueueDescriptor]) -> int:
+        """Enqueue multiple items atomically. Returns count enqueued."""
+        added = 0
+        for item in items:
+            if self.enqueue(item):
+                added += 1
+            else:
+                break
+        return added
+
+    def dequeue_batch(self, count: int) -> list[QueueDescriptor]:
+        """Dequeue up to count items. Returns list (may be shorter than count)."""
+        result = []
+        for _ in range(min(count, len(self.items))):
+            item = self.dequeue()
+            if item is not None:
+                result.append(item)
+        return result
+
+    def depth(self) -> int:
+        return len(self.items)

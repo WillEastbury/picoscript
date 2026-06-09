@@ -197,15 +197,48 @@ Randomness policy:
   - a random offset vector generated at host startup
 - Conformance does not require deterministic value outputs across dispatches when RNG is enabled.
 
-## 8. Security boundaries
+## 8. Performance model
+
+PicoScript includes optional performance hooks for amortization, profiling, and fast-path validation:
+
+### 8.1 Batching & Amortization (Throughput)
+
+- `Queue.DequeueBatch(count) → span` — drain multiple queue descriptors in one host call, amortizing wake-up overhead. Reduces per-item dispatch cost ~100x for bulk processing.
+- `Queue.EnqueueBatch(span)` — enqueue multiple descriptors atomically. Preserves ordering and reduces context switches.
+- `Descriptor.CopyBatch(src_span, dst_span, count)` — bulk span transfer for zero-copy forwarding.
+
+Rationale: queue drains are hot; batching amortizes context switch cost. Expected throughput gain: 10-100x vs. per-item dispatch.
+
+### 8.2 Fast-Path & Arena Heuristics (Latency)
+
+- `Lease.CachedValidate(lease_id) → bool` — O(1) validation for hot leases (host caches generation on acquire). Typical host cache hit: ~5% of lease checks.
+- `Memory.ArenaStats() → (total, free, fragmentation_pct)` — guide allocation policy without scanning arena. Used for heuristic pool rebalance decisions.
+- `Thread.YieldCounted(iterations)` — hint that next N loop iterations should run before preemption. Allows tight loops to batch work and reduce preemption overhead.
+
+### 8.3 Profiling & Diagnostics (Observability)
+
+- `Kernel.ProfileStart(slot)` — begin timing bracket in named slot (host buffers timestamps).
+- `Kernel.ProfileEnd(slot) → elapsed_ticks` — end bracket, return elapsed time for in-script decisions (e.g., early exit on timeout).
+- `Kernel.TracePoint(event_id, data)` — emit tagged event for host trace/replay infrastructure. Deterministic and zero-cost if tracing disabled.
+
+Rationale: identify bottlenecks without guessing. All profiling hooks are optional host bindings; absent implementations are NOOPs.
+
+### 8.4 Determinism & performance tradeoff
+
+- All performance hooks are **optional** and isolated from control flow. Omitting them preserves baseline determinism; using them enables optimization without specifying timing guarantees.
+- Profiling is deterministic (same event sequence on replay) but does not guarantee cycle counts match across runs (host scheduler variance).
+- Batching preserves queue ordering and descriptor integrity.
+
+## 9. Security boundaries
 
 - Kernel remains sole owner of network stack and privilege transitions.
 - Script runtime is non-privileged and memory-bounded.
 - Runtime access to spans/descriptors is lease-gated; lease validity/type hint checks are enforced by host/kernel policy.
 - Queue descriptors are validated by host before script exposure.
 - Script outputs are treated as untrusted until host validation passes.
+- Profile/trace data is host-directed; scripts cannot read profiling state beyond their own `ProfileEnd` return value.
 
-## 9. Compilation targets
+## 10. Compilation targets
 
 PicoScript supports multiple execution targets:
 
@@ -215,15 +248,17 @@ PicoScript supports multiple execution targets:
 
 Target choice must preserve deterministic contract and queue ABI semantics.
 
-## 10. Conformance levels
+## 11. Conformance levels
 
 - **L0 (Core):** parse/compile/disassemble + VM run/dispatch with deterministic budgets.
 - **L1 (Queue host):** inbound queue drain + outbound queue emit integration.
 - **L2 (Kernel-coupled):** IRQ/SW_IRQ wake-fire lifecycle integrated with FIFO ownership transfer.
+- **L3 (Profiling & amortization):** optional performance hooks (batching, profiling, fast-path validation).
 
-## 11. Open items for v0.2
+## 12. Open items for v0.2
 
 - fixed descriptor binary schema (header fields, endian, size limits)
-- host hook namespace hardening and ABI freeze (`Kernel.*`, `Queue.*`, `Random.*`, `Memory.*`, `Span.*`, `Descriptor.*`, extended `Storage.*`)
+- host hook namespace hardening and ABI freeze with performance hooks (`Kernel.*`, `Queue.*`, `Random.*`, `Memory.*`, `Span.*`, `Descriptor.*`, `Lease.*`, extended `Storage.*`)
 - formal memory model for shared RAM windows
 - trace/event format for deterministic replay and audit
+- profiling hook payload schema and buffer management
