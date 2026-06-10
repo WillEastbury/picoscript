@@ -62,6 +62,7 @@ class E:                                  # expression
 def num(v): return E("num", v=v)
 def var(n): return E("var", n=n)
 def bin(op, a, b): return E("bin", op=op, a=a, b=b)
+def tern(c, a, b): return E("tern", c=c, a=a, b=b)
 
 
 # statements: ("assign", name, expr) ("print", expr) ("inc", name)
@@ -87,6 +88,15 @@ def rexpr(e, d):
         return str(e.v)
     if e.kind == "var":
         return e.n
+    if e.kind == "tern":
+        c, a, b = rexpr(e.c, d), rexpr(e.a, d), rexpr(e.b, d)
+        if d == "c":
+            return f"({c}) ? {a} : {b}"
+        if d == "basic":
+            return f"IIF({c}, {a}, {b})"
+        if d == "python":
+            return f"{a} if {c} else {b}"
+        return f"{a} if {c} otherwise {b}"          # english
     a, b = rexpr(e.a, d), rexpr(e.b, d)
     # parenthesize binary sub-expressions for unambiguous precedence
     if e.a.kind == "bin":
@@ -174,6 +184,36 @@ class Rend:
             if d == "python":
                 return [f"{pad}for {v} in range({lo}, {hi + 1}):"] + self.block(body, ind + 1)
             return [f"{pad}For each {v} from {lo} to {hi}:"] + self.block(body, ind + 1)
+        if kind == "switch":
+            _, expr, cases, dflt = s
+            ex = rexpr(expr, d)
+            if d == "c":
+                r = [f"{pad}switch ({ex}) {{"]
+                for val, body in cases:
+                    r += [f"{pad}    case {val}:"] + self.block(body, ind + 2) + [f"{pad}        break;"]
+                if dflt:
+                    r += [f"{pad}    default:"] + self.block(dflt, ind + 2)
+                return r + [f"{pad}}}"]
+            if d == "basic":
+                r = [f"{pad}SWITCH {ex}"]
+                for val, body in cases:
+                    r += [f"{pad}    CASE {val}"] + self.block(body, ind + 2)
+                if dflt:
+                    r += [f"{pad}    DEFAULT"] + self.block(dflt, ind + 2)
+                return r + [f"{pad}ENDSWITCH"]
+            if d == "python":
+                r = [f"{pad}match {ex}:"]
+                for val, body in cases:
+                    r += [f"{pad}    case {val}:"] + self.block(body, ind + 2)
+                if dflt:
+                    r += [f"{pad}    case _:"] + self.block(dflt, ind + 2)
+                return r
+            r = [f"{pad}Choose {ex}:"]                  # english
+            for val, body in cases:
+                r += [f"{pad}    When {val}:"] + self.block(body, ind + 2)
+            if dflt:
+                r += [f"{pad}    Otherwise:"] + self.block(dflt, ind + 2)
+            return r
         raise ValueError(kind)
 
 
@@ -249,8 +289,40 @@ def t_accumulate_evens(rng):
     return f"Sum the even numbers from 1 to {hi} and print the total.", prog
 
 
+def t_nested_sum(rng):
+    a = rng.randint(2, 5); b = rng.randint(2, 5)
+    prog = [("assign", "s", num(0)),
+            ("for", "i", 1, a,
+             [("for", "j", 1, b,
+               [("assign", "s", bin("+", var("s"), bin("*", var("i"), var("j"))))])]),
+            ("print", var("s"))]
+    return f"Sum i*j for i from 1 to {a} and j from 1 to {b}, and print the total.", prog
+
+
+def t_ternary_max(rng):
+    a = rng.randint(1, 99); b = rng.randint(1, 99)
+    while b == a:
+        b = rng.randint(1, 99)
+    prog = [("assign", "a", num(a)), ("assign", "b", num(b)),
+            ("assign", "m", tern(bin(">", var("a"), var("b")), var("a"), var("b"))),
+            ("print", var("m"))]
+    return f"Print the larger of {a} and {b} using a conditional expression.", prog
+
+
+def t_switch_pick(rng):
+    code = rng.randint(0, 3)
+    v0, v1, v2, dv = (rng.randint(10, 99) for _ in range(4))
+    prog = [("assign", "code", num(code)),
+            ("switch", var("code"),
+             [(0, [("print", num(v0))]), (1, [("print", num(v1))]), (2, [("print", num(v2))])],
+             [("print", num(dv))])]
+    return (f"Set code to {code}; in a switch print {v0} for 0, {v1} for 1, {v2} for 2, "
+            f"otherwise {dv}.", prog)
+
+
 TEMPLATES = [t_arith, t_modulo, t_branch, t_sum_range, t_factorial,
-             t_while_count, t_power, t_accumulate_evens]
+             t_while_count, t_power, t_accumulate_evens,
+             t_nested_sum, t_ternary_max, t_switch_pick]
 
 
 # ── generation pipeline ──────────────────────────────────────────────────────
@@ -303,26 +375,85 @@ def generate(count, seed):
     return records, attempts
 
 
+# ── fine-tune-ready chat export ──────────────────────────────────────────────
+DIALECT_NAME = {"c": "C-style", "basic": "BASIC", "python": "Python-style",
+                "english": "natural-English"}
+SYSTEM_CODEGEN = (
+    "You write PicoScript, a deterministic integer-only language that compiles to a "
+    "frozen 16-opcode bytecode. Values are signed 32-bit ints in one global scope; "
+    "there are no strings, floats, or objects. Write the program in the {dialect} "
+    "dialect and output only the code, no prose.")
+SYSTEM_TRANSLATE = (
+    "You translate PicoScript between its four dialects (C-style, BASIC, Python-style, "
+    "natural-English) preserving exact behaviour. Output only the translated program.")
+
+
+def to_chat(records):
+    """Turn raw records into OpenAI-style chat-message training examples."""
+    out = []
+    for r in records:
+        if r["task"] == "nl2code":
+            out.append({"messages": [
+                {"role": "system", "content": SYSTEM_CODEGEN.format(dialect=DIALECT_NAME[r["dialect"]])},
+                {"role": "user", "content": r["instruction"]},
+                {"role": "assistant", "content": r["code"]}],
+                "meta": {"task": "nl2code", "dialect": r["dialect"], "construct": r["construct"]}})
+        elif r["task"] == "translate":
+            out.append({"messages": [
+                {"role": "system", "content": SYSTEM_TRANSLATE},
+                {"role": "user", "content": f"Translate this {DIALECT_NAME[r['from_dialect']]} "
+                                            f"PicoScript to {DIALECT_NAME[r['to_dialect']]}:\n\n{r['from_code']}"},
+                {"role": "assistant", "content": r["to_code"]}],
+                "meta": {"task": "translate", "from": r["from_dialect"], "to": r["to_dialect"]}})
+    return out
+
+
+def split_train_val(items, val_frac, seed):
+    items = items[:]
+    random.Random(seed * 7 + 1).shuffle(items)
+    n_val = max(1, int(round(len(items) * val_frac)))
+    return items[n_val:], items[:n_val]
+
+
+def _write_jsonl(path, items):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for it in items:
+            f.write(json.dumps(it, ensure_ascii=False) + "\n")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--count", type=int, default=200, help="distinct verified programs to emit")
+    p.add_argument("--count", type=int, default=400, help="distinct verified programs to emit")
     p.add_argument("--seed", type=int, default=1)
-    p.add_argument("--out", default=os.path.join(ROOT, "data", "picoscript.jsonl"))
+    p.add_argument("--val-frac", type=float, default=0.1, help="fraction held out for validation")
+    p.add_argument("--out-dir", default=os.path.join(ROOT, "data"))
     args = p.parse_args(argv)
 
     records, attempts = generate(args.count, args.seed)
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as f:
-        for r in records:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    progs = len({(r["construct"], r["code"]) for r in records if r["task"] == "nl2code"}) // len(DIALECTS)
+    chat = to_chat(records)
+    train, val = split_train_val(chat, args.val_frac, args.seed)
+
+    d = args.out_dir
+    _write_jsonl(os.path.join(d, "picoscript.jsonl"), records)          # raw corpus (gitignored)
+    _write_jsonl(os.path.join(d, "train.chat.jsonl"), train)            # fine-tune train (gitignored)
+    _write_jsonl(os.path.join(d, "val.chat.jsonl"), val)                # fine-tune val   (gitignored)
+    _write_jsonl(os.path.join(d, "picoscript.chat.sample.jsonl"), chat[:40])   # committed sample
+
+    progs = len(seen_keys(records))
     by_task = {}
     for r in records:
         by_task[r["task"]] = by_task.get(r["task"], 0) + 1
-    print(f"wrote {args.out}")
-    print(f"  verified programs : {progs} (from {attempts} attempts)")
-    print(f"  records           : {len(records)}  {by_task}")
-    print(f"  dialects          : {', '.join(DIALECTS)}")
+    constructs = sorted({r["construct"] for r in records if r["task"] == "nl2code"})
+    print(f"verified programs : {progs} (from {attempts} attempts)")
+    print(f"raw records       : {len(records)}  {by_task}")
+    print(f"chat examples     : {len(chat)}  ->  train {len(train)} / val {len(val)}")
+    print(f"constructs        : {len(constructs)}  {constructs}")
+    print(f"wrote into {d}/ : picoscript.jsonl, train.chat.jsonl, val.chat.jsonl, picoscript.chat.sample.jsonl")
+
+
+def seen_keys(records):
+    return {(r["construct"], r["code"]) for r in records if r["task"] == "nl2code" and r["dialect"] == "c"}
 
 
 if __name__ == "__main__":

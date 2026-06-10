@@ -7,6 +7,7 @@ and that the four dialects of each program agree (Python/BASIC/English byte-iden
 Run: python tests/test_dataset.py
 """
 
+import json
 import os
 import sys
 
@@ -76,6 +77,38 @@ check("python == basic == english byte-identical per program", not idbad, str(id
 
 # 4) run records carry a list output.
 check("run records well-formed", all(isinstance(r["output"], list) for r in rn))
+
+# 5) the broadened templates (switch / ternary / nested) each render + verify in all 4 dialects.
+import random as _rng
+newbad = []
+for tn in ("t_switch_pick", "t_ternary_max", "t_nested_sum"):
+    instr, prog = getattr(G, tn)(_rng.Random(3))
+    if G.make_sample(tn, instr, prog) is None:
+        newbad.append(tn)
+check("new templates (switch/ternary/nested) verify in all 4 dialects", not newbad, str(newbad))
+
+# 6) chat export is well-formed and the assistant code still compiles+runs to its output.
+chat = G.to_chat(records)
+wf = all(len(x["messages"]) == 3 and [m["role"] for m in x["messages"]] == ["system", "user", "assistant"]
+         and x["messages"][2]["content"] for x in chat)
+check("chat examples well-formed (system/user/assistant)", wf)
+cbad = []
+for x in chat:
+    if x["meta"]["task"] != "nl2code":
+        continue
+    try:
+        if out_of(x["meta"]["dialect"], x["messages"][2]["content"]) != \
+           [r for r in n2c if r["code"] == x["messages"][2]["content"]][0]["output"]:
+            cbad.append(x["meta"])
+    except Exception as e:
+        cbad.append(str(e)[:40])
+check("chat nl2code assistant code recompiles+runs", not cbad, str(cbad[:2]))
+
+# 7) train/val split is disjoint and proportioned.
+train, val = G.split_train_val(chat, val_frac=0.1, seed=1)
+check("train/val disjoint + sized",
+      len(train) + len(val) == len(chat) and len(val) >= 1 and
+      not ({json.dumps(t, sort_keys=True) for t in train} & {json.dumps(v, sort_keys=True) for v in val}))
 
 print(f"\n{passed} passed, {failed} failed  ({len(records)} records over {len(n2c)//4} programs)")
 sys.exit(1 if failed else 0)

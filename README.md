@@ -46,7 +46,7 @@ PicoScript runs inside picoweb as deterministic, bounded userland logic for:
 | `docs/playground.html` | **Playground + language guide**: compile/run/step all four styles live in-browser |
 | `gen_playground.py` | builds `docs/playground.html` from compiled, verified examples |
 | `gen_site.py` | builds the consolidated GitHub Pages site `docs/index.html` (guide, playground, HTTP/TCP simulator, **Cards/Query/Spans** data engine, reference docs) |
-| `tools/gen_dataset.py` | **synthetic dataset generator** for fine-tuning a small coding model: templated programs rendered to all 4 dialects, each **verified** (compiles + runs + identical output) → JSONL (`nl2code` / `translate` / `run`). Sample: `data/picoscript.sample.jsonl` |
+| `tools/gen_dataset.py` | **synthetic dataset generator** for fine-tuning a small coding model: templated programs rendered to all 4 dialects, each **verified** (compiles + runs + identical output) → chat-format JSONL with train/val split. See [`data/README.md`](data/README.md) |
 | `picoscript_runtime.py` | reference runtime structures (arena, lease manager, profiling, queue batching) |
 | `picoscript.py` | ISA helpers and instruction encoding |
 | `picoscript_opcodes.py` | Opcode reference |
