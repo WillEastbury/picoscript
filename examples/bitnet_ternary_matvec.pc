@@ -1,0 +1,92 @@
+// bitnet_ternary_matvec.pc — the BitNet b1.58 hot kernel, in PicoScript.
+//
+// A faithful port of trit_dot_row / trit_matvec from
+// bitnet_c/ternary_matrix.c: the 1.58-bit ternary mat-vec that dominates
+// BitNet inference. One PicoScript program, no host floats; runs on every
+// PicoVM (Python / C / JS) and lowers to native C via the toC bridge.
+//
+// Weight packing (identical to the C engine):
+//   5 trits per byte, base-3 big-endian. Encoding 0->0, +1->1, -1->2, so
+//     byte = e0*81 + e1*27 + e2*9 + e3*3 + e4   (each e in {0,1,2})
+//   Decode by repeated %3 / /3 (no LUT needed): the LAST trit e4 is byte%3,
+//   then divide by 3 and repeat up to e0. Map enc->weight: 1->+1, 2->-1.
+//   Padding trits in a row's final byte are 0 (=> contribute nothing).
+//
+// Activations are int8 (two's-complement), one signed byte each.
+//
+// Memory layout the host seeds before running (byte-addressed 64 KB arena):
+//   [0..1]  rows        (big-endian u16)
+//   [2..3]  cols        (big-endian u16)
+//   [4..5]  row_stride  (big-endian u16, packed bytes per row incl. padding)
+//   256 +   activations : int8 bytes (cols of them)
+//   4096 +  packed weights : row r starts at 4096 + r*row_stride
+//
+// Output: for each row, the int32 dot product as 4 big-endian bytes. The
+// int32 -> bytes split uses Bits.* (logical 32-bit shifts) so a negative
+// accumulator serializes correctly as two's complement.
+//
+// Kept within the 16-register budget: trits are consumed LSB-first so a
+// single `e` holds one trit at a time, and the trit-map folds into the
+// accumulate (+a / -a / nothing) — no separate weight or byte temporaries.
+
+int rows = Memory.Get(0) * 256 + Memory.Get(1);
+int cols = Memory.Get(2) * 256 + Memory.Get(3);
+int stride = Memory.Get(4) * 256 + Memory.Get(5);
+int ngroups = (cols + 4) / 5;
+
+int r = 0;
+int g = 0;
+int rowbase = 0;
+int acc = 0;
+int v = 0;
+int idx = 0;
+int e = 0;
+int a = 0;
+
+while (r < rows) {
+    rowbase = 4096 + r * stride;
+    acc = 0;
+    g = 0;
+    while (g < ngroups) {
+        v = Memory.Get(rowbase + g);
+        idx = 256 + g * 5;
+
+        e = v % 3;
+        v = v / 3;
+        a = Memory.Get(idx + 4);
+        a = a > 127 ? a - 256 : a;
+        acc = acc + (e == 1 ? a : (e == 2 ? 0 - a : 0));
+
+        e = v % 3;
+        v = v / 3;
+        a = Memory.Get(idx + 3);
+        a = a > 127 ? a - 256 : a;
+        acc = acc + (e == 1 ? a : (e == 2 ? 0 - a : 0));
+
+        e = v % 3;
+        v = v / 3;
+        a = Memory.Get(idx + 2);
+        a = a > 127 ? a - 256 : a;
+        acc = acc + (e == 1 ? a : (e == 2 ? 0 - a : 0));
+
+        e = v % 3;
+        v = v / 3;
+        a = Memory.Get(idx + 1);
+        a = a > 127 ? a - 256 : a;
+        acc = acc + (e == 1 ? a : (e == 2 ? 0 - a : 0));
+
+        e = v % 3;
+        a = Memory.Get(idx + 0);
+        a = a > 127 ? a - 256 : a;
+        acc = acc + (e == 1 ? a : (e == 2 ? 0 - a : 0));
+
+        g = g + 1;
+    }
+
+    Io.WriteByte(Bits.And(Bits.Shr(acc, 24), 255));
+    Io.WriteByte(Bits.And(Bits.Shr(acc, 16), 255));
+    Io.WriteByte(Bits.And(Bits.Shr(acc, 8), 255));
+    Io.WriteByte(Bits.And(acc, 255));
+
+    r = r + 1;
+}
