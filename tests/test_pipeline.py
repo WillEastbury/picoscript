@@ -460,6 +460,17 @@ ENDIF
 PRINT S
 """
 
+# Regression: single-letter / article-word variable names (a, an, the) must be
+# ordinary identifiers, not swallowed as English articles.
+EN_VARS = """
+Set a to 2 plus 3 times 4.
+Set an to 20 divided by 4.
+Set the to 17 modulo 5.
+Print a.
+Print an.
+Print the.
+"""
+
 # Host-hook span program in the two new surfaces (Python VM == JS VM).
 PY_SPAN = """
 p = 100
@@ -691,6 +702,7 @@ def main():
                 lower_to_bytecode_safe(compile_basic(BASIC_CTRL)))
     check_equiv("english == basic", lower_to_bytecode_safe(compile_english(EN_CTRL)),
                 lower_to_bytecode_safe(compile_basic(BASIC_CTRL)))
+    check("english: var names a/an/the", lower_to_bytecode_safe(compile_english(EN_VARS)), expect_print=[14, 5, 2])
     print("New frontends with host hooks [Python VM == JS VM]:")
     check_pyjs("python: span slice", lower_to_bytecode_safe(compile_python(PY_SPAN)), expect_print=[12, 4])
     check_pyjs("english: span slice", lower_to_bytecode_safe(compile_english(EN_SPAN)), expect_print=[12, 4])

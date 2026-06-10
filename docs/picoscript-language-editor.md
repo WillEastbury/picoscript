@@ -125,7 +125,8 @@ Comparisons are written in words: `is greater than`, `is less than`, `is at leas
 to`, `is` / `equals` / `is equal to` (`==`), `is not` / `is not equal to` (`!=`),
 `exceeds` (`>`), combined with `and` / `or` / `not`. Arithmetic may be written in
 words too — `plus`, `minus`, `times`, `divided by`, `modulo` / `mod` — or with the
-usual symbols. Articles `a`/`an`/`the` before a value are ignored. Line comments `#`.
+usual symbols. Line comments `#`. (Every word that is not a structural keyword is
+an identifier, so `a`, `i`, `the` are ordinary variable names.)
 Example (identical bytecode to the Python and BASIC versions above):
 
 ```text

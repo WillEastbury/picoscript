@@ -467,8 +467,6 @@ class Parser:
                 return Num(1)
             if lw == "false":
                 return Num(0)
-            if lw in ("the", "a", "an"):          # ignore articles before a value
-                return self.parse_atom()
             if (self.at("op", ".") and self.peek(1).kind == "word"
                     and self.peek(2).kind == "op" and self.peek(2).value == "("):
                 self.next()                       # host call Ns.Method(...)

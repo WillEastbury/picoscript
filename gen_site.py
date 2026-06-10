@@ -529,7 +529,7 @@ var MONARCH = {
       [/[()\[\]:,.]/,'delimiter'],[/[+\-*/%=<>!]+/,'operator'] ],
       str:[[/[^"]+/,'string'],[/"/,'string','@pop']],
       str2:[[/[^']+/,'string'],[/'/,'string','@pop']] } },
-  picoenglish: { ignoreCase:true, keywords:['set','let','to','be','add','subtract','from','increase','decrease','multiply','divide','by','print','show','display','if','otherwise','while','repeat','as','long','for','each','times','with','define','do','call','return','stop','break','skip','continue','is','greater','less','than','at','least','most','equal','equals','exceeds','plus','minus','modulo','mod','over','and','or','not','the','a','an','true','false'],
+  picoenglish: { ignoreCase:true, keywords:['set','let','to','be','add','subtract','from','increase','decrease','multiply','divide','by','print','show','display','if','otherwise','while','repeat','as','long','for','each','times','with','define','do','call','return','stop','break','skip','continue','is','greater','less','than','at','least','most','equal','equals','exceeds','plus','minus','modulo','mod','over','and','or','not','true','false'],
     tokenizer:{ root:[
       [/#.*$/,'comment'],
       [/[A-Za-z_]\w*(?=\s*\.\s*[A-Za-z_]\w*\s*\()/,'type'],

@@ -1206,7 +1206,8 @@ trailing <code>.</code> is allowed and idiomatic).</p>
 to</code>, <code>is</code> / <code>equals</code> / <code>is equal to</code> (<code>==</code>), <code>is not</code> / <code>is not equal to</code> (<code>!=</code>),
 <code>exceeds</code> (<code>&gt;</code>), combined with <code>and</code> / <code>or</code> / <code>not</code>. Arithmetic may be written in
 words too — <code>plus</code>, <code>minus</code>, <code>times</code>, <code>divided by</code>, <code>modulo</code> / <code>mod</code> — or with the
-usual symbols. Articles <code>a</code>/<code>an</code>/<code>the</code> before a value are ignored. Line comments <code>#</code>.
+usual symbols. Line comments <code>#</code>. (Every word that is not a structural keyword is
+an identifier, so <code>a</code>, <code>i</code>, <code>the</code> are ordinary variable names.)
 Example (identical bytecode to the Python and BASIC versions above):</p>
 <pre><code class="language-text">Set total to 0.
 For each i from 1 to 10:
@@ -3272,7 +3273,6 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
         var lw = t.value.toLowerCase();
         if (lw === "true") return { t: "Num", value: 1 };
         if (lw === "false") return { t: "Num", value: 0 };
-        if (lw === "the" || lw === "a" || lw === "an") return this.parseAtom();
         if (this.at("op", ".") && this.peek(1).kind === "word" && this.peek(2).kind === "op" && this.peek(2).value === "(") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; }
         return { t: "Var", name: t.value };
       }
@@ -3662,7 +3662,7 @@ var MONARCH = {
       [/[()\[\]:,.]/,'delimiter'],[/[+\-*/%=<>!]+/,'operator'] ],
       str:[[/[^"]+/,'string'],[/"/,'string','@pop']],
       str2:[[/[^']+/,'string'],[/'/,'string','@pop']] } },
-  picoenglish: { ignoreCase:true, keywords:['set','let','to','be','add','subtract','from','increase','decrease','multiply','divide','by','print','show','display','if','otherwise','while','repeat','as','long','for','each','times','with','define','do','call','return','stop','break','skip','continue','is','greater','less','than','at','least','most','equal','equals','exceeds','plus','minus','modulo','mod','over','and','or','not','the','a','an','true','false'],
+  picoenglish: { ignoreCase:true, keywords:['set','let','to','be','add','subtract','from','increase','decrease','multiply','divide','by','print','show','display','if','otherwise','while','repeat','as','long','for','each','times','with','define','do','call','return','stop','break','skip','continue','is','greater','less','than','at','least','most','equal','equals','exceeds','plus','minus','modulo','mod','over','and','or','not','true','false'],
     tokenizer:{ root:[
       [/#.*$/,'comment'],
       [/[A-Za-z_]\w*(?=\s*\.\s*[A-Za-z_]\w*\s*\()/,'type'],

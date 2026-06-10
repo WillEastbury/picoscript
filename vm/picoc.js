@@ -1173,7 +1173,6 @@
         var lw = t.value.toLowerCase();
         if (lw === "true") return { t: "Num", value: 1 };
         if (lw === "false") return { t: "Num", value: 0 };
-        if (lw === "the" || lw === "a" || lw === "an") return this.parseAtom();
         if (this.at("op", ".") && this.peek(1).kind === "word" && this.peek(2).kind === "op" && this.peek(2).value === "(") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; }
         return { t: "Var", name: t.value };
       }
