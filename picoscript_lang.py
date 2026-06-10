@@ -998,7 +998,7 @@ class Compiler:
             return self._compile_flow(opcode, method, args, pc)
         elif namespace == "Net":
             return self._compile_net(method, args, pc)
-        elif namespace in ("Kernel", "Queue", "Random", "Memory", "Span", "Descriptor", "Lease"):
+        elif namespace in ("Kernel", "Queue", "Random", "Memory", "Span", "Descriptor", "Lease", "Context", "Io"):
             return self._compile_host_hook(namespace, method, args, pc)
         else:
             raise SyntaxError(f"Unhandled namespace '{namespace}' at line {pc}")
@@ -1316,6 +1316,20 @@ class Compiler:
             if mode != "reg":
                 raise SyntaxError("Random.U32 arg must be a register")
             rd = value
+        elif namespace == "Context":
+            if len(args) != 1:
+                raise SyntaxError(f"Context.{method} requires one destination register arg")
+            mode, value = parse_arg(args[0])
+            if mode != "reg":
+                raise SyntaxError(f"Context.{method} arg must be a register")
+            rd = value
+        elif namespace == "Io":
+            if len(args) != 1:
+                raise SyntaxError(f"Io.{method} requires one source register arg")
+            mode, value = parse_arg(args[0])
+            if mode != "reg":
+                raise SyntaxError(f"Io.{method} arg must be a register")
+            rs1 = value
         elif namespace == "Memory":
             if method == "ArenaInit":
                 if len(args) != 3:
@@ -1360,6 +1374,27 @@ class Compiler:
                 if m0 != "reg" or m1 != "reg" or m2 != "reg":
                     raise SyntaxError("Span.Slice args must be registers")
                 rs1, rs2, rd = v0, v1, v2
+            elif method == "Len":
+                if len(args) != 2:
+                    raise SyntaxError("Span.Len requires 2 register args (Rspan, Rout)")
+                m0, v0 = parse_arg(args[0]); m1, v1 = parse_arg(args[1])
+                if m0 != "reg" or m1 != "reg":
+                    raise SyntaxError("Span.Len args must be registers")
+                rs1, rd = v0, v1
+            elif method == "Get":
+                if len(args) != 3:
+                    raise SyntaxError("Span.Get requires 3 register args (Rspan, Rindex, Rout)")
+                m0, v0 = parse_arg(args[0]); m1, v1 = parse_arg(args[1]); m2, v2 = parse_arg(args[2])
+                if m0 != "reg" or m1 != "reg" or m2 != "reg":
+                    raise SyntaxError("Span.Get args must be registers")
+                rs1, rs2, rd = v0, v1, v2
+            elif method == "Materialize":
+                if len(args) != 2:
+                    raise SyntaxError("Span.Materialize requires 2 register args (Rspan, Rout)")
+                m0, v0 = parse_arg(args[0]); m1, v1 = parse_arg(args[1])
+                if m0 != "reg" or m1 != "reg":
+                    raise SyntaxError("Span.Materialize args must be registers")
+                rs1, rd = v0, v1
         elif namespace == "Descriptor":
             if method == "Make":
                 if len(args) != 3:
