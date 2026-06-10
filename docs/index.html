@@ -2401,6 +2401,65 @@ decisions — each rule below cites the decision (<code>[D#]</code>) it comes fr
 is the EL0/PicoScript-facing half of the same ABI.</p>
 </blockquote>
 <hr />
+<h2 id="0-invariants">0. Invariants</h2>
+<p>The ABI rests on eight invariants. Everything in §1–§9 is a <em>derivation</em> of these:
+the kernel <strong>enforces</strong> them and a worker may <strong>rely</strong> on them. They are the
+acceptance criteria for any implementation.</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Invariant</th>
+<th>Enforced by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>I1</strong></td>
+<td>The kernel is the sole authority on message boundaries.</td>
+<td>kernel parses request-line + headers and fixes CL/TE framing; the worker gets a length-bounded body it physically cannot read past ⇒ request smuggling is impossible [§1, D1]</td>
+</tr>
+<tr>
+<td><strong>I2</strong></td>
+<td>A descriptor may have only one owner.</td>
+<td><code>pooldesc.owner ∈ {free, thread, kernel}</code>; ownership <strong>moves</strong> (thread → kernel at <code>seal</code>), never shared — linear / <code>iso</code> semantics [§2,§4, D3,D6]</td>
+</tr>
+<tr>
+<td><strong>I3</strong></td>
+<td>A sealed graph is immutable.</td>
+<td><code>seal</code> consumes the <code>iso</code> arena; committed preamble/headers are frozen and use-after-seal is a compile error. Stream mode <strong>appends</strong> new body descriptors, it never mutates sealed ones [§4, D2,D6]</td>
+</tr>
+<tr>
+<td><strong>I4</strong></td>
+<td>A worker may only access leased memory.</td>
+<td>every read goes through a validated <code>pooldesc</code> lease; a revoked lease faults; there are no raw pointers outside leases [§2, D3]</td>
+</tr>
+<tr>
+<td><strong>I5</strong></td>
+<td>Descriptors may not cross capsule boundaries except through kernel-mediated FIFOs.</td>
+<td>descriptors live in a capsule's micro-pool; movement is FIFO messages only — even <code>ipc</code> is kernel-mediated [§2,§6, D3,D5,D8]</td>
+</tr>
+<tr>
+<td><strong>I6</strong></td>
+<td>Protocol legality is enforced by the binding, not the worker.</td>
+<td>the port + kernel enforce framing, phase order, <code>seal</code> immutability and <code>reorder_mode</code>; the worker only expresses intent and <strong>cannot</strong> emit illegal protocol [§1,§4,§5, D1,D5,D7]</td>
+</tr>
+<tr>
+<td><strong>I7</strong></td>
+<td>Reordering may never cross a phase boundary unless explicitly permitted by binding policy.</td>
+<td>the core rule of §4; <code>reorder_mode</code> and range mode are the only openers [§4, D7]</td>
+</tr>
+<tr>
+<td><strong>I8</strong></td>
+<td>Every descriptor is eventually ACKed, revoked or released.</td>
+<td>outbound: <code>RESP_SENT</code> ACK; inbound: worker-scope-exit release or <code>LEASE_REVOKE</code>; no leaks (liveness) [§2,§6, D3,D8]</td>
+</tr>
+</tbody>
+</table>
+<p>Grouped by what they buy: <strong>I1</strong> no smuggling · <strong>I2+I3</strong> linearity &amp; immutability ·
+<strong>I4+I5</strong> memory safety &amp; isolation · <strong>I6</strong> kernel owns protocol reality ·
+<strong>I7</strong> intent-preserving optimization · <strong>I8</strong> no leaks / liveness.</p>
+<hr />
 <h2 id="1-privilege-model-2-tier-minimal-kernel-surface-d1">1. Privilege model (2-tier, minimal kernel surface) [D1]</h2>
 <pre><code>  wire ─► NIC/DMA ─► TLS ─► TCP ─┐                      EL1 (kernel)
                                  │  parse request-line + HEADERS only
@@ -2819,37 +2878,37 @@ unless the binding policy (range mode, <code>reorder_mode = all</code>) explicit
 <thead>
 <tr>
 <th>Property</th>
-<th>How [D#]</th>
+<th>Invariant(s) · How</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>No request smuggling</td>
-<td>kernel is the single message-boundary authority [D1]</td>
+<td><strong>I1</strong> — kernel is the single message-boundary authority [D1]</td>
 </tr>
 <tr>
 <td>No pin / slowloris / UAF on read</td>
-<td>scope-bound leases + kernel revoke [D3]</td>
+<td><strong>I4,I8</strong> — scope-bound leases + kernel revoke + eventual release [D3]</td>
 </tr>
 <tr>
 <td>Use-after-seal is a <strong>compile</strong> error</td>
-<td><code>iso</code> arena consumed at seal [D6]</td>
+<td><strong>I2,I3</strong> — <code>iso</code> arena consumed at seal [D6]</td>
 </tr>
 <tr>
 <td>Deferred status keeps clean 500</td>
-<td>nothing on the wire until <code>end</code> [D2]</td>
+<td><strong>I3,I6</strong> — nothing on the wire until <code>end</code> [D2]</td>
 </tr>
 <tr>
 <td>Zero body copies</td>
-<td>leased spans in/out; coalesce intra-kind only [D3,D7]</td>
+<td><strong>I4,I7</strong> — leased spans in/out; coalesce intra-phase only [D3,D7]</td>
 </tr>
 <tr>
 <td>One substrate, honest lifecycles</td>
-<td>typed binding kinds over shared pooldesc+FIFO [D5]</td>
+<td><strong>I5,I6</strong> — typed binding kinds over shared pooldesc+FIFO [D5]</td>
 </tr>
 <tr>
-<td>No hot-path malloc</td>
-<td>capsule micro-pools, kernel-ACK release [D3,D8]</td>
+<td>No hot-path malloc / no leaks</td>
+<td><strong>I8</strong> — capsule micro-pools, kernel-ACK release [D3,D8]</td>
 </tr>
 </tbody>
 </table>

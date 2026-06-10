@@ -14,6 +14,29 @@ decisions — each rule below cites the decision (`[D#]`) it comes from.
 
 ---
 
+## 0. Invariants
+
+The ABI rests on eight invariants. Everything in §1–§9 is a *derivation* of these:
+the kernel **enforces** them and a worker may **rely** on them. They are the
+acceptance criteria for any implementation.
+
+| # | Invariant | Enforced by |
+|---|-----------|-------------|
+| **I1** | The kernel is the sole authority on message boundaries. | kernel parses request-line + headers and fixes CL/TE framing; the worker gets a length-bounded body it physically cannot read past ⇒ request smuggling is impossible [§1, D1] |
+| **I2** | A descriptor may have only one owner. | `pooldesc.owner ∈ {free, thread, kernel}`; ownership **moves** (thread → kernel at `seal`), never shared — linear / `iso` semantics [§2,§4, D3,D6] |
+| **I3** | A sealed graph is immutable. | `seal` consumes the `iso` arena; committed preamble/headers are frozen and use-after-seal is a compile error. Stream mode **appends** new body descriptors, it never mutates sealed ones [§4, D2,D6] |
+| **I4** | A worker may only access leased memory. | every read goes through a validated `pooldesc` lease; a revoked lease faults; there are no raw pointers outside leases [§2, D3] |
+| **I5** | Descriptors may not cross capsule boundaries except through kernel-mediated FIFOs. | descriptors live in a capsule's micro-pool; movement is FIFO messages only — even `ipc` is kernel-mediated [§2,§6, D3,D5,D8] |
+| **I6** | Protocol legality is enforced by the binding, not the worker. | the port + kernel enforce framing, phase order, `seal` immutability and `reorder_mode`; the worker only expresses intent and **cannot** emit illegal protocol [§1,§4,§5, D1,D5,D7] |
+| **I7** | Reordering may never cross a phase boundary unless explicitly permitted by binding policy. | the core rule of §4; `reorder_mode` and range mode are the only openers [§4, D7] |
+| **I8** | Every descriptor is eventually ACKed, revoked or released. | outbound: `RESP_SENT` ACK; inbound: worker-scope-exit release or `LEASE_REVOKE`; no leaks (liveness) [§2,§6, D3,D8] |
+
+Grouped by what they buy: **I1** no smuggling · **I2+I3** linearity & immutability ·
+**I4+I5** memory safety & isolation · **I6** kernel owns protocol reality ·
+**I7** intent-preserving optimization · **I8** no leaks / liveness.
+
+---
+
 ## 1. Privilege model (2-tier, minimal kernel surface) [D1]
 
 ```
@@ -335,15 +358,15 @@ unless the binding policy (range mode, `reorder_mode = all`) explicitly opens it
 
 ## 9. Properties this ABI guarantees
 
-| Property                          | How [D#]                                            |
+| Property                          | Invariant(s) · How                                  |
 |-----------------------------------|-----------------------------------------------------|
-| No request smuggling              | kernel is the single message-boundary authority [D1]|
-| No pin / slowloris / UAF on read  | scope-bound leases + kernel revoke [D3]             |
-| Use-after-seal is a **compile** error | `iso` arena consumed at seal [D6]               |
-| Deferred status keeps clean 500   | nothing on the wire until `end` [D2]                |
-| Zero body copies                  | leased spans in/out; coalesce intra-kind only [D3,D7]|
-| One substrate, honest lifecycles  | typed binding kinds over shared pooldesc+FIFO [D5]  |
-| No hot-path malloc                | capsule micro-pools, kernel-ACK release [D3,D8]     |
+| No request smuggling              | **I1** — kernel is the single message-boundary authority [D1]|
+| No pin / slowloris / UAF on read  | **I4,I8** — scope-bound leases + kernel revoke + eventual release [D3]|
+| Use-after-seal is a **compile** error | **I2,I3** — `iso` arena consumed at seal [D6]   |
+| Deferred status keeps clean 500   | **I3,I6** — nothing on the wire until `end` [D2]    |
+| Zero body copies                  | **I4,I7** — leased spans in/out; coalesce intra-phase only [D3,D7]|
+| One substrate, honest lifecycles  | **I5,I6** — typed binding kinds over shared pooldesc+FIFO [D5]|
+| No hot-path malloc / no leaks     | **I8** — capsule micro-pools, kernel-ACK release [D3,D8]|
 
 ---
 
