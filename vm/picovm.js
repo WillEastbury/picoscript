@@ -456,6 +456,24 @@
     return out;
   }
 
+  function _jsonesc(b) {
+    var out = [];
+    for (var i = 0; i < b.length; i++) {
+      var c = b[i];
+      if (c === 0x22) { out.push(0x5c, 0x22); }
+      else if (c === 0x5c) { out.push(0x5c, 0x5c); }
+      else if (c === 0x0a) { out.push(0x5c, 0x6e); }
+      else if (c === 0x0d) { out.push(0x5c, 0x72); }
+      else if (c === 0x09) { out.push(0x5c, 0x74); }
+      else if (c < 0x20) {
+        var hx = ("0000" + c.toString(16)).slice(-4);
+        out.push(0x5c, 0x75);
+        for (var j = 0; j < 4; j++) out.push(hx.charCodeAt(j));
+      } else { out.push(c); }
+    }
+    return out;
+  }
+
   PicoVM.prototype._httplib = function (method, rd, rs1, rs2) {
     var src = this._spanBytes(this.regs[rs1]);
     if (method === "ParseQuery" || method === "ParseForm") {
@@ -473,6 +491,24 @@
         out.push(0x0a);
       }
       this.regs[rd] = this._newSpanBytes(out); return true;
+    }
+    if (method === "EncodeJson") {
+      var lines = [], ln = [], i2;
+      for (i2 = 0; i2 < src.length; i2++) { if (src[i2] === 0x0a) { lines.push(ln); ln = []; } else ln.push(src[i2]); }
+      lines.push(ln);
+      var jo = [0x7b], first = true;
+      for (var li = 0; li < lines.length; li++) {
+        var line = lines[li], eq2 = line.indexOf(0x3d);
+        if (eq2 < 0) continue;
+        var ek = _jsonesc(line.slice(0, eq2)), ev = _jsonesc(line.slice(eq2 + 1)), a2;
+        if (!first) jo.push(0x2c);
+        first = false;
+        jo.push(0x22); for (a2 = 0; a2 < ek.length; a2++) jo.push(ek[a2]);
+        jo.push(0x22, 0x3a, 0x22); for (a2 = 0; a2 < ev.length; a2++) jo.push(ev[a2]);
+        jo.push(0x22);
+      }
+      jo.push(0x7d);
+      this.regs[rd] = this._newSpanBytes(jo); return true;
     }
     return false;
   };

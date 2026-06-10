@@ -419,6 +419,26 @@ class HostApi:
                 out.append(c); i += 1
         return bytes(out)
 
+    @staticmethod
+    def _jsonesc(b: bytes) -> bytes:
+        out = bytearray()
+        for c in b:
+            if c == 0x22:
+                out += b'\\"'
+            elif c == 0x5c:
+                out += b'\\\\'
+            elif c == 0x0a:
+                out += b'\\n'
+            elif c == 0x0d:
+                out += b'\\r'
+            elif c == 0x09:
+                out += b'\\t'
+            elif c < 0x20:
+                out += b'\\u%04x' % c
+            else:
+                out.append(c)
+        return bytes(out)
+
     def _httplib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
         # Pure HTTP parsing: query/form -> key=value lines (the Template model format).
         src = self._span_raw(vm, vm.regs[rs1])
@@ -433,6 +453,14 @@ class HostApi:
                     k, v = pair, b""
                 out += self._urldecode(k) + b"=" + self._urldecode(v) + b"\n"
             vm.regs[rd] = self._new_span_bytes(vm, bytes(out)); return True
+        if method == "EncodeJson":
+            items = []
+            for line in src.split(b"\n"):
+                if b"=" not in line:
+                    continue
+                k, v = line.split(b"=", 1)
+                items.append(b'"' + self._jsonesc(k) + b'":"' + self._jsonesc(v) + b'"')
+            vm.regs[rd] = self._new_span_bytes(vm, b"{" + b",".join(items) + b"}"); return True
         return False
 
     def _templatelib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:

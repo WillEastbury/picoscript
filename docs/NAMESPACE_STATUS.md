@@ -13,7 +13,7 @@ where that was my only objection I implemented a representative op to prove it.
 `Bits.*`, `Dot8.*` (NEON SDOT / SMLAD), native `Memory.*`/`Io`, `String.*`,
 `Number.*`, `Maths.Power/Sqrt`, `Template.*` (holes/sections/`{{#each}}`),
 `Compress.PicoCompress/PicoDecompress` (RLE), `Crypto.Sha256`, `Html.Encode/Decode`,
-`Http.ParseQuery/ParseForm` (url-decode -> Template model).
+`Http.ParseQuery/ParseForm` (url-decode -> Template model) + `Http.EncodeJson`.
 (Already present: `Io`, `Json`, `Xml`, `Queue`, `Random`, `Req`, `Resp`, `Span`,
 `Storage`, `Utf8Reader`, `Utf8Writer`.)
 
@@ -57,8 +57,9 @@ implemented; the 64-bit ones are deferred for this reason.
   `PicoCompress` (RLE) is implemented and covers the embedded case.
 - **HTML DOM + HTTP parsing** — `Html.CreateNode/SetAttribute/QuerySelector/
   ParseTree/Serialize` need a mutable tree model + parser. `Http.ParseQuery/
-  ParseForm` (pure URL-decode -> `key=value` Template model) **are implemented**;
-  `Http.ParseJson/EncodeJson` are pure string parsing and could be added next;
+  ParseForm` (pure URL-decode -> `key=value` Template model) and `Http.EncodeJson`
+  (model -> JSON object, with escaping) **are implemented**; `Http.ParseJson`
+  (JSON -> model) is the remaining pure parser and could be added next;
   `Http.ReadHeader/ReadBody` read the host connection (host-injected).
   `Html.Encode/Decode` (pure) are implemented.
 - **Asymmetric / symmetric crypto** — `Crypto.Sign/Verify/Encrypt/Decrypt/

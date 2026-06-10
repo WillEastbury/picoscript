@@ -84,8 +84,36 @@ def main():
             "int outp = Template.Render(plan, model); Io.Write(outp);")
     assert run_both(intg) == b"Hi Bob (admin)", "ParseQuery -> Template.Render"
 
-    print("PASS Http.*: ParseQuery/ParseForm url-decode -> Template model, Python VM == JS VM "
-          "byte-exact (incl. query-string -> Template.Render integration)")
+    # EncodeJson: key=value model -> JSON object.
+    em = b"name=Bob\nrole=admin"
+    e = (setbytes(1000, em) +
+         f"int s = Span.Make(1000, {len(em)});"
+         "int j = Http.EncodeJson(s); Io.Write(j);")
+    assert run_both(e) == b'{"name":"Bob","role":"admin"}', "EncodeJson basic"
+
+    # EncodeJson escaping: quotes + backslash.
+    eq_ = b'k=a"b\\c'
+    e2 = (setbytes(1000, eq_) +
+          f"int s = Span.Make(1000, {len(eq_)});"
+          "int j = Http.EncodeJson(s); Io.Write(j);")
+    assert run_both(e2) == b'{"k":"a\\"b\\\\c"}', "EncodeJson quote/backslash"
+
+    # EncodeJson escaping: tab + control char (\\t, \\u0001).
+    ec = b"k=x\ty\x01z"
+    e3 = (setbytes(1000, ec) +
+          f"int s = Span.Make(1000, {len(ec)});"
+          "int j = Http.EncodeJson(s); Io.Write(j);")
+    assert run_both(e3) == b'{"k":"x\\ty\\u0001z"}', "EncodeJson tab/control"
+
+    # Chain: query string -> model -> JSON response.
+    cq = b"a=1&b=hello+world"
+    e4 = (setbytes(1000, cq) +
+          f"int s = Span.Make(1000, {len(cq)});"
+          "int m = Http.ParseQuery(s); int j = Http.EncodeJson(m); Io.Write(j);")
+    assert run_both(e4) == b'{"a":"1","b":"hello world"}', "ParseQuery -> EncodeJson"
+
+    print("PASS Http.*: ParseQuery/ParseForm url-decode -> Template model + EncodeJson, "
+          "Python VM == JS VM byte-exact (incl. query-string -> Template.Render integration)")
 
 
 if __name__ == "__main__":
