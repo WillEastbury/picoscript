@@ -1,0 +1,344 @@
+{
+  "format_version": 1,
+  "schema_convention": "PicoStore has self-describing PSC1 cards but no persisted schema-card primitive yet. The schema deck is a PicoStore pack named 'schema' with one card per field definition: pack_id, field_name, field_type, required, ordinal. field_type is 'int' or 'str'.",
+  "deck_file_format": {
+    "magic": "PSCDECK1",
+    "layout": "magic[8], pack_name_len:u16, pack_name:utf8, card_count:u32, repeated(card_len:u32, PSC1 card bytes)",
+    "card_encoding": "PicoBinarySerializer PSC1; fields sorted by UTF-8 name bytes for deterministic output"
+  },
+  "references": [
+    {
+      "from": "orders.customer_id",
+      "to": "customers.id"
+    },
+    {
+      "from": "orders.product_id",
+      "to": "products.id"
+    },
+    {
+      "from": "orders.user_id",
+      "to": "users.id"
+    },
+    {
+      "from": "orders.status",
+      "to": "order_statuses.code"
+    },
+    {
+      "from": "customers.country",
+      "to": "countries.code"
+    },
+    {
+      "from": "customers.currency",
+      "to": "currencies.code"
+    },
+    {
+      "from": "countries.currency",
+      "to": "currencies.code"
+    }
+  ],
+  "decks": [
+    {
+      "name": "schema",
+      "file": "schema.pscdeck",
+      "row_count": 40,
+      "schema": [
+        {
+          "name": "pack_id",
+          "type": "str",
+          "required": true,
+          "ordinal": 1
+        },
+        {
+          "name": "field_name",
+          "type": "str",
+          "required": true,
+          "ordinal": 2
+        },
+        {
+          "name": "field_type",
+          "type": "str",
+          "required": true,
+          "ordinal": 3
+        },
+        {
+          "name": "required",
+          "type": "int",
+          "required": true,
+          "ordinal": 4
+        },
+        {
+          "name": "ordinal",
+          "type": "int",
+          "required": true,
+          "ordinal": 5
+        }
+      ]
+    },
+    {
+      "name": "users",
+      "file": "users.pscdeck",
+      "row_count": 8,
+      "schema": [
+        {
+          "name": "id",
+          "type": "int",
+          "required": true,
+          "ordinal": 1
+        },
+        {
+          "name": "name",
+          "type": "str",
+          "required": true,
+          "ordinal": 2
+        },
+        {
+          "name": "email",
+          "type": "str",
+          "required": true,
+          "ordinal": 3
+        },
+        {
+          "name": "role",
+          "type": "str",
+          "required": true,
+          "ordinal": 4
+        },
+        {
+          "name": "active",
+          "type": "int",
+          "required": true,
+          "ordinal": 5
+        }
+      ]
+    },
+    {
+      "name": "customers",
+      "file": "customers.pscdeck",
+      "row_count": 10,
+      "schema": [
+        {
+          "name": "id",
+          "type": "int",
+          "required": true,
+          "ordinal": 1
+        },
+        {
+          "name": "name",
+          "type": "str",
+          "required": true,
+          "ordinal": 2
+        },
+        {
+          "name": "country",
+          "type": "str",
+          "required": true,
+          "ordinal": 3
+        },
+        {
+          "name": "currency",
+          "type": "str",
+          "required": true,
+          "ordinal": 4
+        },
+        {
+          "name": "tier",
+          "type": "str",
+          "required": true,
+          "ordinal": 5
+        }
+      ]
+    },
+    {
+      "name": "products",
+      "file": "products.pscdeck",
+      "row_count": 12,
+      "schema": [
+        {
+          "name": "id",
+          "type": "int",
+          "required": true,
+          "ordinal": 1
+        },
+        {
+          "name": "sku",
+          "type": "str",
+          "required": true,
+          "ordinal": 2
+        },
+        {
+          "name": "name",
+          "type": "str",
+          "required": true,
+          "ordinal": 3
+        },
+        {
+          "name": "category",
+          "type": "str",
+          "required": true,
+          "ordinal": 4
+        },
+        {
+          "name": "price",
+          "type": "int",
+          "required": true,
+          "ordinal": 5
+        },
+        {
+          "name": "stock",
+          "type": "int",
+          "required": true,
+          "ordinal": 6
+        }
+      ]
+    },
+    {
+      "name": "orders",
+      "file": "orders.pscdeck",
+      "row_count": 16,
+      "schema": [
+        {
+          "name": "id",
+          "type": "int",
+          "required": true,
+          "ordinal": 1
+        },
+        {
+          "name": "customer_id",
+          "type": "int",
+          "required": true,
+          "ordinal": 2
+        },
+        {
+          "name": "product_id",
+          "type": "int",
+          "required": true,
+          "ordinal": 3
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "required": true,
+          "ordinal": 4
+        },
+        {
+          "name": "qty",
+          "type": "int",
+          "required": true,
+          "ordinal": 5
+        },
+        {
+          "name": "total",
+          "type": "int",
+          "required": true,
+          "ordinal": 6
+        },
+        {
+          "name": "status",
+          "type": "str",
+          "required": true,
+          "ordinal": 7
+        }
+      ]
+    },
+    {
+      "name": "days_of_week",
+      "file": "days_of_week.pscdeck",
+      "row_count": 7,
+      "schema": [
+        {
+          "name": "id",
+          "type": "int",
+          "required": true,
+          "ordinal": 1
+        },
+        {
+          "name": "name",
+          "type": "str",
+          "required": true,
+          "ordinal": 2
+        },
+        {
+          "name": "short",
+          "type": "str",
+          "required": true,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "name": "currencies",
+      "file": "currencies.pscdeck",
+      "row_count": 6,
+      "schema": [
+        {
+          "name": "code",
+          "type": "str",
+          "required": true,
+          "ordinal": 1
+        },
+        {
+          "name": "symbol",
+          "type": "str",
+          "required": true,
+          "ordinal": 2
+        },
+        {
+          "name": "name",
+          "type": "str",
+          "required": true,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "name": "countries",
+      "file": "countries.pscdeck",
+      "row_count": 10,
+      "schema": [
+        {
+          "name": "code",
+          "type": "str",
+          "required": true,
+          "ordinal": 1
+        },
+        {
+          "name": "name",
+          "type": "str",
+          "required": true,
+          "ordinal": 2
+        },
+        {
+          "name": "currency",
+          "type": "str",
+          "required": true,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "name": "order_statuses",
+      "file": "order_statuses.pscdeck",
+      "row_count": 5,
+      "schema": [
+        {
+          "name": "code",
+          "type": "str",
+          "required": true,
+          "ordinal": 1
+        },
+        {
+          "name": "name",
+          "type": "str",
+          "required": true,
+          "ordinal": 2
+        },
+        {
+          "name": "sort_order",
+          "type": "int",
+          "required": true,
+          "ordinal": 3
+        }
+      ]
+    }
+  ]
+}
