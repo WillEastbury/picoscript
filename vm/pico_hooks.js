@@ -102,6 +102,8 @@
       0x53: "Descriptor.GetLen",
       0x54: "Descriptor.GetFlags",
       0x55: "Descriptor.CopyBatch",
+      0x56: "Dot8.Len",
+      0x57: "Dot8.Of",
       0x58: "Lease.Acquire",
       0x59: "Lease.Release",
       0x5A: "Lease.Validate",

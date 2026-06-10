@@ -27,6 +27,8 @@ int main(int argc, char **argv)
     }
     long arena = strtol(argv[1], NULL, 10);
     long dlen = strtol(argv[2], NULL, 10);
+    long out_off = (argc >= 4) ? strtol(argv[3], NULL, 10) : -1;
+    long out_len = (argc >= 5) ? strtol(argv[4], NULL, 10) : 0;
     if (arena <= 0 || dlen < 0 || dlen > arena) {
         fprintf(stderr, "bad sizes\n");
         return 2;
@@ -57,7 +59,11 @@ int main(int argc, char **argv)
 
     pico_entry(ctx);
 
-    fwrite(ctx->out, 1, (size_t)ctx->out_len, stdout);
+    if (out_len > 0 && out_off >= 0 && out_off + out_len <= arena) {
+        fwrite(ctx->mem + out_off, 1, (size_t)out_len, stdout);   /* arena region */
+    } else {
+        fwrite(ctx->out, 1, (size_t)ctx->out_len, stdout);        /* Io output */
+    }
     fflush(stdout);
     free(ctx->mem);
     free(ctx);

@@ -1,0 +1,32 @@
+// bitnet_int8_matvec.pc — int8 matrix-vector via the Dot8 SIMD primitive.
+//
+// Dot8.Of lowers to native AArch64 NEON SDOT (4x int8 MAC/instr on the A76 /
+// Pi 5), Cortex-M33 SMLAD (dual 16x16 MAC), or a portable scalar loop. This is
+// the hardware-accelerated path for int8 weight matrices (embeddings, LM head,
+// or an int8 ternary layout) — one Dot8.Of per output row.
+//
+// Params (int32 BE at arena 0): P0=rows P1=cols P2=wbase P3=abase P4=obase
+//   weights: int8, row-major (1 byte/weight), row r at wbase + r*cols
+//   acts:    int8 at abase (cols of them)
+//   out:     int32 BE at obase, row r at obase + r*4
+
+int rows = Memory.Get(0)*16777216 + Memory.Get(1)*65536 + Memory.Get(2)*256 + Memory.Get(3);
+int cols = Memory.Get(4)*16777216 + Memory.Get(5)*65536 + Memory.Get(6)*256 + Memory.Get(7);
+int wbase = Memory.Get(8)*16777216 + Memory.Get(9)*65536 + Memory.Get(10)*256 + Memory.Get(11);
+int abase = Memory.Get(12)*16777216 + Memory.Get(13)*65536 + Memory.Get(14)*256 + Memory.Get(15);
+int obase = Memory.Get(16)*16777216 + Memory.Get(17)*65536 + Memory.Get(18)*256 + Memory.Get(19);
+
+Dot8.Len(cols, 0);
+
+int r = 0;
+int acc = 0;
+int ob = 0;
+while (r < rows) {
+    acc = Dot8.Of(wbase + r * cols, abase);
+    ob = obase + r * 4;
+    Memory.Set(ob, Bits.And(Bits.Shr(acc, 24), 255));
+    Memory.Set(ob + 1, Bits.And(Bits.Shr(acc, 16), 255));
+    Memory.Set(ob + 2, Bits.And(Bits.Shr(acc, 8), 255));
+    Memory.Set(ob + 3, Bits.And(acc, 255));
+    r = r + 1;
+}

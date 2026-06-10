@@ -761,6 +761,10 @@ def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool) -> str:
             return f"    pv_mem_set(ctx, (uint32_t)({a}), (int32_t)({b}));"
         if ins.ns == "Io" and ins.method == "WriteByte":
             return f"    pv_io_write(ctx, (int32_t)({a}));"
+        if ins.ns == "Dot8" and ins.method == "Len":
+            return f"    pv_dot8_setlen(ctx, (int)({a}));"
+        if ins.ns == "Dot8" and ins.method == "Of" and isinstance(ins.dst, VReg):
+            return f"    {name_of(ins.dst)} = pv_dot8(ctx, (uint32_t)({a}), (uint32_t)({b}));"
         return f"    {dst}pv_host(ctx, \"{ins.ns}\", \"{ins.method}\", {a}, {b});"
     if op == "load":
         return f"    {name_of(ins.dst)} = pv_load(ctx, {ins.imm});"

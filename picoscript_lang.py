@@ -225,6 +225,10 @@ NAMESPACE_MAP = {
         "Sar": OP_NOOP,
         "Not": OP_NOOP,
     },
+    "Dot8": {
+        "Len": OP_NOOP,     # set active span length for Dot8.Of
+        "Of":  OP_NOOP,     # int8 span dot product (NEON SDOT / SMLAD / scalar)
+    },
     "Memory": {
         "ArenaInit":  OP_NOOP,
         "ArenaAlloc": OP_NOOP,
@@ -505,6 +509,9 @@ HOST_HOOK_CODES = {
     ("Descriptor", "GetLen"):   0x53,
     ("Descriptor", "GetFlags"): 0x54,
     ("Descriptor", "CopyBatch"):0x55,
+    # Dot8 SIMD int8 dot-product hooks (0x56-0x57)
+    ("Dot8", "Len"):            0x56,
+    ("Dot8", "Of"):             0x57,
     # Lease hooks (0x58-0x5D)
     ("Lease", "Acquire"):       0x58,
     ("Lease", "Release"):       0x59,

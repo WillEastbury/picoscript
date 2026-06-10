@@ -54,6 +54,7 @@
     this.queues = {};
     this.rng = 0x4F6CDD1D >>> 0;
     this.mem = new Uint8Array(520 * 1024);   // process arena = RP2350 (Pico 2) 520 KB SRAM
+    this.dotLen = 0;                          // active span length for Dot8.Of
     this.arenaTop = 0x8000;             // bump pointer for Span.Materialize copies
     this.spans = [null];                // span table; handle = index (1-based)
     this.pc = 0;
@@ -238,6 +239,21 @@
       if (name === "Bits.Shr") { this.regs[rd] = (ba >>> bs) | 0; return; }
       if (name === "Bits.Sar") { this.regs[rd] = (ba >> bs) | 0; return; }
       if (name === "Bits.Not") { this.regs[rd] = (~ba) | 0; return; }
+    }
+    if (name.indexOf("Dot8.") === 0) {
+      if (name === "Dot8.Len") { this.dotLen = this.regs[rs1] >>> 0; return; }
+      if (name === "Dot8.Of") {
+        var n = this.dotLen | 0, sz = this.mem.length;
+        var wp = (this.regs[rs1] >>> 0) % sz, ap = (this.regs[rs2] >>> 0) % sz;
+        var acc = 0;
+        for (var di = 0; di < n; di++) {
+          var w8 = this.mem[(wp + di) % sz]; if (w8 > 127) w8 -= 256;
+          var a8 = this.mem[(ap + di) % sz]; if (a8 > 127) a8 -= 256;
+          acc = (acc + w8 * a8) | 0;
+        }
+        this.regs[rd] = acc | 0;
+        return;
+      }
     }
     // ---- program-level card store: Storage.* over a PicoStore --------------
     if (name.indexOf("Storage.") === 0) {

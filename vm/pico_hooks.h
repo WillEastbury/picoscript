@@ -93,6 +93,8 @@
 #define PV_HOOK_DESCRIPTOR_GETLEN                0x53
 #define PV_HOOK_DESCRIPTOR_GETFLAGS              0x54
 #define PV_HOOK_DESCRIPTOR_COPYBATCH             0x55
+#define PV_HOOK_DOT8_LEN                         0x56
+#define PV_HOOK_DOT8_OF                          0x57
 #define PV_HOOK_LEASE_ACQUIRE                    0x58
 #define PV_HOOK_LEASE_RELEASE                    0x59
 #define PV_HOOK_LEASE_VALIDATE                   0x5A

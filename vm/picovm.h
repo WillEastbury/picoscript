@@ -75,6 +75,8 @@ struct pv_ctx {
     uint8_t  *mem;
     long      mem_size;
 
+    int       dot_len;        /* active span length for Dot8.Of */
+
     pv_host_fn host;
 };
 
@@ -110,6 +112,12 @@ void    pv_net_close(pv_ctx *ctx);
 void    pv_net_header(pv_ctx *ctx);
 int64_t pv_host(pv_ctx *ctx, const char *ns, const char *method, int64_t a, int64_t b);
 int64_t pv_dsp(pv_ctx *ctx, int subop, int64_t a, int64_t b);
+
+/* Dot8: signed int8 span dot product, HW-accelerated where available
+ * (AArch64 NEON SDOT / Cortex-M33 SMLAD / portable scalar). pv_dot8_setlen
+ * sets the span length; pv_dot8 dots two arena spans of that length. */
+void    pv_dot8_setlen(pv_ctx *ctx, int n);
+int32_t pv_dot8(pv_ctx *ctx, uint32_t wptr, uint32_t aptr);
 int     pv_cond(pv_ctx *ctx, int mode);
 void    pv_call(pv_ctx *ctx, const char *label);
 void    pv_wait(pv_ctx *ctx);

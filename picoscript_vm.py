@@ -139,6 +139,22 @@ class HostApi:
             if method == "Not":
                 vm.regs[rd] = (~a) & MASK32
                 return
+        if ns == "Dot8":
+            if method == "Len":
+                vm.dot_len = vm.regs[rs1] & MASK32
+                return
+            if method == "Of":
+                n = getattr(vm, "dot_len", 0)
+                size = vm.arena_bytes
+                wp = vm.regs[rs1] % size
+                ap = vm.regs[rs2] % size
+                acc = 0
+                for i in range(n):
+                    w = vm.mem[(wp + i) % size]
+                    a = vm.mem[(ap + i) % size]
+                    acc += (w - 256 if w > 127 else w) * (a - 256 if a > 127 else a)
+                vm.regs[rd] = acc & MASK32
+                return
         # Memory + span / slice / materialize.
         if ns == "Memory" and method == "Set":
             vm.mem[vm.regs[rs1] % vm.arena_bytes] = vm.regs[rs2] & 0xFF
@@ -655,6 +671,7 @@ class PicoVM:
         self.http_type: Optional[str] = None
         self.mem = bytearray(arena_bytes)    # process arena; default = RP2350 (Pico 2) 520 KB SRAM
         self.arena_bytes = arena_bytes
+        self.dot_len = 0                     # active span length for Dot8.Of
         self.arena_top = 0x8000              # bump pointer for Span.Materialize copies
         self.spans: List[Optional[dict]] = [None]   # span table; handle = 1-based index
         self.host = host or HostApi()
