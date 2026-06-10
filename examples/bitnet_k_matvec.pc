@@ -1,0 +1,52 @@
+// bitnet_k_matvec.pc — param-driven ternary mat-vec (native toC kernel).
+// Params (int32 BE at arena 0): P0=rows P1=cols P2=stride P3=wbase P4=abase P5=obase
+//   weights: ternary-packed at wbase, row r at wbase + r*stride
+//   acts:    int8 at abase (cols of them)
+//   out:     int32 BE written to obase, row r at obase + r*4
+int rows = Memory.Get(0)*16777216 + Memory.Get(1)*65536 + Memory.Get(2)*256 + Memory.Get(3);
+int cols = Memory.Get(4)*16777216 + Memory.Get(5)*65536 + Memory.Get(6)*256 + Memory.Get(7);
+int stride = Memory.Get(8)*16777216 + Memory.Get(9)*65536 + Memory.Get(10)*256 + Memory.Get(11);
+int wbase = Memory.Get(12)*16777216 + Memory.Get(13)*65536 + Memory.Get(14)*256 + Memory.Get(15);
+int abase = Memory.Get(16)*16777216 + Memory.Get(17)*65536 + Memory.Get(18)*256 + Memory.Get(19);
+int obase = Memory.Get(20)*16777216 + Memory.Get(21)*65536 + Memory.Get(22)*256 + Memory.Get(23);
+int ngroups = (cols + 4) / 5;
+int r = 0;
+int rb = 0;
+int acc = 0;
+int g = 0;
+int v = 0;
+int idx = 0;
+int e = 0;
+int a = 0;
+int ob = 0;
+while (r < rows) {
+    rb = wbase + r * stride;
+    acc = 0;
+    g = 0;
+    while (g < ngroups) {
+        v = Memory.Get(rb + g);
+        idx = abase + g * 5;
+        e = v % 3; v = v / 3;
+        a = Memory.Get(idx + 4); a = a > 127 ? a - 256 : a;
+        acc = acc + (e == 1 ? a : (e == 2 ? 0 - a : 0));
+        e = v % 3; v = v / 3;
+        a = Memory.Get(idx + 3); a = a > 127 ? a - 256 : a;
+        acc = acc + (e == 1 ? a : (e == 2 ? 0 - a : 0));
+        e = v % 3; v = v / 3;
+        a = Memory.Get(idx + 2); a = a > 127 ? a - 256 : a;
+        acc = acc + (e == 1 ? a : (e == 2 ? 0 - a : 0));
+        e = v % 3; v = v / 3;
+        a = Memory.Get(idx + 1); a = a > 127 ? a - 256 : a;
+        acc = acc + (e == 1 ? a : (e == 2 ? 0 - a : 0));
+        e = v % 3;
+        a = Memory.Get(idx + 0); a = a > 127 ? a - 256 : a;
+        acc = acc + (e == 1 ? a : (e == 2 ? 0 - a : 0));
+        g = g + 1;
+    }
+    ob = obase + r * 4;
+    Memory.Set(ob, Bits.And(Bits.Shr(acc, 24), 255));
+    Memory.Set(ob + 1, Bits.And(Bits.Shr(acc, 16), 255));
+    Memory.Set(ob + 2, Bits.And(Bits.Shr(acc, 8), 255));
+    Memory.Set(ob + 3, Bits.And(acc, 255));
+    r = r + 1;
+}
