@@ -37,6 +37,7 @@ _HOOK_BY_CODE: Dict[int, tuple] = {code: key for key, code in HOST_HOOK_CODES.it
 _CT_BY_VALUE: Dict[int, str] = {v: k for k, v in CONTENT_TYPES.items()}
 
 MASK32 = 0xFFFFFFFF
+ARENA_BYTES = 520 * 1024                  # PicoVM data arena = RP2350 (Pico 2) 520 KB SRAM
 
 
 def _sx16(v: int) -> int:
@@ -140,10 +141,10 @@ class HostApi:
                 return
         # Memory + span / slice / materialize.
         if ns == "Memory" and method == "Set":
-            vm.mem[vm.regs[rs1] & 0xFFFF] = vm.regs[rs2] & 0xFF
+            vm.mem[vm.regs[rs1] % vm.arena_bytes] = vm.regs[rs2] & 0xFF
             return
         if ns == "Memory" and method == "Get":
-            vm.regs[rd] = vm.mem[vm.regs[rs1] & 0xFFFF]
+            vm.regs[rd] = vm.mem[vm.regs[rs1] % vm.arena_bytes]
             return
         if ns == "Span" and method == "Make":
             vm.spans.append({"ptr": vm.regs[rs1] & 0xFFFF, "len": max(0, _sx32(vm.regs[rs2]))})
@@ -644,14 +645,16 @@ class Halt(Exception):
 class PicoVM:
     """Deterministic interpreter for the 16-opcode PicoScript ISA."""
 
-    def __init__(self, host: Optional[HostApi] = None, max_steps: int = 1_000_000):
+    def __init__(self, host: Optional[HostApi] = None, max_steps: int = 1_000_000,
+                 arena_bytes: int = ARENA_BYTES):
         self.regs: List[int] = [0] * isa_num_regs()
         self.cards: Dict[int, int] = {}
         self.call_stack: List[int] = []
         self.output: List[bytes] = []        # PIPE / Net.Body payloads
         self.http_status: Optional[int] = None
         self.http_type: Optional[str] = None
-        self.mem = bytearray(65536)          # process arena (byte-addressable)
+        self.mem = bytearray(arena_bytes)    # process arena; default = RP2350 (Pico 2) 520 KB SRAM
+        self.arena_bytes = arena_bytes
         self.arena_top = 0x8000              # bump pointer for Span.Materialize copies
         self.spans: List[Optional[dict]] = [None]   # span table; handle = 1-based index
         self.host = host or HostApi()

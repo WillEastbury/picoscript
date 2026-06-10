@@ -53,7 +53,7 @@
     this.httpType = null;
     this.queues = {};
     this.rng = 0x4F6CDD1D >>> 0;
-    this.mem = new Uint8Array(65536);   // process arena (byte-addressable)
+    this.mem = new Uint8Array(520 * 1024);   // process arena = RP2350 (Pico 2) 520 KB SRAM
     this.arenaTop = 0x8000;             // bump pointer for Span.Materialize copies
     this.spans = [null];                // span table; handle = index (1-based)
     this.pc = 0;
@@ -182,8 +182,8 @@
       return;
     }
     // ---- memory + span / slice / materialize -----------------------------
-    if (name === "Memory.Set") { this.mem[this.regs[rs1] & 0xFFFF] = this.regs[rs2] & 0xFF; return; }
-    if (name === "Memory.Get") { this.regs[rd] = this.mem[this.regs[rs1] & 0xFFFF]; return; }
+    if (name === "Memory.Set") { this.mem[(this.regs[rs1] >>> 0) % (520 * 1024)] = this.regs[rs2] & 0xFF; return; }
+    if (name === "Memory.Get") { this.regs[rd] = this.mem[(this.regs[rs1] >>> 0) % (520 * 1024)]; return; }
     if (name === "Span.Make") {
       this.spans.push({ ptr: this.regs[rs1] & 0xFFFF, len: Math.max(0, this.regs[rs2] | 0) });
       this.regs[rd] = this.spans.length - 1; return;

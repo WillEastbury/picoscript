@@ -755,6 +755,12 @@ def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool) -> str:
                 expr = None
             if expr is not None:
                 return f"    {name_of(ins.dst)} = {expr};"
+        if ins.ns == "Memory" and ins.method == "Get" and isinstance(ins.dst, VReg):
+            return f"    {name_of(ins.dst)} = pv_mem_get(ctx, (uint32_t)({a}));"
+        if ins.ns == "Memory" and ins.method == "Set":
+            return f"    pv_mem_set(ctx, (uint32_t)({a}), (int32_t)({b}));"
+        if ins.ns == "Io" and ins.method == "WriteByte":
+            return f"    pv_io_write(ctx, (int32_t)({a}));"
         return f"    {dst}pv_host(ctx, \"{ins.ns}\", \"{ins.method}\", {a}, {b});"
     if op == "load":
         return f"    {name_of(ins.dst)} = pv_load(ctx, {ins.imm});"

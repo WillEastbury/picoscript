@@ -69,8 +69,29 @@ struct pv_ctx {
     int32_t   queues[8][64];
     int       qdepth[8];
 
+    /* data arena for Memory.* / Io.WriteByte (caller-provided; NULL = none).
+     * Lets PicoScript-compiled C touch a real byte-addressable arena — the
+     * same model that runs on the Pico (520 KB SRAM) or a host (full model). */
+    uint8_t  *mem;
+    long      mem_size;
+
     pv_host_fn host;
 };
+
+/* ---- arena accessors shared by emitted C (toC) and the interpreter ----
+ * Address wraps modulo the arena size, mirroring picoscript_vm.PicoVM. */
+static inline int32_t pv_mem_get(pv_ctx *ctx, uint32_t addr)
+{
+    return ctx->mem_size ? (int32_t)ctx->mem[addr % (uint32_t)ctx->mem_size] : 0;
+}
+static inline void pv_mem_set(pv_ctx *ctx, uint32_t addr, int32_t val)
+{
+    if (ctx->mem_size) ctx->mem[addr % (uint32_t)ctx->mem_size] = (uint8_t)(val & 0xFF);
+}
+static inline void pv_io_write(pv_ctx *ctx, int32_t b)
+{
+    if (ctx->out_len < PV_MAX_OUT) ctx->out[ctx->out_len++] = (uint8_t)(b & 0xFF);
+}
 
 /* ---- lifecycle ------------------------------------------------------- */
 void pv_init(pv_ctx *ctx);
