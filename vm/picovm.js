@@ -267,6 +267,10 @@
     if (name.indexOf("Number.") === 0) {
       if (this._numberlib(name.slice(7), rd, rs1, rs2)) return;
     }
+    // ---- Template.* (AOT compile-at-save + render) -------------------------
+    if (name.indexOf("Template.") === 0) {
+      if (this._templatelib(name.slice(9), rd, rs1, rs2)) return;
+    }
     // ---- Io: write raw bytes (UTF-8 strings) to the output buffer ----------
     if (name === "Io.Write") {
       var sw = this.spans[this.regs[rs1]];
@@ -308,7 +312,9 @@
 
   function _bcmp(a, b, off) { for (var k = 0; k < b.length; k++) if (a[off + k] !== b[k]) return false; return true; }
   function _bfind(a, n) { if (!n.length) return 0; for (var i = 0; i + n.length <= a.length; i++) if (_bcmp(a, n, i)) return i; return -1; }
+  function _bfind2(a, b0, b1, start) { for (var i = start; i + 1 < a.length; i++) if (a[i] === b0 && a[i + 1] === b1) return i; return -1; }
   function _ws(c) { return c === 32 || c === 9 || c === 10 || c === 13; }
+  function _keystr(arr) { var s = ""; for (var i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]); return s; }
 
   PicoVM.prototype._spanBytes = function (h) {
     if (h <= 0 || h >= this.spans.length || !this.spans[h]) return [];
@@ -364,6 +370,42 @@
     if (method === "ToHex") { this.regs[rd] = this._newSpanBytes(_strBytes((a >>> 0).toString(16))); return true; }
     if (method === "ToOctal") { this.regs[rd] = this._newSpanBytes(_strBytes((a >>> 0).toString(8))); return true; }
     if (method === "ToBinary") { this.regs[rd] = this._newSpanBytes(_strBytes((a >>> 0).toString(2))); return true; }
+    return false;
+  };
+
+  PicoVM.prototype._templatelib = function (method, rd, rs1, rs2) {
+    if (method === "Compile") {
+      var src = this._spanBytes(this.regs[rs1]), plan = [], i = 0, n = src.length;
+      var lit = function (b) { if (b.length) { plan.push(0x01, (b.length >> 8) & 255, b.length & 255); for (var x = 0; x < b.length; x++) plan.push(b[x]); } };
+      while (i < n) {
+        var j = _bfind2(src, 0x7b, 0x7b, i);
+        if (j < 0) { lit(src.slice(i)); break; }
+        lit(src.slice(i, j));
+        var k = _bfind2(src, 0x7d, 0x7d, j + 2);
+        if (k < 0) { lit(src.slice(j)); break; }
+        var key = src.slice(j + 2, k), a0 = 0, a1 = key.length;
+        while (a0 < a1 && _ws(key[a0])) a0++;
+        while (a1 > a0 && _ws(key[a1 - 1])) a1--;
+        key = key.slice(a0, a1); if (key.length > 255) key = key.slice(0, 255);
+        plan.push(0x02, key.length); for (var y = 0; y < key.length; y++) plan.push(key[y]);
+        i = k + 2;
+      }
+      this.regs[rd] = this._newSpanBytes(plan); return true;
+    }
+    if (method === "Render") {
+      var plan = this._spanBytes(this.regs[rs1]), mb = this._spanBytes(this.regs[rs2]), model = {}, cur = [];
+      var commit = function (ln) { var eq = ln.indexOf(0x3d); if (eq >= 0) model[_keystr(ln.slice(0, eq))] = ln.slice(eq + 1); };
+      for (var p = 0; p < mb.length; p++) { if (mb[p] === 0x0a) { commit(cur); cur = []; } else cur.push(mb[p]); }
+      commit(cur);
+      var out = [], i = 0, n = plan.length;
+      while (i < n) {
+        var op = plan[i++];
+        if (op === 0x01) { var ln2 = (plan[i] << 8) | plan[i + 1]; i += 2; for (var q = 0; q < ln2; q++) out.push(plan[i + q]); i += ln2; }
+        else if (op === 0x02) { var kl = plan[i++], ks = _keystr(plan.slice(i, i + kl)); i += kl; var v = model[ks] || []; for (var r = 0; r < v.length; r++) out.push(v[r]); }
+        else break;
+      }
+      this.regs[rd] = this._newSpanBytes(out); return true;
+    }
     return false;
   };
 

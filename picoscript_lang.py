@@ -290,6 +290,10 @@ NAMESPACE_MAP = {
         "Min":            OP_NOOP,
         "Max":            OP_NOOP,
     },
+    "Template": {
+        "Compile":        OP_NOOP,    # AOT: template source span -> compiled plan span (at save time)
+        "Render":         OP_NOOP,    # plan span + model span -> rendered output span
+    },
     "Maths": {
         "Sin":            OP_NOOP,
         "Cos":            OP_NOOP,
@@ -541,6 +545,9 @@ HOST_HOOK_CODES = {
     # Io / output (0x71-0x72)
     ("Io", "Write"):            0x71,
     ("Io", "WriteByte"):        0x72,
+    # Template engine (0x7A-0x7B): AOT-compiled-at-save, holes rendered at run
+    ("Template", "Compile"):    0x7A,
+    ("Template", "Render"):     0x7B,
     # Utf8Writer (0x21-0x27) -- arena-backed string/byte writer
     ("Utf8Writer", "New"):      0x21,
     ("Utf8Writer", "Byte"):     0x22,

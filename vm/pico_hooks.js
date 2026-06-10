@@ -135,6 +135,8 @@
       0x77: "Xml.Text",
       0x78: "Xml.Close",
       0x79: "Xml.Empty",
+      0x7A: "Template.Compile",
+      0x7B: "Template.Render",
       0x80: "String.Concat",
       0x81: "String.Length",
       0x82: "String.Substring",

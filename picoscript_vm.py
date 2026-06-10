@@ -208,6 +208,10 @@ class HostApi:
         if ns == "Number":
             if self._numberlib(vm, method, rd, rs1, rs2):
                 return
+        # Template.* (AOT compile-at-save + render).
+        if ns == "Template":
+            if self._templatelib(vm, method, rd, rs1, rs2):
+                return
         # Io: write raw bytes (UTF-8 strings) to the output buffer.
         if ns == "Io" and method == "Write":
             h = vm.regs[rs1]
@@ -312,6 +316,55 @@ class HostApi:
             R[rd] = self._new_span_bytes(vm, format(a & MASK32, "o").encode()); return True
         if method == "ToBinary":
             R[rd] = self._new_span_bytes(vm, format(a & MASK32, "b").encode()); return True
+        return False
+
+    def _templatelib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
+        # AOT-compiled template: Compile (at save time) turns a {{hole}} source
+        # into a compact plan; Render walks the plan against a key=value model.
+        # Plan ops: 0x01 LEN_HI LEN_LO <bytes>=literal, 0x02 KEYLEN <key>=hole.
+        if method == "Compile":
+            src = self._span_raw(vm, vm.regs[rs1])
+            plan = bytearray()
+
+            def lit(b):
+                if b:
+                    plan.extend((0x01, (len(b) >> 8) & 0xFF, len(b) & 0xFF)); plan.extend(b)
+
+            i, n = 0, len(src)
+            while i < n:
+                j = src.find(b"{{", i)
+                if j < 0:
+                    lit(src[i:]); break
+                lit(src[i:j])
+                k = src.find(b"}}", j + 2)
+                if k < 0:
+                    lit(src[j:]); break
+                key = src[j + 2:k].strip(b" \t\r\n")[:255]
+                plan.extend((0x02, len(key))); plan.extend(key)
+                i = k + 2
+            vm.regs[rd] = self._new_span_bytes(vm, bytes(plan))
+            return True
+        if method == "Render":
+            plan = self._span_raw(vm, vm.regs[rs1])
+            model = {}
+            for line in self._span_raw(vm, vm.regs[rs2]).split(b"\n"):
+                if b"=" in line:
+                    key, val = line.split(b"=", 1)
+                    model[key] = val
+            out = bytearray()
+            i, n = 0, len(plan)
+            while i < n:
+                op = plan[i]; i += 1
+                if op == 0x01:
+                    ln = (plan[i] << 8) | plan[i + 1]; i += 2
+                    out.extend(plan[i:i + ln]); i += ln
+                elif op == 0x02:
+                    kl = plan[i]; i += 1
+                    out.extend(model.get(bytes(plan[i:i + kl]), b"")); i += kl
+                else:
+                    break
+            vm.regs[rd] = self._new_span_bytes(vm, bytes(out))
+            return True
         return False
 
     # -- PIOS Req.*/Resp.* simulated host backend ----------------------------

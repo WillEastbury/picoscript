@@ -126,6 +126,8 @@
 #define PV_HOOK_XML_TEXT                         0x77
 #define PV_HOOK_XML_CLOSE                        0x78
 #define PV_HOOK_XML_EMPTY                        0x79
+#define PV_HOOK_TEMPLATE_COMPILE                 0x7A
+#define PV_HOOK_TEMPLATE_RENDER                  0x7B
 #define PV_HOOK_STRING_CONCAT                    0x80
 #define PV_HOOK_STRING_LENGTH                    0x81
 #define PV_HOOK_STRING_SUBSTRING                 0x82
