@@ -363,6 +363,28 @@ PAGE = r"""<!DOCTYPE html>
     border-radius:6px; padding:6px 8px; font-family:inherit; font-size:12px; }
   textarea { font-family:"SF Mono",Consolas,monospace; width:100%; resize:vertical; }
   .controls { display:flex; gap:6px; margin:8px 0; flex-wrap:wrap; align-items:center; }
+  .file-sidebar { width:230px; background:var(--panel); border-right:1px solid #2c313f;
+    flex-shrink:0; display:flex; flex-direction:column; overflow:hidden; }
+  .file-sidebar.collapsed { width:36px; }
+  .file-sidebar.collapsed .file-body { display:none; }
+  .file-head { display:flex; align-items:center; gap:6px; padding:8px 10px; border-bottom:1px solid #2c313f;
+    color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.08em; font-weight:700; }
+  .file-head button { margin-left:auto; background:none; border:none; color:var(--muted); cursor:pointer; }
+  .file-body { padding:8px; overflow:auto; display:flex; flex-direction:column; gap:8px; }
+  .file-actions { display:flex; gap:5px; flex-wrap:wrap; }
+  .file-actions button { padding:4px 8px; font-size:10.5px; }
+  .file-list { display:flex; flex-direction:column; gap:3px; }
+  .file-item { border:1px solid transparent; border-radius:6px; padding:6px 7px; cursor:pointer; background:#0c0e14; }
+  .file-item:hover { border-color:#2c313f; background:var(--panel2); }
+  .file-item.active { border-color:var(--accent); background:#20263a; }
+  .file-row { display:flex; align-items:center; gap:5px; min-width:0; }
+  .file-name { flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:12px; }
+  .file-dirty { color:var(--warn); width:10px; text-align:center; font-weight:700; }
+  .file-badge { font-size:9px; font-weight:700; border-radius:8px; padding:1px 5px; color:#0f1117; }
+  .file-badge.c { background:var(--c); } .file-badge.basic { background:var(--b); }
+  .file-badge.python { background:var(--py); } .file-badge.english { background:var(--en); }
+  .file-meta { color:var(--muted); font-size:10px; margin-top:3px; }
+  .file-empty,.file-status { color:var(--muted); font-size:11px; line-height:1.4; }
   .cerr { font-family:monospace; font-size:11px; min-height:14px; }
   @media (max-width:800px){
     .sidebar { width:180px; }
@@ -388,6 +410,21 @@ PAGE = r"""<!DOCTYPE html>
 <div class="main">
   <!-- Sidebar tree -->
   <div class="sidebar" id="tree"></div>
+  <div class="file-sidebar" id="fileSidebar">
+    <div class="file-head">Files <button title="Collapse files" onclick="filesToggle()">&#9664;</button></div>
+    <div class="file-body">
+      <div class="file-actions">
+        <button class="ghost" onclick="psFilesNew()">New</button>
+        <button class="ghost" onclick="psFilesOpen()">Open</button>
+        <button class="act" onclick="psFilesSave()">Save</button>
+        <button class="ghost" onclick="psFilesSaveAs()">Save as</button>
+        <button class="ghost" onclick="psFilesRename()">Rename</button>
+        <button class="ghost" onclick="psFilesDelete()">Delete</button>
+      </div>
+      <div class="file-list" id="fileList"></div>
+      <div class="file-status" id="fileStatus"></div>
+    </div>
+  </div>
 
   <!-- Content -->
   <div class="content">
@@ -459,6 +496,7 @@ function setLang(lang){
     b.classList.toggle('active', b.getAttribute('data-lang')===lang);
   });
   document.getElementById('lang').value = lang;
+  if(typeof onLangChange==='function') onLangChange();
   showCard(CUR_CARD);
 }
 
@@ -529,7 +567,8 @@ function stepCard(i){
 function debugCard(i){
   var d=DATA[i], lang=CUR_LANG; if(!d[lang]) lang='basic';
   document.getElementById('lang').value = lang;
-  document.getElementById('src').value = d[lang].src;
+  if(typeof onLangChange==='function') onLangChange();
+  setSrc(d[lang].src);
   compileSrc(false);
   showDbgPanel('dbg-src');
   expandDbg();
@@ -555,8 +594,91 @@ function expandDbg(){
   document.getElementById('dbgPanels').classList.remove('collapsed');
 }
 
+function getSrc(){return document.getElementById('src').value;}
+function setSrc(v){document.getElementById('src').value=v;if(typeof filesRender==='function')filesRender();}
+function onLangChange(){if(typeof filesRender==='function')filesRender();}
+
+// ---- localStorage-backed playground files ----------------------------------
+var PS_FILES_KEY='picoscript.files.v1';
+var PS_ACTIVE_FILE_KEY='picoscript.files.active';
+var ACTIVE_FILE='';
+function filesSafeLocalStorage(){try{return typeof localStorage!=='undefined'?localStorage:null;}catch(e){return null;}}
+function filesRead(){
+  var ls=filesSafeLocalStorage(); if(!ls) return {};
+  try{
+    var raw=ls.getItem(PS_FILES_KEY), parsed=raw?JSON.parse(raw):{}, out={};
+    if(!parsed||typeof parsed!=='object'||Array.isArray(parsed)) return {};
+    Object.keys(parsed).forEach(function(name){
+      var f=parsed[name]||{};
+      if(typeof name==='string'&&name.trim()&&typeof f.src==='string'&&['c','basic','python','english'].indexOf(f.lang)>=0){
+        out[name]={lang:f.lang,src:f.src,updated:Number(f.updated)||0};
+      }
+    });
+    return out;
+  }catch(e){return {};}
+}
+function filesWrite(files){var ls=filesSafeLocalStorage(); if(!ls) return; try{ls.setItem(PS_FILES_KEY,JSON.stringify(files));}catch(e){}}
+function filesSetActive(name){ACTIVE_FILE=name||'';var ls=filesSafeLocalStorage();if(!ls)return;try{if(ACTIVE_FILE)ls.setItem(PS_ACTIVE_FILE_KEY,ACTIVE_FILE);else ls.removeItem(PS_ACTIVE_FILE_KEY);}catch(e){}}
+function filesEscAttr(s){return esc(String(s)).replace(/"/g,'&quot;');}
+function filesStatus(msg,err){var el=document.getElementById('fileStatus');if(el){el.textContent=msg||'';el.style.color=err?'var(--err)':'var(--muted)';}}
+function filesUniqueName(files){
+  var lang=(document.getElementById('lang')||{}).value||'basic', base='Untitled.'+lang, name=base, n=2;
+  while(files[name]) name='Untitled '+(n++)+'.'+lang;
+  return name;
+}
+function filesIsDirty(){
+  if(!ACTIVE_FILE) return false;
+  var f=filesRead()[ACTIVE_FILE]; if(!f) return false;
+  return f.src!==getSrc()||f.lang!==document.getElementById('lang').value;
+}
+function filesRender(){
+  var list=document.getElementById('fileList'); if(!list) return;
+  var files=filesRead(), names=Object.keys(files).sort(function(a,b){return (files[b].updated||0)-(files[a].updated||0)||a.localeCompare(b);});
+  if(!names.length){list.innerHTML='<div class="file-empty">No saved files yet.</div>';return;}
+  var dirty=filesIsDirty();
+  list.innerHTML=names.map(function(name){
+    var f=files[name], isActive=name===ACTIVE_FILE, dot=isActive&&dirty?'*':'';
+    var when=f.updated?new Date(f.updated).toLocaleString():'';
+    return '<div class="file-item'+(isActive?' active':'')+'" data-name="'+filesEscAttr(name)+'">'+
+      '<div class="file-row"><span class="file-dirty">'+dot+'</span><span class="file-name">'+esc(name)+'</span><span class="file-badge '+f.lang+'">'+f.lang+'</span></div>'+
+      '<div class="file-meta">'+(when?esc(when):'saved')+'</div></div>';
+  }).join('');
+  list.querySelectorAll('.file-item').forEach(function(el){el.onclick=function(){psFilesOpen(el.getAttribute('data-name'));};});
+}
+function filesToggle(){var el=document.getElementById('fileSidebar');if(!el)return;el.classList.toggle('collapsed');var b=el.querySelector('.file-head button');if(b)b.innerHTML=el.classList.contains('collapsed')?'&#9654;':'&#9664;';}
+function psFilesList(){return filesRead();}
+function psFilesNew(name){
+  var files=filesRead(); name=(name||((typeof prompt==='function')?prompt('New file name',filesUniqueName(files)):filesUniqueName(files))||'').trim();
+  if(!name) return null;
+  if(files[name]&&typeof confirm==='function'&&!confirm('Replace "'+name+'"?')) return null;
+  setSrc(''); files[name]={lang:document.getElementById('lang').value||'basic',src:'',updated:Date.now()}; filesWrite(files); filesSetActive(name); filesRender(); filesStatus('New file '+name); return name;
+}
+function psFilesSave(name){
+  var files=filesRead(); name=(name||ACTIVE_FILE||((typeof prompt==='function')?prompt('Save file as',filesUniqueName(files)):filesUniqueName(files))||'').trim();
+  if(!name) return null;
+  files[name]={lang:document.getElementById('lang').value||'basic',src:getSrc(),updated:Date.now()}; filesWrite(files); filesSetActive(name); filesRender(); filesStatus('Saved '+name); return name;
+}
+function psFilesSaveAs(name){return psFilesSave(name||((typeof prompt==='function')?prompt('Save file as',ACTIVE_FILE||filesUniqueName(filesRead())):''));}
+function psFilesOpen(name){
+  var files=filesRead(), names=Object.keys(files).sort();
+  name=(name||((typeof prompt==='function')?prompt('Open file',ACTIVE_FILE||names[0]||''):'')||'').trim();
+  if(!name||!files[name]){filesStatus(name?'File not found: '+name:'Open cancelled',!!name);return null;}
+  document.getElementById('lang').value=files[name].lang; onLangChange(); setSrc(files[name].src); filesSetActive(name); filesRender(); filesStatus('Opened '+name); compileSrc(false); return files[name];
+}
+function psFilesRename(oldName,newName){
+  var files=filesRead(); oldName=(oldName||ACTIVE_FILE||'').trim(); if(!oldName||!files[oldName]){filesStatus('No active file to rename',true);return null;}
+  newName=(newName||((typeof prompt==='function')?prompt('Rename file',oldName):'')||'').trim(); if(!newName||newName===oldName)return oldName;
+  if(files[newName]){filesStatus('File already exists: '+newName,true);return null;}
+  files[newName]=files[oldName]; files[newName].updated=Date.now(); delete files[oldName]; filesWrite(files); if(ACTIVE_FILE===oldName)filesSetActive(newName); filesRender(); filesStatus('Renamed to '+newName); return newName;
+}
+function psFilesDelete(name,skipConfirm){
+  var files=filesRead(); name=(name||ACTIVE_FILE||'').trim(); if(!name||!files[name]){filesStatus('No file selected',true);return false;}
+  if(!skipConfirm&&typeof confirm==='function'&&!confirm('Delete "'+name+'"?')) return false;
+  delete files[name]; filesWrite(files); if(ACTIVE_FILE===name)filesSetActive(''); filesRender(); filesStatus('Deleted '+name); return true;
+}
+
 function compileSrc(run){
-  var lang=document.getElementById('lang').value, src=document.getElementById('src').value;
+  var lang=document.getElementById('lang').value, src=getSrc();
   var err=document.getElementById('cerr');
   try {
     var r=PicoCompile.compile(src,lang);
@@ -603,7 +725,10 @@ function jsDisasm(w){
 buildTree();
 showCard(0);
 document.getElementById('lang').value='basic';
-document.getElementById('src').value=DATA[3] && DATA[3].basic ? DATA[3].basic.src : '';
+setSrc(DATA[3] && DATA[3].basic ? DATA[3].basic.src : '');
+document.getElementById('src').addEventListener('input',filesRender);
+document.getElementById('lang').addEventListener('change',function(){onLangChange();});
+(function(){var ls=filesSafeLocalStorage(),active='';try{active=ls?ls.getItem(PS_ACTIVE_FILE_KEY)||'':'';}catch(e){} if(active&&filesRead()[active]) psFilesOpen(active); else filesRender();})();
 compileSrc(false);
 </script>
 </body>
