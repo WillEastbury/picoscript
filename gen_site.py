@@ -105,12 +105,31 @@ def render_docs():
 
 
 def build_namespace_data():
-    """Build namespace -> method list from HOST_HOOK_CODES for the reference docs."""
+    """Namespace -> method list from HOST_HOOK_CODES, tagged implemented vs planned.
+
+    A hook is 'implemented' only if the VM actually dispatches it (unimplemented ones
+    fall through to an 'unknown host' log entry). Codes >0xFF are excluded entirely:
+    the runtime dispatches on imm16 & 0xFF, so a >0xFF code aliases onto another hook
+    and can never be invoked as itself."""
+    from picoscript_il import ILBuilder, Imm, lower_to_bytecode_safe
+    from picoscript_vm import PicoVM
+
+    def is_impl(ns, method, code):
+        b = ILBuilder()
+        d = b.vreg()
+        b.host(ns, method, (Imm(0), Imm(0)), dst=d)
+        try:
+            vm = PicoVM().run(lower_to_bytecode_safe(b.insts))
+        except Exception:
+            return True   # reached a handler that executed (and may have raised on dummy args)
+        return not any(f"host {ns}.{method}" in m for m in vm.host.log)
+
     ns_map = {}
     for (namespace, method), code in sorted(HOST_HOOK_CODES.items(), key=lambda x: x[1]):
-        if namespace not in ns_map:
-            ns_map[namespace] = []
-        ns_map[namespace].append({"method": method, "code": f"0x{code:02X}"})
+        if code > 0xFF:
+            continue      # not runtime-dispatchable (aliases under the 8-bit hook limit)
+        ns_map.setdefault(namespace, []).append(
+            {"method": method, "code": f"0x{code:02X}", "impl": is_impl(namespace, method, code)})
     return ns_map
 
 
@@ -749,7 +768,10 @@ function showDoc(k){document.querySelectorAll('.docpanel').forEach(function(e){e
 // Namespace reference
 function buildNsRef(){
   var NS_DESC={Kernel:'IRQs, profiling, tracing',Req:'Read HTTP request (method, path, headers, body)',Resp:'Construct HTTP response',Queue:'Message queue ops',Random:'RNG',Memory:'Arena memory',Span:'Zero-copy views',Descriptor:'Pool descriptors',Lease:'Memory leases',Storage:'PicoWAL card CRUD',Thread:'Yield hints',Io:'Direct output',Utf8Writer:'Byte/string writer',Utf8Reader:'Span scanner',Json:'JSON construction',Xml:'XML/HTML elements',String:'String library',Number:'Numeric library',Maths:'Math functions',DateTime:'Date/time',Locale:'i18n',Environment:'System info',Context:'Request context',Crypto:'Cryptography',Compress:'Compression',X509:'Certificates',Auth:'Authentication',Http:'HTTP parsing',Html:'HTML DOM'};
-  var html='';for(var ns in NSDATA){html+='<div class="ns-card"><h4>'+esc(ns)+'</h4><div style="color:var(--muted);font-size:11px;margin-bottom:4px">'+(NS_DESC[ns]||'')+'</div>';NSDATA[ns].forEach(function(m){html+='<div class="method">'+esc(ns)+'.'+esc(m.method)+'() <span class="code">'+m.code+'</span></div>';});html+='</div>';}
+  var html='<div style="color:var(--muted);font-size:11.5px;margin-bottom:12px">Host namespaces callable as <code>Namespace.Method(a,b)</code>. <span style="opacity:.55">Greyed / <b>planned</b></span> = defined in the ABI but not yet runtime-dispatchable.</div>';
+  var names=Object.keys(NSDATA).sort(function(a,b){var ai=NSDATA[a].some(function(m){return m.impl;}),bi=NSDATA[b].some(function(m){return m.impl;});return (ai===bi)?a.localeCompare(b):(ai?-1:1);});
+  var BADGE=' <span style="font-size:9px;background:#4a3a1a;color:#ffd27a;padding:1px 5px;border-radius:3px;vertical-align:middle">planned</span>';
+  names.forEach(function(ns){var anyImpl=NSDATA[ns].some(function(m){return m.impl;});html+='<div class="ns-card"'+(anyImpl?'':' style="opacity:.55"')+'><h4>'+esc(ns)+(anyImpl?'':BADGE)+'</h4><div style="color:var(--muted);font-size:11px;margin-bottom:4px">'+(NS_DESC[ns]||'')+'</div>';NSDATA[ns].forEach(function(m){html+='<div class="method"'+(m.impl?'':' style="opacity:.6"')+'>'+esc(ns)+'.'+esc(m.method)+'() <span class="code">'+m.code+'</span>'+(m.impl?'':BADGE)+'</div>';});html+='</div>';});
   document.getElementById('nsContent').innerHTML=html;
 }
 function renderSyntaxRef(){
