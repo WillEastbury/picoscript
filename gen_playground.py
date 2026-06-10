@@ -288,116 +288,147 @@ PAGE = r"""<!DOCTYPE html>
 <title>PicoScript Playground &amp; Language Guide</title>
 <style>
   :root { --accent:#667eea; --bg:#0f1117; --panel:#1a1d27; --panel2:#232734;
-          --text:#e6e8ef; --muted:#9aa0ad; --c:#7ee787; --b:#79c0ff; --py:#ffd866; --en:#f0a3ff; --warn:#ffd866; }
-  * { box-sizing:border-box; }
-  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-         background:var(--bg); color:var(--text); }
-  header { padding:22px 28px; background:linear-gradient(120deg,#1a1d27,#232734);
-           border-bottom:1px solid #2c313f; }
-  header h1 { margin:0; font-size:24px; color:var(--accent); }
-  header p { margin:6px 0 0; color:var(--muted); font-size:13px; }
-  .wrap { display:grid; grid-template-columns:1fr 1fr; gap:0; }
-  @media (max-width:1100px){ .wrap{ grid-template-columns:1fr; } }
-  .col { padding:20px 24px; }
-  h2.section { font-size:14px; text-transform:uppercase; letter-spacing:.08em;
-               color:var(--muted); border-bottom:1px solid #2c313f; padding-bottom:8px; }
-  .card { background:var(--panel); border:1px solid #2c313f; border-radius:10px;
-          margin:0 0 18px; overflow:hidden; }
-  .card h3 { margin:0; padding:12px 16px; font-size:15px; background:var(--panel2); }
-  .card .desc { padding:8px 16px; color:var(--muted); font-size:12.5px; }
-  .pair { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:#2c313f; }
-  .quad { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:#2c313f; }
-  @media (max-width:680px){ .pair{ grid-template-columns:1fr; } .quad{ grid-template-columns:1fr; } }
-  .pane { background:var(--panel); }
-  .pane .lbl { font-size:11px; font-weight:700; padding:6px 12px; color:#0f1117; }
-  .pane.cstyle .lbl { background:var(--c); }
-  .pane.bstyle .lbl { background:var(--b); }
-  .pane.pystyle .lbl { background:var(--py); }
-  .pane.enstyle .lbl { background:var(--en); }
-  pre { margin:0; padding:12px; font-family:"SF Mono",Consolas,monospace; font-size:12px;
-        line-height:1.5; white-space:pre; overflow-x:auto; }
-  .cstyle pre { color:#cde9c8; } .bstyle pre { color:#cfe4ff; }
-  .pystyle pre { color:#f5e6a8; } .enstyle pre { color:#f3d4ff; }
-  .runbar { display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--panel2);
-            border-top:1px solid #2c313f; }
-  button { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:7px 14px;
-           font-weight:600; cursor:pointer; font-size:12.5px; }
-  button:hover { filter:brightness(1.1); } button.ghost { background:#2c313f; color:var(--text); }
-  .out { font-family:"SF Mono",Consolas,monospace; font-size:12.5px; color:var(--warn); }
-  /* debugger */
-  .debugger { position:sticky; top:0; z-index:5; background:#11141c; border-bottom:1px solid #2c313f;
-              padding:14px 24px; }
-  .dbg-grid { display:grid; grid-template-columns:340px 1fr 260px; gap:16px; }
-  @media (max-width:1100px){ .dbg-grid{ grid-template-columns:1fr; } }
-  select, textarea { background:#0c0e14; color:var(--text); border:1px solid #2c313f;
-                     border-radius:6px; padding:7px; font-family:inherit; font-size:12px; width:100%; }
-  textarea { font-family:"SF Mono",Consolas,monospace; height:64px; resize:vertical; }
-  .listing { background:#0c0e14; border:1px solid #2c313f; border-radius:6px; max-height:240px;
-             overflow:auto; font-family:"SF Mono",Consolas,monospace; font-size:12px; }
-  .listing .row { padding:2px 10px; white-space:pre; color:#9aa0ad; }
-  .listing .row.pc { background:#2d3550; color:#fff; }
-  .regs { display:grid; grid-template-columns:repeat(2,1fr); gap:3px 10px; font-family:"SF Mono",monospace;
-          font-size:12px; }
-  .regs .r { color:var(--muted); } .regs .r b { color:var(--text); }
-  .state { font-family:"SF Mono",Consolas,monospace; font-size:12px; color:var(--muted); margin-top:8px; }
-  .controls { display:flex; gap:8px; margin:10px 0; flex-wrap:wrap; }
-  .pill { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600;
-          background:#2c313f; color:var(--muted); }
+          --text:#e6e8ef; --muted:#9aa0ad; --c:#7ee787; --b:#79c0ff; --py:#ffd866; --en:#f0a3ff;
+          --warn:#ffd866; --err:#ff7b72; --sidebar-w:240px; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { height:100%; overflow:hidden; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         background:var(--bg); color:var(--text); display:flex; flex-direction:column; }
   a { color:var(--b); }
+  /* top bar */
+  .topbar { display:flex; align-items:center; gap:14px; padding:8px 16px; background:var(--panel2);
+            border-bottom:1px solid #2c313f; flex-shrink:0; }
+  .topbar h1 { font-size:16px; color:var(--accent); white-space:nowrap; }
+  .lang-toggle { display:flex; gap:2px; background:#0c0e14; border-radius:6px; padding:2px; }
+  .lang-toggle button { border:none; background:none; color:var(--muted); padding:5px 12px;
+    border-radius:4px; font-size:12px; font-weight:600; cursor:pointer; }
+  .lang-toggle button.active { color:#fff; }
+  .lang-toggle button[data-lang="c"].active { background:var(--c); color:#0f1117; }
+  .lang-toggle button[data-lang="basic"].active { background:var(--b); color:#0f1117; }
+  .lang-toggle button[data-lang="python"].active { background:var(--py); color:#0f1117; }
+  .lang-toggle button[data-lang="english"].active { background:var(--en); color:#0f1117; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:600;
+          background:#2c313f; color:var(--muted); }
+  /* main layout */
+  .main { display:flex; flex:1; overflow:hidden; }
+  /* sidebar tree */
+  .sidebar { width:var(--sidebar-w); background:var(--panel); border-right:1px solid #2c313f;
+             overflow-y:auto; flex-shrink:0; padding:10px 0; }
+  .sidebar .group-title { font-size:10px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--muted); padding:10px 14px 4px; font-weight:700; }
+  .sidebar .tree-item { padding:6px 14px 6px 20px; font-size:12px; cursor:pointer;
+    color:var(--text); border-left:3px solid transparent; white-space:nowrap; overflow:hidden;
+    text-overflow:ellipsis; }
+  .sidebar .tree-item:hover { background:var(--panel2); }
+  .sidebar .tree-item.active { border-left-color:var(--accent); background:var(--panel2); color:var(--accent); }
+  /* content area */
+  .content { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+  /* card view */
+  .card-view { flex:1; overflow-y:auto; padding:20px 28px; }
+  .card-view .card-title { font-size:18px; font-weight:700; margin-bottom:4px; }
+  .card-view .card-desc { color:var(--muted); font-size:13px; margin-bottom:14px; max-width:700px; }
+  .card-view pre { background:#0c0e14; border:1px solid #2c313f; border-radius:6px;
+    padding:14px; font-family:"SF Mono",Consolas,monospace; font-size:12.5px; line-height:1.6;
+    overflow-x:auto; max-width:700px; }
+  .card-view pre.cstyle { color:#cde9c8; border-left:3px solid var(--c); }
+  .card-view pre.bstyle { color:#cfe4ff; border-left:3px solid var(--b); }
+  .card-view pre.pystyle { color:#f5e6a8; border-left:3px solid var(--py); }
+  .card-view pre.enstyle { color:#f3d4ff; border-left:3px solid var(--en); }
+  .card-view .run-area { display:flex; align-items:center; gap:10px; margin-top:12px; }
+  .card-view .out { font-family:"SF Mono",Consolas,monospace; font-size:12px; color:var(--warn); }
+  button.act { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:7px 14px;
+    font-weight:600; cursor:pointer; font-size:12px; }
+  button.ghost { background:#2c313f; color:var(--text); border:none; border-radius:6px; padding:7px 14px;
+    font-weight:600; cursor:pointer; font-size:12px; }
+  button.act:hover,button.ghost:hover { filter:brightness(1.12); }
+  /* debugger panels (collapsible bottom) */
+  .dbg-bar { display:flex; gap:2px; background:var(--panel2); border-top:1px solid #2c313f;
+             border-bottom:1px solid #2c313f; padding:0 12px; flex-shrink:0; }
+  .dbg-bar button { border:none; background:none; color:var(--muted); padding:7px 12px;
+    font-size:11px; font-weight:600; cursor:pointer; border-bottom:2px solid transparent; }
+  .dbg-bar button.active { color:var(--accent); border-bottom-color:var(--accent); }
+  .dbg-panels { background:#11141c; border-top:1px solid #2c313f; overflow:hidden;
+    transition:max-height .2s; flex-shrink:0; }
+  .dbg-panels.collapsed { max-height:0 !important; }
+  .dbg-panel { display:none; padding:10px 16px; overflow:auto; }
+  .dbg-panel.active { display:block; }
+  .listing { background:#0c0e14; border:1px solid #2c313f; border-radius:6px; max-height:180px;
+    overflow:auto; font-family:"SF Mono",Consolas,monospace; font-size:11.5px; }
+  .listing .row { padding:2px 10px; white-space:pre; color:var(--muted); }
+  .listing .row.pc { background:#2d3550; color:#fff; }
+  .regs { display:grid; grid-template-columns:repeat(4,1fr); gap:2px 8px; font-family:"SF Mono",monospace; font-size:11.5px; }
+  .regs .r { color:var(--muted); } .regs .r b { color:var(--text); }
+  .state { font-family:"SF Mono",Consolas,monospace; font-size:11.5px; color:var(--muted); margin-top:6px; }
+  select,textarea,input { background:#0c0e14; color:var(--text); border:1px solid #2c313f;
+    border-radius:6px; padding:6px 8px; font-family:inherit; font-size:12px; }
+  textarea { font-family:"SF Mono",Consolas,monospace; width:100%; resize:vertical; }
+  .controls { display:flex; gap:6px; margin:8px 0; flex-wrap:wrap; align-items:center; }
+  .cerr { font-family:monospace; font-size:11px; min-height:14px; }
+  @media (max-width:800px){
+    .sidebar { width:180px; }
+    .regs { grid-template-columns:repeat(2,1fr); }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>PicoScript Playground &amp; Language Guide</h1>
-  <p>Every construct in both surface styles, side by side &mdash; runnable and steppable in your
-     browser on the same VM that runs on bare metal. <span class="pill">case-insensitive</span>
-     <span class="pill">C-style &#123;&#125;</span> <span class="pill">BASIC block</span></p>
-</header>
+<!-- Top bar with language toggle -->
+<div class="topbar">
+  <h1>PicoScript</h1>
+  <div class="lang-toggle" id="langToggle">
+    <button data-lang="c" class="active" onclick="setLang('c')">C &#123;&#125;</button>
+    <button data-lang="basic" onclick="setLang('basic')">BASIC</button>
+    <button data-lang="python" onclick="setLang('python')">Python</button>
+    <button data-lang="english" onclick="setLang('english')">English</button>
+  </div>
+  <span class="pill">case-insensitive</span>
+  <span class="pill">same bytecode</span>
+  <span style="margin-left:auto;font-size:11px;color:var(--muted)">Playground &amp; Guide</span>
+</div>
 
-<div class="debugger">
-  <h2 class="section" style="margin-top:0">Live debugger &mdash; step the bytecode in the browser</h2>
-  <div class="dbg-grid">
-    <div>
-      <div style="font-size:11px;color:#9aa0ad;margin-bottom:4px">compile your own source in the browser:</div>
-      <select id="lang" style="margin-bottom:6px">
-        <option value="c">C-style &#123; &#125;</option>
-        <option value="basic">BASIC block</option>
-        <option value="python">Python-style</option>
-        <option value="english">Natural English</option>
-      </select>
-      <textarea id="src" style="height:120px" spellcheck="false"></textarea>
-      <div class="controls">
-        <button onclick="compileSrc(true)">Compile &amp; Run &#9654;</button>
-        <button class="ghost" onclick="compileSrc(false)">Compile &amp; Step</button>
-      </div>
-      <div id="cerr" style="color:#ff7b72;font-size:11.5px;font-family:monospace;min-height:14px"></div>
-      <hr style="border-color:#2c313f;margin:10px 0">
-      <div style="font-size:11px;color:#9aa0ad;margin-bottom:4px">&hellip;or load a prebuilt example:</div>
-      <select id="prog"></select>
-      <div class="controls">
-        <button onclick="dbgRun()">Run &#9654;</button>
-        <button class="ghost" onclick="dbgStep()">Step</button>
-        <button class="ghost" onclick="dbgReset()">Reset</button>
-      </div>
-      <div style="font-size:11px;color:#9aa0ad;margin-bottom:4px">&hellip;or paste bytecode hex
-        (<code>emit &hellip; --as bytecode --hex</code>):</div>
-      <textarea id="hex" placeholder="04000064&#10;48000001&hellip;"></textarea>
-      <button class="ghost" style="margin-top:6px" onclick="loadHex()">Load hex</button>
+<div class="main">
+  <!-- Sidebar tree -->
+  <div class="sidebar" id="tree"></div>
+
+  <!-- Content -->
+  <div class="content">
+    <div class="card-view" id="cardView"></div>
+
+    <!-- Debugger tab bar -->
+    <div class="dbg-bar">
+      <button class="active" onclick="toggleDbg(this,'dbg-disasm')">Disassembly</button>
+      <button onclick="toggleDbg(this,'dbg-regs')">Registers</button>
+      <button onclick="toggleDbg(this,'dbg-output')">Output</button>
+      <button onclick="toggleDbg(this,'dbg-src')">Source Editor</button>
+      <button style="margin-left:auto" onclick="collapseDbg()">&#9660; Collapse</button>
     </div>
-    <div>
-      <div style="font-size:11px;color:#9aa0ad;margin-bottom:4px">disassembly (current PC highlighted):</div>
-      <div class="listing" id="listing"></div>
-      <div class="state" id="state"></div>
-      <div class="out" id="out" style="margin-top:6px"></div>
-    </div>
-    <div>
-      <div style="font-size:11px;color:#9aa0ad;margin-bottom:4px">registers R0&ndash;R15:</div>
-      <div class="regs" id="regs"></div>
+    <div class="dbg-panels" id="dbgPanels" style="max-height:220px">
+      <div class="dbg-panel active" id="dbg-disasm">
+        <div class="listing" id="listing"></div>
+        <div class="state" id="state"></div>
+      </div>
+      <div class="dbg-panel" id="dbg-regs">
+        <div class="regs" id="regs"></div>
+      </div>
+      <div class="dbg-panel" id="dbg-output">
+        <div class="out" id="out" style="font-size:13px"></div>
+      </div>
+      <div class="dbg-panel" id="dbg-src">
+        <select id="lang" style="width:auto;margin-bottom:6px">
+          <option value="c">C-style</option><option value="basic">BASIC</option>
+          <option value="python">Python</option><option value="english">English</option>
+        </select>
+        <textarea id="src" style="height:100px" spellcheck="false"></textarea>
+        <div class="controls">
+          <button class="act" onclick="compileSrc(true)">Compile &amp; Run &#9654;</button>
+          <button class="ghost" onclick="compileSrc(false)">Compile &amp; Step</button>
+          <button class="ghost" onclick="dbgStep()">Step</button>
+          <button class="ghost" onclick="dbgReset()">Reset</button>
+        </div>
+        <div id="cerr" class="cerr"></div>
+      </div>
     </div>
   </div>
 </div>
-
-<div class="wrap" id="gallery"></div>
 
 <script>/*__HOOKS__*/</script>
 <script>/*__VM__*/</script>
@@ -405,168 +436,174 @@ PAGE = r"""<!DOCTYPE html>
 <script>/*__SER__*/</script>
 <script>/*__STORE__*/</script>
 <script>
-const DATA = /*__DATA__*/;
+var DATA = /*__DATA__*/;
+var CUR_LANG = 'c';
+var CUR_CARD = 0;
 
-// ---- gallery (side-by-side guide) -----------------------------------------
+// pedagogical grouping
+var GROUPS = [
+  {name:'Basics', items:[0]},
+  {name:'Control Flow', items:[1,2,3,4,10,11]},
+  {name:'Operators', items:[5]},
+  {name:'Dispatch & State', items:[6,7]},
+  {name:'Subroutines', items:[8,9]},
+  {name:'I/O & Cards', items:[12,13]}
+];
+
 function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function buildGallery(){
-  const cols = [document.createElement('div'), document.createElement('div')];
-  cols[0].className = 'col'; cols[1].className = 'col';
-  cols[0].innerHTML = '<h2 class="section">Constructs &mdash; left half</h2>';
-  cols[1].innerHTML = '<h2 class="section">Constructs &mdash; right half</h2>';
-  const STYLES = [['c','C { }','cstyle'],['basic','BASIC','bstyle'],['python','PYTHON','pystyle'],['english','ENGLISH','enstyle']];
-  DATA.forEach((d, i) => {
-    const card = document.createElement('div');
-    card.className = 'card';
-    const present = STYLES.filter(s => d[s[0]]);
-    const panes = present.map(s =>
-      '<div class="pane '+s[2]+'"><div class="lbl">'+s[1]+'</div><pre>'+esc(d[s[0]].src)+'</pre></div>').join('');
-    const dbg = present.map(s =>
-      '<button class="ghost" onclick="debugIn('+i+',\''+s[0]+'\')">Debug '+s[1].split(' ')[0]+'</button>').join('');
-    card.innerHTML =
-      '<h3>'+(i+1)+'. '+esc(d.title)+'</h3>'+
-      '<div class="desc">'+esc(d.desc)+'</div>'+
-      '<div class="quad">'+panes+'</div>'+
-      '<div class="runbar">'+
-        '<button onclick="runCard('+i+')">Run &#9654;</button>'+
-        '<span class="out" id="cardout'+i+'">output &rarr; &hellip;</span>'+
-        '<span style="margin-left:auto"></span>'+dbg+
-      '</div>';
-    cols[i % 2].appendChild(card);
+
+// ---- language toggle -------------------------------------------------------
+function setLang(lang){
+  CUR_LANG = lang;
+  document.querySelectorAll('#langToggle button').forEach(function(b){
+    b.classList.toggle('active', b.getAttribute('data-lang')===lang);
   });
-  const g = document.getElementById('gallery');
-  g.appendChild(cols[0]); g.appendChild(cols[1]);
+  document.getElementById('lang').value = lang;
+  showCard(CUR_CARD);
 }
 
-function runWords(hexWords){
-  const vm = new PicoVM();
-  vm.run(hexWords.map(h => parseInt(h, 16) >>> 0));
-  return vm;
-}
-function runCard(i){
-  const d = DATA[i];
-  const STYLES = ['c','basic','python','english'];
-  const parts = []; let ref = null, same = true;
-  STYLES.forEach(s => { if (!d[s]) return;
-    const o = runWords(d[s].words).outputInts();
-    if (ref === null) ref = JSON.stringify(o); else if (JSON.stringify(o) !== ref) same = false;
-    parts.push(s+' &rarr; ['+o.join(', ')+']'); });
-  document.getElementById('cardout'+i).innerHTML =
-    parts.join('  &nbsp; ')+'  '+(same ? '&#10003; identical' : '&#9888; differ');
-}
-
-// ---- debugger -------------------------------------------------------------
-let DBG = { words: [], disasm: [], vm: null };
-
-function buildProgList(){
-  const sel = document.getElementById('prog');
-  const LABELS = {c:'C-style', basic:'BASIC', python:'Python', english:'English'};
-  DATA.forEach((d, i) => {
-    ['c','basic','python','english'].forEach(style => {
-      if (!d[style]) return;
-      const o = document.createElement('option');
-      o.value = i+':'+style;
-      o.textContent = (i+1)+'. '+d.title+'  ['+LABELS[style]+']';
-      sel.appendChild(o);
+// ---- tree ------------------------------------------------------------------
+function buildTree(){
+  var html = '';
+  GROUPS.forEach(function(g){
+    html += '<div class="group-title">'+esc(g.name)+'</div>';
+    g.items.forEach(function(idx){
+      if(idx < DATA.length){
+        html += '<div class="tree-item'+(idx===0?' active':'')+'" data-idx="'+idx+'" onclick="showCard('+idx+')">'+esc(DATA[idx].title)+'</div>';
+      }
     });
   });
-  sel.onchange = loadSelected;
+  document.getElementById('tree').innerHTML = html;
 }
-function loadSelected(){
-  const [i, style] = document.getElementById('prog').value.split(':');
-  const d = DATA[+i][style];
-  DBG.words = d.words.map(h => parseInt(h, 16) >>> 0);
-  DBG.disasm = d.disasm.slice();
+
+// ---- card view -------------------------------------------------------------
+function showCard(idx){
+  CUR_CARD = idx;
+  var d = DATA[idx];
+  var lang = CUR_LANG;
+  if(!d[lang]) lang = d.c ? 'c' : 'basic';
+  var STYLE_CLASS = {c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle'};
+  var cv = document.getElementById('cardView');
+  cv.innerHTML =
+    '<div class="card-title">'+(idx+1)+'. '+esc(d.title)+'</div>'+
+    '<div class="card-desc">'+d.desc+'</div>'+
+    (d[lang] ? '<pre class="'+STYLE_CLASS[lang]+'">'+esc(d[lang].src)+'</pre>' : '<pre style="color:var(--muted)">(not available in this dialect)</pre>')+
+    '<div class="run-area">'+
+      '<button class="act" onclick="runCard('+idx+')">Run &#9654;</button>'+
+      '<button class="ghost" onclick="stepCard('+idx+')">Step</button>'+
+      '<button class="ghost" onclick="debugCard('+idx+')">Debug in editor</button>'+
+      '<span class="out" id="cardout'+idx+'"></span>'+
+    '</div>';
+  document.querySelectorAll('.tree-item').forEach(function(el){
+    el.classList.toggle('active', parseInt(el.getAttribute('data-idx'))===idx);
+  });
+  cv.scrollTop = 0;
+}
+
+// ---- run / step ------------------------------------------------------------
+function runWords(hex){ var vm=new PicoVM(); vm.run(hex.map(function(h){return parseInt(h,16)>>>0;})); return vm; }
+
+function runCard(i){
+  var d=DATA[i], styles=['c','basic','python','english'], parts=[], ref=null, same=true;
+  styles.forEach(function(s){ if(!d[s]) return;
+    var o=runWords(d[s].words).outputInts();
+    if(ref===null) ref=JSON.stringify(o); else if(JSON.stringify(o)!==ref) same=false;
+    parts.push(s+' \u2192 ['+o.join(', ')+']');
+  });
+  var el=document.getElementById('cardout'+i);
+  if(el) el.innerHTML=parts.join(' &nbsp; ')+'  '+(same?'&#10003;':'&#9888;');
+  // also load into debugger
+  var lang=CUR_LANG; if(!d[lang]) lang='basic';
+  DBG.words=d[lang].words.map(function(h){return parseInt(h,16)>>>0;});
+  DBG.disasm=d[lang].disasm.slice();
+  dbgReset(); dbgRun();
+}
+
+function stepCard(i){
+  var d=DATA[i], lang=CUR_LANG; if(!d[lang]) lang='basic';
+  DBG.words=d[lang].words.map(function(h){return parseInt(h,16)>>>0;});
+  DBG.disasm=d[lang].disasm.slice();
   dbgReset();
+  expandDbg();
 }
-function debugIn(i, style){
-  document.getElementById('lang').value = style;
-  document.getElementById('src').value = DATA[i][style].src;
+function debugCard(i){
+  var d=DATA[i], lang=CUR_LANG; if(!d[lang]) lang='basic';
+  document.getElementById('lang').value = lang;
+  document.getElementById('src').value = d[lang].src;
   compileSrc(false);
-  window.scrollTo({ top:0, behavior:'smooth' });
-}
-function loadHex(){
-  const toks = document.getElementById('hex').value.trim().split(/\s+/).filter(Boolean);
-  DBG.words = toks.map(h => parseInt(h, 16) >>> 0);
-  DBG.disasm = DBG.words.map(jsDisasm);
-  dbgReset();
+  showDbgPanel('dbg-src');
+  expandDbg();
 }
 
-// ---- in-browser compile (picoc.js) ----------------------------------------
+// ---- debugger panels -------------------------------------------------------
+var DBG = { words:[], disasm:[], vm:null };
+
+function toggleDbg(btn, panelId){
+  document.querySelectorAll('.dbg-bar button').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  showDbgPanel(panelId);
+  expandDbg();
+}
+function showDbgPanel(id){
+  document.querySelectorAll('.dbg-panel').forEach(function(p){ p.classList.remove('active'); });
+  var el=document.getElementById(id); if(el) el.classList.add('active');
+}
+function collapseDbg(){
+  document.getElementById('dbgPanels').classList.toggle('collapsed');
+}
+function expandDbg(){
+  document.getElementById('dbgPanels').classList.remove('collapsed');
+}
+
 function compileSrc(run){
-  const lang = document.getElementById('lang').value;
-  const src = document.getElementById('src').value;
-  const err = document.getElementById('cerr');
+  var lang=document.getElementById('lang').value, src=document.getElementById('src').value;
+  var err=document.getElementById('cerr');
   try {
-    const r = PicoCompile.compile(src, lang);
-    DBG.words = r.words.map(w => w >>> 0);
-    DBG.disasm = DBG.words.map(jsDisasm);
-    err.textContent = 'compiled ' + DBG.words.length + ' words';
-    err.style.color = '#7ee787';
-    dbgReset();
-    if (run) dbgRun();
-  } catch (e) {
-    err.textContent = String(e.message || e);
-    err.style.color = '#ff7b72';
-  }
+    var r=PicoCompile.compile(src,lang);
+    DBG.words=r.words.map(function(w){return w>>>0;}); DBG.disasm=DBG.words.map(jsDisasm);
+    err.textContent='compiled '+DBG.words.length+' words'; err.style.color='#7ee787';
+    dbgReset(); if(run) dbgRun();
+  } catch(e){ err.textContent=String(e.message||e); err.style.color='#ff7b72'; }
 }
+function dbgReset(){ DBG.vm=new PicoVM(); DBG.vm.load(DBG.words); render(); }
+function dbgStep(){ if(DBG.vm){ DBG.vm.step(); render(); } }
+function dbgRun(){ if(!DBG.vm) dbgReset(); var g=0; while(DBG.vm.step()&&g++<200000){} render(); }
 
-function dbgReset(){
-  DBG.vm = new PicoVM();
-  DBG.vm.load(DBG.words);
-  render();
-}
-function dbgStep(){
-  if (!DBG.vm) return;
-  DBG.vm.step();
-  render();
-}
-function dbgRun(){
-  if (!DBG.vm) dbgReset();
-  let guard = 0;
-  while (DBG.vm.step() && guard++ < 200000) {}
-  render();
-}
 function render(){
-  const vm = DBG.vm; if (!vm) return;
-  const L = document.getElementById('listing');
-  L.innerHTML = DBG.disasm.map((t, idx) =>
-    '<div class="row'+(idx===vm.pc?' pc':'')+'">'+
-    String(idx).padStart(3,' ')+'  '+esc(t)+'</div>').join('');
-  const pcrow = L.querySelector('.row.pc'); if (pcrow) pcrow.scrollIntoView({block:'nearest'});
-  const R = document.getElementById('regs');
-  R.innerHTML = Array.from(vm.regs).map((v,idx)=>
-    '<div class="r">R'+idx+' <b>'+v+'</b></div>').join('');
-  document.getElementById('state').textContent =
-    'pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;
-  document.getElementById('out').textContent =
-    'output: [' + vm.outputInts().join(', ') + ']';
+  var vm=DBG.vm; if(!vm) return;
+  var L=document.getElementById('listing');
+  L.innerHTML=DBG.disasm.map(function(t,idx){
+    return '<div class="row'+(idx===vm.pc?' pc':'')+'">'+String(idx).padStart(3,' ')+'  '+esc(t)+'</div>';
+  }).join('');
+  var pcrow=L.querySelector('.row.pc'); if(pcrow) pcrow.scrollIntoView({block:'nearest'});
+  document.getElementById('regs').innerHTML=Array.from(vm.regs).map(function(v,idx){
+    return '<div class="r">R'+idx+' <b>'+v+'</b></div>';}).join('');
+  document.getElementById('state').textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;
+  document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']';
 }
 
-// minimal JS disassembler for pasted bytecode
 function jsDisasm(w){
-  const names=["NOOP","LOAD","SAVE","PIPE","ADD","SUB","MUL","DIV","INC","JUMP","BRANCH","CALL","RETURN","WAIT","RAISE","DSP"];
-  const br=["EQ","NE","LT","GT","LE","GE","Z","NZ","EOF","ERR"];
-  const op=(w>>>28)&0xF, rd=(w>>>24)&0xF, rs1=(w>>>20)&0xF, rs2=(w>>>16)&0xF, imm=w&0xFFFF;
+  var names=["NOOP","LOAD","SAVE","PIPE","ADD","SUB","MUL","DIV","INC","JUMP","BRANCH","CALL","RETURN","WAIT","RAISE","DSP"];
+  var br=["EQ","NE","LT","GT","LE","GE","Z","NZ","EOF","ERR"];
+  var op=(w>>>28)&0xF, rd=(w>>>24)&0xF, rs1=(w>>>20)&0xF, rs2=(w>>>16)&0xF, imm=w&0xFFFF;
   if(op===0&&(imm&0xFF00)===0x7000) return "HOSTCALL #0x"+(imm&0xFF).toString(16);
   if(op===0&&(imm&0xF000)===0x8000) return "NET.STATUS "+(imm&0xFFF);
   if(op===0&&imm===0xC000) return "NET.CLOSE";
   if(op>=4&&op<=7) return names[op]+" R"+rd+", R"+rs1+(rs2===1?(", R"+(imm&0xF)):(", #"+imm));
   if(op===8) return "INC R"+rd;
   if(op===9) return "JUMP "+imm;
-  if(op===10){ let off=imm&0x8000?imm-0x10000:imm; return "BRANCH "+(br[rs2]||rs2)+" R"+rd+", R"+rs1+", "+(off>=0?"+":"")+off; }
+  if(op===10){ var off=imm&0x8000?imm-0x10000:imm; return "BRANCH "+(br[rs2]||rs2)+" R"+rd+", R"+rs1+", "+(off>=0?"+":"")+off; }
   if(op===11) return "CALL "+imm;
   if(op>=1&&op<=3) return names[op]+" R"+(op===1?rd:rs1)+", [0x"+imm.toString(16)+"]";
   if(op===12) return "RETURN";
   return names[op]||("?"+op);
 }
 
-buildGallery();
-buildProgList();
-loadSelected();
-// prefill the editor with a BASIC example and compile it live
-document.getElementById('lang').value = 'basic';
-document.getElementById('src').value = DATA[3].basic.src;
+// ---- init ------------------------------------------------------------------
+buildTree();
+showCard(0);
+document.getElementById('lang').value='basic';
+document.getElementById('src').value=DATA[3] && DATA[3].basic ? DATA[3].basic.src : '';
 compileSrc(false);
 </script>
 </body>
