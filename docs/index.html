@@ -2367,10 +2367,11 @@ the bytecode and VMs stay frozen.</p>
 <h2 id="suggested-staged-bootstrap">Suggested staged bootstrap</h2>
 <ul>
 <li><strong>Stage 0 — emit (done):</strong> <code>examples/selfhost_emit.pc</code> proves codegen.</li>
-<li><strong>Stage 1 — self-hosted assembler:</strong> a PicoScript program that reads a tiny
-  textual listing (<code>ADD R0 R0 42</code>, one instruction per line) via <code>Utf8Reader</code>
-  and emits bytecode with the Stage-0 idiom. No grammar, no stack — just lex +
-  encode. This is the smallest <em>useful</em> self-hosted tool.</li>
+<li><strong>Stage 1 — self-hosted assembler (done):</strong> <code>examples/selfhost_asm.pc</code> reads
+  a numeric-field textual listing (<code>op rd rs1 rs2 imm</code>, one instruction per
+  line) via <code>Utf8Reader</code> and emits bytecode with the Stage-0 idiom. Verified by
+  <code>tests/test_selfhost_asm.py</code>, which assembles native bytecode, runs the
+  generated program, and asserts byte-for-byte equality with the native compiler.</li>
 <li><strong>Stage 2 — tiny expression compiler:</strong> add an explicit-stack expression parser
   (numbers, <code>+ - * /</code>, <code>print</code>) emitting bytecode directly (skip PicoIL). Proves
   the parse half works under the no-recursion constraint.</li>
@@ -2394,7 +2395,7 @@ kernel (EL1) without ever touching a socket, a TLS record, or HTTP framing. User
 code expresses <strong>application intent</strong> (read the request, construct a response
 graph); the kernel expresses <strong>transport reality</strong> (TCP, TLS, HTTP framing, DMA,
 connection lifecycle).</p>
-<p>This is the contract a worker can rely on. It is the realization of eight design
+<p>This is the contract a worker can rely on. It is the realization of explicit design
 decisions — each rule below cites the decision (<code>[D#]</code>) it comes from.</p>
 <blockquote>
 <p><strong>Status:</strong> design spec. The kernel side lives in the PIOS repo; this document
@@ -2674,7 +2675,105 @@ the point of no return for the status, <strong>not</strong> "the whole response 
 </ul>
 <p>Chunk framing is the kernel's call: all body descriptors known before commit ⇒
 <code>Content-Length</code>; otherwise chunked <code>TE</code> (or a transform/compression forces
-no-CL — see §9). <strong>EL0 never frames chunks.</strong></p>
+no-CL unless buffered — see §4.1). <strong>EL0 never frames chunks.</strong></p>
+<h3 id="41-body-transform-policy-d1d7d9">4.1 Body transform policy [D1,D7,D9]</h3>
+<p>Compression is modeled as a <strong>body-phase transform policy</strong>, not as a new
+<code>DESC_CONTROL</code> marker. The policy has a per-port default and a per-response
+hint/override on the response graph: <code>identity</code>, <code>negotiate</code>, or an allowed set
+such as <code>{gzip, br}</code>. This keeps compression a kernel/DMA-stage concern over the
+whole representation instead of an EL0-visible ordering event; a control marker
+would imply a phase boundary EL0 must reason about, which is exactly what <strong>I6</strong>
+avoids.</p>
+<p>The kernel owns request headers (<strong>I1/D1</strong>), so it parses <code>Accept-Encoding</code>,
+combines it with port policy and the response hint, chooses <code>identity</code> / <code>gzip</code> /
+<code>br</code>, and sets <code>Content-Encoding</code> (and <code>Vary: Accept-Encoding</code>) as needed. EL0 may
+say what transforms are acceptable for this response; EL0 never compresses bytes
+itself. That preserves the descriptor graph as application intent, while making
+compression an explicit exception to pure zero-copy for that body.</p>
+<p>A transform changes the body length, so it runs <strong>before</strong> length finalization and
+before the kernel chooses <code>Content-Length</code> vs streaming framing:</p>
+<table>
+<thead>
+<tr>
+<th>transform applied?</th>
+<th>full body known before <code>DESC_COMMIT</code>?</th>
+<th>binding result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>no</td>
+<td>yes</td>
+<td>emit <code>Content-Length</code> over the original body bytes</td>
+</tr>
+<tr>
+<td>no</td>
+<td>no</td>
+<td>stream with chunked <code>TE</code> (HTTP/1.1) / data frames</td>
+</tr>
+<tr>
+<td>yes</td>
+<td>yes</td>
+<td>either buffer-transform-then-<code>Content-Length</code> if within quota, or stream transformed bytes with chunked <code>TE</code></td>
+</tr>
+<tr>
+<td>yes</td>
+<td>no</td>
+<td>stream transformed bytes with chunked <code>TE</code>; <code>Content-Length</code> is illegal</td>
+</tr>
+</tbody>
+</table>
+<p>If EL0 supplied a stale <code>Content-Length</code>, the binding canonicalizes or removes it;
+EL0 cannot force an illegal combination (<strong>I6</strong>). The transform is an intra-<code>body</code>
+stage, so it may coalesce or remap <code>DESC_BODY</code> spans only within that phase and
+must not cross <code>FLUSH</code>, <code>trailer</code>, <code>commit</code>, or <code>upgrade</code> boundaries (<strong>I7</strong>).</p>
+<h3 id="42-range-mode-policy-d1d7d10">4.2 Range mode policy [D1,D7,D10]</h3>
+<p><code>range_mode</code> is an explicit port/binding policy (<code>off</code>, <code>single</code>, <code>multi</code>). When
+it is enabled, the kernel parses <code>Range</code> / <code>If-Range</code> with the other request
+headers (<strong>I1/D1</strong>) and validates ranges against the selected representation
+length. EL0 still produces the <strong>full</strong> successful response body graph, or a
+kernel-visible length for it; the kernel slices the body phase to the requested
+offset span(s). This is the one sanctioned exception to "no cross-offset body
+reorder", and it is legal only because <code>range_mode</code> opens it explicitly under
+<strong>I7</strong>.</p>
+<p>Range handling applies only to a successful <code>200</code> representation with known
+length. If there is no usable length, the binding ignores <code>Range</code> and sends the
+normal <code>200</code> response. If the range set is syntactically valid but unsatisfiable,
+the kernel discards the body graph and emits <code>416 Range Not Satisfiable</code> with
+<code>Content-Range: bytes */LEN</code>, then ACKs/releases descriptors normally (<strong>I8</strong>).</p>
+<p>Single and multi-range responses are kernel-framed:</p>
+<table>
+<thead>
+<tr>
+<th>range result</th>
+<th>descriptor mapping</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>one satisfiable span</td>
+<td>final preamble becomes <code>206</code>; kernel emits <code>Content-Range: bytes A-B/LEN</code>, a <code>Content-Length</code> for the selected span when legal, and only the sliced <code>DESC_BODY</code> bytes</td>
+</tr>
+<tr>
+<td>multiple satisfiable spans and <code>range_mode = multi</code></td>
+<td>final preamble becomes <code>206</code>; kernel synthesizes <code>multipart/byteranges</code> <code>Content-Type</code>, boundaries, per-part <code>Content-Range</code> headers, and body slices</td>
+</tr>
+<tr>
+<td>multiple ranges with <code>range_mode = single</code></td>
+<td>kernel may coalesce overlapping/adjacent ranges into one span; otherwise it ignores <code>Range</code> and sends the normal <code>200</code> response rather than making EL0 frame multipart</td>
+</tr>
+</tbody>
+</table>
+<p>EL0 never writes multipart boundaries, just as it never writes chunk framing.
+Those bytes are transport/binding reality, not application body intent (<strong>I6</strong>).</p>
+<p>Range plus dynamic transform is deliberately narrow. RFC range semantics apply to
+the selected representation bytes, including any content encoding; serving ranges
+over a freshly compressed stream would require a complete encoded buffer or an
+index. Therefore dynamic kernel transforms are disabled for ranged responses:
+a satisfiable range forces <code>identity</code> unless the selected representation is
+already pre-encoded with a known encoded length. Range wins over <code>negotiate</code>
+because it preserves streaming and avoids making compression a hidden whole-body
+buffering requirement.</p>
 <h3 id="ownership-move-at-seal-d6">Ownership move at <code>seal</code> [D6]</h3>
 <p><code>seal</code> <strong>consumes</strong> the <code>iso</code> response arena (linear/move semantics) → ownership
 flips <strong>thread → kernel</strong> and any <strong>use-after-seal is a compile error</strong> in the
@@ -2729,9 +2828,11 @@ for every request it accepts — distinct from <code>binding_kind</code>, which 
 <strong>per request</strong> (<code>ctx_desc.binding_kind</code>, e.g. an HTTP port that upgrades a given
 request to <code>duplex</code>):</p>
 <pre><code class="language-c">struct port_cfg {
-    uint16_t reorder_mode;    /* strict | bounded | all   [D7]                 */
-    uint32_t body_inline_max; /* &lt;= this many bytes ⇒ inline spans, else cursor [D4] */
-    uint16_t default_kind;    /* binding kind for new connections [D5]         */
+    uint16_t reorder_mode;     /* strict | bounded | all   [D7]                */
+    uint32_t body_inline_max;  /* &lt;= this many bytes ⇒ inline spans, else cursor [D4] */
+    uint16_t default_kind;     /* binding kind for new connections [D5]        */
+    uint16_t transform_policy; /* identity | negotiate | allowed-set default [D9] */
+    uint8_t  range_mode;       /* off | single | multi [D10]                   */
     /* + TLS identity, principal-binding policy, timeouts, quotas …            */
 };
 </code></pre>
@@ -2846,7 +2947,7 @@ HTTP. Each oddity maps to an explicit mechanism — none is left to a heuristic:
 <tr>
 <td>6</td>
 <td><strong>Content-Length vs chunked</strong></td>
-<td>binding policy + a descriptor flag: all <code>DESC_BODY</code> known before <code>DESC_COMMIT</code> ⇒ <code>Content-Length</code>; otherwise chunked <code>TE</code> / streaming.</td>
+<td>binding policy + a descriptor flag: all <code>DESC_BODY</code> known before <code>DESC_COMMIT</code> ⇒ <code>Content-Length</code>; otherwise chunked <code>TE</code> / streaming; transform may force streaming unless buffered (§4.1).</td>
 </tr>
 <tr>
 <td>7</td>
@@ -2856,12 +2957,12 @@ HTTP. Each oddity maps to an explicit mechanism — none is left to a heuristic:
 <tr>
 <td>8</td>
 <td><strong>Compression / transform</strong></td>
-<td>a transform (gzip/brotli) changes body length, so it must run <strong>before length finalization</strong> or force chunked / no-CL. Modeled as a transform attribute on the <code>body</code> phase, applied before the kernel picks CL vs chunked (#6).</td>
+<td>see §4.1: transform is a body-phase policy chosen by the kernel from <code>Accept-Encoding</code> + EL0 hints, and it runs before length/framing finalization.</td>
 </tr>
 <tr>
 <td>9</td>
 <td><strong>Range responses (<code>206</code>)</strong></td>
-<td>an explicit <strong>range mode</strong> on the binding permits the kernel to <strong>slice / reorder <code>body</code> spans</strong> — the one sanctioned exception to "no cross-offset body reorder".</td>
+<td>see §4.2: explicit <code>range_mode</code> lets the kernel slice body spans, synthesize <code>206</code> / multipart framing, or emit <code>416</code>.</td>
 </tr>
 <tr>
 <td>10</td>
@@ -2899,8 +3000,8 @@ unless the binding policy (range mode, <code>reorder_mode = all</code>) explicit
 <td><strong>I3,I6</strong> — nothing on the wire until <code>end</code> [D2]</td>
 </tr>
 <tr>
-<td>Zero body copies</td>
-<td><strong>I4,I7</strong> — leased spans in/out; coalesce intra-phase only [D3,D7]</td>
+<td>Zero body copies (untransformed)</td>
+<td><strong>I4,I7</strong> — leased spans in/out; coalesce intra-phase only; transform is an explicit opt-out [D3,D7,D9]</td>
 </tr>
 <tr>
 <td>One substrate, honest lifecycles</td>
@@ -2963,6 +3064,16 @@ unless the binding policy (range mode, <code>reorder_mode = all</code>) explicit
 <td>Write ordering</td>
 <td>kernel-ACK FIFO release + kernel-assigned connection-scoped sequence/stream id</td>
 </tr>
+<tr>
+<td>9</td>
+<td>Transform policy</td>
+<td>compression is a body-phase kernel policy (not an EL0 descriptor); dynamic transforms run before length finalization and may opt out of pure zero-copy</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Range mode</td>
+<td><code>range_mode</code> is the explicit opener that lets the kernel slice body spans, synthesize <code>206</code> / multipart framing, and disables dynamic transforms for ranged responses</td>
+</tr>
 </tbody>
 </table></div>
 </div>
@@ -2993,11 +3104,30 @@ unless the binding policy (range mode, <code>reorder_mode = all</code>) explicit
       0x04: "Kernel.ProfileStart",
       0x05: "Kernel.ProfileEnd",
       0x06: "Kernel.TracePoint",
+      0x07: "Req.Seq",
+      0x08: "Req.Principal",
+      0x09: "Req.Method",
+      0x0A: "Req.Path",
+      0x0B: "Req.Header",
+      0x0C: "Req.BodyMode",
+      0x0D: "Req.BodyCount",
+      0x0E: "Req.BodySpan",
       0x10: "Queue.Dequeue",
       0x11: "Queue.Enqueue",
       0x12: "Queue.Depth",
       0x13: "Queue.DequeueBatch",
       0x14: "Queue.EnqueueBatch",
+      0x15: "Resp.Status",
+      0x16: "Resp.Header",
+      0x17: "Resp.Write",
+      0x18: "Resp.Trailer",
+      0x19: "Resp.Seal",
+      0x1A: "Resp.End",
+      0x1B: "Resp.Respond",
+      0x1C: "Resp.Flush",
+      0x1D: "Resp.Continue",
+      0x1E: "Resp.EndStream",
+      0x1F: "Resp.Upgrade",
       0x20: "Random.U32",
       0x21: "Utf8Writer.New",
       0x22: "Utf8Writer.Byte",
@@ -3022,6 +3152,8 @@ unless the binding policy (range mode, <code>reorder_mode = all</code>) explicit
       0x35: "Memory.Poke",
       0x36: "Memory.Set",
       0x37: "Memory.Get",
+      0x38: "Resp.Abort",
+      0x39: "Resp.EarlyHints",
       0x40: "Span.Make",
       0x41: "Span.Slice",
       0x42: "Span.Materialize",
@@ -3280,6 +3412,12 @@ unless the binding policy (range mode, <code>reorder_mode = all</code>) explicit
     this.waiting = false;
     this.program = [];
     this.log = [];
+    // Simulated PIOS I/O binding: one bound request context (I4) and one
+    // response descriptor graph builder (I2) per VM invocation.
+    this.requestContext = null;
+    this.responseGraph = [];
+    this.responseSealed = false;
+    this.responseEnded = false;
   };
 
   PicoVM.prototype.load = function (words) {
@@ -3419,6 +3557,13 @@ unless the binding policy (range mode, <code>reorder_mode = all</code>) explicit
       var idx = this.regs[rs2] | 0;
       this.regs[rd] = (idx >= 0 && idx < sg.len) ? this.mem[sg.ptr + idx] : 0; return;
     }
+    // ---- EL0-facing PIOS request/response hooks ---------------------------
+    if (name.indexOf("Req.") === 0) {
+      if (this._req(name.slice(4), rd, rs1, rs2)) return;
+    }
+    if (name.indexOf("Resp.") === 0) {
+      if (this._resp(name.slice(5), rd, rs1, rs2)) return;
+    }
     if (name === "Queue.Enqueue") {
       (this.queues[rs1] = this.queues[rs1] || []).push(this.regs[rd] | 0);
       return;
@@ -3473,6 +3618,120 @@ unless the binding policy (range mode, <code>reorder_mode = all</code>) explicit
     for (var i = 0; i < b.length; i++) this.mem[dst + i] = b[i];
     this.spans.push({ ptr: dst, len: b.length });
     return this.spans.length - 1;
+  };
+
+  // ---- PIOS Req.*/Resp.* simulated host backend --------------------------
+  PicoVM.prototype.setRequestContext = function (ctx) {
+    ctx = ctx || {};
+    var headers = ctx.headers || {}, body = ctx.body || [], hdr = {};
+    Object.keys(headers).forEach(function (k) {
+      hdr[String(k).toLowerCase()] = {
+        name: this._strSpan(String(k)),
+        value: this._strSpan(String(headers[k]))
+      };
+    }, this);
+    this.requestContext = {
+      seq: (ctx.seq || 0) >>> 0,
+      principal: this._strSpan(String(ctx.principal || "")),
+      method: this._strSpan(String(ctx.method || "GET")),
+      path: this._strSpan(String(ctx.path || "/")),
+      headers: hdr,
+      bodyMode: (ctx.bodyMode || ctx.body_mode || 0) >>> 0,
+      body: body.map(function (chunk) { return this._strSpan(String(chunk)); }, this)
+    };
+    this.responseGraph = [];
+    this.responseSealed = false;
+    this.responseEnded = false;
+  };
+  PicoVM.prototype.installRequestContext = PicoVM.prototype.setRequestContext;
+  PicoVM.prototype.getResponseGraph = function () {
+    return this.responseGraph.map(function (d) {
+      return { kind: d.kind, subtype: d.subtype, payload: d.payload };
+    });
+  };
+  PicoVM.prototype._requireRequestContext = function () {
+    // I4: Req.* reads are confined to the kernel-installed bound context.
+    if (!this.requestContext) throw new Error("I4 violation: Req.* without installed request context");
+    return this.requestContext;
+  };
+  PicoVM.prototype._ensureResponseOpen = function () {
+    // I2: there is exactly one response graph being built; End closes it.
+    if (this.responseEnded) throw new Error("I2 violation: response graph already finalized");
+  };
+  PicoVM.prototype._ensurePreambleMutable = function () {
+    // I3: after Seal, the preamble and headers are immutable/frozen.
+    if (this.responseSealed) throw new Error("I3 violation: response preamble/headers sealed");
+  };
+  PicoVM.prototype._desc = function (kind, subtype, payload) {
+    return { kind: kind, subtype: subtype == null ? null : subtype, payload: payload == null ? null : payload };
+  };
+  PicoVM.prototype._spanPayload = function (handle) {
+    var s = (handle > 0 && handle < this.spans.length) ? this.spans[handle] : { ptr: 0, len: 0 };
+    return { span: handle | 0, text: this._spanStr(handle | 0), ptr: s.ptr, len: s.len };
+  };
+  PicoVM.prototype._respStatus = function (code) {
+    this._ensureResponseOpen();
+    this._ensurePreambleMutable();
+    var desc = this._desc("DESC_PREAMBLE", "STATUS", { code: code | 0 });
+    for (var i = 0; i < this.responseGraph.length; i++) {
+      if (this.responseGraph[i].kind === "DESC_PREAMBLE" && this.responseGraph[i].subtype === "STATUS") {
+        this.responseGraph[i] = desc; return;
+      }
+    }
+    this.responseGraph.push(desc);
+  };
+  PicoVM.prototype._respSeal = function () {
+    this._ensureResponseOpen();
+    if (!this.responseSealed) {
+      this.responseGraph.push(this._desc("DESC_COMMIT", "SEAL", null));
+      this.responseSealed = true;
+    }
+  };
+  PicoVM.prototype._respEnd = function () {
+    this._ensureResponseOpen();
+    this.responseGraph.push(this._desc("DESC_COMMIT", "END", null));
+    this.responseEnded = true;
+  };
+  PicoVM.prototype._req = function (method, rd, rs1, rs2) {
+    var ctx = this._requireRequestContext(), R = this.regs;
+    if (method === "Seq") { R[rd] = ctx.seq | 0; return true; }
+    if (method === "Principal") { R[rd] = ctx.principal | 0; return true; }
+    if (method === "Method") { R[rd] = ctx.method | 0; return true; }
+    if (method === "Path") { R[rd] = ctx.path | 0; return true; }
+    if (method === "Header") { var h = ctx.headers[this._spanStr(R[rs1]).toLowerCase()]; R[rd] = h ? h.value : 0; return true; }
+    if (method === "BodyMode") { R[rd] = ctx.bodyMode | 0; return true; }
+    if (method === "BodyCount") { R[rd] = ctx.body.length | 0; return true; }
+    if (method === "BodySpan") { var idx = R[rs1] | 0; R[rd] = (idx >= 0 && idx < ctx.body.length) ? ctx.body[idx] : 0; return true; }
+    return false;
+  };
+  PicoVM.prototype._resp = function (method, rd, rs1, rs2) {
+    var R = this.regs;
+    if (method === "Status") { this._respStatus(R[rs1]); return true; }
+    if (method === "Header") {
+      this._ensureResponseOpen(); this._ensurePreambleMutable();
+      this.responseGraph.push(this._desc("DESC_HEADER", null, { name: this._spanPayload(R[rs1]), value: this._spanPayload(R[rs2]) }));
+      return true;
+    }
+    if (method === "Write") {
+      this._ensureResponseOpen();
+      this.responseGraph.push(this._desc("DESC_BODY", null, this._spanPayload(R[rs1])));
+      return true;
+    }
+    if (method === "Trailer") {
+      this._ensureResponseOpen();
+      this.responseGraph.push(this._desc("DESC_TRAILER", null, { name: this._spanPayload(R[rs1]), value: this._spanPayload(R[rs2]) }));
+      return true;
+    }
+    if (method === "Seal") { this._respSeal(); return true; }
+    if (method === "End") { this._respEnd(); return true; }
+    if (method === "Respond") { this._respStatus(R[rs1]); this._respSeal(); this._respEnd(); return true; }
+    if (method === "Flush") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "FLUSH", null)); return true; }
+    if (method === "Continue") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "CONTINUE_100", null)); return true; }
+    if (method === "EndStream") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "END_STREAM", null)); return true; }
+    if (method === "Upgrade") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_UPGRADE", null, this._spanPayload(R[rs1]))); return true; }
+    if (method === "Abort") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_ABORT", null, { code: R[rs1] | 0 })); this.responseEnded = true; return true; }
+    if (method === "EarlyHints") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "EARLY_HINTS_103", null)); return true; }
+    return false;
   };
 
   // Mirrors picoscript_vm HostApi._textio: arena-backed Utf8Writer/Reader + Json/Xml.
