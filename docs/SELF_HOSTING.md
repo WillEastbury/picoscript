@@ -108,3 +108,176 @@ demonstrable, and reuses the proven Stage-0 emitter. Treat full self-hosting as 
 the `Memory`-backed style too unwieldy — and keep the 16-opcode ISA and both VMs
 frozen throughout, so every self-hosted output remains verifiable against the
 native compiler byte-for-byte.
+
+## On-device editor and live program cards on PIOS
+
+This is a feasibility sketch for a stronger target than "PicoScript can emit
+bytecode": the **editor itself** runs as an EL0 PicoScript/PIOS capsule, edits
+source stored on the device, compiles it to bytecode cards, and hot-reloads a
+running capsule without a host. It is plausible, but it depends on the staged
+bootstrap above maturing past the current Stage 1 assembler. Today the reliable
+path is still host-assisted; the fully self-hosted loop starts becoming useful at
+Stage 2 and becomes a real on-device development environment around Stage 3.
+
+### Editor as an EL0 capsule
+
+Treat the editor as an ordinary capsule bound to a PIOS binding, not as a kernel
+special case. The binding can be one of:
+
+- a `duplex` terminal/WebSocket-like port for an interactive screen editor;
+- a `stream`/`unary` console binding for a line editor or batch edit command;
+- an `ipc` binding where a separate shell capsule sends edit operations.
+
+The kernel-owned pieces are the same ones described in `PIOS_IO_BINDING.md`:
+
+- **Input FIFO:** keystrokes, paste chunks, terminal resize events, or network
+  frames arrive as `CTX_READY`/`BODY_CHUNK`-style messages. The editor reads only
+  through lease-validated `pooldesc` spans, so input is length-bounded and
+  revocable (I4/I8).
+- **Output binding:** the editor renders either a framebuffer/console descriptor
+  stream or a network response/body stream. The editor expresses screen deltas as
+  descriptor bodies; the binding owns the transport details and ordering legality
+  (I6/I7).
+- **Lease/pooldesc memory:** the editor's text buffer, token cache, dirty ranges,
+  and output spans live in the capsule's micro-pool or in `Memory`/`Span`
+  structures. Descriptors stay single-owner (I2) and never cross to the compiler
+  or runner except through kernel-mediated FIFOs (I5).
+
+The important constraint is that the editor is not allowed to "borrow" another
+capsule's source buffer directly. It can send an edit/save request over an `ipc`
+FIFO, or persist a new source card and hand over the card id. That keeps the
+capsule boundary honest.
+
+### Compile path: self-hosted vs host-assisted
+
+There are two viable compile paths, with different readiness:
+
+1. **Host-assisted now.** A host cross-compiles source to PicoScript bytecode and
+   ships both source and compiled module cards to PicoStore/PicoWAL. PIOS can then
+   load and run the module from cards. This is feasible before the compiler is
+   self-hosted because the on-device side only needs card storage, capsule spawn,
+   and bytecode validation/loading.
+2. **Self-hosted later.** The on-device compiler should extend the completed
+   Stage 1 numeric assembler toward the staged plan above:
+   - Stage 2 gives the first useful on-device compiler: a tiny expression/parser
+     subset (`print`, numbers, arithmetic) that emits bytecode directly.
+   - Stage 3 unlocks practical edit/compile/run demos: assignments, `if`, and
+     `while`, still likely skipping PicoIL and using `Memory`-backed token,
+     symbol, and operand stacks.
+   - Stage 4 is the fixed point: the compiler compiles the subset it is written
+     in.
+
+Be explicit about the tradeoff: a self-hosted compiler for the full current
+Python toolchain is still the wrong target. A "PicoScript-0" compiler that emits
+the frozen 16-opcode bytecode directly is the right target. Until Stage 2 exists,
+the editor can save and launch host-compiled cards, but it cannot honestly claim
+to compile arbitrary source on-device.
+
+### Program-as-card storage
+
+Use PicoStore/PicoWAL as a **program pack**. A program is not one opaque blob; it
+is a set of deterministic cards:
+
+- one source card per source file;
+- one compiled-module card per emitted bytecode module;
+- optional manifest, build log, debug map, and history cards.
+
+PicoBinarySerializer cards are self-describing `int32`/UTF-8-string records, so
+binary bytecode should be stored as a hex string or as fixed-size chunk cards
+rather than as a raw byte array. A concrete schema could be:
+
+```text
+pack: "program:<app>"
+
+manifest card
+  kind="manifest", app="hello", main="main.pc", version=7,
+  active_build=42, created_at=..., updated_at=...
+
+source card
+  kind="source", path="main.pc", version=7, lang="picoscript",
+  text="<UTF-8 source>", parent=6, hash="..."
+
+module card
+  kind="module", path="main.pc", version=7, isa=1,
+  bytecode_hex="50010000...", source_card=17, hash="..."
+
+history card
+  kind="history", path="main.pc", from=6, to=7,
+  source_card=17, module_card=42, reason="editor-save"
+```
+
+For larger modules, replace `bytecode_hex` with `chunk_count` and store
+`kind="module-chunk", module=42, index=N, data_hex="..."` cards. Keeping source
+and module cards separate lets the editor preserve history even when compilation
+fails; a failed build writes a build-log card but does not advance
+`manifest.active_build`.
+
+### Hot-reload lifecycle
+
+Hot-reload should be "load a new capsule from cards", not "patch a live capsule's
+memory". The safe flow is:
+
+1. The editor/compiler writes new source/module cards and updates the manifest
+   only after the module card validates.
+2. The supervisor asks the old capsule to quiesce, or the kernel stops accepting
+   new contexts for its binding.
+3. The old capsule exits or is killed; scope-bound inbound leases auto-release
+   and outbound descriptors are ACKed/released through `RESP_SENT` (I8).
+4. The kernel spawns a new capsule from the module card, with a fresh micro-pool
+   and binding attachment.
+5. Traffic resumes against the new capsule.
+
+This preserves the binding invariants: bytecode/module descriptors have one owner
+at a time (I2), no live descriptor graph is mutated under another capsule (I3),
+the old and new capsules do not share descriptors except through kernel FIFOs
+(I5), and teardown has a bounded release path (I8). The cost is that hot-reload is
+a short capsule replacement event, not in-place code swapping. That is a good
+trade for a micro-OS.
+
+### Full on-device development loop
+
+The eventual no-host loop looks like this:
+
+1. **Edit:** the editor capsule receives input over a terminal/network binding and
+   maintains the working buffer in `Memory`/cards.
+2. **Compile:** it invokes a compiler capsule over `ipc` or runs a compiler
+   subroutine over a source span. At Stage 2 this is a tiny expression compiler;
+   at Stage 3 it is a useful PicoScript-0 subset.
+3. **Store:** the compiler writes source, module, build-log, and manifest cards to
+   the program pack. Successful builds advance `active_build`; failed builds leave
+   the last runnable module intact.
+4. **Run:** a supervisor loads `manifest.active_build`, validates the module card,
+   and spawns a capsule bound to the requested console/network port.
+5. **Debug:** traces, registers, build errors, and crash reports are just more
+   cards or streams. The editor can query them without privileged access.
+
+That loop is entirely compatible with PIOS because all communication is by
+bindings, FIFOs, leases, and cards. There is no need for the editor to become a
+kernel feature.
+
+### Risks, gaps, and next step
+
+The main gaps are concrete:
+
+- **Compiler maturity:** Stage 1 assembles numeric listings; it does not parse the
+  source users want to edit. Stage 2 is the next real unlock.
+- **Kernel services:** PIOS needs a capsule loader that can validate and spawn
+  bytecode from a module card, a supervisor API for quiesce/replace, and at least
+  one interactive binding (`duplex` terminal/WebSocket or a simpler console
+  stream).
+- **Storage shape:** PicoBinarySerializer is record-oriented and string/int-only.
+  That is fine for manifests, source, and small modules, but large bytecode wants
+  chunk cards or a future typed-byte field.
+- **Memory pressure:** an editor plus compiler uses token streams, source buffers,
+  bytecode buffers, and screen state. All of that must fit in per-capsule
+  `Memory`/micro-pools or be paged through cards.
+- **Debug ergonomics:** traces and source maps need a card schema early, otherwise
+  "on-device" will mean "opaque failures on-device".
+
+Recommended next concrete step: build **Stage 2 as a compiler capsule contract**,
+not just as a command-line demo. It should accept a source span/card id, emit a
+module card plus build-log card, and prove the supervisor can spawn that module
+from PicoStore/PicoWAL. In parallel, specify the minimal PIOS loader/supervisor
+verbs for `spawn_from_card`, `quiesce`, and `replace_binding`. That combination is
+the smallest milestone that turns self-hosting from byte emission into a credible
+on-device edit → compile → store → run loop.
