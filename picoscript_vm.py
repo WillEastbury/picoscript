@@ -439,6 +439,97 @@ class HostApi:
                 out.append(c)
         return bytes(out)
 
+    @staticmethod
+    def _parsejson_to_model(s: bytes) -> bytes:
+        # Flatten a JSON value to dotted-path key=value model lines (the Template
+        # {{#each}} model): objects -> prefix.key, arrays -> prefix.index, scalars -> leaf.
+        n = len(s)
+        pos = [0]
+        out = bytearray()
+        ws = (0x20, 0x09, 0x0a, 0x0d)
+
+        def hx(c):
+            return 0x30 <= c <= 0x39 or 0x41 <= c <= 0x46 or 0x61 <= c <= 0x66
+
+        def skipws():
+            while pos[0] < n and s[pos[0]] in ws:
+                pos[0] += 1
+
+        def parse_string():
+            b = bytearray()
+            pos[0] += 1
+            while pos[0] < n:
+                c = s[pos[0]]; pos[0] += 1
+                if c == 0x22:
+                    break
+                if c == 0x5c and pos[0] < n:
+                    e = s[pos[0]]; pos[0] += 1
+                    if e == 0x6e: b.append(0x0a)
+                    elif e == 0x74: b.append(0x09)
+                    elif e == 0x72: b.append(0x0d)
+                    elif e == 0x62: b.append(0x08)
+                    elif e == 0x66: b.append(0x0c)
+                    elif e == 0x75 and pos[0] + 4 <= n and all(hx(s[pos[0] + j]) for j in range(4)):
+                        cp = int(s[pos[0]:pos[0] + 4], 16); pos[0] += 4
+                        if cp < 0x80:
+                            b.append(cp)
+                        elif cp < 0x800:
+                            b.append(0xC0 | (cp >> 6)); b.append(0x80 | (cp & 0x3F))
+                        else:
+                            b.append(0xE0 | (cp >> 12)); b.append(0x80 | ((cp >> 6) & 0x3F)); b.append(0x80 | (cp & 0x3F))
+                    else:
+                        b.append(e)
+                else:
+                    b.append(c)
+            return bytes(b)
+
+        def emit(prefix):
+            skipws()
+            if pos[0] >= n:
+                return
+            c = s[pos[0]]
+            if c == 0x7b:
+                pos[0] += 1; skipws()
+                if pos[0] < n and s[pos[0]] == 0x7d:
+                    pos[0] += 1; return
+                while pos[0] < n:
+                    skipws()
+                    if pos[0] >= n or s[pos[0]] != 0x22:
+                        break
+                    key = parse_string(); skipws()
+                    if pos[0] < n and s[pos[0]] == 0x3a:
+                        pos[0] += 1
+                    emit(key if not prefix else prefix + b"." + key); skipws()
+                    if pos[0] < n and s[pos[0]] == 0x2c:
+                        pos[0] += 1; continue
+                    if pos[0] < n and s[pos[0]] == 0x7d:
+                        pos[0] += 1
+                    break
+            elif c == 0x5b:
+                pos[0] += 1; skipws()
+                if pos[0] < n and s[pos[0]] == 0x5d:
+                    pos[0] += 1; return
+                idx = 0
+                while pos[0] < n:
+                    ik = str(idx).encode()
+                    emit(ik if not prefix else prefix + b"." + ik); idx += 1; skipws()
+                    if pos[0] < n and s[pos[0]] == 0x2c:
+                        pos[0] += 1; continue
+                    if pos[0] < n and s[pos[0]] == 0x5d:
+                        pos[0] += 1
+                    break
+            elif c == 0x22:
+                out.extend(prefix); out.append(0x3d); out.extend(parse_string()); out.append(0x0a)
+            else:
+                start = pos[0]
+                while pos[0] < n and s[pos[0]] not in (0x2c, 0x7d, 0x5d, 0x20, 0x09, 0x0a, 0x0d):
+                    pos[0] += 1
+                out.extend(prefix); out.append(0x3d); out.extend(s[start:pos[0]]); out.append(0x0a)
+
+        skipws()
+        emit(b"")
+        return bytes(out)
+
     def _httplib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
         # Pure HTTP parsing: query/form -> key=value lines (the Template model format).
         src = self._span_raw(vm, vm.regs[rs1])
@@ -461,6 +552,8 @@ class HostApi:
                 k, v = line.split(b"=", 1)
                 items.append(b'"' + self._jsonesc(k) + b'":"' + self._jsonesc(v) + b'"')
             vm.regs[rd] = self._new_span_bytes(vm, b"{" + b",".join(items) + b"}"); return True
+        if method == "ParseJson":
+            vm.regs[rd] = self._new_span_bytes(vm, self._parsejson_to_model(src)); return True
         return False
 
     def _templatelib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:

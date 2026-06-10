@@ -13,7 +13,8 @@ where that was my only objection I implemented a representative op to prove it.
 `Bits.*`, `Dot8.*` (NEON SDOT / SMLAD), native `Memory.*`/`Io`, `String.*`,
 `Number.*`, `Maths.Power/Sqrt`, `Template.*` (holes/sections/`{{#each}}`),
 `Compress.PicoCompress/PicoDecompress` (RLE), `Crypto.Sha256`, `Html.Encode/Decode`,
-`Http.ParseQuery/ParseForm` (url-decode -> Template model) + `Http.EncodeJson`.
+`Http.ParseQuery/ParseForm` (url-decode -> Template model) + `Http.EncodeJson/ParseJson`
+(model <-> JSON, nested JSON flattens to the `{{#each}}` model).
 (Already present: `Io`, `Json`, `Xml`, `Queue`, `Random`, `Req`, `Resp`, `Span`,
 `Storage`, `Utf8Reader`, `Utf8Writer`.)
 
@@ -56,12 +57,13 @@ implemented; the 64-bit ones are deferred for this reason.
   LZ77+Huffman bitstream codecs, bit-identical across Python and JS. The custom
   `PicoCompress` (RLE) is implemented and covers the embedded case.
 - **HTML DOM + HTTP parsing** — `Html.CreateNode/SetAttribute/QuerySelector/
-  ParseTree/Serialize` need a mutable tree model + parser. `Http.ParseQuery/
-  ParseForm` (pure URL-decode -> `key=value` Template model) and `Http.EncodeJson`
-  (model -> JSON object, with escaping) **are implemented**; `Http.ParseJson`
-  (JSON -> model) is the remaining pure parser and could be added next;
-  `Http.ReadHeader/ReadBody` read the host connection (host-injected).
-  `Html.Encode/Decode` (pure) are implemented.
+  ParseTree/Serialize` need a mutable tree model + parser. The pure HTTP parsers
+  **are implemented**: `Http.ParseQuery/ParseForm` (URL-decode -> `key=value`
+  Template model), `Http.EncodeJson` (model -> JSON object with escaping) and
+  `Http.ParseJson` (JSON -> dotted-path model, so nested JSON feeds `{{#each}}`).
+  Only `Http.ReadHeader/ReadBody/GenerateHeaders/GenerateResponse` remain — they
+  read/write the host connection (host-injected). `Html.Encode/Decode` (pure) are
+  implemented.
 - **Asymmetric / symmetric crypto** — `Crypto.Sign/Verify/Encrypt/Decrypt/
   GenerateKeyPair/DeriveKey`, `X509.*`, `Auth.*`. Large security-sensitive
   primitives (RSA/EC/AES) + key management; signing/keygen also need entropy

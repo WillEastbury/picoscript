@@ -112,8 +112,45 @@ def main():
           "int m = Http.ParseQuery(s); int j = Http.EncodeJson(m); Io.Write(j);")
     assert run_both(e4) == b'{"a":"1","b":"hello world"}', "ParseQuery -> EncodeJson"
 
-    print("PASS Http.*: ParseQuery/ParseForm url-decode -> Template model + EncodeJson, "
-          "Python VM == JS VM byte-exact (incl. query-string -> Template.Render integration)")
+    # ParseJson: flat object -> key=value model (leaf lines, one trailing \n each).
+    pj = b'{"name":"Bob","role":"admin"}'
+    p1 = (setbytes(1000, pj) +
+          f"int s = Span.Make(1000, {len(pj)});"
+          "int m = Http.ParseJson(s); Io.Write(m);")
+    assert run_both(p1) == b"name=Bob\nrole=admin\n", "ParseJson flat object"
+
+    # ParseJson: scalars (number / bool / null) emitted verbatim.
+    ps = b'{"a":1,"b":true,"c":null}'
+    p2 = (setbytes(1000, ps) +
+          f"int s = Span.Make(1000, {len(ps)});"
+          "int m = Http.ParseJson(s); Io.Write(m);")
+    assert run_both(p2) == b"a=1\nb=true\nc=null\n", "ParseJson scalars"
+
+    # ParseJson: string unescaping (\\\" \\\\ \\t \\u0041).
+    pe = b'{"k":"a\\"b\\\\c\\tx\\u0041"}'
+    p3 = (setbytes(1000, pe) +
+          f"int s = Span.Make(1000, {len(pe)});"
+          "int m = Http.ParseJson(s); Io.Write(m);")
+    assert run_both(p3) == b'k=a"b\\c\txA\n', "ParseJson unescape"
+
+    # Showcase: nested JSON flattens to the exact Template {{#each}} model, then renders.
+    nj = b'{"items":[{"name":"A"},{"name":"B"}]}'
+    p4 = (setbytes(1000, nj) +
+          f"int s = Span.Make(1000, {len(nj)});"
+          "int m = Http.ParseJson(s); Io.Write(m);")
+    assert run_both(p4) == b"items.0.name=A\nitems.1.name=B\n", "ParseJson nested -> each model"
+
+    tmpl2 = b"{{#each items}}<li>{{name}}</li>{{/each}}"
+    p5 = (setbytes(1000, nj) + setbytes(2000, tmpl2) +
+          f"int s = Span.Make(1000, {len(nj)});"
+          "int model = Http.ParseJson(s);"
+          f"int tsp = Span.Make(2000, {len(tmpl2)});"
+          "int plan = Template.Compile(tsp);"
+          "int outp = Template.Render(plan, model); Io.Write(outp);")
+    assert run_both(p5) == b"<li>A</li><li>B</li>", "ParseJson -> Template.Render({{#each}})"
+
+    print("PASS Http.*: ParseQuery/ParseForm url-decode -> Template model + EncodeJson/ParseJson, "
+          "Python VM == JS VM byte-exact (incl. query/JSON -> Template.Render integration)")
 
 
 if __name__ == "__main__":

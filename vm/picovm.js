@@ -474,6 +474,78 @@
     return out;
   }
 
+  PicoVM.prototype._parseJsonToModel = function (s) {
+    var n = s.length, pos = [0], out = [];
+    function isws(c) { return c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d; }
+    function hx(c) { return (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x46) || (c >= 0x61 && c <= 0x66); }
+    function skipws() { while (pos[0] < n && isws(s[pos[0]])) pos[0] += 1; }
+    function pushAll(dst, arr) { for (var k = 0; k < arr.length; k++) dst.push(arr[k]); }
+    function parseString() {
+      var b = []; pos[0] += 1;
+      while (pos[0] < n) {
+        var c = s[pos[0]]; pos[0] += 1;
+        if (c === 0x22) break;
+        if (c === 0x5c && pos[0] < n) {
+          var e = s[pos[0]]; pos[0] += 1;
+          if (e === 0x6e) b.push(0x0a);
+          else if (e === 0x74) b.push(0x09);
+          else if (e === 0x72) b.push(0x0d);
+          else if (e === 0x62) b.push(0x08);
+          else if (e === 0x66) b.push(0x0c);
+          else if (e === 0x75 && pos[0] + 4 <= n && hx(s[pos[0]]) && hx(s[pos[0] + 1]) && hx(s[pos[0] + 2]) && hx(s[pos[0] + 3])) {
+            var cp = parseInt(String.fromCharCode(s[pos[0]], s[pos[0] + 1], s[pos[0] + 2], s[pos[0] + 3]), 16); pos[0] += 4;
+            if (cp < 0x80) b.push(cp);
+            else if (cp < 0x800) { b.push(0xC0 | (cp >> 6)); b.push(0x80 | (cp & 0x3F)); }
+            else { b.push(0xE0 | (cp >> 12)); b.push(0x80 | ((cp >> 6) & 0x3F)); b.push(0x80 | (cp & 0x3F)); }
+          } else b.push(e);
+        } else b.push(c);
+      }
+      return b;
+    }
+    function childKey(prefix, key) {
+      if (prefix.length === 0) return key.slice();
+      var nk = prefix.slice(); nk.push(0x2e); pushAll(nk, key); return nk;
+    }
+    function emit(prefix) {
+      skipws();
+      if (pos[0] >= n) return;
+      var c = s[pos[0]];
+      if (c === 0x7b) {
+        pos[0] += 1; skipws();
+        if (pos[0] < n && s[pos[0]] === 0x7d) { pos[0] += 1; return; }
+        while (pos[0] < n) {
+          skipws();
+          if (pos[0] >= n || s[pos[0]] !== 0x22) break;
+          var key = parseString(); skipws();
+          if (pos[0] < n && s[pos[0]] === 0x3a) pos[0] += 1;
+          emit(childKey(prefix, key)); skipws();
+          if (pos[0] < n && s[pos[0]] === 0x2c) { pos[0] += 1; continue; }
+          if (pos[0] < n && s[pos[0]] === 0x7d) pos[0] += 1;
+          break;
+        }
+      } else if (c === 0x5b) {
+        pos[0] += 1; skipws();
+        if (pos[0] < n && s[pos[0]] === 0x5d) { pos[0] += 1; return; }
+        var idx = 0;
+        while (pos[0] < n) {
+          var ik = _strBytes(String(idx));
+          emit(childKey(prefix, ik)); idx += 1; skipws();
+          if (pos[0] < n && s[pos[0]] === 0x2c) { pos[0] += 1; continue; }
+          if (pos[0] < n && s[pos[0]] === 0x5d) pos[0] += 1;
+          break;
+        }
+      } else if (c === 0x22) {
+        var v = parseString(); pushAll(out, prefix); out.push(0x3d); pushAll(out, v); out.push(0x0a);
+      } else {
+        var start = pos[0];
+        while (pos[0] < n) { var cc = s[pos[0]]; if (cc === 0x2c || cc === 0x7d || cc === 0x5d || isws(cc)) break; pos[0] += 1; }
+        pushAll(out, prefix); out.push(0x3d); for (var q = start; q < pos[0]; q++) out.push(s[q]); out.push(0x0a);
+      }
+    }
+    skipws(); emit([]);
+    return out;
+  };
+
   PicoVM.prototype._httplib = function (method, rd, rs1, rs2) {
     var src = this._spanBytes(this.regs[rs1]);
     if (method === "ParseQuery" || method === "ParseForm") {
@@ -509,6 +581,9 @@
       }
       jo.push(0x7d);
       this.regs[rd] = this._newSpanBytes(jo); return true;
+    }
+    if (method === "ParseJson") {
+      this.regs[rd] = this._newSpanBytes(this._parseJsonToModel(src)); return true;
     }
     return false;
   };
