@@ -212,6 +212,10 @@ class HostApi:
         if ns == "Template":
             if self._templatelib(vm, method, rd, rs1, rs2):
                 return
+        # Maths.* pure-integer ops (Power/Sqrt).
+        if ns == "Maths":
+            if self._mathslib(vm, method, rd, rs1, rs2):
+                return
         # Io: write raw bytes (UTF-8 strings) to the output buffer.
         if ns == "Io" and method == "Write":
             h = vm.regs[rs1]
@@ -316,6 +320,37 @@ class HostApi:
             R[rd] = self._new_span_bytes(vm, format(a & MASK32, "o").encode()); return True
         if method == "ToBinary":
             R[rd] = self._new_span_bytes(vm, format(a & MASK32, "b").encode()); return True
+        return False
+
+    def _mathslib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
+        # Pure-integer Maths ops (the float transcendentals Sin/Cos/Log/Exp need a
+        # fixed-point convention and are left planned; see STRING_TEMPLATES.md).
+        R = vm.regs
+        if method == "Power":
+            base, exp = _sx32(R[rs1]), _sx32(R[rs2])
+            if exp <= 0:
+                R[rd] = (1 if exp == 0 else 0) & MASK32
+            else:
+                r = 1
+                for _ in range(min(exp, 0xFFFF)):
+                    r = (r * base) & MASK32
+                R[rd] = r
+            return True
+        if method == "Sqrt":
+            n = _sx32(R[rs1])
+            if n <= 0:
+                R[rd] = 0; return True
+            x, res, bit = n, 0, 1 << 30
+            while bit > n:
+                bit >>= 2
+            while bit:
+                if x >= res + bit:
+                    x -= res + bit; res = (res >> 1) + bit
+                else:
+                    res >>= 1
+                bit >>= 2
+            R[rd] = res & MASK32
+            return True
         return False
 
     def _templatelib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:

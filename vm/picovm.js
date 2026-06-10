@@ -271,6 +271,10 @@
     if (name.indexOf("Template.") === 0) {
       if (this._templatelib(name.slice(9), rd, rs1, rs2)) return;
     }
+    // ---- Maths.* pure-integer ops (Power/Sqrt) -----------------------------
+    if (name.indexOf("Maths.") === 0) {
+      if (this._mathslib(name.slice(6), rd, rs1, rs2)) return;
+    }
     // ---- Io: write raw bytes (UTF-8 strings) to the output buffer ----------
     if (name === "Io.Write") {
       var sw = this.spans[this.regs[rs1]];
@@ -370,6 +374,29 @@
     if (method === "ToHex") { this.regs[rd] = this._newSpanBytes(_strBytes((a >>> 0).toString(16))); return true; }
     if (method === "ToOctal") { this.regs[rd] = this._newSpanBytes(_strBytes((a >>> 0).toString(8))); return true; }
     if (method === "ToBinary") { this.regs[rd] = this._newSpanBytes(_strBytes((a >>> 0).toString(2))); return true; }
+    return false;
+  };
+
+  PicoVM.prototype._mathslib = function (method, rd, rs1, rs2) {
+    if (method === "Power") {
+      var base = this.regs[rs1] | 0, exp = this.regs[rs2] | 0;
+      if (exp <= 0) { this.regs[rd] = (exp === 0 ? 1 : 0) | 0; return true; }
+      var r = 1, cap = exp < 0xFFFF ? exp : 0xFFFF;
+      for (var t = 0; t < cap; t++) r = Math.imul(r, base);   // 32-bit modular multiply
+      this.regs[rd] = r | 0; return true;
+    }
+    if (method === "Sqrt") {
+      var n = this.regs[rs1] | 0;
+      if (n <= 0) { this.regs[rd] = 0; return true; }
+      var x = n, res = 0, bit = 1 << 30;
+      while (bit > n) bit >>= 2;
+      while (bit) {
+        if (x >= res + bit) { x -= res + bit; res = (res >> 1) + bit; }
+        else { res >>= 1; }
+        bit >>= 2;
+      }
+      this.regs[rd] = res | 0; return true;
+    }
     return false;
   };
 
