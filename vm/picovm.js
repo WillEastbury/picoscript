@@ -259,6 +259,10 @@
     if (name.indexOf("Storage.") === 0) {
       if (this._storage(name.slice(8), rd, rs1, rs2)) return;
     }
+    // ---- String.* arena string library -------------------------------------
+    if (name.indexOf("String.") === 0) {
+      if (this._stringlib(name.slice(7), rd, rs1, rs2)) return;
+    }
     // ---- Io: write raw bytes (UTF-8 strings) to the output buffer ----------
     if (name === "Io.Write") {
       var sw = this.spans[this.regs[rs1]];
@@ -296,6 +300,46 @@
     for (var i = 0; i < b.length; i++) this.mem[dst + i] = b[i];
     this.spans.push({ ptr: dst, len: b.length });
     return this.spans.length - 1;
+  };
+
+  function _bcmp(a, b, off) { for (var k = 0; k < b.length; k++) if (a[off + k] !== b[k]) return false; return true; }
+  function _bfind(a, n) { if (!n.length) return 0; for (var i = 0; i + n.length <= a.length; i++) if (_bcmp(a, n, i)) return i; return -1; }
+  function _ws(c) { return c === 32 || c === 9 || c === 10 || c === 13; }
+
+  PicoVM.prototype._spanBytes = function (h) {
+    if (h <= 0 || h >= this.spans.length || !this.spans[h]) return [];
+    var s = this.spans[h], out = new Array(s.len);
+    for (var i = 0; i < s.len; i++) out[i] = this.mem[s.ptr + i];
+    return out;
+  };
+  PicoVM.prototype._newSpanBytes = function (bytes) {
+    var dst = this.arenaTop; this.arenaTop += bytes.length;
+    for (var i = 0; i < bytes.length; i++) this.mem[dst + i] = bytes[i] & 255;
+    this.spans.push({ ptr: dst, len: bytes.length });
+    return this.spans.length - 1;
+  };
+  PicoVM.prototype._stringlib = function (method, rd, rs1, rs2) {
+    var a = this._spanBytes(this.regs[rs1]);
+    if (method === "Length") { this.regs[rd] = a.length; return true; }
+    if (method === "Concat") { this.regs[rd] = this._newSpanBytes(a.concat(this._spanBytes(this.regs[rs2]))); return true; }
+    if (method === "Substring") { var st = Math.max(0, this.regs[rs2] | 0); this.regs[rd] = this._newSpanBytes(a.slice(st)); return true; }
+    if (method === "IndexOf") { this.regs[rd] = _bfind(a, this._spanBytes(this.regs[rs2])) | 0; return true; }
+    if (method === "StartsWith") { var p = this._spanBytes(this.regs[rs2]); this.regs[rd] = (p.length <= a.length && _bcmp(a, p, 0)) ? 1 : 0; return true; }
+    if (method === "EndsWith") { var su = this._spanBytes(this.regs[rs2]); this.regs[rd] = (su.length <= a.length && _bcmp(a, su, a.length - su.length)) ? 1 : 0; return true; }
+    if (method === "ToUpper") { this.regs[rd] = this._newSpanBytes(a.map(function (c) { return (c >= 97 && c <= 122) ? c - 32 : c; })); return true; }
+    if (method === "ToLower") { this.regs[rd] = this._newSpanBytes(a.map(function (c) { return (c >= 65 && c <= 90) ? c + 32 : c; })); return true; }
+    if (method === "Trim") { var i = 0, j = a.length; while (i < j && _ws(a[i])) i++; while (j > i && _ws(a[j - 1])) j--; this.regs[rd] = this._newSpanBytes(a.slice(i, j)); return true; }
+    if (method === "SetReplace") { this._strRepl = a; return true; }
+    if (method === "Replace") {
+      var needle = this._spanBytes(this.regs[rs2]), repl = this._strRepl || [], out = [], k = 0;
+      if (needle.length === 0) { this.regs[rd] = this._newSpanBytes(a); return true; }
+      while (k < a.length) {
+        if (k + needle.length <= a.length && _bcmp(a, needle, k)) { for (var m = 0; m < repl.length; m++) out.push(repl[m]); k += needle.length; }
+        else { out.push(a[k]); k++; }
+      }
+      this.regs[rd] = this._newSpanBytes(out); return true;
+    }
+    return false;
   };
 
   // ---- PIOS Req.*/Resp.* simulated host backend --------------------------

@@ -200,6 +200,10 @@ class HostApi:
         if ns == "Storage":
             if self._storage(vm, method, rd, rs1, rs2):
                 return
+        # String.* arena string library.
+        if ns == "String":
+            if self._stringlib(vm, method, rd, rs1, rs2):
+                return
         # Io: write raw bytes (UTF-8 strings) to the output buffer.
         if ns == "Io" and method == "Write":
             h = vm.regs[rs1]
@@ -235,6 +239,49 @@ class HostApi:
         vm.arena_top += len(b)
         vm.spans.append({"ptr": dst, "len": len(b)})
         return len(vm.spans) - 1
+
+    # -- String.* arena string library (spans in / spans out) ---------------
+    def _span_raw(self, vm: "PicoVM", h: int) -> bytes:
+        if h <= 0 or h >= len(vm.spans) or not vm.spans[h]:
+            return b""
+        s = vm.spans[h]
+        return bytes(vm.mem[s["ptr"]:s["ptr"] + s["len"]])
+
+    def _new_span_bytes(self, vm: "PicoVM", data: bytes) -> int:
+        dst = vm.arena_top
+        vm.mem[dst:dst + len(data)] = data
+        vm.arena_top += len(data)
+        vm.spans.append({"ptr": dst, "len": len(data)})
+        return len(vm.spans) - 1
+
+    def _stringlib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
+        R = vm.regs
+        a = self._span_raw(vm, R[rs1])
+        if method == "Length":
+            R[rd] = len(a); return True
+        if method == "Concat":
+            R[rd] = self._new_span_bytes(vm, a + self._span_raw(vm, R[rs2])); return True
+        if method == "Substring":
+            start = max(0, _sx32(R[rs2]))
+            R[rd] = self._new_span_bytes(vm, a[start:]); return True
+        if method == "IndexOf":
+            R[rd] = a.find(self._span_raw(vm, R[rs2])) & MASK32; return True
+        if method == "StartsWith":
+            R[rd] = 1 if a.startswith(self._span_raw(vm, R[rs2])) else 0; return True
+        if method == "EndsWith":
+            R[rd] = 1 if a.endswith(self._span_raw(vm, R[rs2])) else 0; return True
+        if method == "ToUpper":
+            R[rd] = self._new_span_bytes(vm, bytes(c - 32 if 97 <= c <= 122 else c for c in a)); return True
+        if method == "ToLower":
+            R[rd] = self._new_span_bytes(vm, bytes(c + 32 if 65 <= c <= 90 else c for c in a)); return True
+        if method == "Trim":
+            R[rd] = self._new_span_bytes(vm, a.strip(b" \t\r\n")); return True
+        if method == "SetReplace":
+            vm._str_repl = a; return True
+        if method == "Replace":
+            repl = getattr(vm, "_str_repl", b"")
+            R[rd] = self._new_span_bytes(vm, a.replace(self._span_raw(vm, R[rs2]), repl)); return True
+        return False
 
     # -- PIOS Req.*/Resp.* simulated host backend ----------------------------
     def install_request_context(self, vm: "PicoVM", *, seq=0, principal="", method="GET",

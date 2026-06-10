@@ -275,6 +275,7 @@ NAMESPACE_MAP = {
         "Join":           OP_NOOP,
         "StartsWith":     OP_NOOP,
         "EndsWith":       OP_NOOP,
+        "SetReplace":     OP_NOOP,
     },
     "Number": {
         "Parse":          OP_NOOP,
@@ -589,6 +590,7 @@ HOST_HOOK_CODES = {
     ("String", "Join"):         0x89,
     ("String", "StartsWith"):   0x8A,
     ("String", "EndsWith"):     0x8B,
+    ("String", "SetReplace"):   0x8C,
     # Number library (0x90-0x9A)
     ("Number", "Parse"):        0x90,
     ("Number", "ToString"):     0x91,

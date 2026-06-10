@@ -138,6 +138,7 @@
 #define PV_HOOK_STRING_JOIN                      0x89
 #define PV_HOOK_STRING_STARTSWITH                0x8A
 #define PV_HOOK_STRING_ENDSWITH                  0x8B
+#define PV_HOOK_STRING_SETREPLACE                0x8C
 #define PV_HOOK_NUMBER_PARSE                     0x90
 #define PV_HOOK_NUMBER_TOSTRING                  0x91
 #define PV_HOOK_NUMBER_TOHEX                     0x92
