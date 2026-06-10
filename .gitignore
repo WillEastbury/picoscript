@@ -16,3 +16,7 @@ build/
 *.o
 *.pdb
 *.wasm
+
+# generated synthetic dataset corpora (regenerable via tools/gen_dataset.py)
+data/*.jsonl
+!data/*.sample.jsonl

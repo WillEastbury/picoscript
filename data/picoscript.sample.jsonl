@@ -1,0 +1,225 @@
+{"task": "nl2code", "construct": "t_branch", "dialect": "c", "instruction": "Set x to 19; if x is greater than 6 print 66, otherwise print 8.", "code": "int x = 19;\nif (x > 6) {\n    print(66);\n} else {\n    print(8);\n}", "output": [66]}
+{"task": "run", "construct": "t_branch", "dialect": "c", "code": "int x = 19;\nif (x > 6) {\n    print(66);\n} else {\n    print(8);\n}", "output": [66]}
+{"task": "nl2code", "construct": "t_branch", "dialect": "basic", "instruction": "Set x to 19; if x is greater than 6 print 66, otherwise print 8.", "code": "DIM x = 19\nIF x > 6 THEN\n    PRINT 66\nELSE\n    PRINT 8\nENDIF", "output": [66]}
+{"task": "run", "construct": "t_branch", "dialect": "basic", "code": "DIM x = 19\nIF x > 6 THEN\n    PRINT 66\nELSE\n    PRINT 8\nENDIF", "output": [66]}
+{"task": "nl2code", "construct": "t_branch", "dialect": "python", "instruction": "Set x to 19; if x is greater than 6 print 66, otherwise print 8.", "code": "x = 19\nif x > 6:\n    print(66)\nelse:\n    print(8)", "output": [66]}
+{"task": "run", "construct": "t_branch", "dialect": "python", "code": "x = 19\nif x > 6:\n    print(66)\nelse:\n    print(8)", "output": [66]}
+{"task": "nl2code", "construct": "t_branch", "dialect": "english", "instruction": "Set x to 19; if x is greater than 6 print 66, otherwise print 8.", "code": "Set x to 19.\nIf x > 6:\n    Print 66.\nOtherwise:\n    Print 8.", "output": [66]}
+{"task": "run", "construct": "t_branch", "dialect": "english", "code": "Set x to 19.\nIf x > 6:\n    Print 66.\nOtherwise:\n    Print 8.", "output": [66]}
+{"task": "translate", "construct": "t_branch", "from_dialect": "english", "to_dialect": "basic", "from_code": "Set x to 19.\nIf x > 6:\n    Print 66.\nOtherwise:\n    Print 8.", "to_code": "DIM x = 19\nIF x > 6 THEN\n    PRINT 66\nELSE\n    PRINT 8\nENDIF", "output": [66]}
+{"task": "nl2code", "construct": "t_accumulate_evens", "dialect": "c", "instruction": "Sum the even numbers from 1 to 12 and print the total.", "code": "int s = 0;\nfor (i = 1; i <= 12; i++) {\n    if ((i % 2) == 0) {\n        s = s + i;\n    }\n}\nprint(s);", "output": [42]}
+{"task": "run", "construct": "t_accumulate_evens", "dialect": "c", "code": "int s = 0;\nfor (i = 1; i <= 12; i++) {\n    if ((i % 2) == 0) {\n        s = s + i;\n    }\n}\nprint(s);", "output": [42]}
+{"task": "nl2code", "construct": "t_accumulate_evens", "dialect": "basic", "instruction": "Sum the even numbers from 1 to 12 and print the total.", "code": "DIM s = 0\nFOR i = 1 TO 12\n    IF (i MOD 2) = 0 THEN\n        s = s + i\n    ENDIF\nNEXT\nPRINT s", "output": [42]}
+{"task": "run", "construct": "t_accumulate_evens", "dialect": "basic", "code": "DIM s = 0\nFOR i = 1 TO 12\n    IF (i MOD 2) = 0 THEN\n        s = s + i\n    ENDIF\nNEXT\nPRINT s", "output": [42]}
+{"task": "nl2code", "construct": "t_accumulate_evens", "dialect": "python", "instruction": "Sum the even numbers from 1 to 12 and print the total.", "code": "s = 0\nfor i in range(1, 13):\n    if (i % 2) == 0:\n        s = s + i\nprint(s)", "output": [42]}
+{"task": "run", "construct": "t_accumulate_evens", "dialect": "python", "code": "s = 0\nfor i in range(1, 13):\n    if (i % 2) == 0:\n        s = s + i\nprint(s)", "output": [42]}
+{"task": "nl2code", "construct": "t_accumulate_evens", "dialect": "english", "instruction": "Sum the even numbers from 1 to 12 and print the total.", "code": "Set s to 0.\nFor each i from 1 to 12:\n    If (i % 2) == 0:\n        Set s to s + i.\nPrint s.", "output": [42]}
+{"task": "run", "construct": "t_accumulate_evens", "dialect": "english", "code": "Set s to 0.\nFor each i from 1 to 12:\n    If (i % 2) == 0:\n        Set s to s + i.\nPrint s.", "output": [42]}
+{"task": "translate", "construct": "t_accumulate_evens", "from_dialect": "basic", "to_dialect": "c", "from_code": "DIM s = 0\nFOR i = 1 TO 12\n    IF (i MOD 2) = 0 THEN\n        s = s + i\n    ENDIF\nNEXT\nPRINT s", "to_code": "int s = 0;\nfor (i = 1; i <= 12; i++) {\n    if ((i % 2) == 0) {\n        s = s + i;\n    }\n}\nprint(s);", "output": [42]}
+{"task": "nl2code", "construct": "t_accumulate_evens", "dialect": "c", "instruction": "Sum the even numbers from 1 to 6 and print the total.", "code": "int s = 0;\nfor (i = 1; i <= 6; i++) {\n    if ((i % 2) == 0) {\n        s = s + i;\n    }\n}\nprint(s);", "output": [12]}
+{"task": "run", "construct": "t_accumulate_evens", "dialect": "c", "code": "int s = 0;\nfor (i = 1; i <= 6; i++) {\n    if ((i % 2) == 0) {\n        s = s + i;\n    }\n}\nprint(s);", "output": [12]}
+{"task": "nl2code", "construct": "t_accumulate_evens", "dialect": "basic", "instruction": "Sum the even numbers from 1 to 6 and print the total.", "code": "DIM s = 0\nFOR i = 1 TO 6\n    IF (i MOD 2) = 0 THEN\n        s = s + i\n    ENDIF\nNEXT\nPRINT s", "output": [12]}
+{"task": "run", "construct": "t_accumulate_evens", "dialect": "basic", "code": "DIM s = 0\nFOR i = 1 TO 6\n    IF (i MOD 2) = 0 THEN\n        s = s + i\n    ENDIF\nNEXT\nPRINT s", "output": [12]}
+{"task": "nl2code", "construct": "t_accumulate_evens", "dialect": "python", "instruction": "Sum the even numbers from 1 to 6 and print the total.", "code": "s = 0\nfor i in range(1, 7):\n    if (i % 2) == 0:\n        s = s + i\nprint(s)", "output": [12]}
+{"task": "run", "construct": "t_accumulate_evens", "dialect": "python", "code": "s = 0\nfor i in range(1, 7):\n    if (i % 2) == 0:\n        s = s + i\nprint(s)", "output": [12]}
+{"task": "nl2code", "construct": "t_accumulate_evens", "dialect": "english", "instruction": "Sum the even numbers from 1 to 6 and print the total.", "code": "Set s to 0.\nFor each i from 1 to 6:\n    If (i % 2) == 0:\n        Set s to s + i.\nPrint s.", "output": [12]}
+{"task": "run", "construct": "t_accumulate_evens", "dialect": "english", "code": "Set s to 0.\nFor each i from 1 to 6:\n    If (i % 2) == 0:\n        Set s to s + i.\nPrint s.", "output": [12]}
+{"task": "translate", "construct": "t_accumulate_evens", "from_dialect": "english", "to_dialect": "basic", "from_code": "Set s to 0.\nFor each i from 1 to 6:\n    If (i % 2) == 0:\n        Set s to s + i.\nPrint s.", "to_code": "DIM s = 0\nFOR i = 1 TO 6\n    IF (i MOD 2) = 0 THEN\n        s = s + i\n    ENDIF\nNEXT\nPRINT s", "output": [12]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "c", "instruction": "Compute (16 * 10) + 9 and print the result.", "code": "int r = (16 * 10) + 9;\nprint(r);", "output": [169]}
+{"task": "run", "construct": "t_arith", "dialect": "c", "code": "int r = (16 * 10) + 9;\nprint(r);", "output": [169]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "basic", "instruction": "Compute (16 * 10) + 9 and print the result.", "code": "DIM r = (16 * 10) + 9\nPRINT r", "output": [169]}
+{"task": "run", "construct": "t_arith", "dialect": "basic", "code": "DIM r = (16 * 10) + 9\nPRINT r", "output": [169]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "python", "instruction": "Compute (16 * 10) + 9 and print the result.", "code": "r = (16 * 10) + 9\nprint(r)", "output": [169]}
+{"task": "run", "construct": "t_arith", "dialect": "python", "code": "r = (16 * 10) + 9\nprint(r)", "output": [169]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "english", "instruction": "Compute (16 * 10) + 9 and print the result.", "code": "Set r to (16 * 10) + 9.\nPrint r.", "output": [169]}
+{"task": "run", "construct": "t_arith", "dialect": "english", "code": "Set r to (16 * 10) + 9.\nPrint r.", "output": [169]}
+{"task": "translate", "construct": "t_arith", "from_dialect": "python", "to_dialect": "c", "from_code": "r = (16 * 10) + 9\nprint(r)", "to_code": "int r = (16 * 10) + 9;\nprint(r);", "output": [169]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "c", "instruction": "Compute (2 - 19) + 2 and print the result.", "code": "int r = (2 - 19) + 2;\nprint(r);", "output": [-15]}
+{"task": "run", "construct": "t_arith", "dialect": "c", "code": "int r = (2 - 19) + 2;\nprint(r);", "output": [-15]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "basic", "instruction": "Compute (2 - 19) + 2 and print the result.", "code": "DIM r = (2 - 19) + 2\nPRINT r", "output": [-15]}
+{"task": "run", "construct": "t_arith", "dialect": "basic", "code": "DIM r = (2 - 19) + 2\nPRINT r", "output": [-15]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "python", "instruction": "Compute (2 - 19) + 2 and print the result.", "code": "r = (2 - 19) + 2\nprint(r)", "output": [-15]}
+{"task": "run", "construct": "t_arith", "dialect": "python", "code": "r = (2 - 19) + 2\nprint(r)", "output": [-15]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "english", "instruction": "Compute (2 - 19) + 2 and print the result.", "code": "Set r to (2 - 19) + 2.\nPrint r.", "output": [-15]}
+{"task": "run", "construct": "t_arith", "dialect": "english", "code": "Set r to (2 - 19) + 2.\nPrint r.", "output": [-15]}
+{"task": "translate", "construct": "t_arith", "from_dialect": "english", "to_dialect": "python", "from_code": "Set r to (2 - 19) + 2.\nPrint r.", "to_code": "r = (2 - 19) + 2\nprint(r)", "output": [-15]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "c", "instruction": "Compute (18 - 9) + 16 and print the result.", "code": "int r = (18 - 9) + 16;\nprint(r);", "output": [25]}
+{"task": "run", "construct": "t_arith", "dialect": "c", "code": "int r = (18 - 9) + 16;\nprint(r);", "output": [25]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "basic", "instruction": "Compute (18 - 9) + 16 and print the result.", "code": "DIM r = (18 - 9) + 16\nPRINT r", "output": [25]}
+{"task": "run", "construct": "t_arith", "dialect": "basic", "code": "DIM r = (18 - 9) + 16\nPRINT r", "output": [25]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "python", "instruction": "Compute (18 - 9) + 16 and print the result.", "code": "r = (18 - 9) + 16\nprint(r)", "output": [25]}
+{"task": "run", "construct": "t_arith", "dialect": "python", "code": "r = (18 - 9) + 16\nprint(r)", "output": [25]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "english", "instruction": "Compute (18 - 9) + 16 and print the result.", "code": "Set r to (18 - 9) + 16.\nPrint r.", "output": [25]}
+{"task": "run", "construct": "t_arith", "dialect": "english", "code": "Set r to (18 - 9) + 16.\nPrint r.", "output": [25]}
+{"task": "translate", "construct": "t_arith", "from_dialect": "python", "to_dialect": "c", "from_code": "r = (18 - 9) + 16\nprint(r)", "to_code": "int r = (18 - 9) + 16;\nprint(r);", "output": [25]}
+{"task": "nl2code", "construct": "t_sum_range", "dialect": "c", "instruction": "Sum the integers from 4 to 10 and print the total.", "code": "int s = 0;\nfor (i = 4; i <= 10; i++) {\n    s = s + i;\n}\nprint(s);", "output": [49]}
+{"task": "run", "construct": "t_sum_range", "dialect": "c", "code": "int s = 0;\nfor (i = 4; i <= 10; i++) {\n    s = s + i;\n}\nprint(s);", "output": [49]}
+{"task": "nl2code", "construct": "t_sum_range", "dialect": "basic", "instruction": "Sum the integers from 4 to 10 and print the total.", "code": "DIM s = 0\nFOR i = 4 TO 10\n    s = s + i\nNEXT\nPRINT s", "output": [49]}
+{"task": "run", "construct": "t_sum_range", "dialect": "basic", "code": "DIM s = 0\nFOR i = 4 TO 10\n    s = s + i\nNEXT\nPRINT s", "output": [49]}
+{"task": "nl2code", "construct": "t_sum_range", "dialect": "python", "instruction": "Sum the integers from 4 to 10 and print the total.", "code": "s = 0\nfor i in range(4, 11):\n    s = s + i\nprint(s)", "output": [49]}
+{"task": "run", "construct": "t_sum_range", "dialect": "python", "code": "s = 0\nfor i in range(4, 11):\n    s = s + i\nprint(s)", "output": [49]}
+{"task": "nl2code", "construct": "t_sum_range", "dialect": "english", "instruction": "Sum the integers from 4 to 10 and print the total.", "code": "Set s to 0.\nFor each i from 4 to 10:\n    Set s to s + i.\nPrint s.", "output": [49]}
+{"task": "run", "construct": "t_sum_range", "dialect": "english", "code": "Set s to 0.\nFor each i from 4 to 10:\n    Set s to s + i.\nPrint s.", "output": [49]}
+{"task": "translate", "construct": "t_sum_range", "from_dialect": "c", "to_dialect": "python", "from_code": "int s = 0;\nfor (i = 4; i <= 10; i++) {\n    s = s + i;\n}\nprint(s);", "to_code": "s = 0\nfor i in range(4, 11):\n    s = s + i\nprint(s)", "output": [49]}
+{"task": "nl2code", "construct": "t_modulo", "dialect": "c", "instruction": "Print the remainder of 43 divided by 6.", "code": "int x = 43;\nprint(x % 6);", "output": [1]}
+{"task": "run", "construct": "t_modulo", "dialect": "c", "code": "int x = 43;\nprint(x % 6);", "output": [1]}
+{"task": "nl2code", "construct": "t_modulo", "dialect": "basic", "instruction": "Print the remainder of 43 divided by 6.", "code": "DIM x = 43\nPRINT x MOD 6", "output": [1]}
+{"task": "run", "construct": "t_modulo", "dialect": "basic", "code": "DIM x = 43\nPRINT x MOD 6", "output": [1]}
+{"task": "nl2code", "construct": "t_modulo", "dialect": "python", "instruction": "Print the remainder of 43 divided by 6.", "code": "x = 43\nprint(x % 6)", "output": [1]}
+{"task": "run", "construct": "t_modulo", "dialect": "python", "code": "x = 43\nprint(x % 6)", "output": [1]}
+{"task": "nl2code", "construct": "t_modulo", "dialect": "english", "instruction": "Print the remainder of 43 divided by 6.", "code": "Set x to 43.\nPrint x % 6.", "output": [1]}
+{"task": "run", "construct": "t_modulo", "dialect": "english", "code": "Set x to 43.\nPrint x % 6.", "output": [1]}
+{"task": "translate", "construct": "t_modulo", "from_dialect": "c", "to_dialect": "english", "from_code": "int x = 43;\nprint(x % 6);", "to_code": "Set x to 43.\nPrint x % 6.", "output": [1]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "c", "instruction": "Count down from 8 to 0 and print how many steps it took.", "code": "int n = 8;\nint c = 0;\nwhile (n > 0) {\n    c = c + 1;\n    n = n - 1;\n}\nprint(c);", "output": [8]}
+{"task": "run", "construct": "t_while_count", "dialect": "c", "code": "int n = 8;\nint c = 0;\nwhile (n > 0) {\n    c = c + 1;\n    n = n - 1;\n}\nprint(c);", "output": [8]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "basic", "instruction": "Count down from 8 to 0 and print how many steps it took.", "code": "DIM n = 8\nDIM c = 0\nWHILE n > 0\n    c = c + 1\n    n = n - 1\nENDWHILE\nPRINT c", "output": [8]}
+{"task": "run", "construct": "t_while_count", "dialect": "basic", "code": "DIM n = 8\nDIM c = 0\nWHILE n > 0\n    c = c + 1\n    n = n - 1\nENDWHILE\nPRINT c", "output": [8]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "python", "instruction": "Count down from 8 to 0 and print how many steps it took.", "code": "n = 8\nc = 0\nwhile n > 0:\n    c = c + 1\n    n = n - 1\nprint(c)", "output": [8]}
+{"task": "run", "construct": "t_while_count", "dialect": "python", "code": "n = 8\nc = 0\nwhile n > 0:\n    c = c + 1\n    n = n - 1\nprint(c)", "output": [8]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "english", "instruction": "Count down from 8 to 0 and print how many steps it took.", "code": "Set n to 8.\nSet c to 0.\nWhile n > 0:\n    Set c to c + 1.\n    Set n to n - 1.\nPrint c.", "output": [8]}
+{"task": "run", "construct": "t_while_count", "dialect": "english", "code": "Set n to 8.\nSet c to 0.\nWhile n > 0:\n    Set c to c + 1.\n    Set n to n - 1.\nPrint c.", "output": [8]}
+{"task": "translate", "construct": "t_while_count", "from_dialect": "english", "to_dialect": "python", "from_code": "Set n to 8.\nSet c to 0.\nWhile n > 0:\n    Set c to c + 1.\n    Set n to n - 1.\nPrint c.", "to_code": "n = 8\nc = 0\nwhile n > 0:\n    c = c + 1\n    n = n - 1\nprint(c)", "output": [8]}
+{"task": "nl2code", "construct": "t_sum_range", "dialect": "c", "instruction": "Sum the integers from 3 to 10 and print the total.", "code": "int s = 0;\nfor (i = 3; i <= 10; i++) {\n    s = s + i;\n}\nprint(s);", "output": [52]}
+{"task": "run", "construct": "t_sum_range", "dialect": "c", "code": "int s = 0;\nfor (i = 3; i <= 10; i++) {\n    s = s + i;\n}\nprint(s);", "output": [52]}
+{"task": "nl2code", "construct": "t_sum_range", "dialect": "basic", "instruction": "Sum the integers from 3 to 10 and print the total.", "code": "DIM s = 0\nFOR i = 3 TO 10\n    s = s + i\nNEXT\nPRINT s", "output": [52]}
+{"task": "run", "construct": "t_sum_range", "dialect": "basic", "code": "DIM s = 0\nFOR i = 3 TO 10\n    s = s + i\nNEXT\nPRINT s", "output": [52]}
+{"task": "nl2code", "construct": "t_sum_range", "dialect": "python", "instruction": "Sum the integers from 3 to 10 and print the total.", "code": "s = 0\nfor i in range(3, 11):\n    s = s + i\nprint(s)", "output": [52]}
+{"task": "run", "construct": "t_sum_range", "dialect": "python", "code": "s = 0\nfor i in range(3, 11):\n    s = s + i\nprint(s)", "output": [52]}
+{"task": "nl2code", "construct": "t_sum_range", "dialect": "english", "instruction": "Sum the integers from 3 to 10 and print the total.", "code": "Set s to 0.\nFor each i from 3 to 10:\n    Set s to s + i.\nPrint s.", "output": [52]}
+{"task": "run", "construct": "t_sum_range", "dialect": "english", "code": "Set s to 0.\nFor each i from 3 to 10:\n    Set s to s + i.\nPrint s.", "output": [52]}
+{"task": "translate", "construct": "t_sum_range", "from_dialect": "english", "to_dialect": "python", "from_code": "Set s to 0.\nFor each i from 3 to 10:\n    Set s to s + i.\nPrint s.", "to_code": "s = 0\nfor i in range(3, 11):\n    s = s + i\nprint(s)", "output": [52]}
+{"task": "nl2code", "construct": "t_power", "dialect": "c", "instruction": "Raise 2 to the power 5 and print the result.", "code": "int p = 1;\nfor (i = 1; i <= 5; i++) {\n    p = p * 2;\n}\nprint(p);", "output": [32]}
+{"task": "run", "construct": "t_power", "dialect": "c", "code": "int p = 1;\nfor (i = 1; i <= 5; i++) {\n    p = p * 2;\n}\nprint(p);", "output": [32]}
+{"task": "nl2code", "construct": "t_power", "dialect": "basic", "instruction": "Raise 2 to the power 5 and print the result.", "code": "DIM p = 1\nFOR i = 1 TO 5\n    p = p * 2\nNEXT\nPRINT p", "output": [32]}
+{"task": "run", "construct": "t_power", "dialect": "basic", "code": "DIM p = 1\nFOR i = 1 TO 5\n    p = p * 2\nNEXT\nPRINT p", "output": [32]}
+{"task": "nl2code", "construct": "t_power", "dialect": "python", "instruction": "Raise 2 to the power 5 and print the result.", "code": "p = 1\nfor i in range(1, 6):\n    p = p * 2\nprint(p)", "output": [32]}
+{"task": "run", "construct": "t_power", "dialect": "python", "code": "p = 1\nfor i in range(1, 6):\n    p = p * 2\nprint(p)", "output": [32]}
+{"task": "nl2code", "construct": "t_power", "dialect": "english", "instruction": "Raise 2 to the power 5 and print the result.", "code": "Set p to 1.\nFor each i from 1 to 5:\n    Set p to p * 2.\nPrint p.", "output": [32]}
+{"task": "run", "construct": "t_power", "dialect": "english", "code": "Set p to 1.\nFor each i from 1 to 5:\n    Set p to p * 2.\nPrint p.", "output": [32]}
+{"task": "translate", "construct": "t_power", "from_dialect": "basic", "to_dialect": "english", "from_code": "DIM p = 1\nFOR i = 1 TO 5\n    p = p * 2\nNEXT\nPRINT p", "to_code": "Set p to 1.\nFor each i from 1 to 5:\n    Set p to p * 2.\nPrint p.", "output": [32]}
+{"task": "nl2code", "construct": "t_power", "dialect": "c", "instruction": "Raise 5 to the power 3 and print the result.", "code": "int p = 1;\nfor (i = 1; i <= 3; i++) {\n    p = p * 5;\n}\nprint(p);", "output": [125]}
+{"task": "run", "construct": "t_power", "dialect": "c", "code": "int p = 1;\nfor (i = 1; i <= 3; i++) {\n    p = p * 5;\n}\nprint(p);", "output": [125]}
+{"task": "nl2code", "construct": "t_power", "dialect": "basic", "instruction": "Raise 5 to the power 3 and print the result.", "code": "DIM p = 1\nFOR i = 1 TO 3\n    p = p * 5\nNEXT\nPRINT p", "output": [125]}
+{"task": "run", "construct": "t_power", "dialect": "basic", "code": "DIM p = 1\nFOR i = 1 TO 3\n    p = p * 5\nNEXT\nPRINT p", "output": [125]}
+{"task": "nl2code", "construct": "t_power", "dialect": "python", "instruction": "Raise 5 to the power 3 and print the result.", "code": "p = 1\nfor i in range(1, 4):\n    p = p * 5\nprint(p)", "output": [125]}
+{"task": "run", "construct": "t_power", "dialect": "python", "code": "p = 1\nfor i in range(1, 4):\n    p = p * 5\nprint(p)", "output": [125]}
+{"task": "nl2code", "construct": "t_power", "dialect": "english", "instruction": "Raise 5 to the power 3 and print the result.", "code": "Set p to 1.\nFor each i from 1 to 3:\n    Set p to p * 5.\nPrint p.", "output": [125]}
+{"task": "run", "construct": "t_power", "dialect": "english", "code": "Set p to 1.\nFor each i from 1 to 3:\n    Set p to p * 5.\nPrint p.", "output": [125]}
+{"task": "translate", "construct": "t_power", "from_dialect": "python", "to_dialect": "english", "from_code": "p = 1\nfor i in range(1, 4):\n    p = p * 5\nprint(p)", "to_code": "Set p to 1.\nFor each i from 1 to 3:\n    Set p to p * 5.\nPrint p.", "output": [125]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "c", "instruction": "Count down from 3 to 0 and print how many steps it took.", "code": "int n = 3;\nint c = 0;\nwhile (n > 0) {\n    c = c + 1;\n    n = n - 1;\n}\nprint(c);", "output": [3]}
+{"task": "run", "construct": "t_while_count", "dialect": "c", "code": "int n = 3;\nint c = 0;\nwhile (n > 0) {\n    c = c + 1;\n    n = n - 1;\n}\nprint(c);", "output": [3]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "basic", "instruction": "Count down from 3 to 0 and print how many steps it took.", "code": "DIM n = 3\nDIM c = 0\nWHILE n > 0\n    c = c + 1\n    n = n - 1\nENDWHILE\nPRINT c", "output": [3]}
+{"task": "run", "construct": "t_while_count", "dialect": "basic", "code": "DIM n = 3\nDIM c = 0\nWHILE n > 0\n    c = c + 1\n    n = n - 1\nENDWHILE\nPRINT c", "output": [3]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "python", "instruction": "Count down from 3 to 0 and print how many steps it took.", "code": "n = 3\nc = 0\nwhile n > 0:\n    c = c + 1\n    n = n - 1\nprint(c)", "output": [3]}
+{"task": "run", "construct": "t_while_count", "dialect": "python", "code": "n = 3\nc = 0\nwhile n > 0:\n    c = c + 1\n    n = n - 1\nprint(c)", "output": [3]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "english", "instruction": "Count down from 3 to 0 and print how many steps it took.", "code": "Set n to 3.\nSet c to 0.\nWhile n > 0:\n    Set c to c + 1.\n    Set n to n - 1.\nPrint c.", "output": [3]}
+{"task": "run", "construct": "t_while_count", "dialect": "english", "code": "Set n to 3.\nSet c to 0.\nWhile n > 0:\n    Set c to c + 1.\n    Set n to n - 1.\nPrint c.", "output": [3]}
+{"task": "translate", "construct": "t_while_count", "from_dialect": "english", "to_dialect": "python", "from_code": "Set n to 3.\nSet c to 0.\nWhile n > 0:\n    Set c to c + 1.\n    Set n to n - 1.\nPrint c.", "to_code": "n = 3\nc = 0\nwhile n > 0:\n    c = c + 1\n    n = n - 1\nprint(c)", "output": [3]}
+{"task": "nl2code", "construct": "t_modulo", "dialect": "c", "instruction": "Print the remainder of 40 divided by 8.", "code": "int x = 40;\nprint(x % 8);", "output": [0]}
+{"task": "run", "construct": "t_modulo", "dialect": "c", "code": "int x = 40;\nprint(x % 8);", "output": [0]}
+{"task": "nl2code", "construct": "t_modulo", "dialect": "basic", "instruction": "Print the remainder of 40 divided by 8.", "code": "DIM x = 40\nPRINT x MOD 8", "output": [0]}
+{"task": "run", "construct": "t_modulo", "dialect": "basic", "code": "DIM x = 40\nPRINT x MOD 8", "output": [0]}
+{"task": "nl2code", "construct": "t_modulo", "dialect": "python", "instruction": "Print the remainder of 40 divided by 8.", "code": "x = 40\nprint(x % 8)", "output": [0]}
+{"task": "run", "construct": "t_modulo", "dialect": "python", "code": "x = 40\nprint(x % 8)", "output": [0]}
+{"task": "nl2code", "construct": "t_modulo", "dialect": "english", "instruction": "Print the remainder of 40 divided by 8.", "code": "Set x to 40.\nPrint x % 8.", "output": [0]}
+{"task": "run", "construct": "t_modulo", "dialect": "english", "code": "Set x to 40.\nPrint x % 8.", "output": [0]}
+{"task": "translate", "construct": "t_modulo", "from_dialect": "python", "to_dialect": "basic", "from_code": "x = 40\nprint(x % 8)", "to_code": "DIM x = 40\nPRINT x MOD 8", "output": [0]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "c", "instruction": "Compute (17 * 3) - 11 and print the result.", "code": "int r = (17 * 3) - 11;\nprint(r);", "output": [40]}
+{"task": "run", "construct": "t_arith", "dialect": "c", "code": "int r = (17 * 3) - 11;\nprint(r);", "output": [40]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "basic", "instruction": "Compute (17 * 3) - 11 and print the result.", "code": "DIM r = (17 * 3) - 11\nPRINT r", "output": [40]}
+{"task": "run", "construct": "t_arith", "dialect": "basic", "code": "DIM r = (17 * 3) - 11\nPRINT r", "output": [40]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "python", "instruction": "Compute (17 * 3) - 11 and print the result.", "code": "r = (17 * 3) - 11\nprint(r)", "output": [40]}
+{"task": "run", "construct": "t_arith", "dialect": "python", "code": "r = (17 * 3) - 11\nprint(r)", "output": [40]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "english", "instruction": "Compute (17 * 3) - 11 and print the result.", "code": "Set r to (17 * 3) - 11.\nPrint r.", "output": [40]}
+{"task": "run", "construct": "t_arith", "dialect": "english", "code": "Set r to (17 * 3) - 11.\nPrint r.", "output": [40]}
+{"task": "translate", "construct": "t_arith", "from_dialect": "basic", "to_dialect": "c", "from_code": "DIM r = (17 * 3) - 11\nPRINT r", "to_code": "int r = (17 * 3) - 11;\nprint(r);", "output": [40]}
+{"task": "nl2code", "construct": "t_sum_range", "dialect": "c", "instruction": "Sum the integers from 1 to 9 and print the total.", "code": "int s = 0;\nfor (i = 1; i <= 9; i++) {\n    s = s + i;\n}\nprint(s);", "output": [45]}
+{"task": "run", "construct": "t_sum_range", "dialect": "c", "code": "int s = 0;\nfor (i = 1; i <= 9; i++) {\n    s = s + i;\n}\nprint(s);", "output": [45]}
+{"task": "nl2code", "construct": "t_sum_range", "dialect": "basic", "instruction": "Sum the integers from 1 to 9 and print the total.", "code": "DIM s = 0\nFOR i = 1 TO 9\n    s = s + i\nNEXT\nPRINT s", "output": [45]}
+{"task": "run", "construct": "t_sum_range", "dialect": "basic", "code": "DIM s = 0\nFOR i = 1 TO 9\n    s = s + i\nNEXT\nPRINT s", "output": [45]}
+{"task": "nl2code", "construct": "t_sum_range", "dialect": "python", "instruction": "Sum the integers from 1 to 9 and print the total.", "code": "s = 0\nfor i in range(1, 10):\n    s = s + i\nprint(s)", "output": [45]}
+{"task": "run", "construct": "t_sum_range", "dialect": "python", "code": "s = 0\nfor i in range(1, 10):\n    s = s + i\nprint(s)", "output": [45]}
+{"task": "nl2code", "construct": "t_sum_range", "dialect": "english", "instruction": "Sum the integers from 1 to 9 and print the total.", "code": "Set s to 0.\nFor each i from 1 to 9:\n    Set s to s + i.\nPrint s.", "output": [45]}
+{"task": "run", "construct": "t_sum_range", "dialect": "english", "code": "Set s to 0.\nFor each i from 1 to 9:\n    Set s to s + i.\nPrint s.", "output": [45]}
+{"task": "translate", "construct": "t_sum_range", "from_dialect": "basic", "to_dialect": "python", "from_code": "DIM s = 0\nFOR i = 1 TO 9\n    s = s + i\nNEXT\nPRINT s", "to_code": "s = 0\nfor i in range(1, 10):\n    s = s + i\nprint(s)", "output": [45]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "c", "instruction": "Count down from 9 to 0 and print how many steps it took.", "code": "int n = 9;\nint c = 0;\nwhile (n > 0) {\n    c = c + 1;\n    n = n - 1;\n}\nprint(c);", "output": [9]}
+{"task": "run", "construct": "t_while_count", "dialect": "c", "code": "int n = 9;\nint c = 0;\nwhile (n > 0) {\n    c = c + 1;\n    n = n - 1;\n}\nprint(c);", "output": [9]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "basic", "instruction": "Count down from 9 to 0 and print how many steps it took.", "code": "DIM n = 9\nDIM c = 0\nWHILE n > 0\n    c = c + 1\n    n = n - 1\nENDWHILE\nPRINT c", "output": [9]}
+{"task": "run", "construct": "t_while_count", "dialect": "basic", "code": "DIM n = 9\nDIM c = 0\nWHILE n > 0\n    c = c + 1\n    n = n - 1\nENDWHILE\nPRINT c", "output": [9]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "python", "instruction": "Count down from 9 to 0 and print how many steps it took.", "code": "n = 9\nc = 0\nwhile n > 0:\n    c = c + 1\n    n = n - 1\nprint(c)", "output": [9]}
+{"task": "run", "construct": "t_while_count", "dialect": "python", "code": "n = 9\nc = 0\nwhile n > 0:\n    c = c + 1\n    n = n - 1\nprint(c)", "output": [9]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "english", "instruction": "Count down from 9 to 0 and print how many steps it took.", "code": "Set n to 9.\nSet c to 0.\nWhile n > 0:\n    Set c to c + 1.\n    Set n to n - 1.\nPrint c.", "output": [9]}
+{"task": "run", "construct": "t_while_count", "dialect": "english", "code": "Set n to 9.\nSet c to 0.\nWhile n > 0:\n    Set c to c + 1.\n    Set n to n - 1.\nPrint c.", "output": [9]}
+{"task": "translate", "construct": "t_while_count", "from_dialect": "python", "to_dialect": "basic", "from_code": "n = 9\nc = 0\nwhile n > 0:\n    c = c + 1\n    n = n - 1\nprint(c)", "to_code": "DIM n = 9\nDIM c = 0\nWHILE n > 0\n    c = c + 1\n    n = n - 1\nENDWHILE\nPRINT c", "output": [9]}
+{"task": "nl2code", "construct": "t_factorial", "dialect": "c", "instruction": "Compute the factorial of 7 and print it.", "code": "int f = 1;\nfor (i = 2; i <= 7; i++) {\n    f = f * i;\n}\nprint(f);", "output": [5040]}
+{"task": "run", "construct": "t_factorial", "dialect": "c", "code": "int f = 1;\nfor (i = 2; i <= 7; i++) {\n    f = f * i;\n}\nprint(f);", "output": [5040]}
+{"task": "nl2code", "construct": "t_factorial", "dialect": "basic", "instruction": "Compute the factorial of 7 and print it.", "code": "DIM f = 1\nFOR i = 2 TO 7\n    f = f * i\nNEXT\nPRINT f", "output": [5040]}
+{"task": "run", "construct": "t_factorial", "dialect": "basic", "code": "DIM f = 1\nFOR i = 2 TO 7\n    f = f * i\nNEXT\nPRINT f", "output": [5040]}
+{"task": "nl2code", "construct": "t_factorial", "dialect": "python", "instruction": "Compute the factorial of 7 and print it.", "code": "f = 1\nfor i in range(2, 8):\n    f = f * i\nprint(f)", "output": [5040]}
+{"task": "run", "construct": "t_factorial", "dialect": "python", "code": "f = 1\nfor i in range(2, 8):\n    f = f * i\nprint(f)", "output": [5040]}
+{"task": "nl2code", "construct": "t_factorial", "dialect": "english", "instruction": "Compute the factorial of 7 and print it.", "code": "Set f to 1.\nFor each i from 2 to 7:\n    Set f to f * i.\nPrint f.", "output": [5040]}
+{"task": "run", "construct": "t_factorial", "dialect": "english", "code": "Set f to 1.\nFor each i from 2 to 7:\n    Set f to f * i.\nPrint f.", "output": [5040]}
+{"task": "translate", "construct": "t_factorial", "from_dialect": "c", "to_dialect": "python", "from_code": "int f = 1;\nfor (i = 2; i <= 7; i++) {\n    f = f * i;\n}\nprint(f);", "to_code": "f = 1\nfor i in range(2, 8):\n    f = f * i\nprint(f)", "output": [5040]}
+{"task": "nl2code", "construct": "t_branch", "dialect": "c", "instruction": "Set x to 17; if x is greater than 13 print 63, otherwise print 28.", "code": "int x = 17;\nif (x > 13) {\n    print(63);\n} else {\n    print(28);\n}", "output": [63]}
+{"task": "run", "construct": "t_branch", "dialect": "c", "code": "int x = 17;\nif (x > 13) {\n    print(63);\n} else {\n    print(28);\n}", "output": [63]}
+{"task": "nl2code", "construct": "t_branch", "dialect": "basic", "instruction": "Set x to 17; if x is greater than 13 print 63, otherwise print 28.", "code": "DIM x = 17\nIF x > 13 THEN\n    PRINT 63\nELSE\n    PRINT 28\nENDIF", "output": [63]}
+{"task": "run", "construct": "t_branch", "dialect": "basic", "code": "DIM x = 17\nIF x > 13 THEN\n    PRINT 63\nELSE\n    PRINT 28\nENDIF", "output": [63]}
+{"task": "nl2code", "construct": "t_branch", "dialect": "python", "instruction": "Set x to 17; if x is greater than 13 print 63, otherwise print 28.", "code": "x = 17\nif x > 13:\n    print(63)\nelse:\n    print(28)", "output": [63]}
+{"task": "run", "construct": "t_branch", "dialect": "python", "code": "x = 17\nif x > 13:\n    print(63)\nelse:\n    print(28)", "output": [63]}
+{"task": "nl2code", "construct": "t_branch", "dialect": "english", "instruction": "Set x to 17; if x is greater than 13 print 63, otherwise print 28.", "code": "Set x to 17.\nIf x > 13:\n    Print 63.\nOtherwise:\n    Print 28.", "output": [63]}
+{"task": "run", "construct": "t_branch", "dialect": "english", "code": "Set x to 17.\nIf x > 13:\n    Print 63.\nOtherwise:\n    Print 28.", "output": [63]}
+{"task": "translate", "construct": "t_branch", "from_dialect": "c", "to_dialect": "python", "from_code": "int x = 17;\nif (x > 13) {\n    print(63);\n} else {\n    print(28);\n}", "to_code": "x = 17\nif x > 13:\n    print(63)\nelse:\n    print(28)", "output": [63]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "c", "instruction": "Count down from 7 to 0 and print how many steps it took.", "code": "int n = 7;\nint c = 0;\nwhile (n > 0) {\n    c = c + 1;\n    n = n - 1;\n}\nprint(c);", "output": [7]}
+{"task": "run", "construct": "t_while_count", "dialect": "c", "code": "int n = 7;\nint c = 0;\nwhile (n > 0) {\n    c = c + 1;\n    n = n - 1;\n}\nprint(c);", "output": [7]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "basic", "instruction": "Count down from 7 to 0 and print how many steps it took.", "code": "DIM n = 7\nDIM c = 0\nWHILE n > 0\n    c = c + 1\n    n = n - 1\nENDWHILE\nPRINT c", "output": [7]}
+{"task": "run", "construct": "t_while_count", "dialect": "basic", "code": "DIM n = 7\nDIM c = 0\nWHILE n > 0\n    c = c + 1\n    n = n - 1\nENDWHILE\nPRINT c", "output": [7]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "python", "instruction": "Count down from 7 to 0 and print how many steps it took.", "code": "n = 7\nc = 0\nwhile n > 0:\n    c = c + 1\n    n = n - 1\nprint(c)", "output": [7]}
+{"task": "run", "construct": "t_while_count", "dialect": "python", "code": "n = 7\nc = 0\nwhile n > 0:\n    c = c + 1\n    n = n - 1\nprint(c)", "output": [7]}
+{"task": "nl2code", "construct": "t_while_count", "dialect": "english", "instruction": "Count down from 7 to 0 and print how many steps it took.", "code": "Set n to 7.\nSet c to 0.\nWhile n > 0:\n    Set c to c + 1.\n    Set n to n - 1.\nPrint c.", "output": [7]}
+{"task": "run", "construct": "t_while_count", "dialect": "english", "code": "Set n to 7.\nSet c to 0.\nWhile n > 0:\n    Set c to c + 1.\n    Set n to n - 1.\nPrint c.", "output": [7]}
+{"task": "translate", "construct": "t_while_count", "from_dialect": "basic", "to_dialect": "english", "from_code": "DIM n = 7\nDIM c = 0\nWHILE n > 0\n    c = c + 1\n    n = n - 1\nENDWHILE\nPRINT c", "to_code": "Set n to 7.\nSet c to 0.\nWhile n > 0:\n    Set c to c + 1.\n    Set n to n - 1.\nPrint c.", "output": [7]}
+{"task": "nl2code", "construct": "t_power", "dialect": "c", "instruction": "Raise 5 to the power 4 and print the result.", "code": "int p = 1;\nfor (i = 1; i <= 4; i++) {\n    p = p * 5;\n}\nprint(p);", "output": [625]}
+{"task": "run", "construct": "t_power", "dialect": "c", "code": "int p = 1;\nfor (i = 1; i <= 4; i++) {\n    p = p * 5;\n}\nprint(p);", "output": [625]}
+{"task": "nl2code", "construct": "t_power", "dialect": "basic", "instruction": "Raise 5 to the power 4 and print the result.", "code": "DIM p = 1\nFOR i = 1 TO 4\n    p = p * 5\nNEXT\nPRINT p", "output": [625]}
+{"task": "run", "construct": "t_power", "dialect": "basic", "code": "DIM p = 1\nFOR i = 1 TO 4\n    p = p * 5\nNEXT\nPRINT p", "output": [625]}
+{"task": "nl2code", "construct": "t_power", "dialect": "python", "instruction": "Raise 5 to the power 4 and print the result.", "code": "p = 1\nfor i in range(1, 5):\n    p = p * 5\nprint(p)", "output": [625]}
+{"task": "run", "construct": "t_power", "dialect": "python", "code": "p = 1\nfor i in range(1, 5):\n    p = p * 5\nprint(p)", "output": [625]}
+{"task": "nl2code", "construct": "t_power", "dialect": "english", "instruction": "Raise 5 to the power 4 and print the result.", "code": "Set p to 1.\nFor each i from 1 to 4:\n    Set p to p * 5.\nPrint p.", "output": [625]}
+{"task": "run", "construct": "t_power", "dialect": "english", "code": "Set p to 1.\nFor each i from 1 to 4:\n    Set p to p * 5.\nPrint p.", "output": [625]}
+{"task": "translate", "construct": "t_power", "from_dialect": "english", "to_dialect": "basic", "from_code": "Set p to 1.\nFor each i from 1 to 4:\n    Set p to p * 5.\nPrint p.", "to_code": "DIM p = 1\nFOR i = 1 TO 4\n    p = p * 5\nNEXT\nPRINT p", "output": [625]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "c", "instruction": "Compute (19 - 19) + 12 and print the result.", "code": "int r = (19 - 19) + 12;\nprint(r);", "output": [12]}
+{"task": "run", "construct": "t_arith", "dialect": "c", "code": "int r = (19 - 19) + 12;\nprint(r);", "output": [12]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "basic", "instruction": "Compute (19 - 19) + 12 and print the result.", "code": "DIM r = (19 - 19) + 12\nPRINT r", "output": [12]}
+{"task": "run", "construct": "t_arith", "dialect": "basic", "code": "DIM r = (19 - 19) + 12\nPRINT r", "output": [12]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "python", "instruction": "Compute (19 - 19) + 12 and print the result.", "code": "r = (19 - 19) + 12\nprint(r)", "output": [12]}
+{"task": "run", "construct": "t_arith", "dialect": "python", "code": "r = (19 - 19) + 12\nprint(r)", "output": [12]}
+{"task": "nl2code", "construct": "t_arith", "dialect": "english", "instruction": "Compute (19 - 19) + 12 and print the result.", "code": "Set r to (19 - 19) + 12.\nPrint r.", "output": [12]}
+{"task": "run", "construct": "t_arith", "dialect": "english", "code": "Set r to (19 - 19) + 12.\nPrint r.", "output": [12]}
+{"task": "translate", "construct": "t_arith", "from_dialect": "basic", "to_dialect": "english", "from_code": "DIM r = (19 - 19) + 12\nPRINT r", "to_code": "Set r to (19 - 19) + 12.\nPrint r.", "output": [12]}
+{"task": "nl2code", "construct": "t_branch", "dialect": "c", "instruction": "Set x to 18; if x is greater than 14 print 61, otherwise print 6.", "code": "int x = 18;\nif (x > 14) {\n    print(61);\n} else {\n    print(6);\n}", "output": [61]}
+{"task": "run", "construct": "t_branch", "dialect": "c", "code": "int x = 18;\nif (x > 14) {\n    print(61);\n} else {\n    print(6);\n}", "output": [61]}
+{"task": "nl2code", "construct": "t_branch", "dialect": "basic", "instruction": "Set x to 18; if x is greater than 14 print 61, otherwise print 6.", "code": "DIM x = 18\nIF x > 14 THEN\n    PRINT 61\nELSE\n    PRINT 6\nENDIF", "output": [61]}
+{"task": "run", "construct": "t_branch", "dialect": "basic", "code": "DIM x = 18\nIF x > 14 THEN\n    PRINT 61\nELSE\n    PRINT 6\nENDIF", "output": [61]}
+{"task": "nl2code", "construct": "t_branch", "dialect": "python", "instruction": "Set x to 18; if x is greater than 14 print 61, otherwise print 6.", "code": "x = 18\nif x > 14:\n    print(61)\nelse:\n    print(6)", "output": [61]}
+{"task": "run", "construct": "t_branch", "dialect": "python", "code": "x = 18\nif x > 14:\n    print(61)\nelse:\n    print(6)", "output": [61]}
+{"task": "nl2code", "construct": "t_branch", "dialect": "english", "instruction": "Set x to 18; if x is greater than 14 print 61, otherwise print 6.", "code": "Set x to 18.\nIf x > 14:\n    Print 61.\nOtherwise:\n    Print 6.", "output": [61]}
+{"task": "run", "construct": "t_branch", "dialect": "english", "code": "Set x to 18.\nIf x > 14:\n    Print 61.\nOtherwise:\n    Print 6.", "output": [61]}
+{"task": "translate", "construct": "t_branch", "from_dialect": "python", "to_dialect": "c", "from_code": "x = 18\nif x > 14:\n    print(61)\nelse:\n    print(6)", "to_code": "int x = 18;\nif (x > 14) {\n    print(61);\n} else {\n    print(6);\n}", "output": [61]}
+{"task": "nl2code", "construct": "t_modulo", "dialect": "c", "instruction": "Print the remainder of 30 divided by 2.", "code": "int x = 30;\nprint(x % 2);", "output": [0]}
+{"task": "run", "construct": "t_modulo", "dialect": "c", "code": "int x = 30;\nprint(x % 2);", "output": [0]}
+{"task": "nl2code", "construct": "t_modulo", "dialect": "basic", "instruction": "Print the remainder of 30 divided by 2.", "code": "DIM x = 30\nPRINT x MOD 2", "output": [0]}
+{"task": "run", "construct": "t_modulo", "dialect": "basic", "code": "DIM x = 30\nPRINT x MOD 2", "output": [0]}
+{"task": "nl2code", "construct": "t_modulo", "dialect": "python", "instruction": "Print the remainder of 30 divided by 2.", "code": "x = 30\nprint(x % 2)", "output": [0]}
+{"task": "run", "construct": "t_modulo", "dialect": "python", "code": "x = 30\nprint(x % 2)", "output": [0]}
+{"task": "nl2code", "construct": "t_modulo", "dialect": "english", "instruction": "Print the remainder of 30 divided by 2.", "code": "Set x to 30.\nPrint x % 2.", "output": [0]}
+{"task": "run", "construct": "t_modulo", "dialect": "english", "code": "Set x to 30.\nPrint x % 2.", "output": [0]}
+{"task": "translate", "construct": "t_modulo", "from_dialect": "english", "to_dialect": "c", "from_code": "Set x to 30.\nPrint x % 2.", "to_code": "int x = 30;\nprint(x % 2);", "output": [0]}
+{"task": "nl2code", "construct": "t_factorial", "dialect": "c", "instruction": "Compute the factorial of 3 and print it.", "code": "int f = 1;\nfor (i = 2; i <= 3; i++) {\n    f = f * i;\n}\nprint(f);", "output": [6]}
+{"task": "run", "construct": "t_factorial", "dialect": "c", "code": "int f = 1;\nfor (i = 2; i <= 3; i++) {\n    f = f * i;\n}\nprint(f);", "output": [6]}
+{"task": "nl2code", "construct": "t_factorial", "dialect": "basic", "instruction": "Compute the factorial of 3 and print it.", "code": "DIM f = 1\nFOR i = 2 TO 3\n    f = f * i\nNEXT\nPRINT f", "output": [6]}
+{"task": "run", "construct": "t_factorial", "dialect": "basic", "code": "DIM f = 1\nFOR i = 2 TO 3\n    f = f * i\nNEXT\nPRINT f", "output": [6]}
+{"task": "nl2code", "construct": "t_factorial", "dialect": "python", "instruction": "Compute the factorial of 3 and print it.", "code": "f = 1\nfor i in range(2, 4):\n    f = f * i\nprint(f)", "output": [6]}
+{"task": "run", "construct": "t_factorial", "dialect": "python", "code": "f = 1\nfor i in range(2, 4):\n    f = f * i\nprint(f)", "output": [6]}
+{"task": "nl2code", "construct": "t_factorial", "dialect": "english", "instruction": "Compute the factorial of 3 and print it.", "code": "Set f to 1.\nFor each i from 2 to 3:\n    Set f to f * i.\nPrint f.", "output": [6]}
+{"task": "run", "construct": "t_factorial", "dialect": "english", "code": "Set f to 1.\nFor each i from 2 to 3:\n    Set f to f * i.\nPrint f.", "output": [6]}
+{"task": "translate", "construct": "t_factorial", "from_dialect": "python", "to_dialect": "c", "from_code": "f = 1\nfor i in range(2, 4):\n    f = f * i\nprint(f)", "to_code": "int f = 1;\nfor (i = 2; i <= 3; i++) {\n    f = f * i;\n}\nprint(f);", "output": [6]}
