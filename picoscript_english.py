@@ -358,9 +358,9 @@ class Parser:
             self.eat_word("while")
             cond = self.parse_cond()
             return While(cond, self.parse_suite())
-        count = self.parse_expr()                # "Repeat <n> times [with X]:"
-        self.eat_word("times")
-        var = "_i"
+        count = self.parse_unary()               # "Repeat <n> times [with X]:" (n is a
+        self.eat_word("times")                   # simple value; parens for expressions,
+        var = "_i"                               # since 'times' is also the * operator)
         if self.at_word("with"):
             self.eat_word("with")
             var = self.expect("word").value

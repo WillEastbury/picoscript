@@ -24,7 +24,7 @@ sys.path.insert(0, ROOT)
 
 import markdown
 
-from gen_playground import CONSTRUCTS, build_example   # reuse verified gallery data
+from gen_playground import CONSTRUCTS, build_example, _styles   # reuse verified gallery data
 from picoscript_basic import compile_basic
 from picoscript_il import lower_to_bytecode_safe
 from picoscript_vm import PicoVM
@@ -102,8 +102,10 @@ def render_docs():
 
 def main():
     verify_responder()
-    gallery = [{"title": t, "desc": d, **build_example(c, b)}
-               for (t, d, c, b) in CONSTRUCTS]
+    gallery = []
+    for c in CONSTRUCTS:
+        t, d, srcs = _styles(c)
+        gallery.append({"title": t, "desc": d, **build_example(srcs)})
     docnav, docbody = render_docs()
 
     hooks_js = open(os.path.join(ROOT, "vm", "pico_hooks.js"), encoding="utf-8").read()
@@ -140,7 +142,7 @@ PAGE = r"""<!DOCTYPE html>
 <title>PicoScript &mdash; Guide, Playground &amp; HTTP Simulator</title>
 <style>
   :root { --accent:#667eea; --bg:#0f1117; --panel:#1a1d27; --panel2:#232734;
-          --text:#e6e8ef; --muted:#9aa0ad; --c:#7ee787; --b:#79c0ff; --warn:#ffd866; --err:#ff7b72; }
+          --text:#e6e8ef; --muted:#9aa0ad; --c:#7ee787; --b:#79c0ff; --py:#ffd866; --en:#f0a3ff; --warn:#ffd866; --err:#ff7b72; }
   * { box-sizing:border-box; }
   body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
          background:var(--bg); color:var(--text); }
@@ -168,11 +170,14 @@ PAGE = r"""<!DOCTYPE html>
   .card h3 { margin:0; padding:11px 15px; font-size:14px; background:var(--panel2); }
   .card .desc { padding:8px 15px; color:var(--muted); font-size:12px; }
   .pair { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:#2c313f; }
-  @media (max-width:640px){ .pair{ grid-template-columns:1fr; } }
+  .quad { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:#2c313f; }
+  @media (max-width:640px){ .pair{ grid-template-columns:1fr; } .quad{ grid-template-columns:1fr; } }
   .pane { background:var(--panel); } .pane .lbl { font-size:10.5px; font-weight:700; padding:5px 11px; color:#0f1117; }
   .pane.cstyle .lbl { background:var(--c); } .pane.bstyle .lbl { background:var(--b); }
+  .pane.pystyle .lbl { background:var(--py); } .pane.enstyle .lbl { background:var(--en); }
   pre { margin:0; padding:11px; font-family:"SF Mono",Consolas,monospace; font-size:11.5px; line-height:1.5; white-space:pre; overflow-x:auto; }
   .cstyle pre { color:#cde9c8; } .bstyle pre { color:#cfe4ff; }
+  .pystyle pre { color:#f5e6a8; } .enstyle pre { color:#f3d4ff; }
   .runbar { display:flex; align-items:center; gap:10px; padding:9px 15px; background:var(--panel2); border-top:1px solid #2c313f; }
   .out { font-family:"SF Mono",Consolas,monospace; font-size:12px; color:var(--warn); }
   /* debugger / editor */
@@ -468,27 +473,33 @@ function renderWal(){
 // ---- gallery --------------------------------------------------------------
 function runWords(hex){ var vm=new PicoVM(); vm.run(hex.map(function(h){return parseInt(h,16)>>>0;})); return vm; }
 function buildGallery(){
+  var STYLES = [['c','C { }','cstyle'],['basic','BASIC','bstyle'],['python','PYTHON','pystyle'],['english','ENGLISH','enstyle']];
   document.getElementById('gallery').innerHTML = DATA.map(function(d,i){
+    var present = STYLES.filter(function(s){return d[s[0]];});
+    var panes = present.map(function(s){
+      return '<div class="pane '+s[2]+'"><div class="lbl">'+s[1]+'</div><pre>'+esc(d[s[0]].src)+'</pre></div>';
+    }).join('');
+    var edit = present.map(function(s){
+      return '<button class="ghost" onclick="editIn('+i+',\''+s[0]+'\')">Edit '+s[1].split(' ')[0]+'</button>';
+    }).join('');
     return '<div class="card"><h3>'+(i+1)+'. '+esc(d.title)+'</h3>'+
       '<div class="desc">'+esc(d.desc)+'</div>'+
-      '<div class="pair">'+
-        '<div class="pane cstyle"><div class="lbl">C-STYLE { }</div><pre>'+esc(d.c.src)+'</pre></div>'+
-        '<div class="pane bstyle"><div class="lbl">BASIC BLOCK</div><pre>'+esc(d.basic.src)+'</pre></div>'+
-      '</div>'+
-      '<div class="runbar"><button class="act" onclick="runCard('+i+')">Run both &#9654;</button>'+
+      '<div class="quad">'+panes+'</div>'+
+      '<div class="runbar"><button class="act" onclick="runCard('+i+')">Run &#9654;</button>'+
       '<span class="out" id="cardout'+i+'">output &rarr; &hellip;</span>'+
-      '<button class="ghost" style="margin-left:auto" onclick="editIn('+i+',\'c\')">Edit C</button>'+
-      '<button class="ghost" onclick="editIn('+i+',\'basic\')">Edit BASIC</button></div></div>';
+      '<span style="margin-left:auto"></span>'+edit+'</div></div>';
   }).join('');
 }
 function runCard(i){
-  var d=DATA[i], co=runWords(d.c.words).outputInts(), bo=runWords(d.basic.words).outputInts();
-  var same=JSON.stringify(co)===JSON.stringify(bo);
-  document.getElementById('cardout'+i).innerHTML='C &rarr; ['+co.join(', ')+'] &nbsp; BASIC &rarr; ['+bo.join(', ')+'] '+(same?'&#10003;':'&#9888;');
+  var d=DATA[i], STYLES=['c','basic','python','english'], parts=[], ref=null, same=true;
+  STYLES.forEach(function(s){ if(!d[s]) return; var o=runWords(d[s].words).outputInts();
+    if(ref===null) ref=JSON.stringify(o); else if(JSON.stringify(o)!==ref) same=false;
+    parts.push(s+' &rarr; ['+o.join(', ')+']'); });
+  document.getElementById('cardout'+i).innerHTML=parts.join(' &nbsp; ')+' '+(same?'&#10003;':'&#9888;');
 }
 function editIn(i,style){
-  document.getElementById('lang').value=style;
-  document.getElementById('src').value=DATA[i][style].src;
+  document.getElementById('lang').value=style; onLangChange();
+  setSrc(DATA[i][style].src);
   showView('play'); compileSrc(false);
 }
 

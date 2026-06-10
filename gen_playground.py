@@ -19,6 +19,8 @@ sys.path.insert(0, ROOT)
 
 from picoscript_cfront import compile_c
 from picoscript_basic import compile_basic
+from picoscript_python import compile_python
+from picoscript_english import compile_english
 from picoscript_il import lower_to_bytecode_safe, il_to_text
 from picoscript_vm import PicoVM
 
@@ -38,69 +40,88 @@ CONSTRUCTS = [
      "Declare variables with DIM and evaluate expressions. Both styles are "
      "case-insensitive for keywords and variable names; one global scope.",
      "int a = 6;\nint b = 7;\nprint(a * b + 1);",
-     "DIM A = 6\nDIM B = 7\nPRINT A * B + 1"),
+     "DIM A = 6\nDIM B = 7\nPRINT A * B + 1",
+     "a = 6\nb = 7\nprint(a * b + 1)",
+     "Set a to 6.\nSet b to 7.\nPrint a times b plus 1."),
 
     ("Conditional (if / else)",
      "Branch on a comparison. C uses braces; BASIC uses IF/THEN/ELSE/ENDIF. "
      "BASIC accepts symbol (>, =, <>) or word (GT, EQ, NE) comparators.",
      "int x = 7;\nif (x > 5) {\n    print(100);\n} else {\n    print(200);\n}",
-     "DIM X = 7\nIF X > 5 THEN\n    PRINT 100\nELSE\n    PRINT 200\nENDIF"),
+     "DIM X = 7\nIF X > 5 THEN\n    PRINT 100\nELSE\n    PRINT 200\nENDIF",
+     "x = 7\nif x > 5:\n    print(100)\nelse:\n    print(200)",
+     "Set x to 7.\nIf x is greater than 5:\n    Print 100.\nOtherwise:\n    Print 200."),
 
     ("While loop",
      "Repeat while a condition holds (factorial of 5).",
      "int n = 5;\nint f = 1;\nwhile (n > 1) {\n    f = f * n;\n    n = n - 1;\n}\nprint(f);",
-     "DIM N = 5\nDIM F = 1\nWHILE N > 1\n    F = F * N\n    DEC N\nENDWHILE\nPRINT F"),
+     "DIM N = 5\nDIM F = 1\nWHILE N > 1\n    F = F * N\n    DEC N\nENDWHILE\nPRINT F",
+     "n = 5\nf = 1\nwhile n > 1:\n    f = f * n\n    n -= 1\nprint(f)",
+     "Set n to 5.\nSet f to 1.\nWhile n is greater than 1:\n    Set f to f times n.\n    Decrease n by 1.\nPrint f."),
 
     ("Counted loop (for)",
      "Sum 1..10. C uses a C-style for with i++; BASIC uses FOR/TO/NEXT.",
      "int s = 0;\nfor (i = 1; i <= 10; i++) {\n    s += i;\n}\nprint(s);",
-     "DIM S = 0\nFOR I = 1 TO 10\n    S += I\nNEXT\nPRINT S"),
+     "DIM S = 0\nFOR I = 1 TO 10\n    S += I\nNEXT\nPRINT S",
+     "s = 0\nfor i in range(1, 11):\n    s += i\nprint(s)",
+     "Set s to 0.\nFor each i from 1 to 10:\n    Increase s by i.\nPrint s."),
 
     ("Index iteration (foreach)",
      "Iterate an index 0..N-1. C expresses it as a for loop; BASIC has FOREACH.",
      "int a = 0;\nfor (j = 0; j < 5; j++) {\n    a += j;\n}\nprint(a);",
-     "DIM A = 0\nFOREACH J IN 5\n    A += J\nENDFOREACH\nPRINT A"),
+     "DIM A = 0\nFOREACH J IN 5\n    A += J\nENDFOREACH\nPRINT A",
+     "a = 0\nfor j in range(5):\n    a += j\nprint(a)",
+     "Set a to 0.\nRepeat 5 times with j:\n    Increase a by j.\nPrint a."),
 
     ("Operators (++ -- ?: && % )",
      "Increment/decrement, the ternary ?: (IIF in BASIC), short-circuit AND/OR, "
      "real modulo (% / MOD) and compound assignment.",
      "int x = 10;\nx++;\nx += 5;\nint y = x % 7;\nint z = (y == 2 && x > 10) ? 100 : 0;\nprint(x); print(y); print(z);",
-     "DIM X = 10\nINC X\nX += 5\nDIM Y = X MOD 7\nDIM Z = IIF(Y = 2 AND X > 10, 100, 0)\nPRINT X\nPRINT Y\nPRINT Z"),
+     "DIM X = 10\nINC X\nX += 5\nDIM Y = X MOD 7\nDIM Z = IIF(Y = 2 AND X > 10, 100, 0)\nPRINT X\nPRINT Y\nPRINT Z",
+     "x = 10\nx += 1\nx += 5\ny = x % 7\nz = 100 if y == 2 and x > 10 else 0\nprint(x)\nprint(y)\nprint(z)",
+     "Set x to 10.\nIncrease x by 1.\nIncrease x by 5.\nSet y to x modulo 7.\nSet z to 100 if y is 2 and x is greater than 10 otherwise 0.\nPrint x.\nPrint y.\nPrint z."),
 
     ("Multi-way branch (switch)",
-     "Pick a branch by value. C uses an if/else-if chain; BASIC has SWITCH/CASE.",
-     "int code = 2;\nif (code == 1) {\n    print(10);\n} else if (code == 2) {\n    print(20);\n} else {\n    print(0);\n}",
-     "DIM CODE = 2\nSWITCH CODE\n    CASE 1\n        PRINT 10\n    CASE 2\n        PRINT 20\n    DEFAULT\n        PRINT 0\nENDSWITCH"),
+     "Pick a branch by value &mdash; a first-class switch in every style.",
+     "int code = 2;\nswitch (code) {\n    case 1: print(10); break;\n    case 2: print(20); break;\n    default: print(0);\n}",
+     "DIM CODE = 2\nSWITCH CODE\n    CASE 1\n        PRINT 10\n    CASE 2\n        PRINT 20\n    DEFAULT\n        PRINT 0\nENDSWITCH",
+     "code = 2\nmatch code:\n    case 1:\n        print(10)\n    case 2:\n        print(20)\n    case _:\n        print(0)",
+     "Set code to 2.\nChoose code:\n    When 1:\n        Print 10.\n    When 2:\n        Print 20.\n    Otherwise:\n        Print 0."),
 
     ("Subroutine (call / gosub)",
-     "Factor shared logic. C uses a void function + call; BASIC uses SUB + GOSUB. "
-     "Variables are global, so the routine sees ACC.",
+     "Factor shared logic. Variables are global, so the routine sees ACC.",
      "void dbl() {\n    acc = acc + acc;\n}\nint acc = 21;\ndbl();\nprint(acc);",
-     "DIM ACC = 21\nGOSUB DBL\nPRINT ACC\nRETURN\nSUB DBL\n    ACC = ACC + ACC\nENDSUB"),
+     "DIM ACC = 21\nGOSUB DBL\nPRINT ACC\nRETURN\nSUB DBL\n    ACC = ACC + ACC\nENDSUB",
+     "def dbl():\n    acc = acc + acc\nacc = 21\ndbl()\nprint(acc)",
+     "Define dbl:\n    Set acc to acc plus acc.\nSet acc to 21.\nDo dbl.\nPrint acc."),
 
     ("Unconditional jump (goto)",
-     "A back-jump loop. C expresses it structurally with while; BASIC uses a label + GOTO.",
-     "int n = 0;\nwhile (n < 4) {\n    n++;\n}\nprint(n);",
-     "DIM N = 0\nTOP:\nINC N\nIF N < 4 THEN\n    GOTO TOP\nENDIF\nPRINT N"),
+     "A back-jump loop with a label and goto &mdash; now first-class in every style.",
+     "int n = 0;\ntop:\nn++;\nif (n < 4) { goto top; }\nprint(n);",
+     "DIM N = 0\nTOP:\nINC N\nIF N < 4 THEN\n    GOTO TOP\nENDIF\nPRINT N",
+     "n = 0\nlabel top\nn += 1\nif n < 4:\n    goto top\nprint(n)",
+     "Set n to 0.\nLabel top.\nIncrease n by 1.\nIf n is less than 4:\n    Go to top.\nPrint n."),
 
-    ("Post-test loop (DO / LOOP)",
-     "A loop whose body always runs at least once (condition checked at the "
-     "bottom). C expresses it with while(1)+break; BASIC has the proper "
-     "DO ... LOOP WHILE/UNTIL form.",
-     "int i = 0;\nint s = 0;\nwhile (1) {\n    i++;\n    s += i;\n    if (i >= 5) { break; }\n}\nprint(s);",
-     "DIM I = 0\nDIM S = 0\nDO\n    INC I\n    S += I\nLOOP UNTIL I >= 5\nPRINT S"),
+    ("Post-test loop (do)",
+     "A loop whose body always runs at least once (condition checked at the bottom).",
+     "int i = 0;\nint s = 0;\ndo {\n    i++;\n    s += i;\n} while (i < 5);\nprint(s);",
+     "DIM I = 0\nDIM S = 0\nDO\n    INC I\n    S += I\nLOOP UNTIL I >= 5\nPRINT S",
+     "i = 0\ns = 0\ndo:\n    i += 1\n    s += i\nuntil i >= 5\nprint(s)",
+     "Set i to 0.\nSet s to 0.\nRepeat:\n    Increase i by 1.\n    Increase s by i.\nUntil i is at least 5.\nPrint s."),
 
     ("Early exit &amp; skip (break / skip)",
-     "BREAK leaves the nearest loop or SWITCH; SKIP jumps to the next iteration "
-     "(skipping a SWITCH to reach the enclosing loop). C uses break/continue. "
-     "Here: sum 1..10 but skip multiples of 3 and stop once the sum passes 20.",
+     "Sum 1..10 but skip multiples of 3 and stop once the sum passes 20.",
      "int s = 0;\nfor (i = 1; i <= 10; i++) {\n    if (i % 3 == 0) { continue; }\n    s += i;\n    if (s > 20) { break; }\n}\nprint(s);",
-     "DIM S = 0\nFOR I = 1 TO 10\n    IF I MOD 3 = 0 THEN\n        SKIP\n    ENDIF\n    S += I\n    IF S > 20 THEN\n        BREAK\n    ENDIF\nNEXT\nPRINT S"),
+     "DIM S = 0\nFOR I = 1 TO 10\n    IF I MOD 3 = 0 THEN\n        SKIP\n    ENDIF\n    S += I\n    IF S > 20 THEN\n        BREAK\n    ENDIF\nNEXT\nPRINT S",
+     "s = 0\nfor i in range(1, 11):\n    if i % 3 == 0:\n        continue\n    s += i\n    if s > 20:\n        break\nprint(s)",
+     "Set s to 0.\nFor each i from 1 to 10:\n    If i modulo 3 is 0:\n        Skip.\n    Increase s by i.\n    If s is greater than 20:\n        Stop.\nPrint s."),
 
     ("HTTP response (Net.*)",
      "Set an HTTP status/type and emit a value. Namespaces are case-insensitive too.",
      "Net.Status(200);\nNet.Type(\"application/json\");\nprint(42);",
-     "NET.STATUS(200)\nNET.TYPE(\"application/json\")\nPRINT 42"),
+     "NET.STATUS(200)\nNET.TYPE(\"application/json\")\nPRINT 42",
+     "Net.Status(200)\nNet.Type(\"application/json\")\nprint(42)",
+     "Net.Status(200).\nNet.Type(\"application/json\").\nPrint 42."),
 
     ("Cards: CRUD &amp; query (Storage.*)",
      "Program-level card store. Field names and queries are UTF-8 byte-spans built "
@@ -188,10 +209,12 @@ def disasm_lines(words):
     return lines
 
 
-def build_example(c_src, basic_src):
+def build_example(srcs):
+    """srcs: dict of style -> source. Compiles each, returns per-style example data."""
+    comps = {"c": compile_c, "basic": compile_basic, "python": compile_python, "english": compile_english}
     examples = {}
-    for style, src, comp in (("c", c_src, compile_c), ("basic", basic_src, compile_basic)):
-        words = lower_to_bytecode_safe(comp(src))
+    for style, src in srcs.items():
+        words = lower_to_bytecode_safe(comps[style](src))
         vm = PicoVM().run(words)
         examples[style] = {
             "src": src,
@@ -203,14 +226,28 @@ def build_example(c_src, basic_src):
     return examples
 
 
+def _styles(c):
+    """Unpack a CONSTRUCTS tuple into a {style: source} dict (py/en optional)."""
+    title, desc = c[0], c[1]
+    srcs = {"c": c[2], "basic": c[3]}
+    if len(c) >= 6:
+        srcs["python"] = c[4]
+        srcs["english"] = c[5]
+    return title, desc, srcs
+
+
 def main():
     data = []
-    for (title, desc, c_src, basic_src) in CONSTRUCTS:
-        ex = build_example(c_src, basic_src)
-        # cross-style equivalence sanity check
-        assert ex["c"]["out"] == ex["basic"]["out"], (title, ex["c"]["out"], ex["basic"]["out"])
+    for c in CONSTRUCTS:
+        title, desc, srcs = _styles(c)
+        ex = build_example(srcs)
+        outs = {s: ex[s]["out"] for s in ex}
+        # every provided style must produce identical output
+        ref = ex["basic"]["out"]
+        for s, o in outs.items():
+            assert o == ref, (title, s, o, ref)
         data.append({"title": title, "desc": desc, **ex})
-        print(f"  built: {title:32s} -> {ex['basic']['out']}")
+        print(f"  built: {title:32s} -> {ref}  [{', '.join(sorted(ex))}]")
 
     hooks_js = open(os.path.join(ROOT, "vm", "pico_hooks.js"), encoding="utf-8").read()
     vm_js = open(os.path.join(ROOT, "vm", "picovm.js"), encoding="utf-8").read()
@@ -239,7 +276,7 @@ PAGE = r"""<!DOCTYPE html>
 <title>PicoScript Playground &amp; Language Guide</title>
 <style>
   :root { --accent:#667eea; --bg:#0f1117; --panel:#1a1d27; --panel2:#232734;
-          --text:#e6e8ef; --muted:#9aa0ad; --c:#7ee787; --b:#79c0ff; --warn:#ffd866; }
+          --text:#e6e8ef; --muted:#9aa0ad; --c:#7ee787; --b:#79c0ff; --py:#ffd866; --en:#f0a3ff; --warn:#ffd866; }
   * { box-sizing:border-box; }
   body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
          background:var(--bg); color:var(--text); }
@@ -257,14 +294,18 @@ PAGE = r"""<!DOCTYPE html>
   .card h3 { margin:0; padding:12px 16px; font-size:15px; background:var(--panel2); }
   .card .desc { padding:8px 16px; color:var(--muted); font-size:12.5px; }
   .pair { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:#2c313f; }
-  @media (max-width:680px){ .pair{ grid-template-columns:1fr; } }
+  .quad { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:#2c313f; }
+  @media (max-width:680px){ .pair{ grid-template-columns:1fr; } .quad{ grid-template-columns:1fr; } }
   .pane { background:var(--panel); }
   .pane .lbl { font-size:11px; font-weight:700; padding:6px 12px; color:#0f1117; }
   .pane.cstyle .lbl { background:var(--c); }
   .pane.bstyle .lbl { background:var(--b); }
+  .pane.pystyle .lbl { background:var(--py); }
+  .pane.enstyle .lbl { background:var(--en); }
   pre { margin:0; padding:12px; font-family:"SF Mono",Consolas,monospace; font-size:12px;
         line-height:1.5; white-space:pre; overflow-x:auto; }
   .cstyle pre { color:#cde9c8; } .bstyle pre { color:#cfe4ff; }
+  .pystyle pre { color:#f5e6a8; } .enstyle pre { color:#f3d4ff; }
   .runbar { display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--panel2);
             border-top:1px solid #2c313f; }
   button { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:7px 14px;
@@ -309,6 +350,8 @@ PAGE = r"""<!DOCTYPE html>
       <select id="lang" style="margin-bottom:6px">
         <option value="c">C-style &#123; &#125;</option>
         <option value="basic">BASIC block</option>
+        <option value="python">Python-style</option>
+        <option value="english">Natural English</option>
       </select>
       <textarea id="src" style="height:120px" spellcheck="false"></textarea>
       <div class="controls">
@@ -359,21 +402,23 @@ function buildGallery(){
   cols[0].className = 'col'; cols[1].className = 'col';
   cols[0].innerHTML = '<h2 class="section">Constructs &mdash; left half</h2>';
   cols[1].innerHTML = '<h2 class="section">Constructs &mdash; right half</h2>';
+  const STYLES = [['c','C { }','cstyle'],['basic','BASIC','bstyle'],['python','PYTHON','pystyle'],['english','ENGLISH','enstyle']];
   DATA.forEach((d, i) => {
     const card = document.createElement('div');
     card.className = 'card';
+    const present = STYLES.filter(s => d[s[0]]);
+    const panes = present.map(s =>
+      '<div class="pane '+s[2]+'"><div class="lbl">'+s[1]+'</div><pre>'+esc(d[s[0]].src)+'</pre></div>').join('');
+    const dbg = present.map(s =>
+      '<button class="ghost" onclick="debugIn('+i+',\''+s[0]+'\')">Debug '+s[1].split(' ')[0]+'</button>').join('');
     card.innerHTML =
       '<h3>'+(i+1)+'. '+esc(d.title)+'</h3>'+
       '<div class="desc">'+esc(d.desc)+'</div>'+
-      '<div class="pair">'+
-        '<div class="pane cstyle"><div class="lbl">C-STYLE { }</div><pre>'+esc(d.c.src)+'</pre></div>'+
-        '<div class="pane bstyle"><div class="lbl">BASIC BLOCK</div><pre>'+esc(d.basic.src)+'</pre></div>'+
-      '</div>'+
+      '<div class="quad">'+panes+'</div>'+
       '<div class="runbar">'+
-        '<button onclick="runCard('+i+')">Run both &#9654;</button>'+
+        '<button onclick="runCard('+i+')">Run &#9654;</button>'+
         '<span class="out" id="cardout'+i+'">output &rarr; &hellip;</span>'+
-        '<button class="ghost" style="margin-left:auto" onclick="debugIn('+i+',\'c\')">Debug C</button>'+
-        '<button class="ghost" onclick="debugIn('+i+',\'basic\')">Debug BASIC</button>'+
+        '<span style="margin-left:auto"></span>'+dbg+
       '</div>';
     cols[i % 2].appendChild(card);
   });
@@ -388,12 +433,14 @@ function runWords(hexWords){
 }
 function runCard(i){
   const d = DATA[i];
-  const cv = runWords(d.c.words), bv = runWords(d.basic.words);
-  const co = cv.outputInts(), bo = bv.outputInts();
-  const same = JSON.stringify(co) === JSON.stringify(bo);
+  const STYLES = ['c','basic','python','english'];
+  const parts = []; let ref = null, same = true;
+  STYLES.forEach(s => { if (!d[s]) return;
+    const o = runWords(d[s].words).outputInts();
+    if (ref === null) ref = JSON.stringify(o); else if (JSON.stringify(o) !== ref) same = false;
+    parts.push(s+' &rarr; ['+o.join(', ')+']'); });
   document.getElementById('cardout'+i).innerHTML =
-    'C &rarr; ['+co.join(', ')+']  &nbsp; BASIC &rarr; ['+bo.join(', ')+']  '+
-    (same ? '&#10003; identical' : '&#9888; differ');
+    parts.join('  &nbsp; ')+'  '+(same ? '&#10003; identical' : '&#9888; differ');
 }
 
 // ---- debugger -------------------------------------------------------------
@@ -401,11 +448,13 @@ let DBG = { words: [], disasm: [], vm: null };
 
 function buildProgList(){
   const sel = document.getElementById('prog');
+  const LABELS = {c:'C-style', basic:'BASIC', python:'Python', english:'English'};
   DATA.forEach((d, i) => {
-    ['c','basic'].forEach(style => {
+    ['c','basic','python','english'].forEach(style => {
+      if (!d[style]) return;
       const o = document.createElement('option');
       o.value = i+':'+style;
-      o.textContent = (i+1)+'. '+d.title+'  ['+(style==='c'?'C-style':'BASIC')+']';
+      o.textContent = (i+1)+'. '+d.title+'  ['+LABELS[style]+']';
       sel.appendChild(o);
     });
   });

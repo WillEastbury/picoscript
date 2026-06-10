@@ -1237,7 +1237,7 @@
         return { t: "DoLoop", topCond: null, topUntil: false, botCond: cond, botUntil: until, body: body };
       }
       if (this.atWord("while")) { this.eatWord("while"); var c = this.parseExpr(); return { t: "While", cond: c, body: this.parseSuite() }; }
-      var count = this.parseExpr(); this.eatWord("times"); var v = "_i";
+      var count = this.parseUnary(); this.eatWord("times"); var v = "_i";
       if (this.atWord("with")) { this.eatWord("with"); v = this.expect("word").value; }
       return { t: "ForEach", v: v, count: count, body: this.parseSuite() };
     },
