@@ -58,6 +58,14 @@ names**; `Namespace.Method` resolves case-insensitively to the canonical host na
 |----------|------|-----------|-------|
 | C-syntax | `picoscript_cfront.py` | `.pc` | curly-brace, C-like |
 | BASIC-like | `picoscript_basic.py` | `.pbas` | block-structured |
+| Python-style | `picoscript_python.py` | `.ppy` | significant indentation, colon blocks |
+| Natural-English | `picoscript_english.py` | `.eng` | plain imperative sentences |
+
+All four frontends build the **same AST and reuse the same `Lowerer`**, so the same
+program in any style lowers to **byte-for-byte identical bytecode** (the test suite
+asserts `python == basic` and `english == basic` for matching programs). The
+Python-style and English-style frontends are intentionally structured (they have
+no `goto`/`switch`/`do-loop`); everything else maps across all four surfaces.
 
 **C-syntax constructs:** `int`/`var` declarations, assignment and compound
 assignment (`+= -= *= /= %=`), arithmetic `+ - * / %`, comparisons, logical
@@ -75,11 +83,66 @@ guard at the `DO` for pre-test or at the `LOOP` for post-test), `FOR/TO/STEP/NEX
 `GOSUB`/`SUB`/`ENDSUB`, `RETURN`, `BREAK` (exit nearest loop or `SWITCH`), `SKIP`
 (continue nearest loop), `PRINT expr`. Line comments `'` or `//`.
 
+**Python-style constructs:** first assignment declares (`x = expr`), augmented
+assignment (`+= -= *= /= %=`), arithmetic `+ - * / %`, comparisons `== != < > <= >=`,
+logical `and`/`or`/`not`, the conditional expression `a if c else b`, `if:` /
+`elif:` / `else:` indentation blocks, `while:`, `for i in range(n):` (0..n-1) and
+`for i in range(a, b[, step]):` (a..b-1), `def name():` subroutines and `name()`
+calls, `return` / `break` / `continue` / `pass`, `print(expr)`, and
+`Namespace.Method(...)` host calls. Line comments `#`. Example:
+
+```python
+total = 0
+for i in range(1, 11):
+    total += i
+if total > 50:
+    print(total)
+```
+
+**Natural-English constructs:** the pièce de résistance — programs read like plain
+imperative sentences and still compile to the identical bytecode. Compound
+statements use a colon + indented block; simple statements end at the line (a
+trailing `.` is allowed and idiomatic).
+
+| English | Meaning |
+|---------|---------|
+| `Set X to <expr>.` / `Let X be <expr>.` | assign (first use declares) |
+| `Add <e> to X.` / `Subtract <e> from X.` | `X = X + e` / `X = X - e` |
+| `Increase X by <e>.` / `Decrease X by <e>.` | `+= ` / `-=` |
+| `Multiply X by <e>.` / `Divide X by <e>.` | `*=` / `/=` |
+| `Print <expr>.` / `Show <expr>.` / `Display <expr>.` | emit a value |
+| `If <cond>:` … `Otherwise if <cond>:` … `Otherwise:` | conditional block |
+| `While <cond>:` / `Repeat while <cond>:` / `As long as <cond>:` | pre-test loop |
+| `Repeat <n> times with X:` | `X` counts `0..n-1` |
+| `For each X from <a> to <b>:` | `X` counts `a..b` inclusive |
+| `Define <name>:` / `To <name>:` | subroutine (globals; no params) |
+| `Do <name>.` / `Call <name>.` | invoke a subroutine |
+| `Return.` / `Stop.` (break) / `Skip.` (continue) | control flow |
+| `Ns.Method(a, b).` | host hook call |
+
+Comparisons are written in words: `is greater than`, `is less than`, `is at least`
+(`>=`), `is at most` (`<=`), `is greater than or equal to`, `is less than or equal
+to`, `is` / `equals` / `is equal to` (`==`), `is not` / `is not equal to` (`!=`),
+`exceeds` (`>`), combined with `and` / `or` / `not`. Arithmetic may be written in
+words too — `plus`, `minus`, `times`, `divided by`, `modulo` / `mod` — or with the
+usual symbols. Articles `a`/`an`/`the` before a value are ignored. Line comments `#`.
+Example (identical bytecode to the Python and BASIC versions above):
+
+```text
+Set total to 0.
+For each i from 1 to 10:
+    Increase total by i.
+If total is greater than 50:
+    Print total.
+```
+
 The build driver `picoscript_build.py` runs or emits any stage:
-`run`, `emit --as il|bytecode|c|js`, and `native` (zig cc). The compiler is also
-ported to JavaScript (`vm/picoc.js`) so both frontends compile **in the browser**,
+`run`, `emit --as il|bytecode|c|js`, and `native` (zig cc). All four frontends are
+also ported to JavaScript (`vm/picoc.js`) so they compile **in the browser**,
 byte-for-byte identical to Python — see the live playground `docs/playground.html`
-and the pipeline overview `docs/COMPILER_ARCHITECTURE.md`.
+and the pipeline overview `docs/COMPILER_ARCHITECTURE.md`. Force a frontend with
+`--lang c|basic|python|english`, or let the extension choose
+(`.pc`/`.pbas`/`.ppy`/`.eng`).
 
 ## Register-Level C-style Source Syntax
 

@@ -96,17 +96,20 @@ ENDSWITCH
 - **v1 core:** `Storage`, `Thread`, `Math`, `Flow`, `Dsp`, `Net`, `Kernel`, `Queue`, `Random`, `Memory`, `Span`, `Descriptor`, `Lease`
 - **v2 new:** `String`, `Number`, `Maths`, `DateTime`, `Locale` (compile to host hooks like v1 extended namespaces)
 
-### High-level frontends (implemented): C-syntax & BASIC
+### High-level frontends (implemented): C-syntax, BASIC, Python & English
 
-Two high-level imperative frontends compile through a shared intermediate language
+Four high-level imperative frontends compile through a shared intermediate language
 (**PicoIL**, `picoscript_il.py`) rather than mapping one statement to one
 instruction. They introduce **named variables** (auto-allocated to `R0`–`R15` by a
 loop-aware register allocator) and **integer expressions** with operator
 precedence, then lower to the same frozen v1 bytecode — and also to C (`toC`) and
 JavaScript (`toJS`).
 
-Both are **case-insensitive for keywords and variable names**; `namespace.method`
-resolves case-insensitively to the canonical host-ABI spelling.
+All four are **case-insensitive for keywords and variable names**; `namespace.method`
+resolves case-insensitively to the canonical host-ABI spelling. The Python-style and
+English-style frontends **reuse the BASIC AST and lowerer verbatim** (only their
+tokenizer/parser differ), so the same program in any of the four surfaces lowers to
+**byte-for-byte identical bytecode** — asserted by the test suite.
 
 **C-syntax frontend** (`picoscript_cfront.py`, `.pc`) — curly-brace, C-like:
 
@@ -156,7 +159,51 @@ the `IIF(cond,a,b)` ternary, `IF/THEN/ELSEIF/ELSE/ENDIF`, `WHILE/ENDWHILE`,
 `GOTO`/labels, `GOSUB/SUB/ENDSUB`, `RETURN`, `BREAK`, `SKIP`, `PRINT`, and
 `Namespace.Method(...)` calls.
 
-The same compiler is ported to JavaScript (`vm/picoc.js`) so both frontends
+**Python-style frontend** (`picoscript_python.py`, `.ppy`) — significant
+indentation, colon blocks:
+
+```python
+total = 0
+for i in range(1, 11):
+    if i % 3 == 0:
+        continue                # skip multiples of 3
+    total += i
+parity = 1 if total % 2 == 0 else 0   # conditional expression
+print(total)
+```
+
+Supports: `x = expr` (first use declares) and augmented `+= -= *= /= %=`, arithmetic
+`+ - * / %`, comparisons `== != < > <= >=`, logical `and`/`or`/`not`, `a if c else b`,
+`if:`/`elif:`/`else:`, `while:`, `for i in range(n)` / `range(a, b[, step])`,
+`def name():` and `name()` calls, `return`/`break`/`continue`/`pass`, `print(...)`,
+and `Namespace.Method(...)` host calls. Line comments `#`.
+
+**Natural-English frontend** (`picoscript_english.py`, `.eng`) — the *pièce de
+résistance*: plain imperative sentences that compile to the very same bytecode (and,
+through the C backend, to machine code). Compound statements use a colon + indented
+block; simple statements end the line (a trailing `.` is idiomatic):
+
+```text
+Set total to 0.
+For each i from 1 to 10:
+    Increase total by i.
+If total is greater than 50:
+    Print total.
+Otherwise:
+    Print 0.
+```
+
+Statements: `Set X to …` / `Let X be …`, `Add … to X` / `Subtract … from X`,
+`Increase/Decrease/Multiply/Divide X by …`, `Print/Show/Display …`, `If …:` /
+`Otherwise if …:` / `Otherwise:`, `While …:` / `Repeat while …:` / `As long as …:`,
+`Repeat n times with X:` (0..n-1), `For each X from a to b:` (a..b inclusive),
+`Define name:` / `To name:` and `Do name` / `Call name`, `Return` / `Stop` (break) /
+`Skip` (continue), and bare `Ns.Method(a, b).` host calls. Comparisons read as words
+(`is greater than`, `is at least`, `is`, `is not`, `exceeds`, …) joined by
+`and`/`or`/`not`; arithmetic may be `plus`/`minus`/`times`/`divided by`/`modulo` or
+the usual symbols. Line comments `#`.
+
+The same compiler is ported to JavaScript (`vm/picoc.js`) so **all four frontends**
 compile **in the browser**, byte-for-byte identical to the Python compiler; see
 `docs/playground.html` and `docs/COMPILER_ARCHITECTURE.md`.
 

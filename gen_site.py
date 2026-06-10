@@ -210,9 +210,10 @@ PAGE = r"""<!DOCTYPE html>
 <body>
 <header>
   <h1>PicoScript</h1>
-  <p>One language, two surface styles, many targets &mdash; compiled, run and debugged entirely in your browser.
+  <p>One language, four surface styles, many targets &mdash; compiled, run and debugged entirely in your browser.
      <span class="pill">C-style &#123;&#125;</span> <span class="pill">BASIC block</span>
-     <span class="pill">case-insensitive</span> <span class="pill">PicoWAL via localStorage</span></p>
+     <span class="pill">Python block</span> <span class="pill">English prose</span>
+     <span class="pill">PicoWAL via localStorage</span></p>
 </header>
 
 <div class="tabs">
@@ -240,8 +241,10 @@ PAGE = r"""<!DOCTYPE html>
         <select id="example" title="prebuilt example"></select>
         <button class="ghost" onclick="loadExample('c')">Load as C</button>
         <button class="ghost" onclick="loadExample('basic')">Load as BASIC</button>
+        <button class="ghost" onclick="loadLangSample('python')">Python sample</button>
+        <button class="ghost" onclick="loadLangSample('english')">English sample</button>
       </div>
-      <select id="lang" style="margin-bottom:6px"><option value="c">C-style &#123; &#125;</option><option value="basic">BASIC block</option></select>
+      <select id="lang" style="margin-bottom:6px"><option value="c">C-style &#123; &#125;</option><option value="basic">BASIC block</option><option value="python">Python block</option><option value="english">English prose</option></select>
       <textarea id="src" style="height:160px" spellcheck="false"></textarea>
       <div class="controls">
         <button class="act" onclick="compileSrc(true)">Compile &amp; Run &#9654;</button>
@@ -589,6 +592,39 @@ function loadExample(style) {
   var i = parseInt(document.getElementById('example').value, 10) || 0;
   document.getElementById('lang').value = style;
   document.getElementById('src').value = DATA[i][style].src;
+  compileSrc(false);
+}
+var PY_SAMPLE = "# Python-style: indentation blocks, = assignment\n" +
+  "total = 0\n" +
+  "for i in range(1, 11):\n" +
+  "    total += i\n" +
+  "n = 5\n" +
+  "fact = 1\n" +
+  "while n > 1:\n" +
+  "    fact = fact * n\n" +
+  "    n -= 1\n" +
+  "if total > 50:\n" +
+  "    print(fact)\n" +
+  "else:\n" +
+  "    print(0)\n" +
+  "print(total)\n";
+var EN_SAMPLE = "# English prose: the same logic, in plain sentences\n" +
+  "Set total to 0.\n" +
+  "For each i from 1 to 10:\n" +
+  "    Increase total by i.\n" +
+  "Set n to 5.\n" +
+  "Set fact to 1.\n" +
+  "While n is greater than 1:\n" +
+  "    Multiply fact by n.\n" +
+  "    Decrease n by 1.\n" +
+  "If total is greater than 50:\n" +
+  "    Print fact.\n" +
+  "Otherwise:\n" +
+  "    Print 0.\n" +
+  "Print total.\n";
+function loadLangSample(lang) {
+  document.getElementById('lang').value = lang;
+  document.getElementById('src').value = (lang === 'python') ? PY_SAMPLE : EN_SAMPLE;
   compileSrc(false);
 }
 document.getElementById('lang').value='basic';

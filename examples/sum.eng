@@ -1,0 +1,4 @@
+Set s to 0.
+For each i from 1 to 10:
+    Increase s by i.
+Print s.

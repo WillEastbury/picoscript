@@ -31,6 +31,8 @@ PicoScript runs inside picoweb as deterministic, bounded userland logic for:
 | `picoscript_il.py` | **PicoIL** shared IR: optimizer, loop-aware register allocator, `lower_to_bytecode`, `lower_to_c`, `lower_to_js` |
 | `picoscript_cfront.py` | **C-syntax** frontend (curly-brace; case-insensitive; lexer + Pratt parser → PicoIL) |
 | `picoscript_basic.py` | **BASIC-like** frontend (block-structured, case-insensitive → PicoIL) |
+| `picoscript_python.py` | **Python-style** frontend (significant indentation, colon blocks → reuses BASIC AST + Lowerer) |
+| `picoscript_english.py` | **Natural-English** frontend (plain imperative sentences → reuses BASIC AST + Lowerer) |
 | `picoscript_vm.py` | **PicoVM**: Python reference runtime for the 16-opcode ISA |
 | `picoscript_build.py` | unified driver: source → `run` / `emit il\|bytecode\|c\|js` / `native` |
 | `vm/picovm.h` `vm/picovm.c` | portable **C VM** for bare metal (RP2354B/PIOS); freestanding-clean |
@@ -50,21 +52,28 @@ PicoScript runs inside picoweb as deterministic, bounded userland logic for:
 | `docs/picoscript-language-editor.md` | Language syntax, editor contract, completions |
 | `docs/picoscript-hardware.md` | Hardware bytecode contract |
 
-## Toolchain: two frontends, one IL, three backends
+## Toolchain: four frontends, one IL, three backends
 
-Both surface languages lower to a shared intermediate language (**PicoIL**) and
+All four surface languages lower to a shared intermediate language (**PicoIL**) and
 from there to any execution target — the same ISA and queue ABI everywhere
 (LANGUAGE_SPEC.md §10). The bytecode backend runs on three bit-compatible VMs
-(Python, C, JavaScript). Both frontends are **case-insensitive** for keywords and
-variable names:
+(Python, C, JavaScript). Every frontend is **case-insensitive** for keywords and
+variable names, and they all build the **same AST** (the Python-style and
+English-style frontends reuse the BASIC AST + Lowerer), so the same program in any
+style lowers to **byte-for-byte identical bytecode**:
 
 ```
-  C-syntax (.pc) ──┐                                ┌─→ bytecode → PicoVM (Python ref)
-                   │                                ├─→ bytecode → picovm.c (bare metal)
-                   ├─→ AST ─→ PicoIL ─→ lower ──────┼─→ bytecode → picovm.js (browser/Node)
-  BASIC (.pbas) ───┘         (opt + regalloc)       ├─→ C  (toC)  → host cc → Thumb/AArch64
+  C-syntax (.pc) ───┐                               ┌─→ bytecode → PicoVM (Python ref)
+  BASIC (.pbas) ────┤                               ├─→ bytecode → picovm.c (bare metal)
+  Python (.ppy) ────┼─→ AST ─→ PicoIL ─→ lower ─────┼─→ bytecode → picovm.js (browser/Node)
+  English (.eng) ───┘         (opt + regalloc)      ├─→ C  (toC)  → host cc → Thumb/AArch64
                                                     └─→ JS (toJS) → browser / Node
 ```
+
+The natural-English frontend means a program written as plain sentences
+("`Set total to 0.` … `For each i from 1 to 10:` …") compiles, via the same
+optimizer and register allocator, all the way down to **machine code** through the
+C backend.
 
 Lowering is the performance lever: the optimizer (const-fold, INC fusion,
 dead-move removal) and a **loop-aware linear-scan register allocator** decide how
@@ -78,25 +87,31 @@ directly in a browser.
 # Run on the reference VM
 python picoscript_build.py run   examples/sum.pc      --regs
 python picoscript_build.py run   examples/fizzbuzz.pbas --print
+python picoscript_build.py run   examples/sum.ppy     --print   # Python-style
+python picoscript_build.py run   examples/sum.eng     --print   # natural English
 
 # Inspect each stage
 python picoscript_build.py emit  examples/sum.pc --as il
 python picoscript_build.py emit  examples/sum.pc --as bytecode --hex
 python picoscript_build.py emit  examples/fizzbuzz.pbas --as c  -o out.c
-python picoscript_build.py emit  examples/fizzbuzz.pbas --as js -o out.js
+python picoscript_build.py emit  examples/sum.eng --as c  -o sum_from_english.c   # English -> machine code
 
 # Native build (Thumb / AArch64 via zig cc)
 python picoscript_build.py native examples/sum.pc --target aarch64-freestanding-none -o sum.o
 ```
 
+The same four lines above (`.pc`, `.pbas`, `.ppy`, `.eng`) compile to **byte-for-byte
+identical bytecode** — pick whichever surface reads best to you.
+
 ### Compile &amp; debug in the browser
 
 `docs/playground.html` is a self-contained page (no server) showing **every
 construct in both styles side by side**. The whole compiler is ported to JS
-(`vm/picoc.js`), so you can **type C-syntax or BASIC source and compile it live**
-in the browser, then run and single-step it on the inlined JS VM with full
-register/output/PC inspection. You can also load a prebuilt example or paste
-bytecode hex from `emit --as bytecode --hex`. Rebuild with `python gen_playground.py`.
+(`vm/picoc.js`), so you can **type C-syntax, BASIC, Python-style or natural-English
+source and compile it live** in the browser, then run and single-step it on the
+inlined JS VM with full register/output/PC inspection. You can also load a prebuilt
+example or paste bytecode hex from `emit --as bytecode --hex`. Rebuild with
+`python gen_playground.py`.
 
 The in-browser compiler is verified **byte-for-byte identical** to the Python
 compiler (`tests/test_pipeline.py`), so what you debug in the browser is exactly

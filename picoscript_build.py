@@ -12,7 +12,8 @@ One entry point from source to any target (LANGUAGE_SPEC.md sec 10):
     picoscript_build.py native prog.pc  -o prog.exe         # emit C + cc (zig)
 
 Frontend is chosen by extension (.pc = C-syntax, .pbas/.bas = BASIC-like,
-.pico = v1 namespace/method) or forced with --lang {c,basic,v1}.
+.ppy = Python-style, .eng/.english = natural-English, .pico = v1
+namespace/method) or forced with --lang {c,basic,python,english,v1}.
 """
 
 from __future__ import annotations
@@ -37,6 +38,10 @@ def detect_lang(path: str, forced: str | None) -> str:
     ext = os.path.splitext(path)[1].lower()
     if ext in (".pbas", ".bas"):
         return "basic"
+    if ext in (".ppy",):
+        return "python"
+    if ext in (".eng", ".english"):
+        return "english"
     if ext == ".pico":
         return "v1"
     return "c"
@@ -49,6 +54,12 @@ def to_il(source: str, lang: str):
     if lang == "basic":
         from picoscript_basic import compile_basic
         return compile_basic(source)
+    if lang == "python":
+        from picoscript_python import compile_python
+        return compile_python(source)
+    if lang == "english":
+        from picoscript_english import compile_english
+        return compile_english(source)
     raise ValueError(f"frontend {lang!r} has no IL stage (v1 compiles straight to bytecode)")
 
 
@@ -144,7 +155,7 @@ def main(argv=None):
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("file")
-    common.add_argument("--lang", choices=["c", "basic", "v1"], help="force frontend")
+    common.add_argument("--lang", choices=["c", "basic", "python", "english", "v1"], help="force frontend")
     common.add_argument("--no-opt", action="store_true", help="disable IL optimizer")
 
     pr = sub.add_parser("run", parents=[common], help="compile and execute on PicoVM")

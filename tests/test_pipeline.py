@@ -21,6 +21,8 @@ sys.path.insert(0, ROOT)
 
 from picoscript_basic import compile_basic                # noqa: E402
 from picoscript_cfront import compile_c                   # noqa: E402
+from picoscript_python import compile_python              # noqa: E402
+from picoscript_english import compile_english            # noqa: E402
 from picoscript_il import lower_to_bytecode_safe, lower_to_c, lower_to_js  # noqa: E402
 from picoscript_vm import PicoVM                           # noqa: E402
 
@@ -405,6 +407,80 @@ print(Storage.QueryCard(qry));
 """
 
 
+# Python-style and English-style frontends -- both reuse the BASIC AST + Lowerer,
+# so their bytecode is byte-for-byte identical to the equivalent BASIC program.
+PY_CTRL = """
+s = 0
+for i in range(1, 11):
+    s += i
+n = 5
+f = 1
+while n > 1:
+    f = f * n
+    n -= 1
+if s > 50:
+    print(f)
+else:
+    print(0)
+print(s)
+"""
+
+EN_CTRL = """
+Set s to 0.
+For each i from 1 to 10:
+    Increase s by i.
+Set n to 5.
+Set f to 1.
+While n is greater than 1:
+    Set f to f times n.
+    Decrease n by 1.
+If s is greater than 50:
+    Print f.
+Otherwise:
+    Print 0.
+Print s.
+"""
+
+BASIC_CTRL = """
+S = 0
+FOR I = 1 TO 10
+    S += I
+NEXT
+N = 5
+F = 1
+WHILE N > 1
+    F = F * N
+    N -= 1
+ENDWHILE
+IF S > 50 THEN
+    PRINT F
+ELSE
+    PRINT 0
+ENDIF
+PRINT S
+"""
+
+# Host-hook span program in the two new surfaces (Python VM == JS VM).
+PY_SPAN = """
+p = 100
+for i in range(0, 16):
+    Memory.Set(p + i, i)
+s = Span.Make(100, 16)
+s2 = Span.Slice(s, 4)
+print(Span.Len(s2))
+print(Span.Get(s2, 0))
+"""
+
+EN_SPAN = """
+Set p to 100.
+For each i from 0 to 15:
+    Memory.Set(p plus i, i).
+Set s to Span.Make(100, 16).
+Set s2 to Span.Slice(s, 4).
+Print Span.Len(s2).
+Print Span.Get(s2, 0).
+"""
+
 
 def main():
     if not build_c_vm():
@@ -596,6 +672,29 @@ def main():
     check_pyjs("storage: c crud+query", lower_to_bytecode_safe(compile_c(STORAGE_CRUD_C)),
                expect_print=[7, 50, 3, 1, 2, 3, 2])
 
+    def check_equiv(name, words_a, words_b):
+        """Two frontends must lower to byte-identical bytecode (AST reuse proof)."""
+        nonlocal passed, failed
+        ok = (words_a == words_b)
+        detail = "" if ok else f"\n    a={[f'{w:08x}' for w in words_a]}\n    b={[f'{w:08x}' for w in words_b]}"
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name:22s} {len(words_a)} words a==b{detail}")
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+
+    print("Python-style + English-style frontends (3-VM parity + semantics):")
+    check("python: control flow", lower_to_bytecode_safe(compile_python(PY_CTRL)), expect_print=[120, 55])
+    check("english: control flow", lower_to_bytecode_safe(compile_english(EN_CTRL)), expect_print=[120, 55])
+    print("New frontends lower to byte-identical bytecode vs equivalent BASIC:")
+    check_equiv("python == basic", lower_to_bytecode_safe(compile_python(PY_CTRL)),
+                lower_to_bytecode_safe(compile_basic(BASIC_CTRL)))
+    check_equiv("english == basic", lower_to_bytecode_safe(compile_english(EN_CTRL)),
+                lower_to_bytecode_safe(compile_basic(BASIC_CTRL)))
+    print("New frontends with host hooks [Python VM == JS VM]:")
+    check_pyjs("python: span slice", lower_to_bytecode_safe(compile_python(PY_SPAN)), expect_print=[12, 4])
+    check_pyjs("english: span slice", lower_to_bytecode_safe(compile_english(EN_SPAN)), expect_print=[12, 4])
+
     print("toC backend (compile + run emitted C, compare to VM):")
     check_toc("toC: c nested-for", compile_c(C_NEST))
     check_toc("toC: basic full+gosub", compile_basic(BASIC_FULL))
@@ -635,6 +734,10 @@ def main():
     check_jscompile("jsc: span slice", "basic", SPAN_SLICE, lower_to_bytecode_safe(compile_basic(SPAN_SLICE)))
     check_jscompile("jsc: storage basic", "basic", STORAGE_CRUD_BASIC, lower_to_bytecode_safe(compile_basic(STORAGE_CRUD_BASIC)))
     check_jscompile("jsc: storage c", "c", STORAGE_CRUD_C, lower_to_bytecode_safe(compile_c(STORAGE_CRUD_C)))
+    check_jscompile("jsc: python ctrl", "python", PY_CTRL, lower_to_bytecode_safe(compile_python(PY_CTRL)))
+    check_jscompile("jsc: english ctrl", "english", EN_CTRL, lower_to_bytecode_safe(compile_english(EN_CTRL)))
+    check_jscompile("jsc: python span", "python", PY_SPAN, lower_to_bytecode_safe(compile_python(PY_SPAN)))
+    check_jscompile("jsc: english span", "english", EN_SPAN, lower_to_bytecode_safe(compile_english(EN_SPAN)))
 
     print(f"\n{passed} passed, {failed} failed (parity + semantics)")
     sys.exit(1 if failed else 0)

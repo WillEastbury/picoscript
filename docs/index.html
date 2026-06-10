@@ -76,9 +76,10 @@
 <body>
 <header>
   <h1>PicoScript</h1>
-  <p>One language, two surface styles, many targets &mdash; compiled, run and debugged entirely in your browser.
+  <p>One language, four surface styles, many targets &mdash; compiled, run and debugged entirely in your browser.
      <span class="pill">C-style &#123;&#125;</span> <span class="pill">BASIC block</span>
-     <span class="pill">case-insensitive</span> <span class="pill">PicoWAL via localStorage</span></p>
+     <span class="pill">Python block</span> <span class="pill">English prose</span>
+     <span class="pill">PicoWAL via localStorage</span></p>
 </header>
 
 <div class="tabs">
@@ -106,8 +107,10 @@
         <select id="example" title="prebuilt example"></select>
         <button class="ghost" onclick="loadExample('c')">Load as C</button>
         <button class="ghost" onclick="loadExample('basic')">Load as BASIC</button>
+        <button class="ghost" onclick="loadLangSample('python')">Python sample</button>
+        <button class="ghost" onclick="loadLangSample('english')">English sample</button>
       </div>
-      <select id="lang" style="margin-bottom:6px"><option value="c">C-style &#123; &#125;</option><option value="basic">BASIC block</option></select>
+      <select id="lang" style="margin-bottom:6px"><option value="c">C-style &#123; &#125;</option><option value="basic">BASIC block</option><option value="python">Python block</option><option value="english">English prose</option></select>
       <textarea id="src" style="height:160px" spellcheck="false"></textarea>
       <div class="controls">
         <button class="act" onclick="compileSrc(true)">Compile &amp; Run &#9654;</button>
@@ -261,6 +264,14 @@ browser, and send HTTP/TCP requests to a program over a localStorage-backed Pico
 <td><strong>BASIC-like</strong> frontend (block-structured, case-insensitive → PicoIL)</td>
 </tr>
 <tr>
+<td><code>picoscript_python.py</code></td>
+<td><strong>Python-style</strong> frontend (significant indentation, colon blocks → reuses BASIC AST + Lowerer)</td>
+</tr>
+<tr>
+<td><code>picoscript_english.py</code></td>
+<td><strong>Natural-English</strong> frontend (plain imperative sentences → reuses BASIC AST + Lowerer)</td>
+</tr>
+<tr>
 <td><code>picoscript_vm.py</code></td>
 <td><strong>PicoVM</strong>: Python reference runtime for the 16-opcode ISA</td>
 </tr>
@@ -334,18 +345,24 @@ browser, and send HTTP/TCP requests to a program over a localStorage-backed Pico
 </tr>
 </tbody>
 </table>
-<h2 id="toolchain-two-frontends-one-il-three-backends">Toolchain: two frontends, one IL, three backends</h2>
-<p>Both surface languages lower to a shared intermediate language (<strong>PicoIL</strong>) and
+<h2 id="toolchain-four-frontends-one-il-three-backends">Toolchain: four frontends, one IL, three backends</h2>
+<p>All four surface languages lower to a shared intermediate language (<strong>PicoIL</strong>) and
 from there to any execution target — the same ISA and queue ABI everywhere
 (LANGUAGE_SPEC.md §10). The bytecode backend runs on three bit-compatible VMs
-(Python, C, JavaScript). Both frontends are <strong>case-insensitive</strong> for keywords and
-variable names:</p>
-<pre><code>  C-syntax (.pc) ──┐                                ┌─→ bytecode → PicoVM (Python ref)
-                   │                                ├─→ bytecode → picovm.c (bare metal)
-                   ├─→ AST ─→ PicoIL ─→ lower ──────┼─→ bytecode → picovm.js (browser/Node)
-  BASIC (.pbas) ───┘         (opt + regalloc)       ├─→ C  (toC)  → host cc → Thumb/AArch64
+(Python, C, JavaScript). Every frontend is <strong>case-insensitive</strong> for keywords and
+variable names, and they all build the <strong>same AST</strong> (the Python-style and
+English-style frontends reuse the BASIC AST + Lowerer), so the same program in any
+style lowers to <strong>byte-for-byte identical bytecode</strong>:</p>
+<pre><code>  C-syntax (.pc) ───┐                               ┌─→ bytecode → PicoVM (Python ref)
+  BASIC (.pbas) ────┤                               ├─→ bytecode → picovm.c (bare metal)
+  Python (.ppy) ────┼─→ AST ─→ PicoIL ─→ lower ─────┼─→ bytecode → picovm.js (browser/Node)
+  English (.eng) ───┘         (opt + regalloc)      ├─→ C  (toC)  → host cc → Thumb/AArch64
                                                     └─→ JS (toJS) → browser / Node
 </code></pre>
+<p>The natural-English frontend means a program written as plain sentences
+("<code>Set total to 0.</code> … <code>For each i from 1 to 10:</code> …") compiles, via the same
+optimizer and register allocator, all the way down to <strong>machine code</strong> through the
+C backend.</p>
 <p>Lowering is the performance lever: the optimizer (const-fold, INC fusion,
 dead-move removal) and a <strong>loop-aware linear-scan register allocator</strong> decide how
 close to the metal the emitted shape is. The bytecode target is the most compact;
@@ -355,23 +372,28 @@ directly in a browser.</p>
 <pre><code class="language-sh"># Run on the reference VM
 python picoscript_build.py run   examples/sum.pc      --regs
 python picoscript_build.py run   examples/fizzbuzz.pbas --print
+python picoscript_build.py run   examples/sum.ppy     --print   # Python-style
+python picoscript_build.py run   examples/sum.eng     --print   # natural English
 
 # Inspect each stage
 python picoscript_build.py emit  examples/sum.pc --as il
 python picoscript_build.py emit  examples/sum.pc --as bytecode --hex
 python picoscript_build.py emit  examples/fizzbuzz.pbas --as c  -o out.c
-python picoscript_build.py emit  examples/fizzbuzz.pbas --as js -o out.js
+python picoscript_build.py emit  examples/sum.eng --as c  -o sum_from_english.c   # English -&gt; machine code
 
 # Native build (Thumb / AArch64 via zig cc)
 python picoscript_build.py native examples/sum.pc --target aarch64-freestanding-none -o sum.o
 </code></pre>
+<p>The same four lines above (<code>.pc</code>, <code>.pbas</code>, <code>.ppy</code>, <code>.eng</code>) compile to <strong>byte-for-byte
+identical bytecode</strong> — pick whichever surface reads best to you.</p>
 <h3 id="compile-debug-in-the-browser">Compile &amp; debug in the browser</h3>
 <p><code>docs/playground.html</code> is a self-contained page (no server) showing <strong>every
 construct in both styles side by side</strong>. The whole compiler is ported to JS
-(<code>vm/picoc.js</code>), so you can <strong>type C-syntax or BASIC source and compile it live</strong>
-in the browser, then run and single-step it on the inlined JS VM with full
-register/output/PC inspection. You can also load a prebuilt example or paste
-bytecode hex from <code>emit --as bytecode --hex</code>. Rebuild with <code>python gen_playground.py</code>.</p>
+(<code>vm/picoc.js</code>), so you can <strong>type C-syntax, BASIC, Python-style or natural-English
+source and compile it live</strong> in the browser, then run and single-step it on the
+inlined JS VM with full register/output/PC inspection. You can also load a prebuilt
+example or paste bytecode hex from <code>emit --as bytecode --hex</code>. Rebuild with
+<code>python gen_playground.py</code>.</p>
 <p>The in-browser compiler is verified <strong>byte-for-byte identical</strong> to the Python
 compiler (<code>tests/test_pipeline.py</code>), so what you debug in the browser is exactly
 what runs on bare metal.</p>
@@ -508,15 +530,18 @@ ENDSWITCH
 <p><strong>Namespaces (v2 = v1 + Library):</strong>
 - <strong>v1 core:</strong> <code>Storage</code>, <code>Thread</code>, <code>Math</code>, <code>Flow</code>, <code>Dsp</code>, <code>Net</code>, <code>Kernel</code>, <code>Queue</code>, <code>Random</code>, <code>Memory</code>, <code>Span</code>, <code>Descriptor</code>, <code>Lease</code>
 - <strong>v2 new:</strong> <code>String</code>, <code>Number</code>, <code>Maths</code>, <code>DateTime</code>, <code>Locale</code> (compile to host hooks like v1 extended namespaces)</p>
-<h3 id="high-level-frontends-implemented-c-syntax-basic">High-level frontends (implemented): C-syntax &amp; BASIC</h3>
-<p>Two high-level imperative frontends compile through a shared intermediate language
+<h3 id="high-level-frontends-implemented-c-syntax-basic-python-english">High-level frontends (implemented): C-syntax, BASIC, Python &amp; English</h3>
+<p>Four high-level imperative frontends compile through a shared intermediate language
 (<strong>PicoIL</strong>, <code>picoscript_il.py</code>) rather than mapping one statement to one
 instruction. They introduce <strong>named variables</strong> (auto-allocated to <code>R0</code>–<code>R15</code> by a
 loop-aware register allocator) and <strong>integer expressions</strong> with operator
 precedence, then lower to the same frozen v1 bytecode — and also to C (<code>toC</code>) and
 JavaScript (<code>toJS</code>).</p>
-<p>Both are <strong>case-insensitive for keywords and variable names</strong>; <code>namespace.method</code>
-resolves case-insensitively to the canonical host-ABI spelling.</p>
+<p>All four are <strong>case-insensitive for keywords and variable names</strong>; <code>namespace.method</code>
+resolves case-insensitively to the canonical host-ABI spelling. The Python-style and
+English-style frontends <strong>reuse the BASIC AST and lowerer verbatim</strong> (only their
+tokenizer/parser differ), so the same program in any of the four surfaces lowers to
+<strong>byte-for-byte identical bytecode</strong> — asserted by the test suite.</p>
 <p><strong>C-syntax frontend</strong> (<code>picoscript_cfront.py</code>, <code>.pc</code>) — curly-brace, C-like:</p>
 <pre><code class="language-c">int total = 0;
 for (i = 1; i &lt;= 10; i++) {
@@ -557,7 +582,43 @@ the <code>IIF(cond,a,b)</code> ternary, <code>IF/THEN/ELSEIF/ELSE/ENDIF</code>, 
 <code>FOR/TO/STEP/NEXT</code>, <code>FOREACH/IN/ENDFOREACH</code>, <code>SWITCH/CASE/DEFAULT/ENDSWITCH</code>,
 <code>GOTO</code>/labels, <code>GOSUB/SUB/ENDSUB</code>, <code>RETURN</code>, <code>BREAK</code>, <code>SKIP</code>, <code>PRINT</code>, and
 <code>Namespace.Method(...)</code> calls.</p>
-<p>The same compiler is ported to JavaScript (<code>vm/picoc.js</code>) so both frontends
+<p><strong>Python-style frontend</strong> (<code>picoscript_python.py</code>, <code>.ppy</code>) — significant
+indentation, colon blocks:</p>
+<pre><code class="language-python">total = 0
+for i in range(1, 11):
+    if i % 3 == 0:
+        continue                # skip multiples of 3
+    total += i
+parity = 1 if total % 2 == 0 else 0   # conditional expression
+print(total)
+</code></pre>
+<p>Supports: <code>x = expr</code> (first use declares) and augmented <code>+= -= *= /= %=</code>, arithmetic
+<code>+ - * / %</code>, comparisons <code>== != &lt; &gt; &lt;= &gt;=</code>, logical <code>and</code>/<code>or</code>/<code>not</code>, <code>a if c else b</code>,
+<code>if:</code>/<code>elif:</code>/<code>else:</code>, <code>while:</code>, <code>for i in range(n)</code> / <code>range(a, b[, step])</code>,
+<code>def name():</code> and <code>name()</code> calls, <code>return</code>/<code>break</code>/<code>continue</code>/<code>pass</code>, <code>print(...)</code>,
+and <code>Namespace.Method(...)</code> host calls. Line comments <code>#</code>.</p>
+<p><strong>Natural-English frontend</strong> (<code>picoscript_english.py</code>, <code>.eng</code>) — the <em>pièce de
+résistance</em>: plain imperative sentences that compile to the very same bytecode (and,
+through the C backend, to machine code). Compound statements use a colon + indented
+block; simple statements end the line (a trailing <code>.</code> is idiomatic):</p>
+<pre><code class="language-text">Set total to 0.
+For each i from 1 to 10:
+    Increase total by i.
+If total is greater than 50:
+    Print total.
+Otherwise:
+    Print 0.
+</code></pre>
+<p>Statements: <code>Set X to …</code> / <code>Let X be …</code>, <code>Add … to X</code> / <code>Subtract … from X</code>,
+<code>Increase/Decrease/Multiply/Divide X by …</code>, <code>Print/Show/Display …</code>, <code>If …:</code> /
+<code>Otherwise if …:</code> / <code>Otherwise:</code>, <code>While …:</code> / <code>Repeat while …:</code> / <code>As long as …:</code>,
+<code>Repeat n times with X:</code> (0..n-1), <code>For each X from a to b:</code> (a..b inclusive),
+<code>Define name:</code> / <code>To name:</code> and <code>Do name</code> / <code>Call name</code>, <code>Return</code> / <code>Stop</code> (break) /
+<code>Skip</code> (continue), and bare <code>Ns.Method(a, b).</code> host calls. Comparisons read as words
+(<code>is greater than</code>, <code>is at least</code>, <code>is</code>, <code>is not</code>, <code>exceeds</code>, …) joined by
+<code>and</code>/<code>or</code>/<code>not</code>; arithmetic may be <code>plus</code>/<code>minus</code>/<code>times</code>/<code>divided by</code>/<code>modulo</code> or
+the usual symbols. Line comments <code>#</code>.</p>
+<p>The same compiler is ported to JavaScript (<code>vm/picoc.js</code>) so <strong>all four frontends</strong>
 compile <strong>in the browser</strong>, byte-for-byte identical to the Python compiler; see
 <code>docs/playground.html</code> and <code>docs/COMPILER_ARCHITECTURE.md</code>.</p>
 <h3 id="interoperability">Interoperability</h3>
@@ -984,39 +1045,14 @@ in-browser compiler's bytecode is byte-for-byte identical to Python's.</p></div>
 <p>Cards store bytecode, not source text.</p>
 <p>Source files are views over bytecode. The editor may let one user write C#-style PicoScript, another view the same card as BASIC, and another view it as Python-style calls. Save compiles source to bytecode. Load decompiles bytecode to the selected view.</p>
 <h2 id="current-syntax-views">Current Syntax Views</h2>
-<p><code>picoscript_lang.py</code> currently supports these decompiler views:</p>
-<table>
-<thead>
-<tr>
-<th>Mode</th>
-<th>Extension</th>
-<th>Example</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>C# style</td>
-<td><code>.pico</code></td>
-<td><code>Storage.Load(0, 1, 42, R0);</code></td>
-</tr>
-<tr>
-<td>BASIC style</td>
-<td><code>.bas</code></td>
-<td><code>10 STORAGE LOAD, 0, 1, 42, R0</code></td>
-</tr>
-<tr>
-<td>Python style</td>
-<td><code>.py</code></td>
-<td><code>storage.load(0, 1, 42, r0)</code></td>
-</tr>
-<tr>
-<td>Hex</td>
-<td><code>.hex</code></td>
-<td><code>1040002A</code></td>
-</tr>
-</tbody>
-</table>
-<p>The checked-in compiler currently accepts the C#-style namespace/method syntax as the primary input syntax.</p>
+<p><code>picoscript_lang.py</code> currently accepts register-level C-style namespace calls and BASIC-style input, and supports these decompiler views:</p>
+<p>| Mode | Extension | Example |
+|------|-----------|---------|--------|
+| C style | <code>.pico</code> | <code>Storage.Load(0, 1, 42, R0);</code> | Input + output |
+| BASIC style | <code>.bas</code> | <code>10 STORAGE LOAD, 0, 1, 42, R0</code> | Input + output |
+| Python style | <code>.py</code> | <code>storage.load(0, 1, 42, r0)</code> | Output view only |
+| Hex | <code>.hex</code> | <code>1040002A</code> | Output view only |</p>
+<p>The register-level compiler must preserve bytecode across C/BASIC views: C-style source can be decompiled to BASIC and recompiled to the same bytecode, and BASIC can be decompiled to C-style and recompiled to the same bytecode.</p>
 <h2 id="high-level-source-frontends">High-Level Source Frontends</h2>
 <p>Beyond the register-level v1 syntax above, two <strong>high-level imperative frontends</strong>
 compile through a shared intermediate language (PicoIL) to the same frozen
@@ -1046,8 +1082,25 @@ names</strong>; <code>Namespace.Method</code> resolves case-insensitively to the
 <td><code>.pbas</code></td>
 <td>block-structured</td>
 </tr>
+<tr>
+<td>Python-style</td>
+<td><code>picoscript_python.py</code></td>
+<td><code>.ppy</code></td>
+<td>significant indentation, colon blocks</td>
+</tr>
+<tr>
+<td>Natural-English</td>
+<td><code>picoscript_english.py</code></td>
+<td><code>.eng</code></td>
+<td>plain imperative sentences</td>
+</tr>
 </tbody>
 </table>
+<p>All four frontends build the <strong>same AST and reuse the same <code>Lowerer</code></strong>, so the same
+program in any style lowers to <strong>byte-for-byte identical bytecode</strong> (the test suite
+asserts <code>python == basic</code> and <code>english == basic</code> for matching programs). The
+Python-style and English-style frontends are intentionally structured (they have
+no <code>goto</code>/<code>switch</code>/<code>do-loop</code>); everything else maps across all four surfaces.</p>
 <p><strong>C-syntax constructs:</strong> <code>int</code>/<code>var</code> declarations, assignment and compound
 assignment (<code>+= -= *= /= %=</code>), arithmetic <code>+ - * / %</code>, comparisons, logical
 <code>&amp;&amp; || !</code>, the ternary <code>?:</code>, pre/post <code>++</code>/<code>--</code>, <code>if/else</code>, <code>while</code>, <code>for</code>,
@@ -1062,13 +1115,107 @@ guard at the <code>DO</code> for pre-test or at the <code>LOOP</code> for post-t
 <code>FOREACH/IN/ENDFOREACH</code>, <code>SWITCH/CASE/DEFAULT/ENDSWITCH</code>, <code>GOTO</code> + <code>name:</code> labels,
 <code>GOSUB</code>/<code>SUB</code>/<code>ENDSUB</code>, <code>RETURN</code>, <code>BREAK</code> (exit nearest loop or <code>SWITCH</code>), <code>SKIP</code>
 (continue nearest loop), <code>PRINT expr</code>. Line comments <code>'</code> or <code>//</code>.</p>
+<p><strong>Python-style constructs:</strong> first assignment declares (<code>x = expr</code>), augmented
+assignment (<code>+= -= *= /= %=</code>), arithmetic <code>+ - * / %</code>, comparisons <code>== != &lt; &gt; &lt;= &gt;=</code>,
+logical <code>and</code>/<code>or</code>/<code>not</code>, the conditional expression <code>a if c else b</code>, <code>if:</code> /
+<code>elif:</code> / <code>else:</code> indentation blocks, <code>while:</code>, <code>for i in range(n):</code> (0..n-1) and
+<code>for i in range(a, b[, step]):</code> (a..b-1), <code>def name():</code> subroutines and <code>name()</code>
+calls, <code>return</code> / <code>break</code> / <code>continue</code> / <code>pass</code>, <code>print(expr)</code>, and
+<code>Namespace.Method(...)</code> host calls. Line comments <code>#</code>. Example:</p>
+<pre><code class="language-python">total = 0
+for i in range(1, 11):
+    total += i
+if total &gt; 50:
+    print(total)
+</code></pre>
+<p><strong>Natural-English constructs:</strong> the pièce de résistance — programs read like plain
+imperative sentences and still compile to the identical bytecode. Compound
+statements use a colon + indented block; simple statements end at the line (a
+trailing <code>.</code> is allowed and idiomatic).</p>
+<table>
+<thead>
+<tr>
+<th>English</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Set X to &lt;expr&gt;.</code> / <code>Let X be &lt;expr&gt;.</code></td>
+<td>assign (first use declares)</td>
+</tr>
+<tr>
+<td><code>Add &lt;e&gt; to X.</code> / <code>Subtract &lt;e&gt; from X.</code></td>
+<td><code>X = X + e</code> / <code>X = X - e</code></td>
+</tr>
+<tr>
+<td><code>Increase X by &lt;e&gt;.</code> / <code>Decrease X by &lt;e&gt;.</code></td>
+<td><code>+=</code> / <code>-=</code></td>
+</tr>
+<tr>
+<td><code>Multiply X by &lt;e&gt;.</code> / <code>Divide X by &lt;e&gt;.</code></td>
+<td><code>*=</code> / <code>/=</code></td>
+</tr>
+<tr>
+<td><code>Print &lt;expr&gt;.</code> / <code>Show &lt;expr&gt;.</code> / <code>Display &lt;expr&gt;.</code></td>
+<td>emit a value</td>
+</tr>
+<tr>
+<td><code>If &lt;cond&gt;:</code> … <code>Otherwise if &lt;cond&gt;:</code> … <code>Otherwise:</code></td>
+<td>conditional block</td>
+</tr>
+<tr>
+<td><code>While &lt;cond&gt;:</code> / <code>Repeat while &lt;cond&gt;:</code> / <code>As long as &lt;cond&gt;:</code></td>
+<td>pre-test loop</td>
+</tr>
+<tr>
+<td><code>Repeat &lt;n&gt; times with X:</code></td>
+<td><code>X</code> counts <code>0..n-1</code></td>
+</tr>
+<tr>
+<td><code>For each X from &lt;a&gt; to &lt;b&gt;:</code></td>
+<td><code>X</code> counts <code>a..b</code> inclusive</td>
+</tr>
+<tr>
+<td><code>Define &lt;name&gt;:</code> / <code>To &lt;name&gt;:</code></td>
+<td>subroutine (globals; no params)</td>
+</tr>
+<tr>
+<td><code>Do &lt;name&gt;.</code> / <code>Call &lt;name&gt;.</code></td>
+<td>invoke a subroutine</td>
+</tr>
+<tr>
+<td><code>Return.</code> / <code>Stop.</code> (break) / <code>Skip.</code> (continue)</td>
+<td>control flow</td>
+</tr>
+<tr>
+<td><code>Ns.Method(a, b).</code></td>
+<td>host hook call</td>
+</tr>
+</tbody>
+</table>
+<p>Comparisons are written in words: <code>is greater than</code>, <code>is less than</code>, <code>is at least</code>
+(<code>&gt;=</code>), <code>is at most</code> (<code>&lt;=</code>), <code>is greater than or equal to</code>, <code>is less than or equal
+to</code>, <code>is</code> / <code>equals</code> / <code>is equal to</code> (<code>==</code>), <code>is not</code> / <code>is not equal to</code> (<code>!=</code>),
+<code>exceeds</code> (<code>&gt;</code>), combined with <code>and</code> / <code>or</code> / <code>not</code>. Arithmetic may be written in
+words too — <code>plus</code>, <code>minus</code>, <code>times</code>, <code>divided by</code>, <code>modulo</code> / <code>mod</code> — or with the
+usual symbols. Articles <code>a</code>/<code>an</code>/<code>the</code> before a value are ignored. Line comments <code>#</code>.
+Example (identical bytecode to the Python and BASIC versions above):</p>
+<pre><code class="language-text">Set total to 0.
+For each i from 1 to 10:
+    Increase total by i.
+If total is greater than 50:
+    Print total.
+</code></pre>
 <p>The build driver <code>picoscript_build.py</code> runs or emits any stage:
-<code>run</code>, <code>emit --as il|bytecode|c|js</code>, and <code>native</code> (zig cc). The compiler is also
-ported to JavaScript (<code>vm/picoc.js</code>) so both frontends compile <strong>in the browser</strong>,
+<code>run</code>, <code>emit --as il|bytecode|c|js</code>, and <code>native</code> (zig cc). All four frontends are
+also ported to JavaScript (<code>vm/picoc.js</code>) so they compile <strong>in the browser</strong>,
 byte-for-byte identical to Python — see the live playground <code>docs/playground.html</code>
-and the pipeline overview <code>docs/COMPILER_ARCHITECTURE.md</code>.</p>
-<h2 id="primary-source-syntax">Primary Source Syntax</h2>
-<p>The current primary syntax is:</p>
+and the pipeline overview <code>docs/COMPILER_ARCHITECTURE.md</code>. Force a frontend with
+<code>--lang c|basic|python|english</code>, or let the extension choose
+(<code>.pc</code>/<code>.pbas</code>/<code>.ppy</code>/<code>.eng</code>).</p>
+<h2 id="register-level-c-style-source-syntax">Register-Level C-style Source Syntax</h2>
+<p>The register-level C-style syntax is:</p>
 <pre><code class="language-csharp">Namespace.Method(arg0, arg1, ...);
 </code></pre>
 <p>Example:</p>
@@ -1086,6 +1233,16 @@ Math.Inc(R0);
 Flow.Branch(LT, R0, R1, :loop);
 </code></pre>
 <p>Comments currently use <code>//</code>.</p>
+<h2 id="register-level-basic-style-source-syntax">Register-Level BASIC-style Source Syntax</h2>
+<p>BASIC-style input uses optional ascending line numbers, uppercase command groups, and comma-separated operands:</p>
+<pre><code class="language-basic">10 NET STATUS, 200
+20 NET TYPE, TEXT/HTML
+30 NET BODY
+40 STORAGE LOAD, 0, 1, 42, R0
+50 FLOW BRANCH, NZ, R0, R0, 40
+60 FLOW RETURN
+</code></pre>
+<p>Numeric flow targets are BASIC line numbers. The compiler maps line numbers to instruction indices before emitting bytecode.</p>
 <h2 id="namespaces">Namespaces</h2>
 <p>Namespaces are language-facing names for hardware capabilities:</p>
 <table>
@@ -1160,8 +1317,11 @@ Flow.Branch(LT, R0, R1, :loop);
 <li>Store only bytecode in cards.</li>
 <li>Decompile bytecode back into the selected display syntax.</li>
 </ol>
-<p>Round-trip invariant:</p>
-<pre><code class="language-text">source -&gt; bytecode -&gt; selected source view -&gt; bytecode
+<p>Round-trip invariants:</p>
+<pre><code class="language-text">C-style source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
+BASIC source -&gt; bytecode -&gt; C-style source view -&gt; bytecode
+C-style source -&gt; bytecode -&gt; C-style source view -&gt; bytecode
+BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
 </code></pre>
 <p>The final bytecode should match unless the user edits semantics.</p>
 <h2 id="diagnostics">Diagnostics</h2>
@@ -1193,6 +1353,14 @@ Flow.Branch(LT, R0, R1, :loop);
 <tr>
 <td>Unknown label</td>
 <td><code>Unknown label ':name'. Define it with ':name' on its own line.</code></td>
+</tr>
+<tr>
+<td>Unknown BASIC line</td>
+<td><code>Unknown BASIC line N.</code></td>
+</tr>
+<tr>
+<td>Non-ascending BASIC line numbers</td>
+<td><code>BASIC line numbers must be unique and ascending.</code></td>
 </tr>
 <tr>
 <td>Immediate out of range</td>
@@ -1924,11 +2092,13 @@ Flow.Branch(LT, R0, R1, :loop);
 </script>
 <script>// picoc.js -- PicoScript compiler in JavaScript (browser + Node).
 //
-// Faithful port of picoscript_il.py + picoscript_cfront.py + picoscript_basic.py.
-// Lets the browser compile C-syntax and BASIC-like source to the *identical*
-// bytecode the Python toolchain produces, so you can compile AND debug in-browser.
+// Faithful port of picoscript_il.py + picoscript_cfront.py + picoscript_basic.py
+// + picoscript_python.py + picoscript_english.py.
+// Lets the browser compile C-syntax, BASIC-like, Python-style and natural-English
+// source to the *identical* bytecode the Python toolchain produces, so you can
+// compile AND debug in-browser.
 //
-//   PicoCompile.compile(src, "c" | "basic") -> { words:[uint32...], il:[...] }
+//   PicoCompile.compile(src, "c" | "basic" | "python" | "english") -> { words, il }
 //
 // Verified against the Python compiler (byte-for-byte) by tests/test_jscompiler.js.
 (function (root, factory) {
@@ -2822,21 +2992,297 @@ Flow.Branch(LT, R0, R1, :loop);
   function compileBasic(src) { return new BLowerer().lowerProgram(new BParser(btokenize(src)).parseProgram()); }
 
 
+  // ========================================================================
+  // EXTRA FRONTENDS (Python-style + natural-English) -- defined before the
+  // factory's return so their var/prototype initializers actually execute.
+  // ========================================================================
+
+  // ---- Python-style frontend (port of picoscript_python.py) ---------------
+  var PY_KW = {}; ["if","elif","else","while","for","in","range","def","return","break","continue","pass","and","or","not","print","true","false"].forEach(function (k) { PY_KW[k] = 1; });
+  var PY_CMP = { "==":"EQ","!=":"NE","<":"LT",">":"GT","<=":"LE",">=":"GE" };
+  var PY_AUG = { "+=":"+","-=":"-","*=":"*","/=":"/","%=":"MOD" };
+  var PY_PREC = { or:1, and:2, "==":3, "!=":3, "<":3, ">":3, "<=":3, ">=":3, "+":5, "-":5, "*":6, "/":6, "%":6 };
+  var PY_BINOP = { "+":"+","-":"-","*":"*","/":"/","%":"MOD", and:"AND", or:"OR" };
+  var PY_TWO = { "==":1,"!=":1,"<=":1,">=":1,"+=":1,"-=":1,"*=":1,"/=":1,"%=":1 };
+  var PY_ONE = "+-*/%()<>=,.:";
+
+  function indentTokLine(text, out, kwset, two, one, who) {
+    var i = 0, n = text.length;
+    while (i < n) {
+      var c = text[i];
+      if (c === " " || c === "\t") { i++; continue; }
+      if (c === "#") break;
+      if (isDigit(c)) { var j = i; if (c === "0" && (text[j + 1] === "x" || text[j + 1] === "X")) { j += 2; while (j < n && /[0-9a-fA-F]/.test(text[j])) j++; } else { while (j < n && isDigit(text[j])) j++; } out.push({ kind: "num", value: text.slice(i, j) }); i = j; continue; }
+      if (isAlpha(c)) { var j2 = i; while (j2 < n && isAlnum(text[j2])) j2++; var w = text.slice(i, j2); if (kwset === null) out.push({ kind: "word", value: w }); else out.push({ kind: kwset[w.toLowerCase()] ? "kw" : "id", value: w }); i = j2; continue; }
+      if (c === '"' || c === "'") { var q = c, j3 = i + 1, b = ""; while (j3 < n && text[j3] !== q) { if (text[j3] === "\\" && j3 + 1 < n) { var nx = text[j3 + 1]; b += ({ n: "\n", t: "\t", "\\": "\\", '"': '"', "'": "'" }[nx] || nx); j3 += 2; } else { b += text[j3]; j3++; } } if (j3 >= n) throw new Error(who + ": unterminated string"); out.push({ kind: "str", value: b }); i = j3 + 1; continue; }
+      var tw = text.slice(i, i + 2);
+      if (two[tw]) { out.push({ kind: "op", value: tw }); i += 2; continue; }
+      if (one.indexOf(c) >= 0) { out.push({ kind: "op", value: c }); i++; continue; }
+      throw new Error(who + ": unexpected char " + JSON.stringify(c));
+    }
+  }
+
+  function indentTokenize(src, kwset, two, one, who) {
+    var out = [], indents = [0], lines = src.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    for (var li = 0; li < lines.length; li++) {
+      var line = lines[li], stripped = line.replace(/^[ \t]+/, "");
+      if (stripped === "" || stripped[0] === "#") continue;
+      var indent = line.length - stripped.length;
+      if (indent > indents[indents.length - 1]) { indents.push(indent); out.push({ kind: "indent", value: "" }); }
+      else { while (indent < indents[indents.length - 1]) { indents.pop(); out.push({ kind: "dedent", value: "" }); } if (indent !== indents[indents.length - 1]) throw new Error(who + ": inconsistent indentation"); }
+      var before = out.length;
+      indentTokLine(line, out, kwset, two, one, who);
+      if (out.length > before) out.push({ kind: "newline", value: "" });
+    }
+    while (indents.length > 1) { indents.pop(); out.push({ kind: "dedent", value: "" }); }
+    out.push({ kind: "eof", value: "" });
+    return out;
+  }
+
+  function pytokenize(src) { return indentTokenize(src, PY_KW, PY_TWO, PY_ONE, "Python"); }
+
+  function PyParser(toks) { this.toks = toks; this.i = 0; }
+  PyParser.prototype = {
+    peek: function (k) { var j = this.i + (k || 0); return j < this.toks.length ? this.toks[j] : this.toks[this.toks.length - 1]; },
+    next: function () { return this.toks[this.i++]; },
+    at: function (kind, value) { var t = this.peek(); return t.kind === kind && (value === undefined || t.value === value); },
+    atKw: function () { var t = this.peek(); if (t.kind !== "kw") return false; for (var k = 0; k < arguments.length; k++) if (t.value.toLowerCase() === arguments[k]) return true; return false; },
+    expect: function (kind, value) { var t = this.next(); if (t.kind !== kind || (value !== undefined && t.value !== value)) throw new Error("Python: expected " + (value !== undefined ? value : kind) + " got " + t.value); return t; },
+    expectKw: function (name) { var t = this.next(); if (!(t.kind === "kw" && t.value.toLowerCase() === name)) throw new Error("Python: expected " + name + " got " + t.value); },
+    parseProgram: function () { var s = []; while (this.peek().kind !== "eof") { var st = this.parseStmt(); if (st !== null) s.push(st); } return s; },
+    parseSuite: function () {
+      this.expect("op", ":"); this.expect("newline"); this.expect("indent");
+      var s = [];
+      while (!this.at("dedent")) { if (this.peek().kind === "eof") throw new Error("Python: EOF in block"); var st = this.parseStmt(); if (st !== null) s.push(st); }
+      this.expect("dedent"); return s;
+    },
+    parseStmt: function () {
+      var t = this.peek();
+      if (t.kind === "kw") {
+        var kw = t.value.toLowerCase();
+        if (kw === "if") return this.parseIf();
+        if (kw === "while") { this.expectKw("while"); var c = this.parseExpr(); return { t: "While", cond: c, body: this.parseSuite() }; }
+        if (kw === "for") return this.parseFor();
+        if (kw === "def") return this.parseDef();
+        if (kw === "return") { this.next(); this.expect("newline"); return { t: "Return" }; }
+        if (kw === "break") { this.next(); this.expect("newline"); return { t: "Break" }; }
+        if (kw === "continue") { this.next(); this.expect("newline"); return { t: "Skip" }; }
+        if (kw === "pass") { this.next(); this.expect("newline"); return null; }
+        if (kw === "print") { this.next(); this.expect("op", "("); var v = this.parseExpr(); this.expect("op", ")"); this.expect("newline"); return { t: "Print", value: v }; }
+        throw new Error("Python: unexpected keyword " + t.value);
+      }
+      if (t.kind === "id") {
+        var nx = this.peek(1);
+        if (nx.kind === "op" && nx.value === "=") { var nm = this.next().value; this.next(); var vv = this.parseExpr(); this.expect("newline"); return { t: "Let", name: nm, value: vv }; }
+        if (nx.kind === "op" && PY_AUG[nx.value]) { var an = this.next().value; var op = PY_AUG[this.next().value]; var rhs = this.parseExpr(); this.expect("newline"); return { t: "Let", name: an, value: { t: "Bin", op: op, lhs: { t: "Var", name: an }, rhs: rhs } }; }
+        if (nx.kind === "op" && nx.value === ".") { var call = this.parseCallFromId(); this.expect("newline"); return { t: "CallStmt", call: call }; }
+        if (nx.kind === "op" && nx.value === "(") { var gn = this.next().value; this.expect("op", "("); this.expect("op", ")"); this.expect("newline"); return { t: "Gosub", name: gn }; }
+      }
+      throw new Error("Python: cannot parse statement at " + t.value);
+    },
+    parseIf: function () {
+      this.expectKw("if"); var cond = this.parseExpr(); var body = this.parseSuite(); var arms = [[cond, body]], els = null;
+      while (this.atKw("elif")) { this.expectKw("elif"); arms.push([this.parseExpr(), this.parseSuite()]); }
+      if (this.atKw("else")) { this.expectKw("else"); els = this.parseSuite(); }
+      return { t: "If", arms: arms, els: els };
+    },
+    parseFor: function () {
+      this.expectKw("for"); var v = this.expect("id").value; this.expectKw("in"); this.expectKw("range"); this.expect("op", "(");
+      var args = [this.parseExpr()];
+      while (this.at("op", ",")) { this.next(); args.push(this.parseExpr()); }
+      this.expect("op", ")"); var body = this.parseSuite();
+      if (args.length === 1) return { t: "ForEach", v: v, count: args[0], body: body };
+      var end = (args[1].t === "Num") ? { t: "Num", value: args[1].value - 1 } : { t: "Bin", op: "-", lhs: args[1], rhs: { t: "Num", value: 1 } };
+      return { t: "ForTo", v: v, start: args[0], end: end, step: args.length >= 3 ? args[2] : null, body: body };
+    },
+    parseDef: function () { this.expectKw("def"); var name = this.expect("id").value; this.expect("op", "("); this.expect("op", ")"); return { t: "Sub", name: name, body: this.parseSuite() }; },
+    parseCallFromId: function () { var ns = this.next().value; this.expect("op", "."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
+    parseArgs: function () { this.expect("op", "("); var a = []; if (!this.at("op", ")")) { a.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); a.push(this.parseExpr()); } } this.expect("op", ")"); return a; },
+    parseExpr: function (minp) {
+      minp = minp || 0; var left = this.parseUnary();
+      if (minp === 0 && this.atKw("if")) { this.expectKw("if"); var cond = this.parseExpr(); this.expectKw("else"); var els = this.parseExpr(); return { t: "Ternary", cond: cond, then: left, els: els }; }
+      while (true) {
+        var t = this.peek(), ov = null;
+        if (t.kind === "op" && PY_PREC[t.value] !== undefined) ov = t.value;
+        else if (t.kind === "kw" && PY_PREC[t.value.toLowerCase()] !== undefined) ov = t.value.toLowerCase();
+        if (ov === null || PY_PREC[ov] < minp) break;
+        this.next(); var right = this.parseExpr(PY_PREC[ov] + 1);
+        if (PY_CMP[ov]) left = { t: "Cmp", cond: PY_CMP[ov], lhs: left, rhs: right };
+        else left = { t: "Bin", op: PY_BINOP[ov], lhs: left, rhs: right };
+      }
+      return left;
+    },
+    parseUnary: function () {
+      var t = this.peek();
+      if (t.kind === "op" && t.value === "-") { this.next(); return { t: "Bin", op: "-", lhs: { t: "Num", value: 0 }, rhs: this.parseUnary() }; }
+      if (t.kind === "kw" && t.value.toLowerCase() === "not") { this.next(); return { t: "Cmp", cond: "EQ", lhs: this.parseUnary(), rhs: { t: "Num", value: 0 } }; }
+      return this.parseAtom();
+    },
+    parseAtom: function () {
+      var t = this.next();
+      if (t.kind === "num") return { t: "Num", value: numval(t.value) };
+      if (t.kind === "str") return { t: "Str", value: t.value };
+      if (t.kind === "kw" && (t.value.toLowerCase() === "true" || t.value.toLowerCase() === "false")) return { t: "Num", value: t.value.toLowerCase() === "true" ? 1 : 0 };
+      if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.expect("op", ")"); return e; }
+      if (t.kind === "id") { if (this.at("op", ".")) { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; } return { t: "Var", name: t.value }; }
+      throw new Error("Python: unexpected token " + t.value);
+    }
+  };
+  function compilePython(src) { return new BLowerer().lowerProgram(new PyParser(pytokenize(src)).parseProgram()); }
+
+  // ---- English-style frontend (port of picoscript_english.py) -------------
+  var EN_TWO = { "==":1,"!=":1,"<=":1,">=":1,"<>":1 };
+  var EN_ONE = "+-*/%()<>=,.:";
+  var EN_PREC_SYM = { "+":5,"-":5,"*":6,"/":6,"%":6,"<":3,">":3,"<=":3,">=":3,"==":3,"!=":3,"<>":3 };
+  var EN_CMP_SYM = { "<":"LT",">":"GT","<=":"LE",">=":"GE","==":"EQ","!=":"NE","<>":"NE" };
+
+  function entokenize(src) { return indentTokenize(src, null, EN_TWO, EN_ONE, "English"); }
+
+  function EnParser(toks) { this.toks = toks; this.i = 0; }
+  EnParser.prototype = {
+    peek: function (k) { var j = this.i + (k || 0); return j < this.toks.length ? this.toks[j] : this.toks[this.toks.length - 1]; },
+    next: function () { return this.toks[this.i++]; },
+    at: function (kind, value) { var t = this.peek(); return t.kind === kind && (value === undefined || t.value === value); },
+    atWord: function () { var t = this.peek(); if (t.kind !== "word") return false; for (var k = 0; k < arguments.length; k++) if (t.value.toLowerCase() === arguments[k]) return true; return false; },
+    wordAt: function (k) { var t = this.peek(k); return t.kind === "word" ? t.value.toLowerCase() : null; },
+    expect: function (kind, value) { var t = this.next(); if (t.kind !== kind || (value !== undefined && t.value !== value)) throw new Error("English: expected " + (value !== undefined ? value : kind) + " got " + t.value); return t; },
+    eatWord: function () { var t = this.next(); if (t.kind !== "word") throw new Error("English: expected word got " + t.value); var lw = t.value.toLowerCase(); for (var k = 0; k < arguments.length; k++) if (lw === arguments[k]) return t.value; throw new Error("English: expected one of " + Array.prototype.slice.call(arguments) + " got " + t.value); },
+    endStmt: function () { if (this.at("op", ".")) this.next(); this.expect("newline"); },
+    parseProgram: function () { var s = []; while (this.peek().kind !== "eof") { var st = this.parseStmt(); if (st !== null) s.push(st); } return s; },
+    parseSuite: function () {
+      this.expect("op", ":"); this.expect("newline"); this.expect("indent");
+      var s = [];
+      while (!this.at("dedent")) { if (this.peek().kind === "eof") throw new Error("English: EOF in block"); var st = this.parseStmt(); if (st !== null) s.push(st); }
+      this.expect("dedent"); return s;
+    },
+    parseStmt: function () {
+      var t = this.peek();
+      if (t.kind === "word") {
+        var w = t.value.toLowerCase();
+        if (w === "set" || w === "let") { this.next(); var nm = this.expect("word").value; this.eatWord(w === "set" ? "to" : "be"); var v = this.parseExpr(); this.endStmt(); return { t: "Let", name: nm, value: v }; }
+        if (w === "add") { this.next(); var e = this.parseExpr(); this.eatWord("to"); var an = this.expect("word").value; this.endStmt(); return { t: "Let", name: an, value: { t: "Bin", op: "+", lhs: { t: "Var", name: an }, rhs: e } }; }
+        if (w === "subtract") { this.next(); var e2 = this.parseExpr(); this.eatWord("from"); var sn = this.expect("word").value; this.endStmt(); return { t: "Let", name: sn, value: { t: "Bin", op: "-", lhs: { t: "Var", name: sn }, rhs: e2 } }; }
+        if (w === "increase" || w === "decrease" || w === "multiply" || w === "divide") { this.next(); var vn = this.expect("word").value; this.eatWord("by"); var ve = this.parseExpr(); this.endStmt(); var op = { increase: "+", decrease: "-", multiply: "*", divide: "/" }[w]; return { t: "Let", name: vn, value: { t: "Bin", op: op, lhs: { t: "Var", name: vn }, rhs: ve } }; }
+        if (w === "print" || w === "show" || w === "display") { this.next(); var pe = this.parseExpr(); this.endStmt(); return { t: "Print", value: pe }; }
+        if (w === "if") return this.parseIf();
+        if (w === "while") { this.next(); var wc = this.parseExpr(); return { t: "While", cond: wc, body: this.parseSuite() }; }
+        if (w === "as") { this.next(); this.eatWord("long"); this.eatWord("as"); var ac = this.parseExpr(); return { t: "While", cond: ac, body: this.parseSuite() }; }
+        if (w === "repeat") return this.parseRepeat();
+        if (w === "for") return this.parseFor();
+        if (w === "define" || w === "to") {
+          this.next();
+          if (this.atWord("a", "an", "the")) this.next();
+          if (this.atWord("routine", "subroutine", "procedure", "function")) { this.next(); if (this.atWord("called", "named")) this.next(); }
+          var dn = this.expect("word").value; return { t: "Sub", name: dn, body: this.parseSuite() };
+        }
+        if (w === "do" || w === "call") { this.next(); var cn = this.expect("word").value; this.endStmt(); return { t: "Gosub", name: cn }; }
+        if (w === "return") { this.next(); this.endStmt(); return { t: "Return" }; }
+        if (w === "stop" || w === "break") { this.next(); if (this.atWord("out")) this.next(); this.endStmt(); return { t: "Break" }; }
+        if (w === "skip" || w === "continue") { this.next(); this.endStmt(); return { t: "Skip" }; }
+        if (this.peek(1).kind === "op" && this.peek(1).value === "." && this.peek(2).kind === "word" && this.peek(3).kind === "op" && this.peek(3).value === "(") { var call = this.parseCallFromWord(); this.endStmt(); return { t: "CallStmt", call: call }; }
+      }
+      throw new Error("English: cannot parse statement at " + t.value);
+    },
+    parseIf: function () {
+      this.eatWord("if"); var cond = this.parseExpr(); var body = this.parseSuite(); var arms = [[cond, body]], els = null;
+      while (this.atWord("otherwise") && this.peek(1).kind === "word" && this.peek(1).value.toLowerCase() === "if") { this.eatWord("otherwise"); this.eatWord("if"); arms.push([this.parseExpr(), this.parseSuite()]); }
+      if (this.atWord("otherwise")) { this.eatWord("otherwise"); els = this.parseSuite(); }
+      return { t: "If", arms: arms, els: els };
+    },
+    parseRepeat: function () {
+      this.eatWord("repeat");
+      if (this.atWord("while")) { this.eatWord("while"); var c = this.parseExpr(); return { t: "While", cond: c, body: this.parseSuite() }; }
+      var count = this.parseExpr(); this.eatWord("times"); var v = "_i";
+      if (this.atWord("with")) { this.eatWord("with"); v = this.expect("word").value; }
+      return { t: "ForEach", v: v, count: count, body: this.parseSuite() };
+    },
+    parseFor: function () {
+      this.eatWord("for"); this.eatWord("each"); var v = this.expect("word").value; this.eatWord("from"); var start = this.parseExpr(); this.eatWord("to"); var end = this.parseExpr();
+      var step = null; if (this.atWord("by", "step")) { this.next(); step = this.parseExpr(); }
+      return { t: "ForTo", v: v, start: start, end: end, step: step, body: this.parseSuite() };
+    },
+    parseCallFromWord: function () { var ns = this.next().value; this.expect("op", "."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
+    parseArgs: function () { this.expect("op", "("); var a = []; if (!this.at("op", ")")) { a.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); a.push(this.parseExpr()); } } this.expect("op", ")"); return a; },
+    matchBinop: function () {
+      var t = this.peek();
+      if (t.kind === "op" && EN_PREC_SYM[t.value] !== undefined) {
+        if (EN_CMP_SYM[t.value]) return [EN_PREC_SYM[t.value], 1, "cmp", EN_CMP_SYM[t.value]];
+        return [EN_PREC_SYM[t.value], 1, "bin", t.value === "%" ? "MOD" : t.value];
+      }
+      if (t.kind !== "word") return null;
+      var w = t.value.toLowerCase(), w1 = this.wordAt(1), w2 = this.wordAt(2), w3 = this.wordAt(3), w4 = this.wordAt(4), w5 = this.wordAt(5);
+      if (w === "and") return [2, 1, "bin", "AND"];
+      if (w === "or") return [1, 1, "bin", "OR"];
+      if (w === "plus") return [5, 1, "bin", "+"];
+      if (w === "minus") return [5, 1, "bin", "-"];
+      if (w === "times") return [6, 1, "bin", "*"];
+      if (w === "modulo" || w === "mod") return [6, 1, "bin", "MOD"];
+      if (w === "divided" && w1 === "by") return [6, 2, "bin", "/"];
+      if (w === "over") return [6, 1, "bin", "/"];
+      if (w === "is") {
+        if (w1 === "greater" && w2 === "than") { if (w3 === "or" && w4 === "equal" && w5 === "to") return [3, 6, "cmp", "GE"]; return [3, 3, "cmp", "GT"]; }
+        if (w1 === "less" && w2 === "than") { if (w3 === "or" && w4 === "equal" && w5 === "to") return [3, 6, "cmp", "LE"]; return [3, 3, "cmp", "LT"]; }
+        if (w1 === "at" && w2 === "least") return [3, 3, "cmp", "GE"];
+        if (w1 === "at" && w2 === "most") return [3, 3, "cmp", "LE"];
+        if (w1 === "not") { if (w2 === "equal" && w3 === "to") return [3, 4, "cmp", "NE"]; return [3, 2, "cmp", "NE"]; }
+        if (w1 === "equal" && w2 === "to") return [3, 3, "cmp", "EQ"];
+        return [3, 1, "cmp", "EQ"];
+      }
+      if (w === "equals") return [3, 1, "cmp", "EQ"];
+      if (w === "exceeds") return [3, 1, "cmp", "GT"];
+      return null;
+    },
+    parseExpr: function (minp) {
+      minp = minp || 0; var left = this.parseUnary();
+      while (true) {
+        var m = this.matchBinop();
+        if (m === null || m[0] < minp) break;
+        for (var k = 0; k < m[1]; k++) this.next();
+        var right = this.parseExpr(m[0] + 1);
+        left = (m[2] === "cmp") ? { t: "Cmp", cond: m[3], lhs: left, rhs: right } : { t: "Bin", op: m[3], lhs: left, rhs: right };
+      }
+      return left;
+    },
+    parseUnary: function () {
+      var t = this.peek();
+      if (t.kind === "op" && t.value === "-") { this.next(); return { t: "Bin", op: "-", lhs: { t: "Num", value: 0 }, rhs: this.parseUnary() }; }
+      if (t.kind === "word" && t.value.toLowerCase() === "not") { this.next(); return { t: "Cmp", cond: "EQ", lhs: this.parseUnary(), rhs: { t: "Num", value: 0 } }; }
+      return this.parseAtom();
+    },
+    parseAtom: function () {
+      var t = this.next();
+      if (t.kind === "num") return { t: "Num", value: numval(t.value) };
+      if (t.kind === "str") return { t: "Str", value: t.value };
+      if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.expect("op", ")"); return e; }
+      if (t.kind === "word") {
+        var lw = t.value.toLowerCase();
+        if (lw === "true") return { t: "Num", value: 1 };
+        if (lw === "false") return { t: "Num", value: 0 };
+        if (lw === "the" || lw === "a" || lw === "an") return this.parseAtom();
+        if (this.at("op", ".") && this.peek(1).kind === "word" && this.peek(2).kind === "op" && this.peek(2).value === "(") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; }
+        return { t: "Var", name: t.value };
+      }
+      throw new Error("English: unexpected token " + t.value);
+    }
+  };
+  function compileEnglish(src) { return new BLowerer().lowerProgram(new EnParser(entokenize(src)).parseProgram()); }
+
   return {
     compile: function (src, lang) {
-      var il = (lang === "basic") ? compileBasic(src) : compileC(src);
+      var il = (lang === "basic") ? compileBasic(src)
+             : (lang === "python") ? compilePython(src)
+             : (lang === "english") ? compileEnglish(src)
+             : compileC(src);
       return { words: lowerToBytecode(il, true), il: il };
     },
     compileC: function (src) { return { words: lowerToBytecode(compileC(src), true), il: compileC(src) }; },
     compileBasic: function (src) { return { words: lowerToBytecode(compileBasic(src), true), il: compileBasic(src) }; },
+    compilePython: function (src) { return { words: lowerToBytecode(compilePython(src), true), il: compilePython(src) }; },
+    compileEnglish: function (src) { return { words: lowerToBytecode(compileEnglish(src), true), il: compileEnglish(src) }; },
     _lowerToBytecode: lowerToBytecode,
     _VReg: VReg, _Imm: Imm, _ILBuilder: ILBuilder, _canonHost: canonHost, _encodeCardAddr: encodeCardAddr,
     _COND: COND, _COND_NEGATE: COND_NEGATE
   };
-
-  // ========================================================================
-  // FRONTENDS (defined after return via hoisted function declarations)
-  // ========================================================================
 });
 </script>
 <script>// picoserializer.js -- PicoBinarySerializer in JavaScript (browser + Node).
@@ -3259,6 +3705,39 @@ function loadExample(style) {
   var i = parseInt(document.getElementById('example').value, 10) || 0;
   document.getElementById('lang').value = style;
   document.getElementById('src').value = DATA[i][style].src;
+  compileSrc(false);
+}
+var PY_SAMPLE = "# Python-style: indentation blocks, = assignment\n" +
+  "total = 0\n" +
+  "for i in range(1, 11):\n" +
+  "    total += i\n" +
+  "n = 5\n" +
+  "fact = 1\n" +
+  "while n > 1:\n" +
+  "    fact = fact * n\n" +
+  "    n -= 1\n" +
+  "if total > 50:\n" +
+  "    print(fact)\n" +
+  "else:\n" +
+  "    print(0)\n" +
+  "print(total)\n";
+var EN_SAMPLE = "# English prose: the same logic, in plain sentences\n" +
+  "Set total to 0.\n" +
+  "For each i from 1 to 10:\n" +
+  "    Increase total by i.\n" +
+  "Set n to 5.\n" +
+  "Set fact to 1.\n" +
+  "While n is greater than 1:\n" +
+  "    Multiply fact by n.\n" +
+  "    Decrease n by 1.\n" +
+  "If total is greater than 50:\n" +
+  "    Print fact.\n" +
+  "Otherwise:\n" +
+  "    Print 0.\n" +
+  "Print total.\n";
+function loadLangSample(lang) {
+  document.getElementById('lang').value = lang;
+  document.getElementById('src').value = (lang === 'python') ? PY_SAMPLE : EN_SAMPLE;
   compileSrc(false);
 }
 document.getElementById('lang').value='basic';

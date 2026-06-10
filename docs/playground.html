@@ -642,11 +642,13 @@
 </script>
 <script>// picoc.js -- PicoScript compiler in JavaScript (browser + Node).
 //
-// Faithful port of picoscript_il.py + picoscript_cfront.py + picoscript_basic.py.
-// Lets the browser compile C-syntax and BASIC-like source to the *identical*
-// bytecode the Python toolchain produces, so you can compile AND debug in-browser.
+// Faithful port of picoscript_il.py + picoscript_cfront.py + picoscript_basic.py
+// + picoscript_python.py + picoscript_english.py.
+// Lets the browser compile C-syntax, BASIC-like, Python-style and natural-English
+// source to the *identical* bytecode the Python toolchain produces, so you can
+// compile AND debug in-browser.
 //
-//   PicoCompile.compile(src, "c" | "basic") -> { words:[uint32...], il:[...] }
+//   PicoCompile.compile(src, "c" | "basic" | "python" | "english") -> { words, il }
 //
 // Verified against the Python compiler (byte-for-byte) by tests/test_jscompiler.js.
 (function (root, factory) {
@@ -1540,21 +1542,297 @@
   function compileBasic(src) { return new BLowerer().lowerProgram(new BParser(btokenize(src)).parseProgram()); }
 
 
+  // ========================================================================
+  // EXTRA FRONTENDS (Python-style + natural-English) -- defined before the
+  // factory's return so their var/prototype initializers actually execute.
+  // ========================================================================
+
+  // ---- Python-style frontend (port of picoscript_python.py) ---------------
+  var PY_KW = {}; ["if","elif","else","while","for","in","range","def","return","break","continue","pass","and","or","not","print","true","false"].forEach(function (k) { PY_KW[k] = 1; });
+  var PY_CMP = { "==":"EQ","!=":"NE","<":"LT",">":"GT","<=":"LE",">=":"GE" };
+  var PY_AUG = { "+=":"+","-=":"-","*=":"*","/=":"/","%=":"MOD" };
+  var PY_PREC = { or:1, and:2, "==":3, "!=":3, "<":3, ">":3, "<=":3, ">=":3, "+":5, "-":5, "*":6, "/":6, "%":6 };
+  var PY_BINOP = { "+":"+","-":"-","*":"*","/":"/","%":"MOD", and:"AND", or:"OR" };
+  var PY_TWO = { "==":1,"!=":1,"<=":1,">=":1,"+=":1,"-=":1,"*=":1,"/=":1,"%=":1 };
+  var PY_ONE = "+-*/%()<>=,.:";
+
+  function indentTokLine(text, out, kwset, two, one, who) {
+    var i = 0, n = text.length;
+    while (i < n) {
+      var c = text[i];
+      if (c === " " || c === "\t") { i++; continue; }
+      if (c === "#") break;
+      if (isDigit(c)) { var j = i; if (c === "0" && (text[j + 1] === "x" || text[j + 1] === "X")) { j += 2; while (j < n && /[0-9a-fA-F]/.test(text[j])) j++; } else { while (j < n && isDigit(text[j])) j++; } out.push({ kind: "num", value: text.slice(i, j) }); i = j; continue; }
+      if (isAlpha(c)) { var j2 = i; while (j2 < n && isAlnum(text[j2])) j2++; var w = text.slice(i, j2); if (kwset === null) out.push({ kind: "word", value: w }); else out.push({ kind: kwset[w.toLowerCase()] ? "kw" : "id", value: w }); i = j2; continue; }
+      if (c === '"' || c === "'") { var q = c, j3 = i + 1, b = ""; while (j3 < n && text[j3] !== q) { if (text[j3] === "\\" && j3 + 1 < n) { var nx = text[j3 + 1]; b += ({ n: "\n", t: "\t", "\\": "\\", '"': '"', "'": "'" }[nx] || nx); j3 += 2; } else { b += text[j3]; j3++; } } if (j3 >= n) throw new Error(who + ": unterminated string"); out.push({ kind: "str", value: b }); i = j3 + 1; continue; }
+      var tw = text.slice(i, i + 2);
+      if (two[tw]) { out.push({ kind: "op", value: tw }); i += 2; continue; }
+      if (one.indexOf(c) >= 0) { out.push({ kind: "op", value: c }); i++; continue; }
+      throw new Error(who + ": unexpected char " + JSON.stringify(c));
+    }
+  }
+
+  function indentTokenize(src, kwset, two, one, who) {
+    var out = [], indents = [0], lines = src.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    for (var li = 0; li < lines.length; li++) {
+      var line = lines[li], stripped = line.replace(/^[ \t]+/, "");
+      if (stripped === "" || stripped[0] === "#") continue;
+      var indent = line.length - stripped.length;
+      if (indent > indents[indents.length - 1]) { indents.push(indent); out.push({ kind: "indent", value: "" }); }
+      else { while (indent < indents[indents.length - 1]) { indents.pop(); out.push({ kind: "dedent", value: "" }); } if (indent !== indents[indents.length - 1]) throw new Error(who + ": inconsistent indentation"); }
+      var before = out.length;
+      indentTokLine(line, out, kwset, two, one, who);
+      if (out.length > before) out.push({ kind: "newline", value: "" });
+    }
+    while (indents.length > 1) { indents.pop(); out.push({ kind: "dedent", value: "" }); }
+    out.push({ kind: "eof", value: "" });
+    return out;
+  }
+
+  function pytokenize(src) { return indentTokenize(src, PY_KW, PY_TWO, PY_ONE, "Python"); }
+
+  function PyParser(toks) { this.toks = toks; this.i = 0; }
+  PyParser.prototype = {
+    peek: function (k) { var j = this.i + (k || 0); return j < this.toks.length ? this.toks[j] : this.toks[this.toks.length - 1]; },
+    next: function () { return this.toks[this.i++]; },
+    at: function (kind, value) { var t = this.peek(); return t.kind === kind && (value === undefined || t.value === value); },
+    atKw: function () { var t = this.peek(); if (t.kind !== "kw") return false; for (var k = 0; k < arguments.length; k++) if (t.value.toLowerCase() === arguments[k]) return true; return false; },
+    expect: function (kind, value) { var t = this.next(); if (t.kind !== kind || (value !== undefined && t.value !== value)) throw new Error("Python: expected " + (value !== undefined ? value : kind) + " got " + t.value); return t; },
+    expectKw: function (name) { var t = this.next(); if (!(t.kind === "kw" && t.value.toLowerCase() === name)) throw new Error("Python: expected " + name + " got " + t.value); },
+    parseProgram: function () { var s = []; while (this.peek().kind !== "eof") { var st = this.parseStmt(); if (st !== null) s.push(st); } return s; },
+    parseSuite: function () {
+      this.expect("op", ":"); this.expect("newline"); this.expect("indent");
+      var s = [];
+      while (!this.at("dedent")) { if (this.peek().kind === "eof") throw new Error("Python: EOF in block"); var st = this.parseStmt(); if (st !== null) s.push(st); }
+      this.expect("dedent"); return s;
+    },
+    parseStmt: function () {
+      var t = this.peek();
+      if (t.kind === "kw") {
+        var kw = t.value.toLowerCase();
+        if (kw === "if") return this.parseIf();
+        if (kw === "while") { this.expectKw("while"); var c = this.parseExpr(); return { t: "While", cond: c, body: this.parseSuite() }; }
+        if (kw === "for") return this.parseFor();
+        if (kw === "def") return this.parseDef();
+        if (kw === "return") { this.next(); this.expect("newline"); return { t: "Return" }; }
+        if (kw === "break") { this.next(); this.expect("newline"); return { t: "Break" }; }
+        if (kw === "continue") { this.next(); this.expect("newline"); return { t: "Skip" }; }
+        if (kw === "pass") { this.next(); this.expect("newline"); return null; }
+        if (kw === "print") { this.next(); this.expect("op", "("); var v = this.parseExpr(); this.expect("op", ")"); this.expect("newline"); return { t: "Print", value: v }; }
+        throw new Error("Python: unexpected keyword " + t.value);
+      }
+      if (t.kind === "id") {
+        var nx = this.peek(1);
+        if (nx.kind === "op" && nx.value === "=") { var nm = this.next().value; this.next(); var vv = this.parseExpr(); this.expect("newline"); return { t: "Let", name: nm, value: vv }; }
+        if (nx.kind === "op" && PY_AUG[nx.value]) { var an = this.next().value; var op = PY_AUG[this.next().value]; var rhs = this.parseExpr(); this.expect("newline"); return { t: "Let", name: an, value: { t: "Bin", op: op, lhs: { t: "Var", name: an }, rhs: rhs } }; }
+        if (nx.kind === "op" && nx.value === ".") { var call = this.parseCallFromId(); this.expect("newline"); return { t: "CallStmt", call: call }; }
+        if (nx.kind === "op" && nx.value === "(") { var gn = this.next().value; this.expect("op", "("); this.expect("op", ")"); this.expect("newline"); return { t: "Gosub", name: gn }; }
+      }
+      throw new Error("Python: cannot parse statement at " + t.value);
+    },
+    parseIf: function () {
+      this.expectKw("if"); var cond = this.parseExpr(); var body = this.parseSuite(); var arms = [[cond, body]], els = null;
+      while (this.atKw("elif")) { this.expectKw("elif"); arms.push([this.parseExpr(), this.parseSuite()]); }
+      if (this.atKw("else")) { this.expectKw("else"); els = this.parseSuite(); }
+      return { t: "If", arms: arms, els: els };
+    },
+    parseFor: function () {
+      this.expectKw("for"); var v = this.expect("id").value; this.expectKw("in"); this.expectKw("range"); this.expect("op", "(");
+      var args = [this.parseExpr()];
+      while (this.at("op", ",")) { this.next(); args.push(this.parseExpr()); }
+      this.expect("op", ")"); var body = this.parseSuite();
+      if (args.length === 1) return { t: "ForEach", v: v, count: args[0], body: body };
+      var end = (args[1].t === "Num") ? { t: "Num", value: args[1].value - 1 } : { t: "Bin", op: "-", lhs: args[1], rhs: { t: "Num", value: 1 } };
+      return { t: "ForTo", v: v, start: args[0], end: end, step: args.length >= 3 ? args[2] : null, body: body };
+    },
+    parseDef: function () { this.expectKw("def"); var name = this.expect("id").value; this.expect("op", "("); this.expect("op", ")"); return { t: "Sub", name: name, body: this.parseSuite() }; },
+    parseCallFromId: function () { var ns = this.next().value; this.expect("op", "."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
+    parseArgs: function () { this.expect("op", "("); var a = []; if (!this.at("op", ")")) { a.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); a.push(this.parseExpr()); } } this.expect("op", ")"); return a; },
+    parseExpr: function (minp) {
+      minp = minp || 0; var left = this.parseUnary();
+      if (minp === 0 && this.atKw("if")) { this.expectKw("if"); var cond = this.parseExpr(); this.expectKw("else"); var els = this.parseExpr(); return { t: "Ternary", cond: cond, then: left, els: els }; }
+      while (true) {
+        var t = this.peek(), ov = null;
+        if (t.kind === "op" && PY_PREC[t.value] !== undefined) ov = t.value;
+        else if (t.kind === "kw" && PY_PREC[t.value.toLowerCase()] !== undefined) ov = t.value.toLowerCase();
+        if (ov === null || PY_PREC[ov] < minp) break;
+        this.next(); var right = this.parseExpr(PY_PREC[ov] + 1);
+        if (PY_CMP[ov]) left = { t: "Cmp", cond: PY_CMP[ov], lhs: left, rhs: right };
+        else left = { t: "Bin", op: PY_BINOP[ov], lhs: left, rhs: right };
+      }
+      return left;
+    },
+    parseUnary: function () {
+      var t = this.peek();
+      if (t.kind === "op" && t.value === "-") { this.next(); return { t: "Bin", op: "-", lhs: { t: "Num", value: 0 }, rhs: this.parseUnary() }; }
+      if (t.kind === "kw" && t.value.toLowerCase() === "not") { this.next(); return { t: "Cmp", cond: "EQ", lhs: this.parseUnary(), rhs: { t: "Num", value: 0 } }; }
+      return this.parseAtom();
+    },
+    parseAtom: function () {
+      var t = this.next();
+      if (t.kind === "num") return { t: "Num", value: numval(t.value) };
+      if (t.kind === "str") return { t: "Str", value: t.value };
+      if (t.kind === "kw" && (t.value.toLowerCase() === "true" || t.value.toLowerCase() === "false")) return { t: "Num", value: t.value.toLowerCase() === "true" ? 1 : 0 };
+      if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.expect("op", ")"); return e; }
+      if (t.kind === "id") { if (this.at("op", ".")) { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; } return { t: "Var", name: t.value }; }
+      throw new Error("Python: unexpected token " + t.value);
+    }
+  };
+  function compilePython(src) { return new BLowerer().lowerProgram(new PyParser(pytokenize(src)).parseProgram()); }
+
+  // ---- English-style frontend (port of picoscript_english.py) -------------
+  var EN_TWO = { "==":1,"!=":1,"<=":1,">=":1,"<>":1 };
+  var EN_ONE = "+-*/%()<>=,.:";
+  var EN_PREC_SYM = { "+":5,"-":5,"*":6,"/":6,"%":6,"<":3,">":3,"<=":3,">=":3,"==":3,"!=":3,"<>":3 };
+  var EN_CMP_SYM = { "<":"LT",">":"GT","<=":"LE",">=":"GE","==":"EQ","!=":"NE","<>":"NE" };
+
+  function entokenize(src) { return indentTokenize(src, null, EN_TWO, EN_ONE, "English"); }
+
+  function EnParser(toks) { this.toks = toks; this.i = 0; }
+  EnParser.prototype = {
+    peek: function (k) { var j = this.i + (k || 0); return j < this.toks.length ? this.toks[j] : this.toks[this.toks.length - 1]; },
+    next: function () { return this.toks[this.i++]; },
+    at: function (kind, value) { var t = this.peek(); return t.kind === kind && (value === undefined || t.value === value); },
+    atWord: function () { var t = this.peek(); if (t.kind !== "word") return false; for (var k = 0; k < arguments.length; k++) if (t.value.toLowerCase() === arguments[k]) return true; return false; },
+    wordAt: function (k) { var t = this.peek(k); return t.kind === "word" ? t.value.toLowerCase() : null; },
+    expect: function (kind, value) { var t = this.next(); if (t.kind !== kind || (value !== undefined && t.value !== value)) throw new Error("English: expected " + (value !== undefined ? value : kind) + " got " + t.value); return t; },
+    eatWord: function () { var t = this.next(); if (t.kind !== "word") throw new Error("English: expected word got " + t.value); var lw = t.value.toLowerCase(); for (var k = 0; k < arguments.length; k++) if (lw === arguments[k]) return t.value; throw new Error("English: expected one of " + Array.prototype.slice.call(arguments) + " got " + t.value); },
+    endStmt: function () { if (this.at("op", ".")) this.next(); this.expect("newline"); },
+    parseProgram: function () { var s = []; while (this.peek().kind !== "eof") { var st = this.parseStmt(); if (st !== null) s.push(st); } return s; },
+    parseSuite: function () {
+      this.expect("op", ":"); this.expect("newline"); this.expect("indent");
+      var s = [];
+      while (!this.at("dedent")) { if (this.peek().kind === "eof") throw new Error("English: EOF in block"); var st = this.parseStmt(); if (st !== null) s.push(st); }
+      this.expect("dedent"); return s;
+    },
+    parseStmt: function () {
+      var t = this.peek();
+      if (t.kind === "word") {
+        var w = t.value.toLowerCase();
+        if (w === "set" || w === "let") { this.next(); var nm = this.expect("word").value; this.eatWord(w === "set" ? "to" : "be"); var v = this.parseExpr(); this.endStmt(); return { t: "Let", name: nm, value: v }; }
+        if (w === "add") { this.next(); var e = this.parseExpr(); this.eatWord("to"); var an = this.expect("word").value; this.endStmt(); return { t: "Let", name: an, value: { t: "Bin", op: "+", lhs: { t: "Var", name: an }, rhs: e } }; }
+        if (w === "subtract") { this.next(); var e2 = this.parseExpr(); this.eatWord("from"); var sn = this.expect("word").value; this.endStmt(); return { t: "Let", name: sn, value: { t: "Bin", op: "-", lhs: { t: "Var", name: sn }, rhs: e2 } }; }
+        if (w === "increase" || w === "decrease" || w === "multiply" || w === "divide") { this.next(); var vn = this.expect("word").value; this.eatWord("by"); var ve = this.parseExpr(); this.endStmt(); var op = { increase: "+", decrease: "-", multiply: "*", divide: "/" }[w]; return { t: "Let", name: vn, value: { t: "Bin", op: op, lhs: { t: "Var", name: vn }, rhs: ve } }; }
+        if (w === "print" || w === "show" || w === "display") { this.next(); var pe = this.parseExpr(); this.endStmt(); return { t: "Print", value: pe }; }
+        if (w === "if") return this.parseIf();
+        if (w === "while") { this.next(); var wc = this.parseExpr(); return { t: "While", cond: wc, body: this.parseSuite() }; }
+        if (w === "as") { this.next(); this.eatWord("long"); this.eatWord("as"); var ac = this.parseExpr(); return { t: "While", cond: ac, body: this.parseSuite() }; }
+        if (w === "repeat") return this.parseRepeat();
+        if (w === "for") return this.parseFor();
+        if (w === "define" || w === "to") {
+          this.next();
+          if (this.atWord("a", "an", "the")) this.next();
+          if (this.atWord("routine", "subroutine", "procedure", "function")) { this.next(); if (this.atWord("called", "named")) this.next(); }
+          var dn = this.expect("word").value; return { t: "Sub", name: dn, body: this.parseSuite() };
+        }
+        if (w === "do" || w === "call") { this.next(); var cn = this.expect("word").value; this.endStmt(); return { t: "Gosub", name: cn }; }
+        if (w === "return") { this.next(); this.endStmt(); return { t: "Return" }; }
+        if (w === "stop" || w === "break") { this.next(); if (this.atWord("out")) this.next(); this.endStmt(); return { t: "Break" }; }
+        if (w === "skip" || w === "continue") { this.next(); this.endStmt(); return { t: "Skip" }; }
+        if (this.peek(1).kind === "op" && this.peek(1).value === "." && this.peek(2).kind === "word" && this.peek(3).kind === "op" && this.peek(3).value === "(") { var call = this.parseCallFromWord(); this.endStmt(); return { t: "CallStmt", call: call }; }
+      }
+      throw new Error("English: cannot parse statement at " + t.value);
+    },
+    parseIf: function () {
+      this.eatWord("if"); var cond = this.parseExpr(); var body = this.parseSuite(); var arms = [[cond, body]], els = null;
+      while (this.atWord("otherwise") && this.peek(1).kind === "word" && this.peek(1).value.toLowerCase() === "if") { this.eatWord("otherwise"); this.eatWord("if"); arms.push([this.parseExpr(), this.parseSuite()]); }
+      if (this.atWord("otherwise")) { this.eatWord("otherwise"); els = this.parseSuite(); }
+      return { t: "If", arms: arms, els: els };
+    },
+    parseRepeat: function () {
+      this.eatWord("repeat");
+      if (this.atWord("while")) { this.eatWord("while"); var c = this.parseExpr(); return { t: "While", cond: c, body: this.parseSuite() }; }
+      var count = this.parseExpr(); this.eatWord("times"); var v = "_i";
+      if (this.atWord("with")) { this.eatWord("with"); v = this.expect("word").value; }
+      return { t: "ForEach", v: v, count: count, body: this.parseSuite() };
+    },
+    parseFor: function () {
+      this.eatWord("for"); this.eatWord("each"); var v = this.expect("word").value; this.eatWord("from"); var start = this.parseExpr(); this.eatWord("to"); var end = this.parseExpr();
+      var step = null; if (this.atWord("by", "step")) { this.next(); step = this.parseExpr(); }
+      return { t: "ForTo", v: v, start: start, end: end, step: step, body: this.parseSuite() };
+    },
+    parseCallFromWord: function () { var ns = this.next().value; this.expect("op", "."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
+    parseArgs: function () { this.expect("op", "("); var a = []; if (!this.at("op", ")")) { a.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); a.push(this.parseExpr()); } } this.expect("op", ")"); return a; },
+    matchBinop: function () {
+      var t = this.peek();
+      if (t.kind === "op" && EN_PREC_SYM[t.value] !== undefined) {
+        if (EN_CMP_SYM[t.value]) return [EN_PREC_SYM[t.value], 1, "cmp", EN_CMP_SYM[t.value]];
+        return [EN_PREC_SYM[t.value], 1, "bin", t.value === "%" ? "MOD" : t.value];
+      }
+      if (t.kind !== "word") return null;
+      var w = t.value.toLowerCase(), w1 = this.wordAt(1), w2 = this.wordAt(2), w3 = this.wordAt(3), w4 = this.wordAt(4), w5 = this.wordAt(5);
+      if (w === "and") return [2, 1, "bin", "AND"];
+      if (w === "or") return [1, 1, "bin", "OR"];
+      if (w === "plus") return [5, 1, "bin", "+"];
+      if (w === "minus") return [5, 1, "bin", "-"];
+      if (w === "times") return [6, 1, "bin", "*"];
+      if (w === "modulo" || w === "mod") return [6, 1, "bin", "MOD"];
+      if (w === "divided" && w1 === "by") return [6, 2, "bin", "/"];
+      if (w === "over") return [6, 1, "bin", "/"];
+      if (w === "is") {
+        if (w1 === "greater" && w2 === "than") { if (w3 === "or" && w4 === "equal" && w5 === "to") return [3, 6, "cmp", "GE"]; return [3, 3, "cmp", "GT"]; }
+        if (w1 === "less" && w2 === "than") { if (w3 === "or" && w4 === "equal" && w5 === "to") return [3, 6, "cmp", "LE"]; return [3, 3, "cmp", "LT"]; }
+        if (w1 === "at" && w2 === "least") return [3, 3, "cmp", "GE"];
+        if (w1 === "at" && w2 === "most") return [3, 3, "cmp", "LE"];
+        if (w1 === "not") { if (w2 === "equal" && w3 === "to") return [3, 4, "cmp", "NE"]; return [3, 2, "cmp", "NE"]; }
+        if (w1 === "equal" && w2 === "to") return [3, 3, "cmp", "EQ"];
+        return [3, 1, "cmp", "EQ"];
+      }
+      if (w === "equals") return [3, 1, "cmp", "EQ"];
+      if (w === "exceeds") return [3, 1, "cmp", "GT"];
+      return null;
+    },
+    parseExpr: function (minp) {
+      minp = minp || 0; var left = this.parseUnary();
+      while (true) {
+        var m = this.matchBinop();
+        if (m === null || m[0] < minp) break;
+        for (var k = 0; k < m[1]; k++) this.next();
+        var right = this.parseExpr(m[0] + 1);
+        left = (m[2] === "cmp") ? { t: "Cmp", cond: m[3], lhs: left, rhs: right } : { t: "Bin", op: m[3], lhs: left, rhs: right };
+      }
+      return left;
+    },
+    parseUnary: function () {
+      var t = this.peek();
+      if (t.kind === "op" && t.value === "-") { this.next(); return { t: "Bin", op: "-", lhs: { t: "Num", value: 0 }, rhs: this.parseUnary() }; }
+      if (t.kind === "word" && t.value.toLowerCase() === "not") { this.next(); return { t: "Cmp", cond: "EQ", lhs: this.parseUnary(), rhs: { t: "Num", value: 0 } }; }
+      return this.parseAtom();
+    },
+    parseAtom: function () {
+      var t = this.next();
+      if (t.kind === "num") return { t: "Num", value: numval(t.value) };
+      if (t.kind === "str") return { t: "Str", value: t.value };
+      if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.expect("op", ")"); return e; }
+      if (t.kind === "word") {
+        var lw = t.value.toLowerCase();
+        if (lw === "true") return { t: "Num", value: 1 };
+        if (lw === "false") return { t: "Num", value: 0 };
+        if (lw === "the" || lw === "a" || lw === "an") return this.parseAtom();
+        if (this.at("op", ".") && this.peek(1).kind === "word" && this.peek(2).kind === "op" && this.peek(2).value === "(") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; }
+        return { t: "Var", name: t.value };
+      }
+      throw new Error("English: unexpected token " + t.value);
+    }
+  };
+  function compileEnglish(src) { return new BLowerer().lowerProgram(new EnParser(entokenize(src)).parseProgram()); }
+
   return {
     compile: function (src, lang) {
-      var il = (lang === "basic") ? compileBasic(src) : compileC(src);
+      var il = (lang === "basic") ? compileBasic(src)
+             : (lang === "python") ? compilePython(src)
+             : (lang === "english") ? compileEnglish(src)
+             : compileC(src);
       return { words: lowerToBytecode(il, true), il: il };
     },
     compileC: function (src) { return { words: lowerToBytecode(compileC(src), true), il: compileC(src) }; },
     compileBasic: function (src) { return { words: lowerToBytecode(compileBasic(src), true), il: compileBasic(src) }; },
+    compilePython: function (src) { return { words: lowerToBytecode(compilePython(src), true), il: compilePython(src) }; },
+    compileEnglish: function (src) { return { words: lowerToBytecode(compileEnglish(src), true), il: compileEnglish(src) }; },
     _lowerToBytecode: lowerToBytecode,
     _VReg: VReg, _Imm: Imm, _ILBuilder: ILBuilder, _canonHost: canonHost, _encodeCardAddr: encodeCardAddr,
     _COND: COND, _COND_NEGATE: COND_NEGATE
   };
-
-  // ========================================================================
-  // FRONTENDS (defined after return via hoisted function declarations)
-  // ========================================================================
 });
 </script>
 <script>// picoserializer.js -- PicoBinarySerializer in JavaScript (browser + Node).
