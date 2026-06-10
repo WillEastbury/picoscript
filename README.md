@@ -35,7 +35,8 @@ PicoScript runs inside picoweb as deterministic, bounded userland logic for:
 | `picoscript_python.py` | **Python-style** frontend (significant indentation, colon blocks → reuses BASIC AST + Lowerer) |
 | `picoscript_english.py` | **Natural-English** frontend (plain imperative sentences → reuses BASIC AST + Lowerer) |
 | `picoscript_vm.py` | **PicoVM**: Python reference runtime for the 16-opcode ISA |
-| `picoscript_build.py` | unified driver: source → `run` / `emit il\|bytecode\|c\|js` / `native` |
+| `picoscript_build.py` | unified driver: source → `run` / `emit il\|bytecode\|c\|js` / `native` / `stats` |
+| `picoscript_metrics.py` | IL/bytecode size, opcode histogram, static + (profiled) dynamic cycle estimates, C/JS backend sizes |
 | `vm/picovm.h` `vm/picovm.c` | portable **C VM** for bare metal (RP2354B/PIOS); freestanding-clean |
 | `vm/picovm.js` | **JS VM** for browser/Node debugging (step API; 32-bit parity) |
 | `vm/picoc.js` | **In-browser compiler**: all four frontends → bytecode (byte-identical to Python) |

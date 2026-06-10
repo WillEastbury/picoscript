@@ -516,7 +516,7 @@ function monacoLangId(lang){ return { c:'picoc', basic:'picobasic', python:'pico
 function onLangChange(){ if (EDITOR) monaco.editor.setModelLanguage(EDITOR.getModel(), monacoLangId(document.getElementById('lang').value)); }
 function hookNames(){ var H=(typeof PV_HOOKS!=='undefined'&&PV_HOOKS.BY_CODE)?PV_HOOKS.BY_CODE:{}; var out=[]; for(var k in H) out.push(H[k]); return out; }
 var MONARCH = {
-  picoc: { keywords:['int','var','void','if','else','while','for','return','break','continue','print'],
+  picoc: { keywords:['int','var','void','if','else','while','for','return','break','continue','print','switch','case','default','do','goto','dispatch'],
     tokenizer:{ root:[
       [/\/\/.*$/,'comment'],[/\/\*/,'comment','@block'],
       [/[A-Za-z_]\w*(?=\s*\.)/,'type'],
@@ -525,7 +525,7 @@ var MONARCH = {
       [/[{}()\[\];,.]/,'delimiter'],[/[+\-*/%=<>!&|?:]+/,'operator'] ],
       block:[[/\*\//,'comment','@pop'],[/./,'comment']],
       str:[[/[^"]+/,'string'],[/"/,'string','@pop']] } },
-  picobasic: { ignoreCase:true, keywords:['DIM','LET','IF','THEN','ELSEIF','ELSE','ENDIF','WHILE','ENDWHILE','FOR','TO','STEP','NEXT','FOREACH','IN','ENDFOREACH','SWITCH','CASE','DEFAULT','ENDSWITCH','GOTO','GOSUB','SUB','ENDSUB','RETURN','PRINT','AND','OR','NOT','DO','LOOP','UNTIL','BREAK','SKIP','INC','DEC','IIF','EQ','NE','LT','GT','LE','GE','MOD'],
+  picobasic: { ignoreCase:true, keywords:['DIM','LET','IF','THEN','ELSEIF','ELSE','ENDIF','WHILE','ENDWHILE','FOR','TO','STEP','NEXT','FOREACH','IN','ENDFOREACH','SWITCH','CASE','DEFAULT','ENDSWITCH','DISPATCH','ENDDISPATCH','GOTO','GOSUB','SUB','ENDSUB','RETURN','PRINT','AND','OR','NOT','DO','LOOP','UNTIL','BREAK','SKIP','INC','DEC','IIF','EQ','NE','LT','GT','LE','GE','MOD'],
     tokenizer:{ root:[
       [/'.*$/,'comment'],[/\/\/.*$/,'comment'],
       [/[A-Za-z_]\w*(?=\s*\.)/,'type'],
@@ -533,7 +533,7 @@ var MONARCH = {
       [/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],
       [/[()\[\];,.:]/,'delimiter'],[/[+\-*/=<>]+/,'operator'] ],
       str:[[/[^"]+/,'string'],[/"/,'string','@pop']] } },
-  picopython: { keywords:['if','elif','else','while','for','in','range','def','return','break','continue','pass','and','or','not','print','True','False'],
+  picopython: { keywords:['if','elif','else','while','for','in','range','def','return','break','continue','pass','and','or','not','print','True','False','match','case','dispatch'],
     tokenizer:{ root:[
       [/#.*$/,'comment'],
       [/[A-Za-z_]\w*(?=\s*\.)/,'type'],
@@ -542,7 +542,7 @@ var MONARCH = {
       [/[()\[\]:,.]/,'delimiter'],[/[+\-*/%=<>!]+/,'operator'] ],
       str:[[/[^"]+/,'string'],[/"/,'string','@pop']],
       str2:[[/[^']+/,'string'],[/'/,'string','@pop']] } },
-  picoenglish: { ignoreCase:true, keywords:['set','let','to','be','add','subtract','from','increase','decrease','multiply','divide','by','print','show','display','if','otherwise','while','repeat','as','long','for','each','times','with','define','do','call','return','stop','break','skip','continue','is','greater','less','than','at','least','most','equal','equals','exceeds','plus','minus','modulo','mod','over','and','or','not','true','false'],
+  picoenglish: { ignoreCase:true, keywords:['set','let','to','be','add','subtract','from','increase','decrease','multiply','divide','by','print','show','display','if','otherwise','while','repeat','as','long','for','each','times','with','define','do','call','return','stop','break','skip','continue','choose','when','dispatch','on','is','greater','less','than','at','least','most','equal','equals','exceeds','plus','minus','modulo','mod','over','and','or','not','true','false'],
     tokenizer:{ root:[
       [/#.*$/,'comment'],
       [/[A-Za-z_]\w*(?=\s*\.\s*[A-Za-z_]\w*\s*\()/,'type'],

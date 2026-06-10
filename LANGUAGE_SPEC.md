@@ -224,6 +224,7 @@ idiomatically for its surface; equivalent programs lower to identical bytecode:
 | counted for | `for (i=a; i<=b; i++) {…}` | `FOR I = a TO b … NEXT` | `for i in range(a, b+1):` | `For each i from a to b:` |
 | index for (0..n-1) | `for (i=0; i<n; i++) {…}` | `FOREACH I IN n … ENDFOREACH` | `for i in range(n):` | `Repeat n times with i:` |
 | switch | `switch (x) { case N: … break; default: … }` | `SWITCH x CASE N … DEFAULT … ENDSWITCH` | `match x:` / `case N:` / `case _:` | `Choose x:` / `When N:` / `Otherwise:` |
+| dispatch (jump table) | `dispatch (x) { case N: … break; default: … }` | `DISPATCH x CASE N … DEFAULT … ENDDISPATCH` | `dispatch x:` / `case N:` / `case _:` | `Dispatch on x:` / `When N:` / `Otherwise:` |
 | goto / label | `L: … goto L;` | `L: … GOTO L` | `label L` … `goto L` | `Label L.` … `Go to L.` |
 | subroutine | `void f(){…}` / `f();` | `SUB f … ENDSUB` / `GOSUB f` | `def f():` / `f()` | `Define f:` / `Do f.` |
 | break / continue | `break;` / `continue;` | `BREAK` / `SKIP` | `break` / `continue` | `Stop.` / `Skip.` |
@@ -232,6 +233,42 @@ idiomatically for its surface; equivalent programs lower to identical bytecode:
 | modulo | `x % 7` | `X MOD 7` | `x % 7` | `x modulo 7` |
 | logical | `a && b \|\| !c` | `A AND B OR NOT C` | `a and b or not c` | `a and b or not c` |
 | host call | `Net.Status(200);` | `NET.STATUS(200)` | `Net.Status(200)` | `Net.Status(200).` |
+
+
+### Jump-table dispatch and the indexed jump
+
+`dispatch` is a `switch` that compiles to a **real jump table** rather than a
+compare chain — O(1) dispatch on a dense, non-negative integer selector. It is the
+single primitive beneath `switch`, `match`, and event / hook / interrupt /
+**protocol** dispatch, so a state machine (an in-PicoScript protocol parser, for
+example) is expressed directly:
+
+```c
+state s = START;
+while (running) {
+    dispatch (s) {                 // O(1) indexed jump on the state
+        case START:  …; s = HEADER; break;
+        case HEADER: …; s = BODY;   break;
+        case BODY:   …; s = DONE;   break;
+        default:     s = ERROR;            // out-of-range selector
+    }
+}
+```
+
+It lowers to a jump table on **every** backend:
+
+- **bytecode** — a bounds guard (selector into `[0, N)`, else default) then an
+  **indexed jump**: `JUMP` with addressing mode `Rs2 = 0x3` means `PC = Rs1 + imm16`
+  (selector + table base), landing on one of `N` inline `JUMP` table entries. This
+  is a backward-compatible use of the existing addressing-mode field — the 16-opcode
+  ISA is unchanged; an ordinary `JUMP` keeps `Rs2 = 0` (`PC = imm16`). `Rs2 = 0x1`
+  is the pure-indirect form (`PC = Rs1`).
+- **C / JS** (`toC` / `toJS`) — a native `switch`, which the host compiler emits as
+  its own jump table for dense cases.
+
+Cases are independent handlers and do **not** fall through (each ends by leaving the
+dispatch), and an out-of-range selector always routes to `default` — important when
+the selector comes from untrusted input.
 
 
 ### Interoperability

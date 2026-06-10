@@ -88,6 +88,18 @@ CONSTRUCTS = [
      "code = 2\nmatch code:\n    case 1:\n        print(10)\n    case 2:\n        print(20)\n    case _:\n        print(0)",
      "Set code to 2.\nChoose code:\n    When 1:\n        Print 10.\n    When 2:\n        Print 20.\n    Otherwise:\n        Print 0."),
 
+    ("Jump-table dispatch (state machine)",
+     "<code>dispatch</code> is a switch that compiles to a real <b>jump table</b> (an "
+     "indexed jump) instead of a compare chain &mdash; O(1) dispatch on a dense integer "
+     "selector. It is the primitive under switch / match / event / hook / interrupt / "
+     "protocol dispatch, so you can write a state machine (or a protocol parser) directly "
+     "in PicoScript. Here a 3-state ring advances 5 steps (0&rarr;1&rarr;2&rarr;0&rarr;1&rarr;2). "
+     "Out-of-range selectors fall through a bounds guard to the default.",
+     "int st = 0;\nint k = 0;\nwhile (k < 5) {\n    dispatch (st) {\n        case 0: st = 1; break;\n        case 1: st = 2; break;\n        case 2: st = 0; break;\n    }\n    k++;\n}\nprint(st);",
+     "DIM ST = 0\nDIM K = 0\nWHILE K < 5\n    DISPATCH ST\n        CASE 0\n            ST = 1\n        CASE 1\n            ST = 2\n        CASE 2\n            ST = 0\n    ENDDISPATCH\n    INC K\nENDWHILE\nPRINT ST",
+     "st = 0\nk = 0\nwhile k < 5:\n    dispatch st:\n        case 0:\n            st = 1\n        case 1:\n            st = 2\n        case 2:\n            st = 0\n    k += 1\nprint(st)",
+     "Set st to 0.\nSet k to 0.\nWhile k is less than 5:\n    Dispatch on st:\n        When 0:\n            Set st to 1.\n        When 1:\n            Set st to 2.\n        When 2:\n            Set st to 0.\n    Increase k by 1.\nPrint st."),
+
     ("Subroutine (call / gosub)",
      "Factor shared logic. Variables are global, so the routine sees ACC.",
      "void dbl() {\n    acc = acc + acc;\n}\nint acc = 21;\ndbl();\nprint(acc);",

@@ -79,6 +79,7 @@ for its surface (see the per-frontend tables below).
 | counted for | `for (…) {}` | `FOR i = a TO b … NEXT` | `for i in range(a, b):` | `For each i from a to b:` |
 | index for (0..n-1) | `for (…) {}` | `FOREACH i IN n … ENDFOREACH` | `for i in range(n):` | `Repeat n times with i:` |
 | switch | `switch (x) { case … }` | `SWITCH x CASE … ENDSWITCH` | `match x:` / `case …` | `Choose x:` / `When …:` |
+| dispatch (jump table) | `dispatch (x) { case … }` | `DISPATCH x CASE … ENDDISPATCH` | `dispatch x:` / `case …` | `Dispatch on x:` / `When …:` |
 | goto / label | `goto L;` / `L:` | `GOTO L` / `L:` | `goto L` / `label L` | `Go to L.` / `Label L.` |
 | subroutine | `void f(){}` / `f();` | `SUB f … ENDSUB` / `GOSUB f` | `def f():` / `f()` | `Define f:` / `Do f.` |
 | ternary | `c ? a : b` | `IIF(c, a, b)` | `a if c else b` | `a if c otherwise b` |

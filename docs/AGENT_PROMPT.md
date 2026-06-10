@@ -64,6 +64,7 @@ Keywords, variable names and `Namespace.Method` names are **case-insensitive**.
 | for (counted)      | `for (i=a;i<=b;i++) {…}`            | `FOR I=a TO b … NEXT`             | `for i in range(a,b+1):`     | `For each i from a to b:`                 |
 | for (0..n-1)       | `for (i=0;i<n;i++) {…}`             | `FOREACH I IN n … ENDFOREACH`     | `for i in range(n):`         | `Repeat n times with i:`                  |
 | switch             | `switch(x){case N: … break; default: …}` | `SWITCH x CASE N … DEFAULT … ENDSWITCH` | `match x:`/`case N:`/`case _:` | `Choose x:`/`When N:`/`Otherwise:`  |
+| dispatch (jump table) | `dispatch(x){case N: … break; default: …}` | `DISPATCH x CASE N … DEFAULT … ENDDISPATCH` | `dispatch x:`/`case N:`/`case _:` | `Dispatch on x:`/`When N:`/`Otherwise:` |
 | goto / label       | `L: … goto L;`                      | `L: … GOTO L`                      | `label L` … `goto L`         | `Label L.` … `Go to L.`                  |
 | subroutine         | `void f(){…}` / `f();`              | `SUB f … ENDSUB` / `GOSUB f`       | `def f():` / `f()`           | `Define f:` / `Do f.`                    |
 | break / continue   | `break;` / `continue;`              | `BREAK` / `SKIP`                   | `break` / `continue`         | `Stop.` / `Skip.`                        |

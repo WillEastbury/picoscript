@@ -51,3 +51,36 @@ All frontends and backends share one IL, so any source runs on any target with i
 semantics and queue ABI (per spec §10). `tests/test_pipeline.py` asserts cross-target parity:
 PicoVM (Python) = picovm.c = picovm.js, plus emitted C and JS run and match, and the
 in-browser compiler's bytecode is byte-for-byte identical to Python's.
+
+## Jump-table dispatch (one primitive, many subsystems)
+
+The `dispatch` construct lowers to a single IL op, `jmptab`, which is a self-contained
+indexed jump:
+
+```
+  selector ──► bounds guard ──► jmptab ──► handler
+   (state)     (0 ≤ s < N?)      │            (case body)
+                  └─ else ───────┴──► default
+```
+
+`jmptab` carries the selector vreg + an ordered list of case labels + the default, so
+each backend lowers it idiomatically:
+
+- **bytecode** — one *indexed* `JUMP` (`Rs2 = 0x3` ⇒ `PC = Rs1 + imm16`, selector + table
+  base) into an inline table of `N` absolute `JUMP`s. O(1). The indexed/indirect modes are
+  a backward-compatible use of the addressing-mode field; the 16-opcode ISA is frozen and
+  an ordinary `JUMP` (`Rs2 = 0`) is unchanged.
+- **toC / toJS** — a native `switch`, which the host compiler turns into its own jump table.
+
+This one primitive is the shared core for `switch`, `match`, and event / hook / interrupt /
+**protocol** dispatch — which is what lets a protocol state machine be written in PicoScript
+itself (e.g. an EL0 framing parser feeding the descriptor model).
+
+## Metrics (`picoscript_build.py stats`)
+
+`picoscript_metrics.py` reports, for a program across backends: IL instruction count
+(raw + optimised), bytecode words/bytes, a static opcode histogram (host calls split out,
+computed jumps shown as `JUMP*`), an analytical cycle estimate, and the emitted C/JS source
+sizes. With `--run` it adds profiled **dynamic** instruction and cycle counts via an opt-in
+VM profiler (`PicoVM.profile`, near-zero cost when off). The cycle model is a comparative
+estimate, not cycle-accurate — tune `CYCLE_COST` against real Pi5 / RP2350 measurements.
