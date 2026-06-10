@@ -435,12 +435,33 @@ HOST_HOOK_CODES = {
     ("Kernel", "ProfileStart"): 0x04,
     ("Kernel", "ProfileEnd"):   0x05,
     ("Kernel", "TracePoint"):   0x06,
+    # EL0-facing request context hooks (0x07-0x0E)
+    ("Req", "Seq"):             0x07,
+    ("Req", "Principal"):       0x08,
+    ("Req", "Method"):          0x09,
+    ("Req", "Path"):            0x0A,
+    ("Req", "Header"):          0x0B,
+    ("Req", "BodyMode"):        0x0C,
+    ("Req", "BodyCount"):       0x0D,
+    ("Req", "BodySpan"):        0x0E,
     # Queue hooks (0x10-0x14)
     ("Queue", "Dequeue"):       0x10,
     ("Queue", "Enqueue"):       0x11,
     ("Queue", "Depth"):         0x12,
     ("Queue", "DequeueBatch"):  0x13,
     ("Queue", "EnqueueBatch"):  0x14,
+    # EL0-facing response descriptor graph hooks (0x15-0x1F, 0x38-0x3B)
+    ("Resp", "Status"):         0x15,
+    ("Resp", "Header"):         0x16,
+    ("Resp", "Write"):          0x17,
+    ("Resp", "Trailer"):        0x18,
+    ("Resp", "Seal"):           0x19,
+    ("Resp", "End"):            0x1A,
+    ("Resp", "Respond"):        0x1B,
+    ("Resp", "Flush"):          0x1C,
+    ("Resp", "Continue"):       0x1D,
+    ("Resp", "EndStream"):      0x1E,
+    ("Resp", "Upgrade"):        0x1F,
     # Random hooks (0x20)
     ("Random", "U32"):          0x20,
     # Memory hooks (0x30-0x35)
@@ -452,6 +473,8 @@ HOST_HOOK_CODES = {
     ("Memory", "Poke"):         0x35,
     ("Memory", "Set"):          0x36,
     ("Memory", "Get"):          0x37,
+    ("Resp", "Abort"):          0x38,
+    ("Resp", "EarlyHints"):     0x39,
     # Span hooks (0x40-0x44)
     ("Span", "Make"):           0x40,
     ("Span", "Slice"):          0x41,

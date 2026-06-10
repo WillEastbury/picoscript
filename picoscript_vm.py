@@ -73,6 +73,12 @@ class HostApi:
         self.readers: Dict[int, dict] = {}
         self._next_writer = 1
         self._next_reader = 1
+        # Simulated PIOS I/O binding state: one bound request context (I4) and
+        # one in-flight response descriptor graph (I2) per VM invocation.
+        self.request_context: Optional[dict] = None
+        self.response_graph: List[dict] = []
+        self.response_sealed = False
+        self.response_ended = False
 
     @property
     def store(self):
@@ -141,6 +147,13 @@ class HostApi:
             idx = _sx32(vm.regs[rs2])
             vm.regs[rd] = vm.mem[s["ptr"] + idx] if 0 <= idx < s["len"] else 0
             return
+        # EL0-facing PIOS request/response hooks over a simulated in-VM backend.
+        if ns == "Req":
+            if self._req(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Resp":
+            if self._resp(vm, method, rd, rs1, rs2):
+                return
         # Program-level card store: Storage.* over a PicoStore (text via byte-spans).
         if ns == "Storage":
             if self._storage(vm, method, rd, rs1, rs2):
@@ -180,6 +193,157 @@ class HostApi:
         vm.arena_top += len(b)
         vm.spans.append({"ptr": dst, "len": len(b)})
         return len(vm.spans) - 1
+
+    # -- PIOS Req.*/Resp.* simulated host backend ----------------------------
+    def install_request_context(self, vm: "PicoVM", *, seq=0, principal="", method="GET",
+                                path="/", headers=None, body=None, body_mode=0):
+        """Install the bound request context used by Req.* tests.
+
+        String fields are materialized as VM spans; Req.* only reads this installed
+        context (I4), and the response graph is reset to exactly one builder (I2).
+        """
+        headers = headers or {}
+        body = body or []
+        hdr = {}
+        for k, v in headers.items():
+            name_h = self._str_span(vm, str(k))
+            value_h = self._str_span(vm, str(v))
+            hdr[str(k).lower()] = {"name": name_h, "value": value_h}
+        self.request_context = {
+            "seq": int(seq) & MASK32,
+            "principal": self._str_span(vm, str(principal)),
+            "method": self._str_span(vm, str(method)),
+            "path": self._str_span(vm, str(path)),
+            "headers": hdr,
+            "body_mode": int(body_mode) & MASK32,
+            "body": [self._str_span(vm, str(chunk)) for chunk in body],
+        }
+        self.response_graph = []
+        self.response_sealed = False
+        self.response_ended = False
+
+    set_request_context = install_request_context
+
+    def get_response_graph(self) -> List[dict]:
+        """Return a copy of the simulated response descriptor graph."""
+        return [dict(d) for d in self.response_graph]
+
+    def _require_request_context(self) -> dict:
+        # I4: Req.* reads are confined to the kernel-installed bound context.
+        if self.request_context is None:
+            raise RuntimeError("I4 violation: Req.* without installed request context")
+        return self.request_context
+
+    def _ensure_response_open(self):
+        # I2: there is exactly one response graph being built; End closes it.
+        if self.response_ended:
+            raise RuntimeError("I2 violation: response graph already finalized")
+
+    def _ensure_preamble_mutable(self):
+        # I3: after Seal, the preamble and headers are immutable/frozen.
+        if self.response_sealed:
+            raise RuntimeError("I3 violation: response preamble/headers sealed")
+
+    def _desc(self, kind: str, subtype=None, payload=None) -> dict:
+        return {"kind": kind, "subtype": subtype, "payload": payload}
+
+    def _span_payload(self, vm: "PicoVM", handle: int) -> dict:
+        s = vm.spans[handle] if 0 < handle < len(vm.spans) else {"ptr": 0, "len": 0}
+        return {"span": handle, "text": self._span_str(vm, handle), "ptr": s["ptr"], "len": s["len"]}
+
+    def _resp_status(self, vm: "PicoVM", code: int):
+        self._ensure_response_open()
+        self._ensure_preamble_mutable()
+        desc = self._desc("DESC_PREAMBLE", "STATUS", {"code": _sx32(code)})
+        for i, existing in enumerate(self.response_graph):
+            if existing["kind"] == "DESC_PREAMBLE" and existing["subtype"] == "STATUS":
+                self.response_graph[i] = desc
+                return
+        self.response_graph.append(desc)
+
+    def _resp_seal(self):
+        self._ensure_response_open()
+        if not self.response_sealed:
+            self.response_graph.append(self._desc("DESC_COMMIT", "SEAL", None))
+            self.response_sealed = True
+
+    def _resp_end(self):
+        self._ensure_response_open()
+        self.response_graph.append(self._desc("DESC_COMMIT", "END", None))
+        self.response_ended = True
+
+    def _req(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        ctx = self._require_request_context()
+        R = vm.regs
+        if method == "Seq":
+            R[rd] = ctx["seq"]; return True
+        if method == "Principal":
+            R[rd] = ctx["principal"]; return True
+        if method == "Method":
+            R[rd] = ctx["method"]; return True
+        if method == "Path":
+            R[rd] = ctx["path"]; return True
+        if method == "Header":
+            name = self._span_str(vm, R[rs1]).lower()
+            R[rd] = ctx["headers"].get(name, {}).get("value", 0)
+            return True
+        if method == "BodyMode":
+            R[rd] = ctx["body_mode"]; return True
+        if method == "BodyCount":
+            R[rd] = len(ctx["body"]); return True
+        if method == "BodySpan":
+            idx = _sx32(R[rs1])
+            R[rd] = ctx["body"][idx] if 0 <= idx < len(ctx["body"]) else 0
+            return True
+        return False
+
+    def _resp(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        R = vm.regs
+        if method == "Status":
+            self._resp_status(vm, R[rs1]); return True
+        if method == "Header":
+            self._ensure_response_open(); self._ensure_preamble_mutable()
+            self.response_graph.append(self._desc("DESC_HEADER", None, {
+                "name": self._span_payload(vm, R[rs1]),
+                "value": self._span_payload(vm, R[rs2]),
+            }))
+            return True
+        if method == "Write":
+            self._ensure_response_open()
+            self.response_graph.append(self._desc("DESC_BODY", None, self._span_payload(vm, R[rs1])))
+            return True
+        if method == "Trailer":
+            self._ensure_response_open()
+            self.response_graph.append(self._desc("DESC_TRAILER", None, {
+                "name": self._span_payload(vm, R[rs1]),
+                "value": self._span_payload(vm, R[rs2]),
+            }))
+            return True
+        if method == "Seal":
+            self._resp_seal(); return True
+        if method == "End":
+            self._resp_end(); return True
+        if method == "Respond":
+            self._resp_status(vm, R[rs1]); self._resp_seal(); self._resp_end(); return True
+        if method == "Flush":
+            self._ensure_response_open()
+            self.response_graph.append(self._desc("DESC_CONTROL", "FLUSH", None)); return True
+        if method == "Continue":
+            self._ensure_response_open()
+            self.response_graph.append(self._desc("DESC_CONTROL", "CONTINUE_100", None)); return True
+        if method == "EndStream":
+            self._ensure_response_open()
+            self.response_graph.append(self._desc("DESC_CONTROL", "END_STREAM", None)); return True
+        if method == "Upgrade":
+            self._ensure_response_open()
+            self.response_graph.append(self._desc("DESC_UPGRADE", None, self._span_payload(vm, R[rs1]))); return True
+        if method == "Abort":
+            self._ensure_response_open()
+            self.response_graph.append(self._desc("DESC_ABORT", None, {"code": _sx32(R[rs1])})); self.response_ended = True; return True
+        if method == "EarlyHints":
+            self._ensure_response_open()
+            self.response_graph.append(self._desc("DESC_CONTROL", "EARLY_HINTS_103", None)); return True
+        return False
 
     # -- Text/binary primitives (Utf8Writer / Utf8Reader / Json / Xml) -------
     @staticmethod

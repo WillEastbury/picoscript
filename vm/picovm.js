@@ -62,6 +62,12 @@
     this.waiting = false;
     this.program = [];
     this.log = [];
+    // Simulated PIOS I/O binding: one bound request context (I4) and one
+    // response descriptor graph builder (I2) per VM invocation.
+    this.requestContext = null;
+    this.responseGraph = [];
+    this.responseSealed = false;
+    this.responseEnded = false;
   };
 
   PicoVM.prototype.load = function (words) {
@@ -201,6 +207,13 @@
       var idx = this.regs[rs2] | 0;
       this.regs[rd] = (idx >= 0 && idx < sg.len) ? this.mem[sg.ptr + idx] : 0; return;
     }
+    // ---- EL0-facing PIOS request/response hooks ---------------------------
+    if (name.indexOf("Req.") === 0) {
+      if (this._req(name.slice(4), rd, rs1, rs2)) return;
+    }
+    if (name.indexOf("Resp.") === 0) {
+      if (this._resp(name.slice(5), rd, rs1, rs2)) return;
+    }
     if (name === "Queue.Enqueue") {
       (this.queues[rs1] = this.queues[rs1] || []).push(this.regs[rd] | 0);
       return;
@@ -255,6 +268,120 @@
     for (var i = 0; i < b.length; i++) this.mem[dst + i] = b[i];
     this.spans.push({ ptr: dst, len: b.length });
     return this.spans.length - 1;
+  };
+
+  // ---- PIOS Req.*/Resp.* simulated host backend --------------------------
+  PicoVM.prototype.setRequestContext = function (ctx) {
+    ctx = ctx || {};
+    var headers = ctx.headers || {}, body = ctx.body || [], hdr = {};
+    Object.keys(headers).forEach(function (k) {
+      hdr[String(k).toLowerCase()] = {
+        name: this._strSpan(String(k)),
+        value: this._strSpan(String(headers[k]))
+      };
+    }, this);
+    this.requestContext = {
+      seq: (ctx.seq || 0) >>> 0,
+      principal: this._strSpan(String(ctx.principal || "")),
+      method: this._strSpan(String(ctx.method || "GET")),
+      path: this._strSpan(String(ctx.path || "/")),
+      headers: hdr,
+      bodyMode: (ctx.bodyMode || ctx.body_mode || 0) >>> 0,
+      body: body.map(function (chunk) { return this._strSpan(String(chunk)); }, this)
+    };
+    this.responseGraph = [];
+    this.responseSealed = false;
+    this.responseEnded = false;
+  };
+  PicoVM.prototype.installRequestContext = PicoVM.prototype.setRequestContext;
+  PicoVM.prototype.getResponseGraph = function () {
+    return this.responseGraph.map(function (d) {
+      return { kind: d.kind, subtype: d.subtype, payload: d.payload };
+    });
+  };
+  PicoVM.prototype._requireRequestContext = function () {
+    // I4: Req.* reads are confined to the kernel-installed bound context.
+    if (!this.requestContext) throw new Error("I4 violation: Req.* without installed request context");
+    return this.requestContext;
+  };
+  PicoVM.prototype._ensureResponseOpen = function () {
+    // I2: there is exactly one response graph being built; End closes it.
+    if (this.responseEnded) throw new Error("I2 violation: response graph already finalized");
+  };
+  PicoVM.prototype._ensurePreambleMutable = function () {
+    // I3: after Seal, the preamble and headers are immutable/frozen.
+    if (this.responseSealed) throw new Error("I3 violation: response preamble/headers sealed");
+  };
+  PicoVM.prototype._desc = function (kind, subtype, payload) {
+    return { kind: kind, subtype: subtype == null ? null : subtype, payload: payload == null ? null : payload };
+  };
+  PicoVM.prototype._spanPayload = function (handle) {
+    var s = (handle > 0 && handle < this.spans.length) ? this.spans[handle] : { ptr: 0, len: 0 };
+    return { span: handle | 0, text: this._spanStr(handle | 0), ptr: s.ptr, len: s.len };
+  };
+  PicoVM.prototype._respStatus = function (code) {
+    this._ensureResponseOpen();
+    this._ensurePreambleMutable();
+    var desc = this._desc("DESC_PREAMBLE", "STATUS", { code: code | 0 });
+    for (var i = 0; i < this.responseGraph.length; i++) {
+      if (this.responseGraph[i].kind === "DESC_PREAMBLE" && this.responseGraph[i].subtype === "STATUS") {
+        this.responseGraph[i] = desc; return;
+      }
+    }
+    this.responseGraph.push(desc);
+  };
+  PicoVM.prototype._respSeal = function () {
+    this._ensureResponseOpen();
+    if (!this.responseSealed) {
+      this.responseGraph.push(this._desc("DESC_COMMIT", "SEAL", null));
+      this.responseSealed = true;
+    }
+  };
+  PicoVM.prototype._respEnd = function () {
+    this._ensureResponseOpen();
+    this.responseGraph.push(this._desc("DESC_COMMIT", "END", null));
+    this.responseEnded = true;
+  };
+  PicoVM.prototype._req = function (method, rd, rs1, rs2) {
+    var ctx = this._requireRequestContext(), R = this.regs;
+    if (method === "Seq") { R[rd] = ctx.seq | 0; return true; }
+    if (method === "Principal") { R[rd] = ctx.principal | 0; return true; }
+    if (method === "Method") { R[rd] = ctx.method | 0; return true; }
+    if (method === "Path") { R[rd] = ctx.path | 0; return true; }
+    if (method === "Header") { var h = ctx.headers[this._spanStr(R[rs1]).toLowerCase()]; R[rd] = h ? h.value : 0; return true; }
+    if (method === "BodyMode") { R[rd] = ctx.bodyMode | 0; return true; }
+    if (method === "BodyCount") { R[rd] = ctx.body.length | 0; return true; }
+    if (method === "BodySpan") { var idx = R[rs1] | 0; R[rd] = (idx >= 0 && idx < ctx.body.length) ? ctx.body[idx] : 0; return true; }
+    return false;
+  };
+  PicoVM.prototype._resp = function (method, rd, rs1, rs2) {
+    var R = this.regs;
+    if (method === "Status") { this._respStatus(R[rs1]); return true; }
+    if (method === "Header") {
+      this._ensureResponseOpen(); this._ensurePreambleMutable();
+      this.responseGraph.push(this._desc("DESC_HEADER", null, { name: this._spanPayload(R[rs1]), value: this._spanPayload(R[rs2]) }));
+      return true;
+    }
+    if (method === "Write") {
+      this._ensureResponseOpen();
+      this.responseGraph.push(this._desc("DESC_BODY", null, this._spanPayload(R[rs1])));
+      return true;
+    }
+    if (method === "Trailer") {
+      this._ensureResponseOpen();
+      this.responseGraph.push(this._desc("DESC_TRAILER", null, { name: this._spanPayload(R[rs1]), value: this._spanPayload(R[rs2]) }));
+      return true;
+    }
+    if (method === "Seal") { this._respSeal(); return true; }
+    if (method === "End") { this._respEnd(); return true; }
+    if (method === "Respond") { this._respStatus(R[rs1]); this._respSeal(); this._respEnd(); return true; }
+    if (method === "Flush") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "FLUSH", null)); return true; }
+    if (method === "Continue") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "CONTINUE_100", null)); return true; }
+    if (method === "EndStream") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "END_STREAM", null)); return true; }
+    if (method === "Upgrade") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_UPGRADE", null, this._spanPayload(R[rs1]))); return true; }
+    if (method === "Abort") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_ABORT", null, { code: R[rs1] | 0 })); this.responseEnded = true; return true; }
+    if (method === "EarlyHints") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "EARLY_HINTS_103", null)); return true; }
+    return false;
   };
 
   // Mirrors picoscript_vm HostApi._textio: arena-backed Utf8Writer/Reader + Json/Xml.
