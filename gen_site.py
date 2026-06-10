@@ -111,9 +111,9 @@ def build_namespace_data():
     """Namespace -> method list from HOST_HOOK_CODES, tagged implemented vs planned.
 
     A hook is 'implemented' only if the VM actually dispatches it (unimplemented ones
-    fall through to an 'unknown host' log entry). Codes >0xFF are excluded entirely:
-    the runtime dispatches on imm16 & 0xFF, so a >0xFF code aliases onto another hook
-    and can never be invoked as itself."""
+    fall through to an 'unknown host' log entry). Codes >0xFF are dispatched via the
+    extended base (imm16 = EXT_HOST_HOOK_BASE | (code & 0xFFF)), so they are real
+    hooks too -- not excluded."""
     from picoscript_il import ILBuilder, Imm, lower_to_bytecode_safe
     from picoscript_vm import PicoVM
 
@@ -129,8 +129,6 @@ def build_namespace_data():
 
     ns_map = {}
     for (namespace, method), code in sorted(HOST_HOOK_CODES.items(), key=lambda x: x[1]):
-        if code > 0xFF:
-            continue      # not runtime-dispatchable (aliases under the 8-bit hook limit)
         ns_map.setdefault(namespace, []).append(
             {"method": method, "code": f"0x{code:02X}", "impl": is_impl(namespace, method, code)})
     return ns_map

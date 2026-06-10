@@ -216,6 +216,16 @@ class HostApi:
         if ns == "Maths":
             if self._mathslib(vm, method, rd, rs1, rs2):
                 return
+        # Compress.* (PicoCompress RLE), Crypto.* (Sha256), Html.* (entity escape).
+        if ns == "Compress":
+            if self._compresslib(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Crypto":
+            if self._cryptolib(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Html":
+            if self._htmllib(vm, method, rd, rs1, rs2):
+                return
         # Io: write raw bytes (UTF-8 strings) to the output buffer.
         if ns == "Io" and method == "Write":
             h = vm.regs[rs1]
@@ -351,6 +361,43 @@ class HostApi:
                 bit >>= 2
             R[rd] = res & MASK32
             return True
+        return False
+
+    def _compresslib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
+        # PicoCompress: a simple reversible byte-run RLE -> (count, byte) pairs.
+        src = self._span_raw(vm, vm.regs[rs1])
+        if method == "PicoCompress":
+            out = bytearray(); i = 0
+            while i < len(src):
+                c = 1
+                while i + c < len(src) and src[i + c] == src[i] and c < 255:
+                    c += 1
+                out.append(c); out.append(src[i]); i += c
+            vm.regs[rd] = self._new_span_bytes(vm, bytes(out)); return True
+        if method == "PicoDecompress":
+            out = bytearray(); i = 0
+            while i + 1 < len(src):
+                out.extend(bytes([src[i + 1]]) * src[i]); i += 2
+            vm.regs[rd] = self._new_span_bytes(vm, bytes(out)); return True
+        return False
+
+    def _cryptolib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
+        if method == "Sha256":
+            import hashlib
+            h = hashlib.sha256(self._span_raw(vm, vm.regs[rs1])).digest()
+            vm.regs[rd] = self._new_span_bytes(vm, h); return True
+        return False
+
+    def _htmllib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
+        src = self._span_raw(vm, vm.regs[rs1])
+        if method == "Encode":
+            out = (src.replace(b"&", b"&amp;").replace(b"<", b"&lt;").replace(b">", b"&gt;")
+                      .replace(b'"', b"&quot;").replace(b"'", b"&#39;"))
+            vm.regs[rd] = self._new_span_bytes(vm, out); return True
+        if method == "Decode":
+            out = (src.replace(b"&lt;", b"<").replace(b"&gt;", b">").replace(b"&quot;", b'"')
+                      .replace(b"&#39;", b"'").replace(b"&amp;", b"&"))
+            vm.regs[rd] = self._new_span_bytes(vm, out); return True
         return False
 
     def _templatelib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
