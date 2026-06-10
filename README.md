@@ -56,6 +56,7 @@ PicoScript runs inside picoweb as deterministic, bounded userland logic for:
 | `docs/AGENT_PROMPT.md` | **Ready-to-use prompt** for an LLM/agent to generate valid PicoScript (grammar, rules, host calls, worked 4-style examples) |
 | `docs/SELF_HOSTING.md` | Feasibility exploration: compiling PicoScript in PicoScript (staged bootstrap) + `examples/selfhost_emit.pc` PoC |
 | `docs/PIOS_IO_BINDING.md` | EL0↔kernel descriptor + FIFO ABI: `pooldesc` leases, typed/phased response graph, binding kinds, response lifecycle (seal/write/end), HTTP edge cases |
+| `docs/PIOS_IO_INTEGRATION.md` `include/pios_io_binding.h` | kernel-side **integration work-order** + standalone C ABI header (vendor into the PIOS kernel; phased plan with I1–I8 acceptance) |
 | `docs/picoscript-hardware.md` | Hardware bytecode contract |
 
 ## Toolchain: four frontends, one IL, three backends

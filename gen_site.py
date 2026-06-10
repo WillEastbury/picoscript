@@ -63,6 +63,7 @@ DOC_FILES = [
     ("agent", "Agent Prompt", os.path.join(ROOT, "docs", "AGENT_PROMPT.md")),
     ("selfhost", "Self-Hosting", os.path.join(ROOT, "docs", "SELF_HOSTING.md")),
     ("iobinding", "PIOS I/O Binding", os.path.join(ROOT, "docs", "PIOS_IO_BINDING.md")),
+    ("iointegration", "PIOS Integration", os.path.join(ROOT, "docs", "PIOS_IO_INTEGRATION.md")),
     ("internals", "Internals", os.path.join(ROOT, "docs", "INTERNALS.md")),
 ]
 

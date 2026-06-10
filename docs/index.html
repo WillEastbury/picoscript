@@ -270,7 +270,7 @@
         </div>
         <div class="ref-section" id="ref-samples"><h2 style="color:var(--accent);margin-bottom:10px">Application Samples</h2><div id="samplesContent"></div></div>
         <div class="ref-section" id="ref-internals"><h2 style="color:var(--accent);margin-bottom:10px">Deep Technical Internals <span class="badge">implementer</span></h2><p style="color:var(--muted);font-size:12px;margin-bottom:10px">For contributors. Not required for app authors.</p><div class="docpanel active" style="display:block" id="doc-internals-inline"></div></div>
-        <div class="ref-section" id="ref-rawdocs"><h2 style="color:var(--accent);margin-bottom:10px">Source Documentation</h2><div class="docnav"><button class="docnav-btn active" onclick="showDoc('readme')" data-doc="readme">README</button><button class="docnav-btn" onclick="showDoc('spec')" data-doc="spec">Language Spec</button><button class="docnav-btn" onclick="showDoc('arch')" data-doc="arch">Compiler Architecture</button><button class="docnav-btn" onclick="showDoc('editor')" data-doc="editor">Editor Contract</button><button class="docnav-btn" onclick="showDoc('agent')" data-doc="agent">Agent Prompt</button><button class="docnav-btn" onclick="showDoc('selfhost')" data-doc="selfhost">Self-Hosting</button><button class="docnav-btn" onclick="showDoc('iobinding')" data-doc="iobinding">PIOS I/O Binding</button><button class="docnav-btn" onclick="showDoc('internals')" data-doc="internals">Internals</button></div><div class="docpanel active" id="doc-readme"><h1 id="picoscript">PicoScript</h1>
+        <div class="ref-section" id="ref-rawdocs"><h2 style="color:var(--accent);margin-bottom:10px">Source Documentation</h2><div class="docnav"><button class="docnav-btn active" onclick="showDoc('readme')" data-doc="readme">README</button><button class="docnav-btn" onclick="showDoc('spec')" data-doc="spec">Language Spec</button><button class="docnav-btn" onclick="showDoc('arch')" data-doc="arch">Compiler Architecture</button><button class="docnav-btn" onclick="showDoc('editor')" data-doc="editor">Editor Contract</button><button class="docnav-btn" onclick="showDoc('agent')" data-doc="agent">Agent Prompt</button><button class="docnav-btn" onclick="showDoc('selfhost')" data-doc="selfhost">Self-Hosting</button><button class="docnav-btn" onclick="showDoc('iobinding')" data-doc="iobinding">PIOS I/O Binding</button><button class="docnav-btn" onclick="showDoc('iointegration')" data-doc="iointegration">PIOS Integration</button><button class="docnav-btn" onclick="showDoc('internals')" data-doc="internals">Internals</button></div><div class="docpanel active" id="doc-readme"><h1 id="picoscript">PicoScript</h1>
 <p>Deterministic userland scripting language for embedded queue-driven processing in the Pico stack.</p>
 <blockquote>
 <p><strong>▶ Live playground &amp; reference:</strong> open <strong><a href="docs/index.html"><code>docs/index.html</code></a></strong> (or the
@@ -377,6 +377,10 @@ browser, and send HTTP/TCP requests to a program over a localStorage-backed Pico
 <td>builds the consolidated GitHub Pages site <code>docs/index.html</code> (guide, playground, HTTP/TCP simulator, <strong>Cards/Query/Spans</strong> data engine, reference docs)</td>
 </tr>
 <tr>
+<td><code>tools/gen_dataset.py</code></td>
+<td><strong>synthetic dataset generator</strong> for fine-tuning a small coding model: templated programs rendered to all 4 dialects, each <strong>verified</strong> (compiles + runs + identical output) → JSONL (<code>nl2code</code> / <code>translate</code> / <code>run</code>). Sample: <code>data/picoscript.sample.jsonl</code></td>
+</tr>
+<tr>
 <td><code>picoscript_runtime.py</code></td>
 <td>reference runtime structures (arena, lease manager, profiling, queue batching)</td>
 </tr>
@@ -411,6 +415,10 @@ browser, and send HTTP/TCP requests to a program over a localStorage-backed Pico
 <tr>
 <td><code>docs/PIOS_IO_BINDING.md</code></td>
 <td>EL0↔kernel descriptor + FIFO ABI: <code>pooldesc</code> leases, typed/phased response graph, binding kinds, response lifecycle (seal/write/end), HTTP edge cases</td>
+</tr>
+<tr>
+<td><code>docs/PIOS_IO_INTEGRATION.md</code> <code>include/pios_io_binding.h</code></td>
+<td>kernel-side <strong>integration work-order</strong> + standalone C ABI header (vendor into the PIOS kernel; phased plan with I1–I8 acceptance)</td>
 </tr>
 <tr>
 <td><code>docs/picoscript-hardware.md</code></td>
@@ -3281,7 +3289,150 @@ unless the binding policy (range mode, <code>reorder_mode = all</code>) explicit
 <td><code>range_mode</code> is the explicit opener that lets the kernel slice body spans, synthesize <code>206</code> / multipart framing, and disables dynamic transforms for ranged responses</td>
 </tr>
 </tbody>
-</table></div><div class="docpanel" id="doc-internals"><h1 id="picoscript-deep-internals">PicoScript deep internals</h1>
+</table></div><div class="docpanel" id="doc-iointegration"><h1 id="pios-io-binding-kernel-integration-work-order">PIOS I/O Binding — kernel integration work-order</h1>
+<p>A hand-off for the <strong>PIOS agent</strong>: wire <code>include/pios_io_binding.h</code> into the EL1
+kernel so EL0 PicoScript capsules talk to the network/transport through the
+descriptor + FIFO ABI. This is the executable plan; the contract it implements is
+<code>docs/PIOS_IO_BINDING.md</code> (§0 invariants I1–I8, the <code>pooldesc</code>/<code>ctx_desc</code>/<code>pios_desc</code>
+records, the FIFO message set, <code>port_cfg</code>). The EL0 half already exists and is
+<em>simulated</em> in <code>picoscript_vm.py</code> / <code>vm/picovm.js</code> (the <code>Req.*</code>/<code>Resp.*</code> host
+hooks) — match that behaviour exactly so the simulator stays a faithful model.</p>
+<blockquote>
+<p><strong>Scope note for the agent:</strong> this repo (picoscript) has no kernel source.
+Vendor <code>include/pios_io_binding.h</code> into the PIOS kernel tree and implement the
+phases below against the <em>real</em> kernel structures (RP1/ETH RX, TLS, TCP,
+the FIFO/mailbox IPC, arena allocator, EL0 capsule scheduler). Where a kernel
+primitive already exists (e.g. the mailbox/return-FIFO model, arena alloc),
+bind to it rather than reinventing.</p>
+</blockquote>
+<h2 id="ground-rules-do-not-violate-these-are-the-acceptance-criteria">Ground rules (do not violate — these are the acceptance criteria)</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Invariant</th>
+<th>What the kernel must do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>I1</strong></td>
+<td>Kernel is sole authority on message boundaries</td>
+<td>Parse only request-line + headers; fix CL/TE framing kernel-side; hand EL0 a <strong>length-bounded</strong> body it cannot read past.</td>
+</tr>
+<tr>
+<td><strong>I2</strong></td>
+<td>One owner per descriptor</td>
+<td><code>pooldesc.owner ∈ {FREE,THREAD,KERNEL}</code>; transfer, never share.</td>
+</tr>
+<tr>
+<td><strong>I3</strong></td>
+<td>Sealed graph immutable</td>
+<td>After <code>RESP_SEAL</code>, reject further preamble/header descriptors; stream mode only <em>appends</em> body.</td>
+</tr>
+<tr>
+<td><strong>I4</strong></td>
+<td>Worker accesses only leased memory</td>
+<td>Every EL0 read goes through a validated <code>pooldesc</code>; revoke faults it.</td>
+</tr>
+<tr>
+<td><strong>I5</strong></td>
+<td>Cross-capsule only via kernel FIFO</td>
+<td>Descriptors move solely as <code>pios_fifo_message</code>s; even <code>ipc</code> is kernel-mediated.</td>
+</tr>
+<tr>
+<td><strong>I6</strong></td>
+<td>Binding enforces protocol legality</td>
+<td>Kernel enforces framing/phase order/seal immutability/<code>reorder_mode</code>; EL0 expresses intent only.</td>
+</tr>
+<tr>
+<td><strong>I7</strong></td>
+<td>No reorder across a phase boundary</td>
+<td>Honour <code>reorder_mode</code> (strict/bounded/all); coalesce only within a phase; never cross <code>FLUSH</code>/<code>UPGRADE</code>.</td>
+</tr>
+<tr>
+<td><strong>I8</strong></td>
+<td>Every descriptor eventually ACKed/revoked/released</td>
+<td><code>RESP_SENT</code> releases outbound; scope-exit / <code>LEASE_REVOKE</code> releases inbound; no leaks.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="phase-1-pool-lease-layer-foundation-i2i4i8">Phase 1 — pool + lease layer  (foundation, I2/I4/I8)</h2>
+<ol>
+<li>Per-capsule <strong>micro-pool</strong> of <code>struct pooldesc</code> in that capsule's EL0-readable
+   RAM; the kernel (which sees all EL0 RAM) allocates/leases from it. No hot-path
+   malloc.</li>
+<li>Lease ops: acquire (mark <code>USED</code>, <code>owner=THREAD</code>), validate (cheap generation
+   check — the <code>Lease.Validate/CachedValidate</code> semantics), revoke (set <code>REVOKED</code>;
+   the next EL0 validate must fault → kernel synthesizes 503).</li>
+<li><strong>Scope-bound release:</strong> when a worker invocation returns / faults / is killed,
+   sweep its <code>THREAD</code>-owned inbound descriptors → <code>RELEASED</code> → reclaim spans →
+   recycle the connection.</li>
+<li><strong>Conformance:</strong> a pinned/slow worker can hold RX buffers only for its own
+   invocation (I4); no descriptor is leaked (I8).</li>
+</ol>
+<h2 id="phase-2-inbound-parse-bind-lease-deliver-i1i3-prep">Phase 2 — inbound: parse → bind → lease → deliver  (I1/I3-prep)</h2>
+<ol>
+<li>RX: NIC/DMA → TLS record decode → TCP reassembly (existing kernel paths).</li>
+<li>Parse <strong>request-line + headers only</strong>; extract cookies/auth → resolve + <strong>bind
+   the principal</strong> (kernel-authoritative; per-request, not per-connection).</li>
+<li>Determine body framing from CL/TE → the kernel is the <strong>single boundary
+   authority</strong> (I1). Small body ⇒ inline span pooldescs; large/unknown ⇒ a pull
+   cursor.</li>
+<li>Stamp a connection-scoped <strong>seq/stream id</strong>; fill a <code>pios_ctx_desc</code>; lease the
+   inbound descriptors; post <strong><code>CTX_READY</code></strong> to the capsule FIFO; schedule the
+   worker.</li>
+</ol>
+<h2 id="phase-3-the-fifo-message-loop-i5">Phase 3 — the FIFO message loop  (I5)</h2>
+<p>Implement handlers for <code>pios_fifo_message</code> (<code>pios_fifo_msg</code> tag):</p>
+<ul>
+<li><strong>K→C:</strong> <code>CTX_READY</code> (deliver context), <code>BODY_CHUNK</code> (answer a pull), <code>RESP_SENT</code>
+  (TX complete → release outbound), <code>LEASE_REVOKE</code> (reclaim inbound under pressure).</li>
+<li><strong>C→K:</strong> <code>BODY_PULL</code> (stream-mode body), <code>RESP_SEAL</code> (commit preamble+headers —
+  freeze them, I3), <code>RESP_WRITE</code> (append body), <code>RESP_END</code> (complete), <code>RESP_FAULT</code>
+  (abandon → discard graph; synthesize 500 only if pre-first-flush).</li>
+</ul>
+<p>All descriptor movement is messages — never a shared pointer hop (I5).</p>
+<h2 id="phase-4-outbound-order-frame-transmit-release-i3i6i7i8">Phase 4 — outbound: order → frame → transmit → release  (I3/I6/I7/I8)</h2>
+<ol>
+<li>Collect the EL0 <strong>typed response graph</strong> (<code>pios_desc</code>, kinds
+   <code>PREAMBLE/HEADER/BODY/TRAILER/CONTROL/COMMIT/ABORT/UPGRADE</code>).</li>
+<li>Order by <strong>phase</strong> per the port's <code>reorder_mode</code>
+   (<code>strict|bounded|all</code>); coalesce/DMA-map only <strong>within</strong> a phase; never cross a
+   <code>FLUSH</code>/<code>UPGRADE</code> boundary (I7). Deferred status ⇒ buffer + reorder so the
+   preamble goes first.</li>
+<li><strong>Framing (kernel owns it):</strong> all body known before <code>COMMIT</code> ⇒ <code>Content-Length</code>;
+   else chunked <code>TE</code>. Apply transform/compression and range policy per
+   <code>PIOS_IO_BINDING.md</code> §4.1/§4.2 (transform before length finalization; <code>range_mode</code>
+   slices/synthesizes 206/multipart/416). EL0 never writes chunk/multipart framing.</li>
+<li>Place by <strong>seq/stream id</strong> (HTTP/1.1 in-order with a hold buffer; HTTP/2 by
+   stream). On TX-complete, post <strong><code>RESP_SENT</code></strong> → release the outbound descriptors
+   back to the pool (I8).</li>
+</ol>
+<h2 id="phase-5-ports-binding-kinds-i6">Phase 5 — ports + binding kinds  (I6)</h2>
+<ol>
+<li><code>pios_port_cfg</code> per listener: <code>reorder_mode</code>, <code>body_inline_max</code>, <code>default_kind</code>,
+   plus TLS identity / principal-binding policy / timeouts / quotas.</li>
+<li>Lifecycle per <code>binding_kind</code>: <code>unary</code> (respond / seal-write-end), <code>stream</code>
+   (seal→write*→end), <code>duplex</code> (after <code>UPGRADE</code>, long-lived bidirectional FIFO peer,
+   <code>reorder_mode</code> flips to strict), <code>datagram</code> (one inbound → optional reply),
+   <code>ipc</code> (same records over an internal FIFO).</li>
+</ol>
+<h2 id="acceptance-bring-up">Acceptance / bring-up</h2>
+<ol>
+<li><strong>Unary "hello":</strong> an EL0 capsule that does <code>Resp.Status(200); Resp.Write("hi"); Resp.Respond()</code>
+   serves a real <code>200 OK</code> over the bound port. Verify on Pi5 (RP1/ETH).</li>
+<li><strong>Deferred status:</strong> a handler that sets the status at <code>RESP_END</code> still emits it
+   first on the wire (bounded-mode reorder).</li>
+<li><strong>Streaming:</strong> SSE/chunked endpoint flushes incrementally; a <code>FLUSH</code> control
+   descriptor is a hard coalescing barrier.</li>
+<li><strong>Fault paths:</strong> pre-flush <code>RESP_FAULT</code> ⇒ clean 500; post-flush ⇒ connection
+   teardown (you can't un-send a 200).</li>
+<li><strong>Invariant sweep:</strong> walk I1–I8 above as a checklist; the simulator
+   (<code>tests/test_io_hooks.py</code>) is the reference for EL0-visible behaviour.</li>
+</ol>
+<p>Keep the kernel's parsing surface minimal (headers + framing only); everything
+else is EL0. The smaller the EL1 attack surface, the closer you are to I1/I6.</p></div><div class="docpanel" id="doc-internals"><h1 id="picoscript-deep-internals">PicoScript deep internals</h1>
 <blockquote>
 <p><strong>Deep technical internals.</strong> This page is for implementers and contributors who
 want to understand the compiler, bytecode, runtimes, and size trade-offs. It is
