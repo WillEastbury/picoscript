@@ -210,6 +210,19 @@
     if (name.indexOf("Storage.") === 0) {
       if (this._storage(name.slice(8), rd, rs1, rs2)) return;
     }
+    // ---- Io: write raw bytes (UTF-8 strings) to the output buffer ----------
+    if (name === "Io.Write") {
+      var sw = this.spans[this.regs[rs1]];
+      if (sw) { for (var iw = 0; iw < sw.len; iw++) this.output.push(this.mem[sw.ptr + iw]); }
+      return;
+    }
+    if (name === "Io.WriteByte") { this.output.push(this.regs[rs1] & 0xFF); return; }
+    // ---- text/binary primitives: Utf8Writer / Utf8Reader / Json / Xml -----
+    if (name.indexOf("Utf8Writer.") === 0 || name.indexOf("Utf8Reader.") === 0 ||
+        name.indexOf("Json.") === 0 || name.indexOf("Xml.") === 0) {
+      var dot = name.indexOf(".");
+      if (this._textio(name.slice(0, dot), name.slice(dot + 1), rd, rs1, rs2)) return;
+    }
     this.log.push("host " + name + " R" + rd + " R" + rs1);
   };
 
@@ -234,6 +247,98 @@
     for (var i = 0; i < b.length; i++) this.mem[dst + i] = b[i];
     this.spans.push({ ptr: dst, len: b.length });
     return this.spans.length - 1;
+  };
+
+  // Mirrors picoscript_vm HostApi._textio: arena-backed Utf8Writer/Reader + Json/Xml.
+  PicoVM.prototype._wByte = function (w, b) { if (w.pos < w.cap) { this.mem[w.ptr + w.pos] = b & 0xFF; w.pos++; } };
+  PicoVM.prototype._wText = function (w, text) { var b = new TextEncoder().encode(text); for (var i = 0; i < b.length; i++) this._wByte(w, b[i]); };
+  PicoVM.prototype._wSpan = function (w, h) { var s = (h > 0 && h < this.spans.length) ? this.spans[h] : null; if (s) { for (var i = 0; i < s.len; i++) this._wByte(w, this.mem[s.ptr + i]); } };
+  function jsonEsc(s) {
+    var out = "";
+    for (var i = 0; i < s.length; i++) {
+      var ch = s[i], o = s.charCodeAt(i);
+      if (ch === '"') out += '\\"';
+      else if (ch === '\\') out += '\\\\';
+      else if (ch === '\n') out += '\\n';
+      else if (ch === '\r') out += '\\r';
+      else if (ch === '\t') out += '\\t';
+      else if (o < 0x20) out += '\\u' + ('000' + o.toString(16)).slice(-4);
+      else out += ch;
+    }
+    return out;
+  }
+  function xmlEsc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  PicoVM.prototype._jsonPre = function (w) {
+    if (!w.stack.length) return;
+    var st = w.stack[w.stack.length - 1];
+    if (st.afterKey) st.afterKey = false;
+    else if (st.count > 0) this._wByte(w, 0x2C);
+  };
+  PicoVM.prototype._jsonPost = function (w) { if (w.stack.length) w.stack[w.stack.length - 1].count += 1; };
+  PicoVM.prototype._textio = function (ns, method, rd, rs1, rs2) {
+    if (!this._tio) this._tio = { writers: {}, readers: {}, nextW: 1, nextR: 1 };
+    var T = this._tio, R = this.regs;
+    if (ns === "Utf8Writer") {
+      if (method === "New") { var h = T.nextW++; T.writers[h] = { ptr: R[rs1] & 0xFFFF, cap: R[rs2] & 0xFFFF, pos: 0, stack: [] }; R[rd] = h; return true; }
+      var w = T.writers[R[rs1]]; if (!w) { R[rd] = 0; return true; }
+      if (method === "Byte") { this._wByte(w, R[rs2]); return true; }
+      if (method === "Int") { this._wText(w, String(R[rs2] | 0)); return true; }
+      if (method === "Span") { this._wSpan(w, R[rs2]); return true; }
+      if (method === "ToSpan") { this.spans.push({ ptr: w.ptr, len: w.pos }); R[rd] = this.spans.length - 1; return true; }
+      if (method === "Len") { R[rd] = w.pos; return true; }
+      if (method === "Reset") { w.pos = 0; w.stack = []; return true; }
+      return false;
+    }
+    if (ns === "Utf8Reader") {
+      if (method === "New") { var s = (R[rs1] > 0 && R[rs1] < this.spans.length) ? this.spans[R[rs1]] : { ptr: 0, len: 0 }; var rh = T.nextR++; T.readers[rh] = { ptr: s.ptr, len: s.len, pos: 0 }; R[rd] = rh; return true; }
+      var r = T.readers[R[rs1]]; if (!r) { R[rd] = 0; return true; }
+      if (method === "Peek") { R[rd] = r.pos < r.len ? this.mem[r.ptr + r.pos] : 0; return true; }
+      if (method === "Next") { R[rd] = r.pos < r.len ? this.mem[r.ptr + r.pos] : 0; if (r.pos < r.len) r.pos++; return true; }
+      if (method === "SkipWs") { while (r.pos < r.len && (this.mem[r.ptr + r.pos] === 32 || this.mem[r.ptr + r.pos] === 9 || this.mem[r.ptr + r.pos] === 10 || this.mem[r.ptr + r.pos] === 13)) r.pos++; return true; }
+      if (method === "Eof") { R[rd] = r.pos >= r.len ? 1 : 0; return true; }
+      if (method === "Pos") { R[rd] = r.pos; return true; }
+      if (method === "Match") { if (r.pos < r.len && this.mem[r.ptr + r.pos] === (R[rs2] & 0xFF)) { r.pos++; R[rd] = 1; } else R[rd] = 0; return true; }
+      if (method === "Int") {
+        while (r.pos < r.len && (this.mem[r.ptr + r.pos] === 32 || this.mem[r.ptr + r.pos] === 9 || this.mem[r.ptr + r.pos] === 10 || this.mem[r.ptr + r.pos] === 13)) r.pos++;
+        var sign = 1; if (r.pos < r.len && this.mem[r.ptr + r.pos] === 0x2D) { sign = -1; r.pos++; }
+        var n = 0; while (r.pos < r.len && this.mem[r.ptr + r.pos] >= 0x30 && this.mem[r.ptr + r.pos] <= 0x39) { n = n * 10 + (this.mem[r.ptr + r.pos] - 0x30); r.pos++; }
+        R[rd] = (sign * n) | 0; return true;
+      }
+      return false;
+    }
+    if (ns === "Json") {
+      var jw = T.writers[R[rs1]]; if (!jw) { R[rd] = 0; return true; }
+      if (method === "BeginObject" || method === "BeginArray") {
+        this._jsonPre(jw); this._wByte(jw, method === "BeginObject" ? 0x7B : 0x5B);
+        if (jw.stack.length) jw.stack[jw.stack.length - 1].count += 1;
+        jw.stack.push({ count: 0, afterKey: false }); return true;
+      }
+      if (method === "EndObject" || method === "EndArray") { if (jw.stack.length) jw.stack.pop(); this._wByte(jw, method === "EndObject" ? 0x7D : 0x5D); return true; }
+      if (method === "Key") {
+        var st = jw.stack.length ? jw.stack[jw.stack.length - 1] : null;
+        if (st && st.count > 0) this._wByte(jw, 0x2C);
+        this._wByte(jw, 0x22); this._wText(jw, jsonEsc(this._spanStr(R[rs2]))); this._wByte(jw, 0x22); this._wByte(jw, 0x3A);
+        if (st) st.afterKey = true; return true;
+      }
+      if (method === "Str") { this._jsonPre(jw); this._wByte(jw, 0x22); this._wText(jw, jsonEsc(this._spanStr(R[rs2]))); this._wByte(jw, 0x22); this._jsonPost(jw); return true; }
+      if (method === "Int") { this._jsonPre(jw); this._wText(jw, String(R[rs2] | 0)); this._jsonPost(jw); return true; }
+      if (method === "Bool") { this._jsonPre(jw); this._wText(jw, R[rs2] ? "true" : "false"); this._jsonPost(jw); return true; }
+      if (method === "Null") { this._jsonPre(jw); this._wText(jw, "null"); this._jsonPost(jw); return true; }
+      if (method === "Raw") { this._jsonPre(jw); this._wSpan(jw, R[rs2]); this._jsonPost(jw); return true; }
+      return false;
+    }
+    if (ns === "Xml") {
+      var xw = T.writers[R[rs1]]; if (!xw) { R[rd] = 0; return true; }
+      if (method === "Open") { this._wByte(xw, 0x3C); this._wSpan(xw, R[rs2]); return true; }
+      if (method === "AttrName") { this._wByte(xw, 0x20); this._wSpan(xw, R[rs2]); this._wByte(xw, 0x3D); this._wByte(xw, 0x22); return true; }
+      if (method === "AttrValue") { this._wText(xw, xmlEsc(this._spanStr(R[rs2]))); this._wByte(xw, 0x22); return true; }
+      if (method === "OpenEnd") { this._wByte(xw, 0x3E); return true; }
+      if (method === "Text") { this._wText(xw, xmlEsc(this._spanStr(R[rs2]))); return true; }
+      if (method === "Close") { this._wByte(xw, 0x3C); this._wByte(xw, 0x2F); this._wSpan(xw, R[rs2]); this._wByte(xw, 0x3E); return true; }
+      if (method === "Empty") { this._wByte(xw, 0x2F); this._wByte(xw, 0x3E); return true; }
+      return false;
+    }
+    return false;
   };
 
   // Mirrors picoscript_vm HostApi._storage. Context model (cur pack + card)
@@ -308,6 +413,11 @@
       out.push(v);
     }
     return out;
+  };
+
+  // Decode the output buffer (PIPE ints + Io.Write bytes) as UTF-8 text.
+  PicoVM.prototype.outputText = function () {
+    return new TextDecoder("utf-8").decode(new Uint8Array(this.output));
   };
 
   return PicoVM;

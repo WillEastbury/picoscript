@@ -67,6 +67,11 @@ class HostApi:
         self.cur_pack = 0
         self.cur_card = 0
         self.query_results: List[int] = []
+        # Text/binary I/O: arena-backed writer + reader handle tables.
+        self.writers: Dict[int, dict] = {}
+        self.readers: Dict[int, dict] = {}
+        self._next_writer = 1
+        self._next_reader = 1
 
     @property
     def store(self):
@@ -139,6 +144,20 @@ class HostApi:
         if ns == "Storage":
             if self._storage(vm, method, rd, rs1, rs2):
                 return
+        # Io: write raw bytes (UTF-8 strings) to the output buffer.
+        if ns == "Io" and method == "Write":
+            h = vm.regs[rs1]
+            s = vm.spans[h] if 0 < h < len(vm.spans) else None
+            if s:
+                vm.output.append(bytes(vm.mem[s["ptr"]:s["ptr"] + s["len"]]))
+            return
+        if ns == "Io" and method == "WriteByte":
+            vm.output.append(bytes([vm.regs[rs1] & 0xFF]))
+            return
+        # Text/binary primitives: Utf8Writer / Utf8Reader / Json / Xml.
+        if ns in ("Utf8Writer", "Utf8Reader", "Json", "Xml"):
+            if self._textio(vm, ns, method, rd, rs1, rs2):
+                return
         # Unknown hook: record and continue (host-fillable primitive).
         self.log.append(f"host {ns}.{method} rd=R{rd} rs1=R{rs1} rs2=R{rs2} imm={imm16:#06x}")
 
@@ -160,6 +179,201 @@ class HostApi:
         vm.arena_top += len(b)
         vm.spans.append({"ptr": dst, "len": len(b)})
         return len(vm.spans) - 1
+
+    # -- Text/binary primitives (Utf8Writer / Utf8Reader / Json / Xml) -------
+    @staticmethod
+    def _w_byte(vm, w, b):
+        if w["pos"] < w["cap"]:
+            vm.mem[w["ptr"] + w["pos"]] = b & 0xFF
+            w["pos"] += 1
+
+    def _w_text(self, vm, w, text):
+        for byte in text.encode("utf-8"):
+            self._w_byte(vm, w, byte)
+
+    def _w_span(self, vm, w, span_handle):
+        s = vm.spans[span_handle] if 0 < span_handle < len(vm.spans) else None
+        if s:
+            for i in range(s["len"]):
+                self._w_byte(vm, w, vm.mem[s["ptr"] + i])
+
+    @staticmethod
+    def _json_esc(s: str) -> str:
+        out = []
+        for ch in s:
+            o = ord(ch)
+            if ch == '"':
+                out.append('\\"')
+            elif ch == '\\':
+                out.append('\\\\')
+            elif ch == '\n':
+                out.append('\\n')
+            elif ch == '\r':
+                out.append('\\r')
+            elif ch == '\t':
+                out.append('\\t')
+            elif o < 0x20:
+                out.append('\\u%04x' % o)
+            else:
+                out.append(ch)
+        return "".join(out)
+
+    @staticmethod
+    def _xml_esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def _json_pre(self, vm, w):
+        if not w["stack"]:
+            return
+        st = w["stack"][-1]
+        if st["afterKey"]:
+            st["afterKey"] = False
+        elif st["count"] > 0:
+            self._w_byte(vm, w, 0x2C)               # ,
+
+    def _json_post(self, w):
+        if w["stack"]:
+            w["stack"][-1]["count"] += 1
+
+    def _textio(self, vm, ns, method, rd, rs1, rs2) -> bool:
+        R = vm.regs
+        if ns == "Utf8Writer":
+            if method == "New":
+                h = self._next_writer
+                self._next_writer += 1
+                self.writers[h] = {"ptr": R[rs1] & 0xFFFF, "cap": R[rs2] & 0xFFFF, "pos": 0, "stack": []}
+                R[rd] = h
+                return True
+            w = self.writers.get(R[rs1])
+            if w is None:
+                R[rd] = 0
+                return True
+            if method == "Byte":
+                self._w_byte(vm, w, R[rs2]); return True
+            if method == "Int":
+                self._w_text(vm, w, str(_sx32(R[rs2]))); return True
+            if method == "Span":
+                self._w_span(vm, w, R[rs2]); return True
+            if method == "ToSpan":
+                vm.spans.append({"ptr": w["ptr"], "len": w["pos"]})
+                R[rd] = len(vm.spans) - 1; return True
+            if method == "Len":
+                R[rd] = w["pos"]; return True
+            if method == "Reset":
+                w["pos"] = 0; w["stack"] = []; return True
+            return False
+        if ns == "Utf8Reader":
+            if method == "New":
+                s = vm.spans[R[rs1]] if 0 < R[rs1] < len(vm.spans) else {"ptr": 0, "len": 0}
+                h = self._next_reader
+                self._next_reader += 1
+                self.readers[h] = {"ptr": s["ptr"], "len": s["len"], "pos": 0}
+                R[rd] = h
+                return True
+            r = self.readers.get(R[rs1])
+            if r is None:
+                R[rd] = 0
+                return True
+            cur = (lambda: vm.mem[r["ptr"] + r["pos"]] if r["pos"] < r["len"] else 0)
+            if method == "Peek":
+                R[rd] = cur(); return True
+            if method == "Next":
+                R[rd] = cur()
+                if r["pos"] < r["len"]:
+                    r["pos"] += 1
+                return True
+            if method == "SkipWs":
+                while r["pos"] < r["len"] and vm.mem[r["ptr"] + r["pos"]] in (32, 9, 10, 13):
+                    r["pos"] += 1
+                return True
+            if method == "Eof":
+                R[rd] = 1 if r["pos"] >= r["len"] else 0; return True
+            if method == "Pos":
+                R[rd] = r["pos"]; return True
+            if method == "Match":
+                if r["pos"] < r["len"] and vm.mem[r["ptr"] + r["pos"]] == (R[rs2] & 0xFF):
+                    r["pos"] += 1; R[rd] = 1
+                else:
+                    R[rd] = 0
+                return True
+            if method == "Int":
+                while r["pos"] < r["len"] and vm.mem[r["ptr"] + r["pos"]] in (32, 9, 10, 13):
+                    r["pos"] += 1
+                sign = 1
+                if r["pos"] < r["len"] and vm.mem[r["ptr"] + r["pos"]] == 0x2D:
+                    sign = -1; r["pos"] += 1
+                n = 0
+                while r["pos"] < r["len"] and 0x30 <= vm.mem[r["ptr"] + r["pos"]] <= 0x39:
+                    n = n * 10 + (vm.mem[r["ptr"] + r["pos"]] - 0x30); r["pos"] += 1
+                R[rd] = (sign * n) & MASK32
+                return True
+            return False
+        if ns == "Json":
+            w = self.writers.get(R[rs1])
+            if w is None:
+                R[rd] = 0
+                return True
+            if method == "BeginObject" or method == "BeginArray":
+                self._json_pre(vm, w)
+                self._w_byte(vm, w, 0x7B if method == "BeginObject" else 0x5B)   # { or [
+                if w["stack"]:
+                    w["stack"][-1]["count"] += 1
+                w["stack"].append({"count": 0, "afterKey": False})
+                return True
+            if method == "EndObject" or method == "EndArray":
+                if w["stack"]:
+                    w["stack"].pop()
+                self._w_byte(vm, w, 0x7D if method == "EndObject" else 0x5D)     # } or ]
+                return True
+            if method == "Key":
+                st = w["stack"][-1] if w["stack"] else None
+                if st and st["count"] > 0:
+                    self._w_byte(vm, w, 0x2C)
+                self._w_byte(vm, w, 0x22)
+                self._w_text(vm, w, self._json_esc(self._span_str(vm, R[rs2])))
+                self._w_byte(vm, w, 0x22); self._w_byte(vm, w, 0x3A)             # ":
+                if st:
+                    st["afterKey"] = True
+                return True
+            if method == "Str":
+                self._json_pre(vm, w)
+                self._w_byte(vm, w, 0x22)
+                self._w_text(vm, w, self._json_esc(self._span_str(vm, R[rs2])))
+                self._w_byte(vm, w, 0x22)
+                self._json_post(w); return True
+            if method == "Int":
+                self._json_pre(vm, w); self._w_text(vm, w, str(_sx32(R[rs2]))); self._json_post(w); return True
+            if method == "Bool":
+                self._json_pre(vm, w); self._w_text(vm, w, "true" if R[rs2] else "false"); self._json_post(w); return True
+            if method == "Null":
+                self._json_pre(vm, w); self._w_text(vm, w, "null"); self._json_post(w); return True
+            if method == "Raw":
+                self._json_pre(vm, w); self._w_span(vm, w, R[rs2]); self._json_post(w); return True
+            return False
+        if ns == "Xml":
+            w = self.writers.get(R[rs1])
+            if w is None:
+                R[rd] = 0
+                return True
+            if method == "Open":
+                self._w_byte(vm, w, 0x3C); self._w_span(vm, w, R[rs2]); return True          # <tag
+            if method == "AttrName":
+                self._w_byte(vm, w, 0x20); self._w_span(vm, w, R[rs2])
+                self._w_byte(vm, w, 0x3D); self._w_byte(vm, w, 0x22); return True             # name="
+            if method == "AttrValue":
+                self._w_text(vm, w, self._xml_esc(self._span_str(vm, R[rs2])))
+                self._w_byte(vm, w, 0x22); return True                                         # value"
+            if method == "OpenEnd":
+                self._w_byte(vm, w, 0x3E); return True                                         # >
+            if method == "Text":
+                self._w_text(vm, w, self._xml_esc(self._span_str(vm, R[rs2]))); return True
+            if method == "Close":
+                self._w_byte(vm, w, 0x3C); self._w_byte(vm, w, 0x2F)
+                self._w_span(vm, w, R[rs2]); self._w_byte(vm, w, 0x3E); return True             # </tag>
+            if method == "Empty":
+                self._w_byte(vm, w, 0x2F); self._w_byte(vm, w, 0x3E); return True               # />
+            return False
+        return False
 
     def _storage(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
         """Execute a Storage.* card op. Returns True if handled.
@@ -279,6 +493,10 @@ class PicoVM:
         except Halt:
             self.halted = True
         return self
+
+    def output_text(self) -> str:
+        """Decode the output buffer (PIPE ints + Io.Write bytes) as UTF-8 text."""
+        return b"".join(self.output).decode("utf-8", "replace")
 
     # -- core ------------------------------------------------------------
     def _step(self):

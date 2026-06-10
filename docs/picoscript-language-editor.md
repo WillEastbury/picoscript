@@ -268,6 +268,7 @@ The editor can derive completions from the language namespace table:
 | `Random.` | `U32` |
 | `Memory.` | `ArenaInit`, `ArenaAlloc`, `ArenaReset`, `ArenaStats`, `Set`, `Get` |
 | `Span.` | `Make`, `Slice`, `Materialize`, `Len`, `Get` |
+| `Io.` | `Write`, `WriteByte` |
 | `Descriptor.` | `Make`, `SetFlags`, `GetPtr`, `GetLen`, `GetFlags`, `CopyBatch` |
 | `Lease.` | `Acquire`, `Release`, `Validate`, `CachedValidate`, `GetSpan`, `GetTypeHint` |
 
@@ -336,6 +337,8 @@ To support queue-driven runtimes across non-identical hosts, PicoScript exposes 
 - `Span.Materialize(Rspan, Rout);` — memcpy to a fresh contiguous region (independent copy).
 - `Span.Len(Rspan, Rout);` — element count of a span.
 - `Span.Get(Rspan, Ridx, Rout);` — read element `idx` of a span.
+- `Io.Write(Rspan);` — append a span's UTF-8 bytes to the output buffer (string output for `print` / HTTP body).
+- `Io.WriteByte(Rval);` — append one byte to the output buffer.
 - `Descriptor.Make(Rptr, Rlen, RdescOut);`
 - `Descriptor.SetFlags(Rdesc, Rflags);`
 - `Descriptor.GetPtr(Rdesc, Rout);`

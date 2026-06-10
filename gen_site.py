@@ -592,7 +592,8 @@ function render(){
                              : '<tr><td colspan="3" style="color:var(--muted)">(no named variables)</td></tr>';
   }
   document.getElementById('state').textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;
-  document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']';
+  var _txt=vm.outputText(), _pr=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_txt);
+  document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']'+(_pr&&_txt?'\ntext: '+JSON.stringify(_txt):'');
 }
 function jsDisasm(w){
   var names=["NOOP","LOAD","SAVE","PIPE","ADD","SUB","MUL","DIV","INC","JUMP","BRANCH","CALL","RETURN","WAIT","RAISE","DSP"];
@@ -653,7 +654,8 @@ function renderResponse(vm,req){
   L.push('Content-Type: '+(vm.httpType||'application/octet-stream'));
   L.push('X-PicoScript-Steps: '+vm.steps);
   L.push('X-Request-Bytes: '+req.length);
-  L.push(''); L.push(JSON.stringify(body));
+  var _bt=vm.outputText(), _bp=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_bt);
+  L.push(''); L.push(_bp&&_bt ? _bt : JSON.stringify(body));
   el.textContent=L.join('\n');
 }
 function loadResponder(){ document.getElementById('lang').value='basic'; onLangChange(); setSrc(RESPONDER); compileSrc(false); }

@@ -746,6 +746,10 @@ compile <strong>in the browser</strong>, byte-for-byte identical to the Python c
 <li><code>Random.U32(Rdest)</code> for host-backed random generation.</li>
 <li><code>Memory.ArenaInit/Alloc/Reset/Stats(...)</code> for arena lifecycle and allocation control; <code>Memory.Set/Get(span, idx[, val])</code> for byte-addressable read/write into a span's backing arena.</li>
 <li><code>Span.Make/Slice/Materialize/Len/Get(...)</code> for span construction and access: <code>Slice</code> returns a <strong>zero-copy view</strong> (shared backing bytes), <code>Materialize</code> <strong>memcpys</strong> to a fresh contiguous arena region (independent copy), <code>Len</code>/<code>Get</code> read length and elements.</li>
+<li><code>Io.Write(span)</code> / <code>Io.WriteByte(reg)</code> for <strong>string/byte output</strong> — append a span's UTF-8 bytes (or one byte) to the output buffer that backs <code>print</code> and the HTTP body. <code>print</code>/<code>PRINT</code> of a numeric value pipes a 4-byte integer; <code>print</code> of a <strong>string literal</strong> lowers to a scratch-span build + <code>Io.Write</code>, so <code>print("hello")</code> works in every frontend. Decode the buffer as text with <code>vm.output_text()</code> (Python) / <code>vm.outputText()</code> (JS).</li>
+<li><strong><code>Utf8Writer</code> / <code>Utf8Reader</code></strong> — arena-backed, no-allocation text/binary primitives. <code>Utf8Writer.New(ptr, cap) → w</code> opens a writer over a caller-owned arena region; <code>Byte/Int/Span(w, …)</code> append, <code>ToSpan(w) → span</code> / <code>Len(w)</code> / <code>Reset(w)</code> finish or rewind. <code>Utf8Reader.New(span) → r</code> scans: <code>Peek/Next(r)</code>, <code>Int(r)</code> (parse signed decimal), <code>SkipWs(r)</code>, <code>Match(r, byte)</code>, <code>Eof(r)</code>, <code>Pos(r)</code>. Per-byte ops touch only the arena — no runtime allocation on the hot path.</li>
+<li><strong><code>Json.*</code></strong> — streaming JSON on a <code>Utf8Writer</code>, with automatic commas and string escaping: <code>BeginObject/EndObject/BeginArray/EndArray(w)</code>, <code>Key(w, nameSpan)</code>, <code>Str(w, span)</code>, <code>Int(w, n)</code>, <code>Bool(w, b)</code>, <code>Null(w)</code>, <code>Raw(w, span)</code>. Builds e.g. <code>{"status":"ok","count":42,"items":[1,2]}</code>.</li>
+<li><strong><code>Xml.*</code></strong> — HTML/XML element writer on a <code>Utf8Writer</code>, with attribute and text escaping: <code>Open(w, tagSpan)</code>, <code>AttrName(w, nameSpan)</code>, <code>AttrValue(w, valSpan)</code>, <code>OpenEnd(w)</code>, <code>Text(w, span)</code>, <code>Close(w, tagSpan)</code>, <code>Empty(w)</code>. Builds e.g. <code>&lt;a href="/x?a=1&amp;amp;b=2"&gt;go &amp;amp; see&lt;/a&gt;</code>. String-literal arguments (<code>Json.Key("status")</code>, <code>Xml.Open("a")</code>) are staged into a scratch span automatically by every frontend.</li>
 <li><code>Descriptor.Make/SetFlags/GetPtr/GetLen/GetFlags/CopyBatch(...)</code> for descriptor flow and bulk transfer.</li>
 <li><code>Lease.Acquire/Release/Validate/CachedValidate/GetSpan/GetTypeHint(...)</code> for capability/lease-mediated access with fast-path validation.</li>
 <li><code>Storage.GetSchemaForPack</code>, <code>Storage.SetSchemaForPack</code>, <code>Storage.AddCard</code>, <code>Storage.UpdateCard</code>, <code>Storage.DeleteCard</code>, <code>Storage.PatchCard</code>, <code>Storage.ReadCard</code>, <code>Storage.QueryCard</code> as backend-swappable storage API hooks. Cards are encoded with the <strong>PicoBinarySerializer</strong> (magic <code>PSC1</code>, self-describing, fields sorted by UTF-8 name bytes for determinism) and <code>QueryCard</code> accepts the card <strong>query language</strong> (<code>field OP value [AND|OR ...]</code>, <code>OP ∈ = == != &lt;&gt; &lt; &gt; &lt;= &gt;= ~</code>).</li>
@@ -1436,6 +1440,10 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
 <td><code>Make</code>, <code>Slice</code>, <code>Materialize</code>, <code>Len</code>, <code>Get</code></td>
 </tr>
 <tr>
+<td><code>Io.</code></td>
+<td><code>Write</code>, <code>WriteByte</code></td>
+</tr>
+<tr>
 <td><code>Descriptor.</code></td>
 <td><code>Make</code>, <code>SetFlags</code>, <code>GetPtr</code>, <code>GetLen</code>, <code>GetFlags</code>, <code>CopyBatch</code></td>
 </tr>
@@ -1503,6 +1511,8 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
 <li><code>Span.Materialize(Rspan, Rout);</code> — memcpy to a fresh contiguous region (independent copy).</li>
 <li><code>Span.Len(Rspan, Rout);</code> — element count of a span.</li>
 <li><code>Span.Get(Rspan, Ridx, Rout);</code> — read element <code>idx</code> of a span.</li>
+<li><code>Io.Write(Rspan);</code> — append a span's UTF-8 bytes to the output buffer (string output for <code>print</code> / HTTP body).</li>
+<li><code>Io.WriteByte(Rval);</code> — append one byte to the output buffer.</li>
 <li><code>Descriptor.Make(Rptr, Rlen, RdescOut);</code></li>
 <li><code>Descriptor.SetFlags(Rdesc, Rflags);</code></li>
 <li><code>Descriptor.GetPtr(Rdesc, Rout);</code></li>
@@ -1600,6 +1610,21 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
       0x13: "Queue.DequeueBatch",
       0x14: "Queue.EnqueueBatch",
       0x20: "Random.U32",
+      0x21: "Utf8Writer.New",
+      0x22: "Utf8Writer.Byte",
+      0x23: "Utf8Writer.Int",
+      0x24: "Utf8Writer.Span",
+      0x25: "Utf8Writer.ToSpan",
+      0x26: "Utf8Writer.Len",
+      0x27: "Utf8Writer.Reset",
+      0x28: "Utf8Reader.New",
+      0x29: "Utf8Reader.Peek",
+      0x2A: "Utf8Reader.Next",
+      0x2B: "Utf8Reader.Int",
+      0x2C: "Utf8Reader.SkipWs",
+      0x2D: "Utf8Reader.Eof",
+      0x2E: "Utf8Reader.Pos",
+      0x2F: "Utf8Reader.Match",
       0x30: "Memory.ArenaInit",
       0x31: "Memory.ArenaAlloc",
       0x32: "Memory.ArenaReset",
@@ -1613,6 +1638,16 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
       0x42: "Span.Materialize",
       0x43: "Span.Len",
       0x44: "Span.Get",
+      0x45: "Json.BeginObject",
+      0x46: "Json.EndObject",
+      0x47: "Json.BeginArray",
+      0x48: "Json.EndArray",
+      0x49: "Json.Key",
+      0x4A: "Json.Str",
+      0x4B: "Json.Int",
+      0x4C: "Json.Bool",
+      0x4D: "Json.Null",
+      0x4E: "Json.Raw",
       0x50: "Descriptor.Make",
       0x51: "Descriptor.SetFlags",
       0x52: "Descriptor.GetPtr",
@@ -1641,6 +1676,15 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
       0x6D: "Storage.GetFieldStr",
       0x6E: "Storage.QueryResult",
       0x70: "Thread.YieldCounted",
+      0x71: "Io.Write",
+      0x72: "Io.WriteByte",
+      0x73: "Xml.Open",
+      0x74: "Xml.AttrName",
+      0x75: "Xml.AttrValue",
+      0x76: "Xml.OpenEnd",
+      0x77: "Xml.Text",
+      0x78: "Xml.Close",
+      0x79: "Xml.Empty",
       0x80: "String.Concat",
       0x81: "String.Length",
       0x82: "String.Substring",
@@ -1995,6 +2039,19 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
     if (name.indexOf("Storage.") === 0) {
       if (this._storage(name.slice(8), rd, rs1, rs2)) return;
     }
+    // ---- Io: write raw bytes (UTF-8 strings) to the output buffer ----------
+    if (name === "Io.Write") {
+      var sw = this.spans[this.regs[rs1]];
+      if (sw) { for (var iw = 0; iw < sw.len; iw++) this.output.push(this.mem[sw.ptr + iw]); }
+      return;
+    }
+    if (name === "Io.WriteByte") { this.output.push(this.regs[rs1] & 0xFF); return; }
+    // ---- text/binary primitives: Utf8Writer / Utf8Reader / Json / Xml -----
+    if (name.indexOf("Utf8Writer.") === 0 || name.indexOf("Utf8Reader.") === 0 ||
+        name.indexOf("Json.") === 0 || name.indexOf("Xml.") === 0) {
+      var dot = name.indexOf(".");
+      if (this._textio(name.slice(0, dot), name.slice(dot + 1), rd, rs1, rs2)) return;
+    }
     this.log.push("host " + name + " R" + rd + " R" + rs1);
   };
 
@@ -2019,6 +2076,98 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
     for (var i = 0; i < b.length; i++) this.mem[dst + i] = b[i];
     this.spans.push({ ptr: dst, len: b.length });
     return this.spans.length - 1;
+  };
+
+  // Mirrors picoscript_vm HostApi._textio: arena-backed Utf8Writer/Reader + Json/Xml.
+  PicoVM.prototype._wByte = function (w, b) { if (w.pos < w.cap) { this.mem[w.ptr + w.pos] = b & 0xFF; w.pos++; } };
+  PicoVM.prototype._wText = function (w, text) { var b = new TextEncoder().encode(text); for (var i = 0; i < b.length; i++) this._wByte(w, b[i]); };
+  PicoVM.prototype._wSpan = function (w, h) { var s = (h > 0 && h < this.spans.length) ? this.spans[h] : null; if (s) { for (var i = 0; i < s.len; i++) this._wByte(w, this.mem[s.ptr + i]); } };
+  function jsonEsc(s) {
+    var out = "";
+    for (var i = 0; i < s.length; i++) {
+      var ch = s[i], o = s.charCodeAt(i);
+      if (ch === '"') out += '\\"';
+      else if (ch === '\\') out += '\\\\';
+      else if (ch === '\n') out += '\\n';
+      else if (ch === '\r') out += '\\r';
+      else if (ch === '\t') out += '\\t';
+      else if (o < 0x20) out += '\\u' + ('000' + o.toString(16)).slice(-4);
+      else out += ch;
+    }
+    return out;
+  }
+  function xmlEsc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  PicoVM.prototype._jsonPre = function (w) {
+    if (!w.stack.length) return;
+    var st = w.stack[w.stack.length - 1];
+    if (st.afterKey) st.afterKey = false;
+    else if (st.count > 0) this._wByte(w, 0x2C);
+  };
+  PicoVM.prototype._jsonPost = function (w) { if (w.stack.length) w.stack[w.stack.length - 1].count += 1; };
+  PicoVM.prototype._textio = function (ns, method, rd, rs1, rs2) {
+    if (!this._tio) this._tio = { writers: {}, readers: {}, nextW: 1, nextR: 1 };
+    var T = this._tio, R = this.regs;
+    if (ns === "Utf8Writer") {
+      if (method === "New") { var h = T.nextW++; T.writers[h] = { ptr: R[rs1] & 0xFFFF, cap: R[rs2] & 0xFFFF, pos: 0, stack: [] }; R[rd] = h; return true; }
+      var w = T.writers[R[rs1]]; if (!w) { R[rd] = 0; return true; }
+      if (method === "Byte") { this._wByte(w, R[rs2]); return true; }
+      if (method === "Int") { this._wText(w, String(R[rs2] | 0)); return true; }
+      if (method === "Span") { this._wSpan(w, R[rs2]); return true; }
+      if (method === "ToSpan") { this.spans.push({ ptr: w.ptr, len: w.pos }); R[rd] = this.spans.length - 1; return true; }
+      if (method === "Len") { R[rd] = w.pos; return true; }
+      if (method === "Reset") { w.pos = 0; w.stack = []; return true; }
+      return false;
+    }
+    if (ns === "Utf8Reader") {
+      if (method === "New") { var s = (R[rs1] > 0 && R[rs1] < this.spans.length) ? this.spans[R[rs1]] : { ptr: 0, len: 0 }; var rh = T.nextR++; T.readers[rh] = { ptr: s.ptr, len: s.len, pos: 0 }; R[rd] = rh; return true; }
+      var r = T.readers[R[rs1]]; if (!r) { R[rd] = 0; return true; }
+      if (method === "Peek") { R[rd] = r.pos < r.len ? this.mem[r.ptr + r.pos] : 0; return true; }
+      if (method === "Next") { R[rd] = r.pos < r.len ? this.mem[r.ptr + r.pos] : 0; if (r.pos < r.len) r.pos++; return true; }
+      if (method === "SkipWs") { while (r.pos < r.len && (this.mem[r.ptr + r.pos] === 32 || this.mem[r.ptr + r.pos] === 9 || this.mem[r.ptr + r.pos] === 10 || this.mem[r.ptr + r.pos] === 13)) r.pos++; return true; }
+      if (method === "Eof") { R[rd] = r.pos >= r.len ? 1 : 0; return true; }
+      if (method === "Pos") { R[rd] = r.pos; return true; }
+      if (method === "Match") { if (r.pos < r.len && this.mem[r.ptr + r.pos] === (R[rs2] & 0xFF)) { r.pos++; R[rd] = 1; } else R[rd] = 0; return true; }
+      if (method === "Int") {
+        while (r.pos < r.len && (this.mem[r.ptr + r.pos] === 32 || this.mem[r.ptr + r.pos] === 9 || this.mem[r.ptr + r.pos] === 10 || this.mem[r.ptr + r.pos] === 13)) r.pos++;
+        var sign = 1; if (r.pos < r.len && this.mem[r.ptr + r.pos] === 0x2D) { sign = -1; r.pos++; }
+        var n = 0; while (r.pos < r.len && this.mem[r.ptr + r.pos] >= 0x30 && this.mem[r.ptr + r.pos] <= 0x39) { n = n * 10 + (this.mem[r.ptr + r.pos] - 0x30); r.pos++; }
+        R[rd] = (sign * n) | 0; return true;
+      }
+      return false;
+    }
+    if (ns === "Json") {
+      var jw = T.writers[R[rs1]]; if (!jw) { R[rd] = 0; return true; }
+      if (method === "BeginObject" || method === "BeginArray") {
+        this._jsonPre(jw); this._wByte(jw, method === "BeginObject" ? 0x7B : 0x5B);
+        if (jw.stack.length) jw.stack[jw.stack.length - 1].count += 1;
+        jw.stack.push({ count: 0, afterKey: false }); return true;
+      }
+      if (method === "EndObject" || method === "EndArray") { if (jw.stack.length) jw.stack.pop(); this._wByte(jw, method === "EndObject" ? 0x7D : 0x5D); return true; }
+      if (method === "Key") {
+        var st = jw.stack.length ? jw.stack[jw.stack.length - 1] : null;
+        if (st && st.count > 0) this._wByte(jw, 0x2C);
+        this._wByte(jw, 0x22); this._wText(jw, jsonEsc(this._spanStr(R[rs2]))); this._wByte(jw, 0x22); this._wByte(jw, 0x3A);
+        if (st) st.afterKey = true; return true;
+      }
+      if (method === "Str") { this._jsonPre(jw); this._wByte(jw, 0x22); this._wText(jw, jsonEsc(this._spanStr(R[rs2]))); this._wByte(jw, 0x22); this._jsonPost(jw); return true; }
+      if (method === "Int") { this._jsonPre(jw); this._wText(jw, String(R[rs2] | 0)); this._jsonPost(jw); return true; }
+      if (method === "Bool") { this._jsonPre(jw); this._wText(jw, R[rs2] ? "true" : "false"); this._jsonPost(jw); return true; }
+      if (method === "Null") { this._jsonPre(jw); this._wText(jw, "null"); this._jsonPost(jw); return true; }
+      if (method === "Raw") { this._jsonPre(jw); this._wSpan(jw, R[rs2]); this._jsonPost(jw); return true; }
+      return false;
+    }
+    if (ns === "Xml") {
+      var xw = T.writers[R[rs1]]; if (!xw) { R[rd] = 0; return true; }
+      if (method === "Open") { this._wByte(xw, 0x3C); this._wSpan(xw, R[rs2]); return true; }
+      if (method === "AttrName") { this._wByte(xw, 0x20); this._wSpan(xw, R[rs2]); this._wByte(xw, 0x3D); this._wByte(xw, 0x22); return true; }
+      if (method === "AttrValue") { this._wText(xw, xmlEsc(this._spanStr(R[rs2]))); this._wByte(xw, 0x22); return true; }
+      if (method === "OpenEnd") { this._wByte(xw, 0x3E); return true; }
+      if (method === "Text") { this._wText(xw, xmlEsc(this._spanStr(R[rs2]))); return true; }
+      if (method === "Close") { this._wByte(xw, 0x3C); this._wByte(xw, 0x2F); this._wSpan(xw, R[rs2]); this._wByte(xw, 0x3E); return true; }
+      if (method === "Empty") { this._wByte(xw, 0x2F); this._wByte(xw, 0x3E); return true; }
+      return false;
+    }
+    return false;
   };
 
   // Mirrors picoscript_vm HostApi._storage. Context model (cur pack + card)
@@ -2093,6 +2242,11 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
       out.push(v);
     }
     return out;
+  };
+
+  // Decode the output buffer (PIPE ints + Io.Write bytes) as UTF-8 text.
+  PicoVM.prototype.outputText = function () {
+    return new TextDecoder("utf-8").decode(new Uint8Array(this.output));
   };
 
   return PicoVM;
@@ -2488,7 +2642,26 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
     parseArgs: function () { this.expect("("); var a = []; if (!this.accept(")")) { a.push(this.parseExpr()); while (this.accept(",")) a.push(this.parseExpr()); this.expect(")"); } return a; }
   };
 
-  function CLowerer() { this.b = new ILBuilder(); this.vars = {}; this.funcs = []; this.loop = []; }
+  // Stage a string literal's UTF-8 bytes in a scratch arena region and return a
+  // span over them (two alternating slots). Mirrors picoscript_*.emit_str_span.
+  function emitStrSpan(self, text) {
+    var data = Array.prototype.slice.call(new TextEncoder().encode(text));
+    var base = 0x7E00 + (self._strlitN & 1) * 0x100;
+    self._strlitN++;
+    var b = self.b, areg = b.vreg(), vreg = b.vreg();
+    for (var i = 0; i < data.length; i++) {
+      b.const_(areg, base + i);
+      b.const_(vreg, data[i]);
+      b.host("Memory", "Set", [areg, vreg], null);
+    }
+    b.const_(areg, base);
+    b.const_(vreg, data.length);
+    var span = b.vreg();
+    b.host("Span", "Make", [areg, vreg], span);
+    return span;
+  }
+
+  function CLowerer() { this.b = new ILBuilder(); this.vars = {}; this.funcs = []; this.loop = []; this._strlitN = 0; }
   CLowerer.prototype = {
     varOf: function (name) { var k = name.toLowerCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
     lowerProgram: function (prog) {
@@ -2565,6 +2738,7 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
         if (e.op === "!") { var iv = this.eval(e.operand); return this.evalBool({ t: "Bin", op: "==", lhs: { t: "Raw", v: iv }, rhs: { t: "Num", value: 0 } }); }
       }
       if (e.t === "Call") return this.lowerCall(e, want);
+      if (e.t === "Str") return emitStrSpan(this, e.value);
       throw new Error("C: cannot evaluate " + e.t);
     },
     evalBool: function (e) {
@@ -2615,7 +2789,7 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
     lowerCall: function (c, want) {
       var ns = c.ns, m = c.method;
       if (ns == null) {
-        if (m.toLowerCase() === "print") { var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
+        if (m.toLowerCase() === "print") { if (c.args[0].t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, c.args[0].value)], null); return null; } var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
         this.b.call("fn_" + m.toLowerCase()); return null;
       }
       if (ns.toUpperCase() === "NET") {
@@ -2810,7 +2984,7 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
     }
   };
 
-  function BLowerer() { this.b = new ILBuilder(); this.vars = {}; this.subs = []; this.scopes = []; }
+  function BLowerer() { this.b = new ILBuilder(); this.vars = {}; this.subs = []; this.scopes = []; this._strlitN = 0; }
   BLowerer.prototype = {
     varOf: function (name) { var k = name.toUpperCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
     lowerProgram: function (prog) {
@@ -2838,7 +3012,7 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
       else if (s.t === "ForTo") this.lowerFor(s);
       else if (s.t === "ForEach") this.lowerForeach(s);
       else if (s.t === "Switch") this.lowerSwitch(s);
-      else if (s.t === "Print") { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); }
+      else if (s.t === "Print") { if (s.value.t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, s.value.value)], null); } else { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); } }
       else if (s.t === "CallStmt") this.lowerCall(s.call, false);
       else throw new Error("BASIC: cannot lower " + s.t);
     },
@@ -2942,6 +3116,7 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
       if (e.t === "Cmp") return this.evalBool(e);
       if (e.t === "Ternary") return this.evalTernary(e);
       if (e.t === "Call") { var r = this.lowerCall(e, true); if (r == null) throw new Error(e.ns + "." + e.method + " has no value"); return r; }
+      if (e.t === "Str") return emitStrSpan(this, e.value);
       throw new Error("BASIC: cannot evaluate " + e.t);
     },
     evalBool: function (e) {
@@ -3725,7 +3900,8 @@ function render(){
                              : '<tr><td colspan="3" style="color:var(--muted)">(no named variables)</td></tr>';
   }
   document.getElementById('state').textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;
-  document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']';
+  var _txt=vm.outputText(), _pr=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_txt);
+  document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']'+(_pr&&_txt?'\ntext: '+JSON.stringify(_txt):'');
 }
 function jsDisasm(w){
   var names=["NOOP","LOAD","SAVE","PIPE","ADD","SUB","MUL","DIV","INC","JUMP","BRANCH","CALL","RETURN","WAIT","RAISE","DSP"];
@@ -3786,7 +3962,8 @@ function renderResponse(vm,req){
   L.push('Content-Type: '+(vm.httpType||'application/octet-stream'));
   L.push('X-PicoScript-Steps: '+vm.steps);
   L.push('X-Request-Bytes: '+req.length);
-  L.push(''); L.push(JSON.stringify(body));
+  var _bt=vm.outputText(), _bp=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_bt);
+  L.push(''); L.push(_bp&&_bt ? _bt : JSON.stringify(body));
   el.textContent=L.join('\n');
 }
 function loadResponder(){ document.getElementById('lang').value='basic'; onLangChange(); setSrc(RESPONDER); compileSrc(false); }

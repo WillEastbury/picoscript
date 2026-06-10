@@ -142,6 +142,21 @@
       0x13: "Queue.DequeueBatch",
       0x14: "Queue.EnqueueBatch",
       0x20: "Random.U32",
+      0x21: "Utf8Writer.New",
+      0x22: "Utf8Writer.Byte",
+      0x23: "Utf8Writer.Int",
+      0x24: "Utf8Writer.Span",
+      0x25: "Utf8Writer.ToSpan",
+      0x26: "Utf8Writer.Len",
+      0x27: "Utf8Writer.Reset",
+      0x28: "Utf8Reader.New",
+      0x29: "Utf8Reader.Peek",
+      0x2A: "Utf8Reader.Next",
+      0x2B: "Utf8Reader.Int",
+      0x2C: "Utf8Reader.SkipWs",
+      0x2D: "Utf8Reader.Eof",
+      0x2E: "Utf8Reader.Pos",
+      0x2F: "Utf8Reader.Match",
       0x30: "Memory.ArenaInit",
       0x31: "Memory.ArenaAlloc",
       0x32: "Memory.ArenaReset",
@@ -155,6 +170,16 @@
       0x42: "Span.Materialize",
       0x43: "Span.Len",
       0x44: "Span.Get",
+      0x45: "Json.BeginObject",
+      0x46: "Json.EndObject",
+      0x47: "Json.BeginArray",
+      0x48: "Json.EndArray",
+      0x49: "Json.Key",
+      0x4A: "Json.Str",
+      0x4B: "Json.Int",
+      0x4C: "Json.Bool",
+      0x4D: "Json.Null",
+      0x4E: "Json.Raw",
       0x50: "Descriptor.Make",
       0x51: "Descriptor.SetFlags",
       0x52: "Descriptor.GetPtr",
@@ -183,6 +208,15 @@
       0x6D: "Storage.GetFieldStr",
       0x6E: "Storage.QueryResult",
       0x70: "Thread.YieldCounted",
+      0x71: "Io.Write",
+      0x72: "Io.WriteByte",
+      0x73: "Xml.Open",
+      0x74: "Xml.AttrName",
+      0x75: "Xml.AttrValue",
+      0x76: "Xml.OpenEnd",
+      0x77: "Xml.Text",
+      0x78: "Xml.Close",
+      0x79: "Xml.Empty",
       0x80: "String.Concat",
       0x81: "String.Length",
       0x82: "String.Substring",
@@ -537,6 +571,19 @@
     if (name.indexOf("Storage.") === 0) {
       if (this._storage(name.slice(8), rd, rs1, rs2)) return;
     }
+    // ---- Io: write raw bytes (UTF-8 strings) to the output buffer ----------
+    if (name === "Io.Write") {
+      var sw = this.spans[this.regs[rs1]];
+      if (sw) { for (var iw = 0; iw < sw.len; iw++) this.output.push(this.mem[sw.ptr + iw]); }
+      return;
+    }
+    if (name === "Io.WriteByte") { this.output.push(this.regs[rs1] & 0xFF); return; }
+    // ---- text/binary primitives: Utf8Writer / Utf8Reader / Json / Xml -----
+    if (name.indexOf("Utf8Writer.") === 0 || name.indexOf("Utf8Reader.") === 0 ||
+        name.indexOf("Json.") === 0 || name.indexOf("Xml.") === 0) {
+      var dot = name.indexOf(".");
+      if (this._textio(name.slice(0, dot), name.slice(dot + 1), rd, rs1, rs2)) return;
+    }
     this.log.push("host " + name + " R" + rd + " R" + rs1);
   };
 
@@ -561,6 +608,98 @@
     for (var i = 0; i < b.length; i++) this.mem[dst + i] = b[i];
     this.spans.push({ ptr: dst, len: b.length });
     return this.spans.length - 1;
+  };
+
+  // Mirrors picoscript_vm HostApi._textio: arena-backed Utf8Writer/Reader + Json/Xml.
+  PicoVM.prototype._wByte = function (w, b) { if (w.pos < w.cap) { this.mem[w.ptr + w.pos] = b & 0xFF; w.pos++; } };
+  PicoVM.prototype._wText = function (w, text) { var b = new TextEncoder().encode(text); for (var i = 0; i < b.length; i++) this._wByte(w, b[i]); };
+  PicoVM.prototype._wSpan = function (w, h) { var s = (h > 0 && h < this.spans.length) ? this.spans[h] : null; if (s) { for (var i = 0; i < s.len; i++) this._wByte(w, this.mem[s.ptr + i]); } };
+  function jsonEsc(s) {
+    var out = "";
+    for (var i = 0; i < s.length; i++) {
+      var ch = s[i], o = s.charCodeAt(i);
+      if (ch === '"') out += '\\"';
+      else if (ch === '\\') out += '\\\\';
+      else if (ch === '\n') out += '\\n';
+      else if (ch === '\r') out += '\\r';
+      else if (ch === '\t') out += '\\t';
+      else if (o < 0x20) out += '\\u' + ('000' + o.toString(16)).slice(-4);
+      else out += ch;
+    }
+    return out;
+  }
+  function xmlEsc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  PicoVM.prototype._jsonPre = function (w) {
+    if (!w.stack.length) return;
+    var st = w.stack[w.stack.length - 1];
+    if (st.afterKey) st.afterKey = false;
+    else if (st.count > 0) this._wByte(w, 0x2C);
+  };
+  PicoVM.prototype._jsonPost = function (w) { if (w.stack.length) w.stack[w.stack.length - 1].count += 1; };
+  PicoVM.prototype._textio = function (ns, method, rd, rs1, rs2) {
+    if (!this._tio) this._tio = { writers: {}, readers: {}, nextW: 1, nextR: 1 };
+    var T = this._tio, R = this.regs;
+    if (ns === "Utf8Writer") {
+      if (method === "New") { var h = T.nextW++; T.writers[h] = { ptr: R[rs1] & 0xFFFF, cap: R[rs2] & 0xFFFF, pos: 0, stack: [] }; R[rd] = h; return true; }
+      var w = T.writers[R[rs1]]; if (!w) { R[rd] = 0; return true; }
+      if (method === "Byte") { this._wByte(w, R[rs2]); return true; }
+      if (method === "Int") { this._wText(w, String(R[rs2] | 0)); return true; }
+      if (method === "Span") { this._wSpan(w, R[rs2]); return true; }
+      if (method === "ToSpan") { this.spans.push({ ptr: w.ptr, len: w.pos }); R[rd] = this.spans.length - 1; return true; }
+      if (method === "Len") { R[rd] = w.pos; return true; }
+      if (method === "Reset") { w.pos = 0; w.stack = []; return true; }
+      return false;
+    }
+    if (ns === "Utf8Reader") {
+      if (method === "New") { var s = (R[rs1] > 0 && R[rs1] < this.spans.length) ? this.spans[R[rs1]] : { ptr: 0, len: 0 }; var rh = T.nextR++; T.readers[rh] = { ptr: s.ptr, len: s.len, pos: 0 }; R[rd] = rh; return true; }
+      var r = T.readers[R[rs1]]; if (!r) { R[rd] = 0; return true; }
+      if (method === "Peek") { R[rd] = r.pos < r.len ? this.mem[r.ptr + r.pos] : 0; return true; }
+      if (method === "Next") { R[rd] = r.pos < r.len ? this.mem[r.ptr + r.pos] : 0; if (r.pos < r.len) r.pos++; return true; }
+      if (method === "SkipWs") { while (r.pos < r.len && (this.mem[r.ptr + r.pos] === 32 || this.mem[r.ptr + r.pos] === 9 || this.mem[r.ptr + r.pos] === 10 || this.mem[r.ptr + r.pos] === 13)) r.pos++; return true; }
+      if (method === "Eof") { R[rd] = r.pos >= r.len ? 1 : 0; return true; }
+      if (method === "Pos") { R[rd] = r.pos; return true; }
+      if (method === "Match") { if (r.pos < r.len && this.mem[r.ptr + r.pos] === (R[rs2] & 0xFF)) { r.pos++; R[rd] = 1; } else R[rd] = 0; return true; }
+      if (method === "Int") {
+        while (r.pos < r.len && (this.mem[r.ptr + r.pos] === 32 || this.mem[r.ptr + r.pos] === 9 || this.mem[r.ptr + r.pos] === 10 || this.mem[r.ptr + r.pos] === 13)) r.pos++;
+        var sign = 1; if (r.pos < r.len && this.mem[r.ptr + r.pos] === 0x2D) { sign = -1; r.pos++; }
+        var n = 0; while (r.pos < r.len && this.mem[r.ptr + r.pos] >= 0x30 && this.mem[r.ptr + r.pos] <= 0x39) { n = n * 10 + (this.mem[r.ptr + r.pos] - 0x30); r.pos++; }
+        R[rd] = (sign * n) | 0; return true;
+      }
+      return false;
+    }
+    if (ns === "Json") {
+      var jw = T.writers[R[rs1]]; if (!jw) { R[rd] = 0; return true; }
+      if (method === "BeginObject" || method === "BeginArray") {
+        this._jsonPre(jw); this._wByte(jw, method === "BeginObject" ? 0x7B : 0x5B);
+        if (jw.stack.length) jw.stack[jw.stack.length - 1].count += 1;
+        jw.stack.push({ count: 0, afterKey: false }); return true;
+      }
+      if (method === "EndObject" || method === "EndArray") { if (jw.stack.length) jw.stack.pop(); this._wByte(jw, method === "EndObject" ? 0x7D : 0x5D); return true; }
+      if (method === "Key") {
+        var st = jw.stack.length ? jw.stack[jw.stack.length - 1] : null;
+        if (st && st.count > 0) this._wByte(jw, 0x2C);
+        this._wByte(jw, 0x22); this._wText(jw, jsonEsc(this._spanStr(R[rs2]))); this._wByte(jw, 0x22); this._wByte(jw, 0x3A);
+        if (st) st.afterKey = true; return true;
+      }
+      if (method === "Str") { this._jsonPre(jw); this._wByte(jw, 0x22); this._wText(jw, jsonEsc(this._spanStr(R[rs2]))); this._wByte(jw, 0x22); this._jsonPost(jw); return true; }
+      if (method === "Int") { this._jsonPre(jw); this._wText(jw, String(R[rs2] | 0)); this._jsonPost(jw); return true; }
+      if (method === "Bool") { this._jsonPre(jw); this._wText(jw, R[rs2] ? "true" : "false"); this._jsonPost(jw); return true; }
+      if (method === "Null") { this._jsonPre(jw); this._wText(jw, "null"); this._jsonPost(jw); return true; }
+      if (method === "Raw") { this._jsonPre(jw); this._wSpan(jw, R[rs2]); this._jsonPost(jw); return true; }
+      return false;
+    }
+    if (ns === "Xml") {
+      var xw = T.writers[R[rs1]]; if (!xw) { R[rd] = 0; return true; }
+      if (method === "Open") { this._wByte(xw, 0x3C); this._wSpan(xw, R[rs2]); return true; }
+      if (method === "AttrName") { this._wByte(xw, 0x20); this._wSpan(xw, R[rs2]); this._wByte(xw, 0x3D); this._wByte(xw, 0x22); return true; }
+      if (method === "AttrValue") { this._wText(xw, xmlEsc(this._spanStr(R[rs2]))); this._wByte(xw, 0x22); return true; }
+      if (method === "OpenEnd") { this._wByte(xw, 0x3E); return true; }
+      if (method === "Text") { this._wText(xw, xmlEsc(this._spanStr(R[rs2]))); return true; }
+      if (method === "Close") { this._wByte(xw, 0x3C); this._wByte(xw, 0x2F); this._wSpan(xw, R[rs2]); this._wByte(xw, 0x3E); return true; }
+      if (method === "Empty") { this._wByte(xw, 0x2F); this._wByte(xw, 0x3E); return true; }
+      return false;
+    }
+    return false;
   };
 
   // Mirrors picoscript_vm HostApi._storage. Context model (cur pack + card)
@@ -635,6 +774,11 @@
       out.push(v);
     }
     return out;
+  };
+
+  // Decode the output buffer (PIPE ints + Io.Write bytes) as UTF-8 text.
+  PicoVM.prototype.outputText = function () {
+    return new TextDecoder("utf-8").decode(new Uint8Array(this.output));
   };
 
   return PicoVM;
@@ -861,9 +1005,16 @@
     throw new Error("cannot lower IL op " + op);
   }
 
-  function lowerToBytecode(insts, opt) {
+  function lowerToBytecode(insts, opt, outVars) {
     if (opt !== false) insts = optimize(insts);
     var mapping = allocate(insts);
+    if (outVars) {
+      insts.forEach(function (ins) {
+        operandVRegs(ins).forEach(function (v) {
+          if (v.pinned && mapping[v.id] !== undefined) outVars[v.name] = mapping[v.id];
+        });
+      });
+    }
     function width(ins) {
       if (ins.op === "label") return 0;
       if (ins.op === "const") return 2;
@@ -1023,7 +1174,26 @@
     parseArgs: function () { this.expect("("); var a = []; if (!this.accept(")")) { a.push(this.parseExpr()); while (this.accept(",")) a.push(this.parseExpr()); this.expect(")"); } return a; }
   };
 
-  function CLowerer() { this.b = new ILBuilder(); this.vars = {}; this.funcs = []; this.loop = []; }
+  // Stage a string literal's UTF-8 bytes in a scratch arena region and return a
+  // span over them (two alternating slots). Mirrors picoscript_*.emit_str_span.
+  function emitStrSpan(self, text) {
+    var data = Array.prototype.slice.call(new TextEncoder().encode(text));
+    var base = 0x7E00 + (self._strlitN & 1) * 0x100;
+    self._strlitN++;
+    var b = self.b, areg = b.vreg(), vreg = b.vreg();
+    for (var i = 0; i < data.length; i++) {
+      b.const_(areg, base + i);
+      b.const_(vreg, data[i]);
+      b.host("Memory", "Set", [areg, vreg], null);
+    }
+    b.const_(areg, base);
+    b.const_(vreg, data.length);
+    var span = b.vreg();
+    b.host("Span", "Make", [areg, vreg], span);
+    return span;
+  }
+
+  function CLowerer() { this.b = new ILBuilder(); this.vars = {}; this.funcs = []; this.loop = []; this._strlitN = 0; }
   CLowerer.prototype = {
     varOf: function (name) { var k = name.toLowerCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
     lowerProgram: function (prog) {
@@ -1100,6 +1270,7 @@
         if (e.op === "!") { var iv = this.eval(e.operand); return this.evalBool({ t: "Bin", op: "==", lhs: { t: "Raw", v: iv }, rhs: { t: "Num", value: 0 } }); }
       }
       if (e.t === "Call") return this.lowerCall(e, want);
+      if (e.t === "Str") return emitStrSpan(this, e.value);
       throw new Error("C: cannot evaluate " + e.t);
     },
     evalBool: function (e) {
@@ -1150,7 +1321,7 @@
     lowerCall: function (c, want) {
       var ns = c.ns, m = c.method;
       if (ns == null) {
-        if (m.toLowerCase() === "print") { var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
+        if (m.toLowerCase() === "print") { if (c.args[0].t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, c.args[0].value)], null); return null; } var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
         this.b.call("fn_" + m.toLowerCase()); return null;
       }
       if (ns.toUpperCase() === "NET") {
@@ -1345,7 +1516,7 @@
     }
   };
 
-  function BLowerer() { this.b = new ILBuilder(); this.vars = {}; this.subs = []; this.scopes = []; }
+  function BLowerer() { this.b = new ILBuilder(); this.vars = {}; this.subs = []; this.scopes = []; this._strlitN = 0; }
   BLowerer.prototype = {
     varOf: function (name) { var k = name.toUpperCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
     lowerProgram: function (prog) {
@@ -1373,7 +1544,7 @@
       else if (s.t === "ForTo") this.lowerFor(s);
       else if (s.t === "ForEach") this.lowerForeach(s);
       else if (s.t === "Switch") this.lowerSwitch(s);
-      else if (s.t === "Print") { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); }
+      else if (s.t === "Print") { if (s.value.t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, s.value.value)], null); } else { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); } }
       else if (s.t === "CallStmt") this.lowerCall(s.call, false);
       else throw new Error("BASIC: cannot lower " + s.t);
     },
@@ -1477,6 +1648,7 @@
       if (e.t === "Cmp") return this.evalBool(e);
       if (e.t === "Ternary") return this.evalTernary(e);
       if (e.t === "Call") { var r = this.lowerCall(e, true); if (r == null) throw new Error(e.ns + "." + e.method + " has no value"); return r; }
+      if (e.t === "Str") return emitStrSpan(this, e.value);
       throw new Error("BASIC: cannot evaluate " + e.t);
     },
     evalBool: function (e) {
@@ -1808,7 +1980,6 @@
         var lw = t.value.toLowerCase();
         if (lw === "true") return { t: "Num", value: 1 };
         if (lw === "false") return { t: "Num", value: 0 };
-        if (lw === "the" || lw === "a" || lw === "an") return this.parseAtom();
         if (this.at("op", ".") && this.peek(1).kind === "word" && this.peek(2).kind === "op" && this.peek(2).value === "(") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; }
         return { t: "Var", name: t.value };
       }
@@ -1817,13 +1988,22 @@
   };
   function compileEnglish(src) { return new BLowerer().lowerProgram(new EnParser(entokenize(src)).parseProgram()); }
 
+  function compileIL(src, lang) {
+    return (lang === "basic") ? compileBasic(src)
+         : (lang === "python") ? compilePython(src)
+         : (lang === "english") ? compileEnglish(src)
+         : compileC(src);
+  }
+
   return {
     compile: function (src, lang) {
-      var il = (lang === "basic") ? compileBasic(src)
-             : (lang === "python") ? compilePython(src)
-             : (lang === "english") ? compileEnglish(src)
-             : compileC(src);
+      var il = compileIL(src, lang);
       return { words: lowerToBytecode(il, true), il: il };
+    },
+    compileDebug: function (src, lang) {
+      var vars = {};
+      var words = lowerToBytecode(compileIL(src, lang), true, vars);
+      return { words: words, vars: vars };
     },
     compileC: function (src) { return { words: lowerToBytecode(compileC(src), true), il: compileC(src) }; },
     compileBasic: function (src) { return { words: lowerToBytecode(compileBasic(src), true), il: compileBasic(src) }; },

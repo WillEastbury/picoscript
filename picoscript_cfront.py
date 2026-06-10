@@ -409,6 +409,7 @@ class Lowerer:
         self.vars: Dict[str, VReg] = {}
         self.funcs: List[Func] = []
         self.loop_stack: List[Tuple[str, str]] = []   # (continue_label, break_label)
+        self._strlit_n = 0          # alternating scratch region per string literal
 
     def lower_program(self, prog: List[object]) -> List:
         body = [s for s in prog if not isinstance(s, Func)]
@@ -575,7 +576,7 @@ class Lowerer:
         if isinstance(e, Call):
             return self.lower_call(e, want_value)
         if isinstance(e, Str):
-            raise SyntaxError("string literal only valid as a host/Net argument")
+            return self.emit_str_span(e.value)
         if isinstance(e, _RawVReg):
             return e.v
         raise SyntaxError(f"cannot evaluate {e}")
@@ -655,6 +656,9 @@ class Lowerer:
         # local subroutine call (case-insensitive); print(x) is a built-in
         if ns is None:
             if method.lower() == "print":
+                if isinstance(c.args[0], Str):
+                    self.b.host("Io", "Write", (self.emit_str_span(c.args[0].value),), None)
+                    return None
                 v = self.eval(c.args[0])
                 self.b.save(v, 0xFFFE)
                 self.b.pipe(v, 0xFFFE)
@@ -696,6 +700,23 @@ class Lowerer:
         dst = self.b.vreg() if want_value else None
         self.b.host(ns, method, tuple(argregs), dst)
         return dst
+
+    def emit_str_span(self, text: str):
+        """Stage a string literal's UTF-8 bytes in a scratch arena region and
+        return a span over them (two alternating slots; mirrors picoscript_basic)."""
+        data = text.encode("utf-8")
+        base = 0x7E00 + (self._strlit_n & 1) * 0x100
+        self._strlit_n += 1
+        areg = self.b.vreg(); vreg = self.b.vreg()
+        for i, byte in enumerate(data):
+            self.b.const(areg, base + i)
+            self.b.const(vreg, byte)
+            self.b.host("Memory", "Set", (areg, vreg), None)
+        self.b.const(areg, base)
+        self.b.const(vreg, len(data))
+        span = self.b.vreg()
+        self.b.host("Span", "Make", (areg, vreg), span)
+        return span
 
 
 @dataclass

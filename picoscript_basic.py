@@ -556,6 +556,7 @@ class Lowerer:
         # Stack of (continue_label_or_None, break_label) for BREAK/SKIP.
         # Loops push a continue label; SWITCH pushes None (breakable, not skippable).
         self.scopes: List[tuple] = []
+        self._strlit_n = 0          # alternating scratch region per string literal
 
     def var(self, name: str) -> VReg:
         key = name.upper()
@@ -780,9 +781,30 @@ class Lowerer:
         self.b.label(end)
 
     def lower_print(self, s: Print):
+        if isinstance(s.value, Str):
+            self.b.host("Io", "Write", (self.emit_str_span(s.value.value),), None)
+            return
         v = self.eval(s.value)
         self.b.save(v, PRINT_CARD)
         self.b.pipe(v, PRINT_CARD)
+
+    def emit_str_span(self, text: str) -> VReg:
+        """Stage a string literal's UTF-8 bytes in a scratch arena region and
+        return a span over them. Literals alternate between two scratch slots so
+        up to two can be live as arguments to one host call."""
+        data = text.encode("utf-8")
+        base = 0x7E00 + (self._strlit_n & 1) * 0x100
+        self._strlit_n += 1
+        areg = self.b.vreg(); vreg = self.b.vreg()
+        for i, byte in enumerate(data):
+            self.b.const(areg, base + i)
+            self.b.const(vreg, byte)
+            self.b.host("Memory", "Set", (areg, vreg), None)
+        self.b.const(areg, base)
+        self.b.const(vreg, len(data))
+        span = self.b.vreg()
+        self.b.host("Span", "Make", (areg, vreg), span)
+        return span
 
     # -- expressions -----------------------------------------------------
     def eval(self, e) -> VReg:
@@ -813,7 +835,7 @@ class Lowerer:
                 raise SyntaxError(f"{e.ns}.{e.method} does not return a value")
             return r
         if isinstance(e, Str):
-            raise SyntaxError("string literal only valid as a Net/host argument")
+            return self.emit_str_span(e.value)
         raise SyntaxError(f"cannot evaluate {e}")
 
     def eval_mod(self, lhs, rhs) -> VReg:

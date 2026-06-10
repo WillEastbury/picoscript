@@ -388,7 +388,26 @@
     parseArgs: function () { this.expect("("); var a = []; if (!this.accept(")")) { a.push(this.parseExpr()); while (this.accept(",")) a.push(this.parseExpr()); this.expect(")"); } return a; }
   };
 
-  function CLowerer() { this.b = new ILBuilder(); this.vars = {}; this.funcs = []; this.loop = []; }
+  // Stage a string literal's UTF-8 bytes in a scratch arena region and return a
+  // span over them (two alternating slots). Mirrors picoscript_*.emit_str_span.
+  function emitStrSpan(self, text) {
+    var data = Array.prototype.slice.call(new TextEncoder().encode(text));
+    var base = 0x7E00 + (self._strlitN & 1) * 0x100;
+    self._strlitN++;
+    var b = self.b, areg = b.vreg(), vreg = b.vreg();
+    for (var i = 0; i < data.length; i++) {
+      b.const_(areg, base + i);
+      b.const_(vreg, data[i]);
+      b.host("Memory", "Set", [areg, vreg], null);
+    }
+    b.const_(areg, base);
+    b.const_(vreg, data.length);
+    var span = b.vreg();
+    b.host("Span", "Make", [areg, vreg], span);
+    return span;
+  }
+
+  function CLowerer() { this.b = new ILBuilder(); this.vars = {}; this.funcs = []; this.loop = []; this._strlitN = 0; }
   CLowerer.prototype = {
     varOf: function (name) { var k = name.toLowerCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
     lowerProgram: function (prog) {
@@ -465,6 +484,7 @@
         if (e.op === "!") { var iv = this.eval(e.operand); return this.evalBool({ t: "Bin", op: "==", lhs: { t: "Raw", v: iv }, rhs: { t: "Num", value: 0 } }); }
       }
       if (e.t === "Call") return this.lowerCall(e, want);
+      if (e.t === "Str") return emitStrSpan(this, e.value);
       throw new Error("C: cannot evaluate " + e.t);
     },
     evalBool: function (e) {
@@ -515,7 +535,7 @@
     lowerCall: function (c, want) {
       var ns = c.ns, m = c.method;
       if (ns == null) {
-        if (m.toLowerCase() === "print") { var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
+        if (m.toLowerCase() === "print") { if (c.args[0].t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, c.args[0].value)], null); return null; } var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
         this.b.call("fn_" + m.toLowerCase()); return null;
       }
       if (ns.toUpperCase() === "NET") {
@@ -710,7 +730,7 @@
     }
   };
 
-  function BLowerer() { this.b = new ILBuilder(); this.vars = {}; this.subs = []; this.scopes = []; }
+  function BLowerer() { this.b = new ILBuilder(); this.vars = {}; this.subs = []; this.scopes = []; this._strlitN = 0; }
   BLowerer.prototype = {
     varOf: function (name) { var k = name.toUpperCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
     lowerProgram: function (prog) {
@@ -738,7 +758,7 @@
       else if (s.t === "ForTo") this.lowerFor(s);
       else if (s.t === "ForEach") this.lowerForeach(s);
       else if (s.t === "Switch") this.lowerSwitch(s);
-      else if (s.t === "Print") { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); }
+      else if (s.t === "Print") { if (s.value.t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, s.value.value)], null); } else { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); } }
       else if (s.t === "CallStmt") this.lowerCall(s.call, false);
       else throw new Error("BASIC: cannot lower " + s.t);
     },
@@ -842,6 +862,7 @@
       if (e.t === "Cmp") return this.evalBool(e);
       if (e.t === "Ternary") return this.evalTernary(e);
       if (e.t === "Call") { var r = this.lowerCall(e, true); if (r == null) throw new Error(e.ns + "." + e.method + " has no value"); return r; }
+      if (e.t === "Str") return emitStrSpan(this, e.value);
       throw new Error("BASIC: cannot evaluate " + e.t);
     },
     evalBool: function (e) {

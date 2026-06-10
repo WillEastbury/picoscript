@@ -492,6 +492,89 @@ Print Span.Len(s2).
 Print Span.Get(s2, 0).
 """
 
+# String output: print a string literal (all four frontends lower it to a
+# scratch-span build + Io.Write) -- Python VM == JS VM, byte-identical compile.
+STR_C = 'print("Hello, HTTP!");\n'
+STR_BASIC = 'PRINT "Hello, HTTP!"\n'
+STR_PY = 'print("Hello, HTTP!")\n'
+STR_EN = 'Print "Hello, HTTP!".\n'
+
+# Dynamic string: store a string card field, read it back, Io.Write it to output.
+STR_DYN_PY = """
+Memory.Set(200, 109)
+Memory.Set(201, 115)
+Memory.Set(202, 103)
+name = Span.Make(200, 3)
+Memory.Set(210, 104)
+Memory.Set(211, 105)
+val = Span.Make(210, 2)
+Storage.UsePack(1)
+Storage.AddCard()
+Storage.SetFieldStr(name, val)
+s = Storage.GetFieldStr(name)
+Io.Write(s)
+"""
+
+# Utf8Writer / Json / Xml / Utf8Reader primitives (string literals -> spans).
+JSON_PY = """
+w = Utf8Writer.New(4096, 1024)
+Json.BeginObject(w)
+Json.Key(w, "status")
+Json.Str(w, "ok")
+Json.Key(w, "count")
+Json.Int(w, 42)
+Json.Key(w, "items")
+Json.BeginArray(w)
+Json.Int(w, 1)
+Json.Int(w, 2)
+Json.EndArray(w)
+Json.EndObject(w)
+Io.Write(Utf8Writer.ToSpan(w))
+"""
+
+JSON_EN = """
+Set w to Utf8Writer.New(4096, 1024).
+Json.BeginObject(w).
+Json.Key(w, "status").
+Json.Str(w, "ok").
+Json.Key(w, "count").
+Json.Int(w, 42).
+Json.EndObject(w).
+Io.Write(Utf8Writer.ToSpan(w)).
+"""
+
+HTML_PY = """
+w = Utf8Writer.New(8192, 1024)
+Xml.Open(w, "a")
+Xml.AttrName(w, "href")
+Xml.AttrValue(w, "/x?a=1&b=2")
+Xml.OpenEnd(w)
+Xml.Text(w, "go & see")
+Xml.Close(w, "a")
+Io.Write(Utf8Writer.ToSpan(w))
+"""
+
+# Utf8Reader: scan "12,34,-5", sum the three ints, print the total.
+READER_PY = """
+Memory.Set(300, 49)
+Memory.Set(301, 50)
+Memory.Set(302, 44)
+Memory.Set(303, 51)
+Memory.Set(304, 52)
+Memory.Set(305, 44)
+Memory.Set(306, 45)
+Memory.Set(307, 53)
+sp = Span.Make(300, 8)
+r = Utf8Reader.New(sp)
+total = 0
+total += Utf8Reader.Int(r)
+Utf8Reader.Match(r, 44)
+total += Utf8Reader.Int(r)
+Utf8Reader.Match(r, 44)
+total += Utf8Reader.Int(r)
+print(total)
+"""
+
 
 def main():
     if not build_c_vm():
@@ -707,6 +790,34 @@ def main():
     check_pyjs("python: span slice", lower_to_bytecode_safe(compile_python(PY_SPAN)), expect_print=[12, 4])
     check_pyjs("english: span slice", lower_to_bytecode_safe(compile_english(EN_SPAN)), expect_print=[12, 4])
 
+    def check_str(name, words, expect_text):
+        """String output: Python VM == JS VM, decoded as UTF-8 text."""
+        nonlocal passed, failed
+        py = py_state(words)
+        jv = run_js_vm(words)
+        py_text = bytes(int(h, 16) for h in py["out"]).decode("utf-8", "replace")
+        js_text = bytes(int(h, 16) for h in jv["out"]).decode("utf-8", "replace")
+        ok = (py["out"] == jv["out"] and py_text == expect_text)
+        detail = "" if ok else f"\n    py={py_text!r} js={js_text!r} want={expect_text!r}"
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name:22s} Python VM == JS VM  text={py_text!r}{detail}")
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+
+    print("String output: print(\"...\") + Io.Write [Python VM == JS VM]:")
+    check_str("str: c literal", lower_to_bytecode_safe(compile_c(STR_C)), "Hello, HTTP!")
+    check_str("str: basic literal", lower_to_bytecode_safe(compile_basic(STR_BASIC)), "Hello, HTTP!")
+    check_str("str: python literal", lower_to_bytecode_safe(compile_python(STR_PY)), "Hello, HTTP!")
+    check_str("str: english literal", lower_to_bytecode_safe(compile_english(STR_EN)), "Hello, HTTP!")
+    check_str("str: card field roundtrip", lower_to_bytecode_safe(compile_python(STR_DYN_PY)), "hi")
+
+    print("Utf8Writer / Json / Xml / Utf8Reader primitives [Python VM == JS VM]:")
+    check_str("json: build (python)", lower_to_bytecode_safe(compile_python(JSON_PY)), '{"status":"ok","count":42,"items":[1,2]}')
+    check_str("json: build (english)", lower_to_bytecode_safe(compile_english(JSON_EN)), '{"status":"ok","count":42}')
+    check_str("xml: build element", lower_to_bytecode_safe(compile_python(HTML_PY)), '<a href="/x?a=1&amp;b=2">go &amp; see</a>')
+    check_pyjs("reader: scan ints", lower_to_bytecode_safe(compile_python(READER_PY)), expect_print=[41])
+
     print("toC backend (compile + run emitted C, compare to VM):")
     check_toc("toC: c nested-for", compile_c(C_NEST))
     check_toc("toC: basic full+gosub", compile_basic(BASIC_FULL))
@@ -750,6 +861,14 @@ def main():
     check_jscompile("jsc: english ctrl", "english", EN_CTRL, lower_to_bytecode_safe(compile_english(EN_CTRL)))
     check_jscompile("jsc: python span", "python", PY_SPAN, lower_to_bytecode_safe(compile_python(PY_SPAN)))
     check_jscompile("jsc: english span", "english", EN_SPAN, lower_to_bytecode_safe(compile_english(EN_SPAN)))
+    check_jscompile("jsc: c string", "c", STR_C, lower_to_bytecode_safe(compile_c(STR_C)))
+    check_jscompile("jsc: basic string", "basic", STR_BASIC, lower_to_bytecode_safe(compile_basic(STR_BASIC)))
+    check_jscompile("jsc: python string", "python", STR_PY, lower_to_bytecode_safe(compile_python(STR_PY)))
+    check_jscompile("jsc: english string", "english", STR_EN, lower_to_bytecode_safe(compile_english(STR_EN)))
+    check_jscompile("jsc: json python", "python", JSON_PY, lower_to_bytecode_safe(compile_python(JSON_PY)))
+    check_jscompile("jsc: json english", "english", JSON_EN, lower_to_bytecode_safe(compile_english(JSON_EN)))
+    check_jscompile("jsc: xml python", "python", HTML_PY, lower_to_bytecode_safe(compile_python(HTML_PY)))
+    check_jscompile("jsc: reader python", "python", READER_PY, lower_to_bytecode_safe(compile_python(READER_PY)))
 
     print(f"\n{passed} passed, {failed} failed (parity + semantics)")
     sys.exit(1 if failed else 0)

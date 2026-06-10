@@ -133,6 +133,27 @@ NAMESPACE_MAP = {
         "Wait":  OP_WAIT,
         "Raise": OP_RAISE,
     },
+    "Io": {
+        "Write":     OP_NOOP,
+        "WriteByte": OP_NOOP,
+    },
+    "Utf8Writer": {
+        "New": OP_NOOP, "Byte": OP_NOOP, "Int": OP_NOOP, "Span": OP_NOOP,
+        "ToSpan": OP_NOOP, "Len": OP_NOOP, "Reset": OP_NOOP,
+    },
+    "Utf8Reader": {
+        "New": OP_NOOP, "Peek": OP_NOOP, "Next": OP_NOOP, "Int": OP_NOOP,
+        "SkipWs": OP_NOOP, "Eof": OP_NOOP, "Pos": OP_NOOP, "Match": OP_NOOP,
+    },
+    "Json": {
+        "BeginObject": OP_NOOP, "EndObject": OP_NOOP, "BeginArray": OP_NOOP,
+        "EndArray": OP_NOOP, "Key": OP_NOOP, "Str": OP_NOOP, "Int": OP_NOOP,
+        "Bool": OP_NOOP, "Null": OP_NOOP, "Raw": OP_NOOP,
+    },
+    "Xml": {
+        "Open": OP_NOOP, "AttrName": OP_NOOP, "AttrValue": OP_NOOP,
+        "OpenEnd": OP_NOOP, "Text": OP_NOOP, "Close": OP_NOOP, "Empty": OP_NOOP,
+    },
     "Math": {
         "Add":   OP_ADD,
         "Sub":   OP_SUB,
@@ -466,6 +487,45 @@ HOST_HOOK_CODES = {
     ("Storage", "QueryResult"): 0x6E,
     # Thread hints (0x70)
     ("Thread", "YieldCounted"): 0x70,
+    # Io / output (0x71-0x72)
+    ("Io", "Write"):            0x71,
+    ("Io", "WriteByte"):        0x72,
+    # Utf8Writer (0x21-0x27) -- arena-backed string/byte writer
+    ("Utf8Writer", "New"):      0x21,
+    ("Utf8Writer", "Byte"):     0x22,
+    ("Utf8Writer", "Int"):      0x23,
+    ("Utf8Writer", "Span"):     0x24,
+    ("Utf8Writer", "ToSpan"):   0x25,
+    ("Utf8Writer", "Len"):      0x26,
+    ("Utf8Writer", "Reset"):    0x27,
+    # Utf8Reader (0x28-0x2F) -- span scanner
+    ("Utf8Reader", "New"):      0x28,
+    ("Utf8Reader", "Peek"):     0x29,
+    ("Utf8Reader", "Next"):     0x2A,
+    ("Utf8Reader", "Int"):      0x2B,
+    ("Utf8Reader", "SkipWs"):   0x2C,
+    ("Utf8Reader", "Eof"):      0x2D,
+    ("Utf8Reader", "Pos"):      0x2E,
+    ("Utf8Reader", "Match"):    0x2F,
+    # Json writer (0x45-0x4E) -- streaming JSON on a Utf8Writer
+    ("Json", "BeginObject"):    0x45,
+    ("Json", "EndObject"):      0x46,
+    ("Json", "BeginArray"):     0x47,
+    ("Json", "EndArray"):       0x48,
+    ("Json", "Key"):            0x49,
+    ("Json", "Str"):            0x4A,
+    ("Json", "Int"):            0x4B,
+    ("Json", "Bool"):           0x4C,
+    ("Json", "Null"):           0x4D,
+    ("Json", "Raw"):            0x4E,
+    # Xml/Html element writer (0x73-0x79)
+    ("Xml", "Open"):            0x73,
+    ("Xml", "AttrName"):        0x74,
+    ("Xml", "AttrValue"):       0x75,
+    ("Xml", "OpenEnd"):         0x76,
+    ("Xml", "Text"):            0x77,
+    ("Xml", "Close"):           0x78,
+    ("Xml", "Empty"):           0x79,
     # String library (0x80-0x8B)
     ("String", "Concat"):       0x80,
     ("String", "Length"):       0x81,
