@@ -29,6 +29,7 @@ from typing import List, Optional, Tuple, Union, Dict
 import picoscript as isa
 from picoscript_lang import (
     HOST_HOOK_BASE,
+    EXT_HOST_HOOK_BASE,
     HOST_HOOK_CODES,
     NET_STATUS_BASE,
     NET_HEADER_BASE,
@@ -513,7 +514,7 @@ def _emit_word(ins: Inst, mapping, labels, pc: int) -> int:
         hook = HOST_HOOK_CODES.get((ins.ns, ins.method))
         if hook is None:
             raise ValueError(f"unknown host hook {ins.ns}.{ins.method}")
-        imm16 = HOST_HOOK_BASE | hook
+        imm16 = (HOST_HOOK_BASE | hook) if hook <= 0xFF else (EXT_HOST_HOOK_BASE | (hook & 0x0FFF))
         rd = _phys(mapping, ins.dst) if isinstance(ins.dst, VReg) else 0
         rs1 = _phys(mapping, ins.args[0]) if len(ins.args) >= 1 and isinstance(ins.args[0], VReg) else 0
         rs2 = _phys(mapping, ins.args[1]) if len(ins.args) >= 2 and isinstance(ins.args[1], VReg) else 0

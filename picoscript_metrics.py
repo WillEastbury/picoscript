@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 import picoscript as isa
-from picoscript_lang import HOST_HOOK_BASE
+from picoscript_lang import HOST_HOOK_BASE, EXT_HOST_HOOK_BASE
 from picoscript_il import lower_to_bytecode_safe, lower_to_c, lower_to_js, optimize
 from picoscript_vm import PicoVM
 
@@ -49,7 +49,7 @@ def classify_word(word: int):
     d = isa.decode_instruction(word)
     op, imm, rs2 = d["opcode"], d["imm16"], d["rs2"]
     if op == isa.OP_NOOP:
-        if (imm & 0xFF00) == HOST_HOOK_BASE:
+        if (imm & 0xFF00) == HOST_HOOK_BASE or (imm & 0xF000) == EXT_HOST_HOOK_BASE:
             return "HOSTCALL", HOSTCALL_CYCLES
         if imm:
             return "NET", NET_OP_CYCLES

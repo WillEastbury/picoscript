@@ -23,6 +23,7 @@ from typing import Callable, Dict, List, Optional
 import picoscript as isa
 from picoscript_lang import (
     HOST_HOOK_BASE,
+    EXT_HOST_HOOK_BASE,
     HOST_HOOK_CODES,
     NET_STATUS_BASE,
     NET_HEADER_BASE,
@@ -514,7 +515,7 @@ class PicoVM:
         if self.profile:
             self.op_hist[op] = self.op_hist.get(op, 0) + 1
             if op == isa.OP_NOOP:
-                if (imm16 & 0xFF00) == HOST_HOOK_BASE:
+                if (imm16 & 0xFF00) == HOST_HOOK_BASE or (imm16 & 0xF000) == EXT_HOST_HOOK_BASE:
                     self.host_calls += 1
                 elif imm16:
                     self.net_ops += 1
@@ -600,8 +601,8 @@ class PicoVM:
         return False
 
     def _noop(self, rd, rs1, rs2, imm16):
-        if (imm16 & 0xFF00) == HOST_HOOK_BASE:
-            hook = imm16 & 0x00FF
+        if (imm16 & 0xFF00) == HOST_HOOK_BASE or (imm16 & 0xF000) == EXT_HOST_HOOK_BASE:
+            hook = (imm16 & 0x0FFF) if (imm16 & 0xF000) == EXT_HOST_HOOK_BASE else (imm16 & 0x00FF)
             key = _HOOK_BY_CODE.get(hook)
             if key is None:
                 self.host.log.append(f"unknown host hook {hook:#04x}")

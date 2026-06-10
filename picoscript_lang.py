@@ -424,6 +424,9 @@ NET_CLOSE_MARKER = 0xC000
 # Host/KERNEL/queue/rng hooks use NOOP + reserved imm16 range.
 # These are language-level stable placeholders that host runtimes can bind.
 HOST_HOOK_BASE = 0x7000
+# Extended hostcall: imm16 = 0x6000 | (hook & 0x0FFF). Reaches hooks >= 0x100
+# (Compress/X509/Auth/Http/Html) that do not fit the single-byte 0x7000 page.
+EXT_HOST_HOOK_BASE = 0x6000
 HOST_HOOK_CODES = {
     # Kernel hooks (0x01-0x06)
     ("Kernel", "WaitIRQ"):      0x01,
@@ -1215,7 +1218,7 @@ class Compiler:
         if hook is None:
             raise SyntaxError(f"Unknown {namespace} method: {method}")
 
-        imm16 = HOST_HOOK_BASE | hook
+        imm16 = (HOST_HOOK_BASE | hook) if hook <= 0xFF else (EXT_HOST_HOOK_BASE | (hook & 0x0FFF))
         rd = 0
         rs1 = 0
         rs2 = 0
@@ -1416,8 +1419,8 @@ def disassemble(words):
         imm16 = word & 0xFFFF
 
         # Check host hook NOOP encodings first.
-        if opcode == OP_NOOP and (imm16 & 0xFF00) == HOST_HOOK_BASE:
-            hook_id = imm16 & 0x00FF
+        if opcode == OP_NOOP and ((imm16 & 0xFF00) == HOST_HOOK_BASE or (imm16 & 0xF000) == EXT_HOST_HOOK_BASE):
+            hook_id = (imm16 & 0x0FFF) if (imm16 & 0xF000) == EXT_HOST_HOOK_BASE else (imm16 & 0x00FF)
             hook = HOST_HOOK_NAMES.get(hook_id)
             if hook:
                 namespace, method = hook
@@ -1470,6 +1473,10 @@ def disassemble(words):
                         lines.append(f"    Storage.{method}(R{rs1}, R{rs2});")
                     else:
                         lines.append(f"    Storage.{method}(R{rs1}, R{rs2}, R{rd});")
+                else:
+                    # Generic host hook (e.g. ext-page Http.*/Auth.*/Html.*/String.*/Json.*):
+                    # faithfully decode the encoded registers in IL (args -> dst) order.
+                    lines.append(f"    {namespace}.{method}(R{rs1}, R{rs2}, R{rd});")
                 continue
 
         # Check for Net.* (NOOP with high bit set in imm16)
@@ -1575,8 +1582,8 @@ def decompile_basic(words):
         lineno = (i + 1) * 10
 
         # Net.* (NOOP with high bit)
-        if opcode == OP_NOOP and (imm16 & 0xFF00) == HOST_HOOK_BASE:
-            hook_id = imm16 & 0x00FF
+        if opcode == OP_NOOP and ((imm16 & 0xFF00) == HOST_HOOK_BASE or (imm16 & 0xF000) == EXT_HOST_HOOK_BASE):
+            hook_id = (imm16 & 0x0FFF) if (imm16 & 0xF000) == EXT_HOST_HOOK_BASE else (imm16 & 0x00FF)
             hook = HOST_HOOK_NAMES.get(hook_id)
             if hook:
                 namespace, method = hook
@@ -1709,8 +1716,8 @@ def decompile_python(words):
         opcode = d["opcode"]
         rd, rs1, rs2, imm16 = d["rd"], d["rs1"], d["rs2"], d["imm16"]
 
-        if opcode == OP_NOOP and (imm16 & 0xFF00) == HOST_HOOK_BASE:
-            hook_id = imm16 & 0x00FF
+        if opcode == OP_NOOP and ((imm16 & 0xFF00) == HOST_HOOK_BASE or (imm16 & 0xF000) == EXT_HOST_HOOK_BASE):
+            hook_id = (imm16 & 0x0FFF) if (imm16 & 0xF000) == EXT_HOST_HOOK_BASE else (imm16 & 0x00FF)
             hook = HOST_HOOK_NAMES.get(hook_id)
             if hook:
                 namespace, method = hook

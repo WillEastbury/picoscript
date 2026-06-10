@@ -219,7 +219,7 @@
 
 <!-- ===================== DOCS ===================== -->
 <div class="view" id="view-docs">
-  <div class="docnav"><button class="docnav-btn active" onclick="showDoc('readme')" data-doc="readme">README</button><button class="docnav-btn" onclick="showDoc('spec')" data-doc="spec">Language Spec</button><button class="docnav-btn" onclick="showDoc('arch')" data-doc="arch">Compiler Architecture</button><button class="docnav-btn" onclick="showDoc('editor')" data-doc="editor">Editor Contract</button><button class="docnav-btn" onclick="showDoc('agent')" data-doc="agent">Agent Prompt</button><button class="docnav-btn" onclick="showDoc('selfhost')" data-doc="selfhost">Self-Hosting</button></div>
+  <div class="docnav"><button class="docnav-btn active" onclick="showDoc('readme')" data-doc="readme">README</button><button class="docnav-btn" onclick="showDoc('spec')" data-doc="spec">Language Spec</button><button class="docnav-btn" onclick="showDoc('arch')" data-doc="arch">Compiler Architecture</button><button class="docnav-btn" onclick="showDoc('editor')" data-doc="editor">Editor Contract</button><button class="docnav-btn" onclick="showDoc('agent')" data-doc="agent">Agent Prompt</button><button class="docnav-btn" onclick="showDoc('selfhost')" data-doc="selfhost">Self-Hosting</button><button class="docnav-btn" onclick="showDoc('iobinding')" data-doc="iobinding">PIOS I/O Binding</button></div>
   <div class="docpanel active" id="doc-readme"><h1 id="picoscript">PicoScript</h1>
 <p>Deterministic userland scripting language for embedded queue-driven processing in the Pico stack.</p>
 <blockquote>
@@ -357,6 +357,10 @@ browser, and send HTTP/TCP requests to a program over a localStorage-backed Pico
 <tr>
 <td><code>docs/SELF_HOSTING.md</code></td>
 <td>Feasibility exploration: compiling PicoScript in PicoScript (staged bootstrap) + <code>examples/selfhost_emit.pc</code> PoC</td>
+</tr>
+<tr>
+<td><code>docs/PIOS_IO_BINDING.md</code></td>
+<td>EL0↔kernel descriptor + FIFO ABI: <code>pooldesc</code> leases, typed/phased response graph, binding kinds, response lifecycle (seal/write/end), HTTP edge cases</td>
 </tr>
 <tr>
 <td><code>docs/picoscript-hardware.md</code></td>
@@ -2384,13 +2388,531 @@ demonstrable, and reuses the proven Stage-0 emitter. Treat full self-hosting as 
 1,300-line four-frontend toolchain. Add array/param sugar only if Stage 3 proves
 the <code>Memory</code>-backed style too unwieldy — and keep the 16-opcode ISA and both VMs
 frozen throughout, so every self-hosted output remains verifiable against the
-native compiler byte-for-byte.</p></div>
+native compiler byte-for-byte.</p></div><div class="docpanel" id="doc-iobinding"><h1 id="pios-io-binding-descriptor-fifo-abi-el0-facing-contract">PIOS I/O Binding — descriptor &amp; FIFO ABI (EL0-facing contract)</h1>
+<p>How a PicoScript capsule (EL0) exchanges request/response data with the PIOS
+kernel (EL1) without ever touching a socket, a TLS record, or HTTP framing. User
+code expresses <strong>application intent</strong> (read the request, construct a response
+graph); the kernel expresses <strong>transport reality</strong> (TCP, TLS, HTTP framing, DMA,
+connection lifecycle).</p>
+<p>This is the contract a worker can rely on. It is the realization of eight design
+decisions — each rule below cites the decision (<code>[D#]</code>) it comes from.</p>
+<blockquote>
+<p><strong>Status:</strong> design spec. The kernel side lives in the PIOS repo; this document
+is the EL0/PicoScript-facing half of the same ABI.</p>
+</blockquote>
+<hr />
+<h2 id="1-privilege-model-2-tier-minimal-kernel-surface-d1">1. Privilege model (2-tier, minimal kernel surface) [D1]</h2>
+<pre><code>  wire ─► NIC/DMA ─► TLS ─► TCP ─┐                      EL1 (kernel)
+                                 │  parse request-line + HEADERS only
+                                 │  → extract cookies/auth → BIND principal
+                                 │  → determine body framing (CL/TE)  ← single
+                                 │     authority on message boundaries
+                                 ▼
+                       ┌──────────────────────┐  FIFO   ┌────────────────────┐
+                       │  bound context + body │ ──────► │  capsule worker     │  EL0
+                       │  (leased pooldescs)    │ ◄────── │  (PicoScript)       │
+                       └──────────────────────┘  resp   └────────────────────┘
+</code></pre>
+<p>The kernel parses <strong>only</strong> what identity and framing require: the request line
+and headers. It does <strong>not</strong> parse the body — that is user mode. Because the
+kernel already reads the headers, it also owns <strong>message-boundary framing</strong>
+(<code>Content-Length</code> / <code>Transfer-Encoding</code>) and hands EL0 a <em>length-bounded</em> body.
+One authority on where a request ends ⇒ request smuggling (CL.TE / TE.CL) is
+structurally impossible: EL0 physically cannot read past the kernel's boundary.</p>
+<p>Everything else — body-content parsing, routing, application logic, response
+construction — is EL0.</p>
+<hr />
+<h2 id="2-the-lease-record-pooldesc-d3">2. The lease record: <code>pooldesc</code> [D3]</h2>
+<p>All EL0 access to request/response bytes is a <strong>lease</strong> on a typed span. The
+lease record lives in the capsule's own micro-pool (the kernel sees all EL0 RAM,
+so it leases directly into that pool — no hot-path <code>malloc</code>).</p>
+<pre><code class="language-c">struct pooldesc {           /* one lease, 16 bytes, pool-allocated */
+    void    *ptr;           /* span base (kernel RX/TX arena, EL0-readable)   */
+    uint32_t len;           /* span length — kernel-authoritative bound        */
+    uint16_t kind;          /* descriptor kind (see §4) + flags                */
+    uint8_t  owner;         /* 0 = free, 1 = thread (worker), 2 = kernel       */
+    uint8_t  state;         /* bit0 used, bit1 released, bit2 revoked          */
+};
+</code></pre>
+<ul>
+<li><strong>Pool ownership</strong> is at the <strong>capsule</strong> level (persists across invocations).</li>
+<li>A descriptor is marked <strong>owned-by-thread</strong> while a worker holds it.</li>
+<li><strong>Inbound</strong> pooldescs auto-release on <strong>worker scope exit</strong> (return / fault /
+  kill) → kernel reclaims spans → connection recycled.</li>
+<li>The kernel may <strong>revoke</strong> an inbound lease under memory pressure
+  (<code>state |= revoked</code>); the next validated read faults → kernel synthesizes 503.</li>
+<li>A worker can therefore only pin RX buffers for the duration of <em>its own</em>
+  invocation — slowloris / pin / use-after-free are gone by construction.</li>
+</ul>
+<p>EL0 reads only through a validated lease (<code>Lease.Validate</code> / <code>Lease.CachedValidate</code>,
+hooks 0x5A/0x5B); <code>CachedValidate</code> is a generation-counter compare after the first
+validate, so steady-state cost is ~1 instruction per region.</p>
+<hr />
+<h2 id="3-inbound-the-bound-context-descriptor-d1d3d4d8">3. Inbound: the bound context descriptor [D1,D3,D4,D8]</h2>
+<p>What a worker receives when it is invoked (delivered as a <code>CTX_READY</code> FIFO
+message, §6):</p>
+<pre><code class="language-c">struct ctx_desc {
+    uint32_t seq;             /* connection-scoped sequence / stream id [D8]   */
+    uint16_t binding_kind;    /* unary | stream | duplex | datagram | ipc [D5] */
+    uint16_t header_count;
+    principal_t principal;    /* kernel-bound identity/capability [D1]         */
+    pooldesc *headers;        /* parsed header table, as leased spans          */
+    uint8_t   body_mode;      /* 0 = inline spans, 1 = pull cursor   [D4]      */
+    union {
+        struct { pooldesc *spans; uint16_t span_count; } inline_body; /* small */
+        struct { uint32_t cursor; uint32_t hint_len;   } stream_body; /* large */
+    } body;
+};
+</code></pre>
+<ul>
+<li><code>principal</code> is <strong>kernel-authoritative</strong> [D1] — EL0 cannot forge it; it is bound
+  per request (keep-alive may carry different principals per request, so it is a
+  context field, never per-connection).</li>
+<li><strong>Small bodies</strong> arrive <strong>materialized</strong> as <code>inline_body.spans</code> (fast path).</li>
+<li><strong>Large / unknown-length bodies</strong> arrive as a <strong>pull cursor</strong>; the worker pulls
+  more pooldescs as bytes arrive (<code>BODY_PULL</code> / <code>BODY_CHUNK</code>, §6) and can feed them
+  straight into an incremental parser (a <code>dispatch</code>/<code>jmptab</code> state machine). [D4]</li>
+</ul>
+<hr />
+<h2 id="4-outbound-the-typed-response-descriptor-graph-d2d6d7">4. Outbound: the typed response descriptor graph [D2,D6,D7]</h2>
+<p>EL0 builds the response in an <strong><code>iso</code> (move-only) arena</strong> as a graph of typed
+descriptors. Every descriptor carries a <strong><code>kind</code></strong> tag and belongs to a <strong>semantic
+phase</strong>; how aggressively the kernel may use them for wire ordering is a per-port
+<code>reorder_mode</code> [D7], never a heuristic.</p>
+<h3 id="descriptor-kinds">Descriptor kinds</h3>
+<table>
+<thead>
+<tr>
+<th>kind</th>
+<th>phase</th>
+<th>notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DESC_PREAMBLE</code></td>
+<td>preamble</td>
+<td>status line: version / code / reason. May be set <strong>last</strong> [D2]; a response may carry an <em>informational</em> preamble (1xx) before the <em>final</em> one.</td>
+</tr>
+<tr>
+<td><code>DESC_HEADER</code></td>
+<td>header</td>
+<td>response headers (or 1xx informational headers)</td>
+</tr>
+<tr>
+<td><code>DESC_BODY</code></td>
+<td>body</td>
+<td>payload chunks — the only kind that streams</td>
+</tr>
+<tr>
+<td><code>DESC_TRAILER</code></td>
+<td>trailer</td>
+<td>chunked / HTTP-2 trailers (metadata <em>after</em> body)</td>
+</tr>
+<tr>
+<td><code>DESC_CONTROL</code></td>
+<td>in-band</td>
+<td>flow-control marker; carries a subtype (below); a coalescing barrier</td>
+</tr>
+<tr>
+<td><code>DESC_COMMIT</code></td>
+<td>terminal</td>
+<td>seal/release marker — preamble + headers committed</td>
+</tr>
+<tr>
+<td><code>DESC_ABORT</code></td>
+<td>terminal</td>
+<td>discard the graph / emit an error (pre-flush) or tear down (post-flush)</td>
+</tr>
+<tr>
+<td><code>DESC_UPGRADE</code></td>
+<td>boundary</td>
+<td>protocol switch — ordering policy flips <code>bounded → strict</code> after it</td>
+</tr>
+</tbody>
+</table>
+<p><code>DESC_CONTROL</code> subtypes:</p>
+<table>
+<thead>
+<tr>
+<th>subtype</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FLUSH</code></td>
+<td>push buffered body now; kernel <strong>must not coalesce past it</strong> (SSE / log streams)</td>
+</tr>
+<tr>
+<td><code>CHECKPOINT</code></td>
+<td>a resumable / observable point in the stream</td>
+</tr>
+<tr>
+<td><code>END_STREAM</code></td>
+<td>end of a stream body (HTTP-2 END_STREAM, SSE close)</td>
+</tr>
+<tr>
+<td><code>CONTINUE_100</code></td>
+<td>emit a <code>100 Continue</code> informational response</td>
+</tr>
+<tr>
+<td><code>EARLY_HINTS_103</code></td>
+<td>emit a <code>103 Early Hints</code> informational preamble + headers</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phases-and-the-core-rule">Phases and the core rule</h3>
+<p>An HTTP response flows through ordered semantic phases:</p>
+<pre><code>  [ info: 1xx preamble + header ]*  →  preamble  →  header  →  body  →  trailer  →  commit
+                                                                              └─ upgrade ⇒ strict
+</code></pre>
+<p><strong>Core rule [D7]:</strong> <em>reordering is allowed only </em><em>within</em><em> the same semantic
+phase, never across a phase boundary — unless the binding policy explicitly
+permits it.</em> The per-port <code>reorder_mode</code> sets the intra-phase freedom:</p>
+<table>
+<thead>
+<tr>
+<th>reorder_mode</th>
+<th>within a phase</th>
+<th>across phases</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>strict</code></td>
+<td>none — exact production order</td>
+<td>never</td>
+</tr>
+<tr>
+<td><code>bounded</code> (HTTP)</td>
+<td>coalesce / compress / DMA-map / merge</td>
+<td>never (phase order fixed)</td>
+</tr>
+<tr>
+<td><code>all</code></td>
+<td>reorder + coalesce freely</td>
+<td>allowed</td>
+</tr>
+</tbody>
+</table>
+<p>So "can the kernel optimize without violating intent?" is precise and
+configurable: <code>bounded</code> HTTP gets intra-phase optimization with <strong>hard phase
+boundaries</strong>; <code>strict</code> gets nothing; <code>all</code> gets everything. A <code>FLUSH</code>
+(<code>DESC_CONTROL</code>) is an additional barrier <em>even within</em> the body phase.</p>
+<h3 id="seal-complete-d2d6"><code>seal</code> ≠ complete [D2,D6]</h3>
+<p><code>seal</code> (<code>DESC_COMMIT</code>) means "<strong>preamble + headers are committed and immutable</strong>" —
+the point of no return for the status, <strong>not</strong> "the whole response is done":</p>
+<ul>
+<li><strong>Status committed early</strong> (commit before first body flush) ⇒ kernel streams
+  <code>BODY</code> as chunked <code>Transfer-Encoding</code>; the discard-and-500 fallback no longer
+  applies (headers are on the wire), so <code>DESC_ABORT</code> here can only <strong>tear down the
+  connection</strong>.</li>
+<li><strong>Status deferred</strong> (commit at <code>end</code>, body buffered) ⇒ kernel emits
+  preamble + headers + body in phase order; nothing is on the wire until commit, so
+  the <strong>discard-and-500 guarantee survives the whole response</strong> and <code>DESC_ABORT</code>
+  yields a clean error response.</li>
+</ul>
+<p>Chunk framing is the kernel's call: all body descriptors known before commit ⇒
+<code>Content-Length</code>; otherwise chunked <code>TE</code> (or a transform/compression forces
+no-CL — see §9). <strong>EL0 never frames chunks.</strong></p>
+<h3 id="ownership-move-at-seal-d6">Ownership move at <code>seal</code> [D6]</h3>
+<p><code>seal</code> <strong>consumes</strong> the <code>iso</code> response arena (linear/move semantics) → ownership
+flips <strong>thread → kernel</strong> and any <strong>use-after-seal is a compile error</strong> in the
+AOT PicoScript compiler. A runtime ownership flag (<code>pooldesc.owner = kernel</code>)
+backstops any dynamically-assembled descriptors. The kernel holds the response
+past worker scope until TX completes.</p>
+<hr />
+<h2 id="5-binding-kinds-one-substrate-typed-lifecycles-d5">5. Binding kinds (one substrate, typed lifecycles) [D5]</h2>
+<p>All kinds share <code>pooldesc</code> + the descriptor records + the FIFO ABI; only the
+<strong>lifecycle contract</strong> differs.</p>
+<table>
+<thead>
+<tr>
+<th>kind</th>
+<th>transport</th>
+<th>lifecycle</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>unary</code></td>
+<td>HTTP request/response</td>
+<td>ctx → <code>respond()</code> (or <code>seal</code>/<code>write</code>/<code>end</code>)</td>
+</tr>
+<tr>
+<td><code>stream</code></td>
+<td>SSE, chunked, long-poll</td>
+<td>ctx → <code>seal</code> → <code>write*</code> → <code>end</code></td>
+</tr>
+<tr>
+<td><code>duplex</code></td>
+<td>WebSocket (post-upgrade)</td>
+<td>ctx → long-lived <strong>bidirectional FIFO peer</strong></td>
+</tr>
+<tr>
+<td><code>datagram</code></td>
+<td>UDP</td>
+<td>one inbound pooldesc → optional reply, no conn</td>
+</tr>
+<tr>
+<td><code>ipc</code></td>
+<td>capsule ↔ capsule</td>
+<td>same descriptor records over an internal FIFO</td>
+</tr>
+</tbody>
+</table>
+<p>Implement <code>unary</code> + <code>stream</code> first; <code>duplex</code>/<code>datagram</code>/<code>ipc</code> add later <strong>without
+changing the descriptor ABI</strong>.</p>
+<h3 id="port-configuration-per-listener">Port configuration (per-listener)</h3>
+<p>A <strong>port</strong> (listener) is configured once with the policies the kernel enforces
+for every request it accepts — distinct from <code>binding_kind</code>, which is decided
+<strong>per request</strong> (<code>ctx_desc.binding_kind</code>, e.g. an HTTP port that upgrades a given
+request to <code>duplex</code>):</p>
+<pre><code class="language-c">struct port_cfg {
+    uint16_t reorder_mode;    /* strict | bounded | all   [D7]                 */
+    uint32_t body_inline_max; /* &lt;= this many bytes ⇒ inline spans, else cursor [D4] */
+    uint16_t default_kind;    /* binding kind for new connections [D5]         */
+    /* + TLS identity, principal-binding policy, timeouts, quotas …            */
+};
+</code></pre>
+<p>HTTP ports run <code>reorder_mode = bounded</code>; a UDP port might run <code>all</code>; a binary
+framed protocol that must not move bytes runs <code>strict</code>.</p>
+<hr />
+<h2 id="6-fifo-message-format">6. FIFO message format</h2>
+<p>Communication is FIFO-only and async (post to the kernel mailbox, completion
+arrives on the return FIFO). Messages are fixed-size records; <code>seq</code> ties a message
+to its request/stream.</p>
+<p><strong>Kernel → capsule</strong>
+| msg            | payload                                             |
+|----------------|-----------------------------------------------------|
+| <code>CTX_READY</code>    | <code>ctx_desc</code> (§3) — a worker invocation begins         |
+| <code>BODY_CHUNK</code>   | <code>seq, pooldesc, eof</code> — response to a <code>BODY_PULL</code>     |
+| <code>RESP_SENT</code>    | <code>seq</code> — TX complete ⇒ <strong>release</strong> outbound descs [D8]|
+| <code>LEASE_REVOKE</code> | <code>pooldesc</code> — reclaim an inbound lease under pressure |</p>
+<p><strong>Capsule → kernel</strong>
+| msg            | payload                                             |
+|----------------|-----------------------------------------------------|
+| <code>BODY_PULL</code>    | <code>seq, cursor, max</code> — pull more body (stream mode)    |
+| <code>RESP_SEAL</code>    | <code>seq, status?, header descs</code> — headers committed [D2]|
+| <code>RESP_WRITE</code>   | <code>seq, body descs</code> — append body (may flush)          |
+| <code>RESP_END</code>     | <code>seq, status?, trailer descs</code> — complete             |
+| <code>RESP_FAULT</code>   | <code>seq</code> — abandon; kernel discards graph, 500 if pre-flush |</p>
+<p><code>respond(status, body)</code> is unary sugar = <code>RESP_SEAL</code> + <code>RESP_WRITE</code> + <code>RESP_END</code>
+in one post. <code>RESP_SENT</code> releases the descriptors back to the capsule pool [D8].</p>
+<hr />
+<h2 id="7-the-picoscript-facing-verbs">7. The PicoScript-facing verbs</h2>
+<p>Request (read-only, lease-validated):</p>
+<pre><code class="language-c">Req.Seq()                 // connection-scoped sequence/stream id
+Req.Principal()           // kernel-bound identity (cannot be forged)
+Req.Header(nameSpan)      // -&gt; value span (from the parsed header table)
+Req.BodyMode()            // 0 = inline spans, 1 = pull cursor
+Req.BodySpan(i)           // inline mode: i-th body span
+Req.BodyPull(max)         // stream mode: pull next pooldesc (blocks via FIFO)
+</code></pre>
+<p>Response (build the <code>iso</code> graph, then a terminal verb):</p>
+<pre><code class="language-c">Resp.Status(code)         // DESC_PREAMBLE (status line); may be called last
+Resp.Header(nameSpan, valueSpan)
+Resp.Write(span)          // DESC_BODY
+Resp.Trailer(nameSpan, valueSpan)
+Resp.Seal()               // DESC_COMMIT: preamble+headers committed; iso arena moves
+Resp.End()                // complete; ownership -&gt; kernel
+Resp.Respond(code)        // unary sugar: Seal + (pending Writes) + End
+
+// control / phase descriptors (DESC_CONTROL subtypes + boundaries)
+Resp.Flush()              // FLUSH: push body now, coalescing barrier (SSE/logs)
+Resp.Continue()           // CONTINUE_100 informational
+Resp.EarlyHints(...)      // EARLY_HINTS_103 informational preamble+headers
+Resp.EndStream()          // END_STREAM (HTTP/2 / SSE close)
+Resp.Upgrade(proto)       // DESC_UPGRADE: switch protocol; reorder flips -&gt; strict
+Resp.Abort(code)          // DESC_ABORT: pre-flush =&gt; clean error; post-flush =&gt; teardown
+</code></pre>
+<p>The original sketch becomes, unmodified in spirit:</p>
+<pre><code class="language-c">Resp.Write(s);
+Resp.Write(&quot;: Request Complete&quot;);
+Resp.Respond(200);        // 'commit' retired; status may even be set at the end
+</code></pre>
+<p>Streaming, with the status known up front:</p>
+<pre><code class="language-c">Resp.Status(200);
+Resp.Header(ct, textplain);
+Resp.Seal();              // kernel may begin chunked TX now
+Resp.Write(chunk1);
+Resp.Write(chunk2);
+Resp.End();
+</code></pre>
+<p>Deferred status (decide the outcome after the work; full 500 safety):</p>
+<pre><code class="language-c">Resp.Write(part1);
+Resp.Write(part2);
+Resp.Status(ok ? 200 : 500);   // chosen at the end
+Resp.End();                    // kernel buffers, emits in kind order
+</code></pre>
+<hr />
+<h2 id="8-http-edge-cases-httpd-mode">8. HTTP edge cases (HTTPD mode)</h2>
+<p>The phase model + control descriptors are what make <code>bounded</code> mode survive real
+HTTP. Each oddity maps to an explicit mechanism — none is left to a heuristic:</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>case</th>
+<th>mechanism</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>Trailers</strong> (chunked / HTTP-2 metadata after body)</td>
+<td>a real <code>trailer</code> phase after <code>body</code>; phase order <code>preamble → header → body → trailer</code>.</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>HEAD requests</strong></td>
+<td>request carries a <code>HEAD</code> flag; the kernel uses <code>DESC_BODY</code> descriptors <strong>only for <code>Content-Length</code></strong> then <strong>suppresses body TX</strong>. EL0 writes the body normally and is oblivious.</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>1xx informational</strong> (<code>100 Continue</code>, <code>103 Early Hints</code>)</td>
+<td><code>DESC_CONTROL/CONTINUE_100</code> and <code>…/EARLY_HINTS_103</code> emit an <strong>informational phase</strong> before the final preamble. A response may have many info phases then exactly one final <code>preamble</code>.</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>CONNECT / WebSocket / Upgrade</strong></td>
+<td>a <code>DESC_UPGRADE</code> boundary descriptor; after it the port's <code>reorder_mode</code> flips <code>bounded → strict</code> and the binding becomes <code>duplex</code> — HTTP framing stops.</td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>Error after partial stream</strong></td>
+<td><code>seal</code> = <em>headers committed</em>, not <em>complete</em>. Pre-flush <code>DESC_ABORT</code> ⇒ clean error/500; <strong>post-flush</strong> <code>DESC_ABORT</code> can only <strong>tear down the connection</strong> (you cannot un-send a 200).</td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>Content-Length vs chunked</strong></td>
+<td>binding policy + a descriptor flag: all <code>DESC_BODY</code> known before <code>DESC_COMMIT</code> ⇒ <code>Content-Length</code>; otherwise chunked <code>TE</code> / streaming.</td>
+</tr>
+<tr>
+<td>7</td>
+<td><strong>Header mutability boundary</strong></td>
+<td>after <code>seal</code>, <code>preamble</code> + <code>header</code> descriptors are <strong>immutable</strong>; <code>body</code> still accepts <code>write</code> in <code>stream</code> mode, not in <code>unary</code> (already finalized).</td>
+</tr>
+<tr>
+<td>8</td>
+<td><strong>Compression / transform</strong></td>
+<td>a transform (gzip/brotli) changes body length, so it must run <strong>before length finalization</strong> or force chunked / no-CL. Modeled as a transform attribute on the <code>body</code> phase, applied before the kernel picks CL vs chunked (#6).</td>
+</tr>
+<tr>
+<td>9</td>
+<td><strong>Range responses (<code>206</code>)</strong></td>
+<td>an explicit <strong>range mode</strong> on the binding permits the kernel to <strong>slice / reorder <code>body</code> spans</strong> — the one sanctioned exception to "no cross-offset body reorder".</td>
+</tr>
+<tr>
+<td>10</td>
+<td><strong>Flush / low-latency</strong> (SSE, logs)</td>
+<td><code>DESC_CONTROL/FLUSH</code> pushes buffered body immediately and is a <strong>hard coalescing barrier</strong> — the kernel must not merge body across it. <code>END_STREAM</code> closes the stream phase.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Invariant tying it together:</strong> reordering/coalescing is permitted only <em>within</em>
+one semantic phase and never across a phase boundary or a <code>FLUSH</code>/<code>UPGRADE</code> marker,
+unless the binding policy (range mode, <code>reorder_mode = all</code>) explicitly opens it.</p>
+<h2 id="9-properties-this-abi-guarantees">9. Properties this ABI guarantees</h2>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>How [D#]</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No request smuggling</td>
+<td>kernel is the single message-boundary authority [D1]</td>
+</tr>
+<tr>
+<td>No pin / slowloris / UAF on read</td>
+<td>scope-bound leases + kernel revoke [D3]</td>
+</tr>
+<tr>
+<td>Use-after-seal is a <strong>compile</strong> error</td>
+<td><code>iso</code> arena consumed at seal [D6]</td>
+</tr>
+<tr>
+<td>Deferred status keeps clean 500</td>
+<td>nothing on the wire until <code>end</code> [D2]</td>
+</tr>
+<tr>
+<td>Zero body copies</td>
+<td>leased spans in/out; coalesce intra-kind only [D3,D7]</td>
+</tr>
+<tr>
+<td>One substrate, honest lifecycles</td>
+<td>typed binding kinds over shared pooldesc+FIFO [D5]</td>
+</tr>
+<tr>
+<td>No hot-path malloc</td>
+<td>capsule micro-pools, kernel-ACK release [D3,D8]</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="appendix-decision-log">Appendix — decision log</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>topic</th>
+<th>decision</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Privilege tiering</td>
+<td>2-tier, minimal kernel parsing surface (kernel reads request-line+headers, binds principal, owns body framing)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Response lifecycle</td>
+<td>both unary + streaming; status/headers committed independently of body, deferrable to <code>end</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td>Span access</td>
+<td>lease-gated via per-capsule micro-pools of <code>pooldesc</code>; scope-bound auto-release + kernel revoke</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Request body</td>
+<td>both: materialized spans (small) / pull cursor (large/streamed)</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Binding kinds</td>
+<td>typed kinds (unary/stream/duplex/datagram/ipc) over one shared substrate</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Ownership move</td>
+<td>layered: <code>iso</code> lease consumed at <code>seal</code> (compile-time) + runtime owner-flag backstop</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Reorder policy</td>
+<td>per-port <code>reorder_mode</code> (<code>strict</code>|<code>bounded</code>|<code>all</code>) over a typed <strong>phased</strong> descriptor graph (PREAMBLE/HEADER/BODY/TRAILER/CONTROL/COMMIT/ABORT/UPGRADE); reorder only within a phase, never across a boundary unless policy opens it</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Write ordering</td>
+<td>kernel-ACK FIFO release + kernel-assigned connection-scoped sequence/stream id</td>
+</tr>
+</tbody>
+</table></div>
 </div>
 
 <script>// AUTO-GENERATED from picoscript_lang.py -- do not edit by hand.
 (function (root) {
   var H = {
     HOST_HOOK_BASE: 0x7000,
+    EXT_HOST_HOOK_BASE: 0x6000,
     NET_STATUS_BASE: 0x8000,
     NET_HEADER_BASE: 0x9000,
     NET_BODY_MARKER: 0xB000,
@@ -2670,6 +3192,7 @@ native compiler byte-for-byte.</p></div>
   function PicoVM(opts) {
     opts = opts || {};
     this.hooks = opts.hooks || PV_HOOKS || { HOST_HOOK_BASE: 0x7000,
+      EXT_HOST_HOOK_BASE: 0x6000,
       NET_STATUS_BASE: 0x8000, NET_BODY_MARKER: 0xB000, NET_CLOSE_MARKER: 0xC000,
       NET_HEADER_BASE: 0x9000, CONTENT_TYPES: {}, BY_CODE: {} };
     this.maxSteps = opts.maxSteps || 1000000;
@@ -2788,6 +3311,8 @@ native compiler byte-for-byte.</p></div>
     var H = this.hooks;
     if ((imm & 0xFF00) === H.HOST_HOOK_BASE) {
       this._host(imm & 0xFF, rd, rs1, rs2, imm);
+    } else if ((imm & 0xF000) === (H.EXT_HOST_HOOK_BASE || 0x6000)) {
+      this._host(imm & 0xFFF, rd, rs1, rs2, imm);
     } else if ((imm & 0xF000) === H.NET_STATUS_BASE) {
       this.httpStatus = imm & 0x0FFF;
     } else if ((imm & 0xF000) === 0xA000) {

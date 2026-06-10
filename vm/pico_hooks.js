@@ -2,6 +2,7 @@
 (function (root) {
   var H = {
     HOST_HOOK_BASE: 0x7000,
+    EXT_HOST_HOOK_BASE: 0x6000,
     NET_STATUS_BASE: 0x8000,
     NET_HEADER_BASE: 0x9000,
     NET_BODY_MARKER: 0xB000,

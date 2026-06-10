@@ -33,6 +33,7 @@
   function PicoVM(opts) {
     opts = opts || {};
     this.hooks = opts.hooks || PV_HOOKS || { HOST_HOOK_BASE: 0x7000,
+      EXT_HOST_HOOK_BASE: 0x6000,
       NET_STATUS_BASE: 0x8000, NET_BODY_MARKER: 0xB000, NET_CLOSE_MARKER: 0xC000,
       NET_HEADER_BASE: 0x9000, CONTENT_TYPES: {}, BY_CODE: {} };
     this.maxSteps = opts.maxSteps || 1000000;
@@ -151,6 +152,8 @@
     var H = this.hooks;
     if ((imm & 0xFF00) === H.HOST_HOOK_BASE) {
       this._host(imm & 0xFF, rd, rs1, rs2, imm);
+    } else if ((imm & 0xF000) === (H.EXT_HOST_HOOK_BASE || 0x6000)) {
+      this._host(imm & 0xFFF, rd, rs1, rs2, imm);
     } else if ((imm & 0xF000) === H.NET_STATUS_BASE) {
       this.httpStatus = imm & 0x0FFF;
     } else if ((imm & 0xF000) === 0xA000) {

@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from picoscript_lang import (
-    HOST_HOOK_CODES, HOST_HOOK_BASE, NET_STATUS_BASE, NET_HEADER_BASE,
+    HOST_HOOK_CODES, HOST_HOOK_BASE, EXT_HOST_HOOK_BASE, NET_STATUS_BASE, NET_HEADER_BASE,
     NET_BODY_MARKER, NET_CLOSE_MARKER, CONTENT_TYPES,
 )
 
@@ -20,6 +20,7 @@ L.append("// AUTO-GENERATED from picoscript_lang.py -- do not edit by hand.")
 L.append("(function (root) {")
 L.append("  var H = {")
 L.append("    HOST_HOOK_BASE: 0x%04X," % HOST_HOOK_BASE)
+L.append("    EXT_HOST_HOOK_BASE: 0x%04X," % EXT_HOST_HOOK_BASE)
 L.append("    NET_STATUS_BASE: 0x%04X," % NET_STATUS_BASE)
 L.append("    NET_HEADER_BASE: 0x%04X," % NET_HEADER_BASE)
 L.append("    NET_BODY_MARKER: 0x%04X," % NET_BODY_MARKER)
@@ -49,6 +50,7 @@ H.append("#ifndef PICO_HOOKS_H")
 H.append("#define PICO_HOOKS_H")
 H.append("")
 H.append("#define PV_HOST_HOOK_BASE  0x%04X" % HOST_HOOK_BASE)
+H.append("#define PV_EXT_HOST_HOOK_BASE 0x%04X" % EXT_HOST_HOOK_BASE)
 H.append("#define PV_NET_STATUS_BASE 0x%04X" % NET_STATUS_BASE)
 H.append("#define PV_NET_HEADER_BASE 0x%04X" % NET_HEADER_BASE)
 H.append("#define PV_NET_BODY_MARKER 0x%04X" % NET_BODY_MARKER)

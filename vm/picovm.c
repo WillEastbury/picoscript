@@ -160,6 +160,9 @@ static void pv_noop(pv_ctx *ctx, int rd, int rs1, int rs2, int imm16)
     if ((imm16 & 0xFF00) == PV_HOST_HOOK_BASE) {
         int hook = imm16 & 0x00FF;
         if (ctx->host) ctx->host(ctx, hook, rd, rs1, rs2, imm16);
+    } else if ((imm16 & 0xF000) == PV_EXT_HOST_HOOK_BASE) {
+        int hook = imm16 & 0x0FFF;                                  /* extended hostcall: hooks >= 0x100 */
+        if (ctx->host) ctx->host(ctx, hook, rd, rs1, rs2, imm16);
     } else if ((imm16 & 0xF000) == PV_NET_STATUS_BASE) {
         ctx->http_status = imm16 & 0x0FFF;
     } else if ((imm16 & 0xF000) == 0xA000) {
