@@ -374,32 +374,32 @@
   };
 
   PicoVM.prototype._templatelib = function (method, rd, rs1, rs2) {
+    var trim = function (a) { var p = 0, q = a.length; while (p < q && _ws(a[p])) p++; while (q > p && _ws(a[q - 1])) q--; return a.slice(p, q); };
     if (method === "Compile") {
       var src = this._spanBytes(this.regs[rs1]), plan = [], i = 0, n = src.length;
       var lit = function (b) { if (b.length) { plan.push(0x01, (b.length >> 8) & 255, b.length & 255); for (var x = 0; x < b.length; x++) plan.push(b[x]); } };
+      var emitKey = function (op, key) { if (key.length > 255) key = key.slice(0, 255); plan.push(op, key.length); for (var y = 0; y < key.length; y++) plan.push(key[y]); };
       while (i < n) {
         var j = _bfind2(src, 0x7b, 0x7b, i);
         if (j < 0) { lit(src.slice(i)); break; }
         lit(src.slice(i, j));
         var k = _bfind2(src, 0x7d, 0x7d, j + 2);
         if (k < 0) { lit(src.slice(j)); break; }
-        var inner = src.slice(j + 2, k), a0 = 0, a1 = inner.length;
-        while (a0 < a1 && _ws(inner[a0])) a0++;
-        while (a1 > a0 && _ws(inner[a1 - 1])) a1--;
-        inner = inner.slice(a0, a1);
+        var inner = trim(src.slice(j + 2, k));
         var first = inner.length ? inner[0] : 0;
-        if (first === 0x23 || first === 0x5e) {        // '#' section / '^' inverted
-          var key = inner.slice(1), b0 = 0, b1 = key.length;
-          while (b0 < b1 && _ws(key[b0])) b0++;
-          while (b1 > b0 && _ws(key[b1 - 1])) b1--;
-          key = key.slice(b0, b1); if (key.length > 255) key = key.slice(0, 255);
-          plan.push(first === 0x23 ? 0x03 : 0x04, key.length);
-          for (var y = 0; y < key.length; y++) plan.push(key[y]);
-        } else if (first === 0x2f) {                    // '/' section end
+        if (first === 0x23) {                            // '#' section or '#each list'
+          var rest = trim(inner.slice(1));
+          if (rest.length >= 4 && rest[0] === 0x65 && rest[1] === 0x61 && rest[2] === 0x63 && rest[3] === 0x68 && (rest.length === 4 || _ws(rest[4]))) {
+            emitKey(0x06, trim(rest.slice(4)));
+          } else {
+            emitKey(0x03, rest);
+          }
+        } else if (first === 0x5e) {                     // '^' inverted
+          emitKey(0x04, trim(inner.slice(1)));
+        } else if (first === 0x2f) {                     // '/' end
           plan.push(0x05);
-        } else {                                        // hole
-          var hk = inner; if (hk.length > 255) hk = hk.slice(0, 255);
-          plan.push(0x02, hk.length); for (var z = 0; z < hk.length; z++) plan.push(hk[z]);
+        } else {                                         // hole
+          emitKey(0x02, inner);
         }
         i = k + 2;
       }
@@ -410,26 +410,58 @@
       var commit = function (ln) { var eq = ln.indexOf(0x3d); if (eq >= 0) model[_keystr(ln.slice(0, eq))] = ln.slice(eq + 1); };
       for (var p = 0; p < mb.length; p++) { if (mb[p] === 0x0a) { commit(cur); cur = []; } else cur.push(mb[p]); }
       commit(cur);
-      var out = [], i = 0, n = plan.length;
+      var resolve = function (keyArr, prefix) {
+        var ks = _keystr(keyArr);
+        if (ks === ".") return model[prefix] || [];
+        if (prefix) { var v = model[prefix + "." + ks]; if (v !== undefined) return v; }
+        return model[ks] || [];
+      };
+      var countList = function (full) {
+        var c = 0;
+        for (;;) {
+          var base = full + "." + c, has = (model[base] !== undefined);
+          if (!has) { var bp = base + "."; for (var kk in model) { if (kk.indexOf(bp) === 0) { has = true; break; } } }
+          if (has) c++; else return c;
+        }
+      };
+      var skipBlock = function (pp) {
+        var depth = 1;
+        while (pp < plan.length && depth > 0) {
+          var o = plan[pp++];
+          if (o === 0x01) { pp += 2 + ((plan[pp] << 8) | plan[pp + 1]); }
+          else if (o === 0x02) { pp += 1 + plan[pp]; }
+          else if (o === 0x03 || o === 0x04 || o === 0x06) { pp += 1 + plan[pp]; depth++; }
+          else if (o === 0x05) { depth--; }
+        }
+        return pp;
+      };
+      var out = [], prefix = "", stack = [], i = 0, n = plan.length;
       while (i < n) {
         var op = plan[i++];
         if (op === 0x01) { var ln2 = (plan[i] << 8) | plan[i + 1]; i += 2; for (var q = 0; q < ln2; q++) out.push(plan[i + q]); i += ln2; }
-        else if (op === 0x02) { var kl = plan[i++], ks = _keystr(plan.slice(i, i + kl)); i += kl; var v = model[ks] || []; for (var r = 0; r < v.length; r++) out.push(v[r]); }
+        else if (op === 0x02) { var kl = plan[i++]; var v = resolve(plan.slice(i, i + kl), prefix); i += kl; for (var r = 0; r < v.length; r++) out.push(v[r]); }
         else if (op === 0x03 || op === 0x04) {
-          var kl2 = plan[i++], ks2 = _keystr(plan.slice(i, i + kl2)); i += kl2;
-          var truthy = (model[ks2] || []).length > 0;
-          if (!(op === 0x03 ? truthy : !truthy)) {     // skip section body (nesting-aware)
-            var depth = 1;
-            while (i < n && depth > 0) {
-              var o = plan[i++];
-              if (o === 0x01) { i += 2 + ((plan[i] << 8) | plan[i + 1]); }
-              else if (o === 0x02) { i += 1 + plan[i]; }
-              else if (o === 0x03 || o === 0x04) { i += 1 + plan[i]; depth++; }
-              else if (o === 0x05) { depth--; }
-            }
+          var kl2 = plan[i++], key = plan.slice(i, i + kl2); i += kl2;
+          var truthy = resolve(key, prefix).length > 0;
+          if (op === 0x03 ? truthy : !truthy) stack.push(["sec", prefix, 0, 0, "", 0]);
+          else i = skipBlock(i);
+        }
+        else if (op === 0x06) {
+          var kl3 = plan[i++], lk = _keystr(plan.slice(i, i + kl3)); i += kl3;
+          var full = prefix ? (prefix + "." + lk) : lk, cnt = countList(full);
+          if (cnt === 0) i = skipBlock(i);
+          else { stack.push(["each", prefix, i, cnt, full, 0]); prefix = full + ".0"; }
+        }
+        else if (op === 0x05) {
+          if (stack.length) {
+            var fr = stack[stack.length - 1];
+            if (fr[0] === "each") {
+              fr[5]++;
+              if (fr[5] < fr[3]) { prefix = fr[4] + "." + fr[5]; i = fr[2]; }
+              else { prefix = fr[1]; stack.pop(); }
+            } else { prefix = fr[1]; stack.pop(); }
           }
         }
-        else if (op === 0x05) { /* end of rendered section */ }
         else break;
       }
       this.regs[rd] = this._newSpanBytes(out); return true;

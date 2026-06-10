@@ -68,8 +68,15 @@ def main():
     check(b"{{#a}}A{{#b}}B{{/b}}C{{/a}}", b"a=1\nb=", b"AC")       # nested, inner false
     check(b"{{#a}}A{{/a}}", b"a=", b"")                           # outer false skips body
     check(b"Hi {{#vip}}*{{/vip}}{{name}}", b"vip=1\nname=Bob", b"Hi *Bob")
+    # iteration: object lists, scalar lists ({{.}}), nesting, empty
+    check(b"{{#each items}}<li>{{name}}</li>{{/each}}", b"items.0.name=A\nitems.1.name=B",
+          b"<li>A</li><li>B</li>")
+    check(b"{{#each xs}}[{{.}}]{{/each}}", b"xs.0=1\nxs.1=2\nxs.2=3", b"[1][2][3]")
+    check(b"{{#each none}}X{{/each}}", b"other=1", b"")
+    check(b"{{#each rows}}{{#each cols}}{{.}}{{/each}};{{/each}}",
+          b"rows.0.cols.0=a\nrows.0.cols.1=b\nrows.1.cols.0=c", b"ab;c;")
     print("PASS Template.*: AOT compile-at-save + render, Python VM == JS VM byte-exact "
-          "(holes, sections, inverted, nesting, missing-key, literal passthrough)")
+          "(holes, sections, inverted, nesting, {{#each}} object/scalar/nested lists, missing-key)")
 
 
 if __name__ == "__main__":

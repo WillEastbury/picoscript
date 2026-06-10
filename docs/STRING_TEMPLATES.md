@@ -39,20 +39,23 @@ plan = Template.Compile(source_span)     // at SAVE time -> store `plan` in a ca
 out  = Template.Render(plan, model_span) // at RENDER time -> fast, no parse
 ```
 
-* **Source**: literal text, `{{key}}` holes, and **sections** `{{#key}}…{{/key}}`
-  (render the body when `key` is non-empty) / `{{^key}}…{{/key}}` (inverted —
-  render when empty/absent). Sections **nest**. Keys are whitespace-trimmed.
+* **Source**: literal text, `{{key}}` holes, sections `{{#key}}…{{/key}}` /
+  `{{^key}}…{{/key}}` (inverted), and **iteration** `{{#each list}}…{{/each}}`.
+  Sections and loops **nest**; keys are whitespace-trimmed.
+* **List model**: indexed flat keys — `list.0.name=…`, `list.1.name=…` for object
+  lists, `list.0=…` for scalar lists. Inside `{{#each list}}`, `{{name}}` resolves
+  to `list.<i>.name` and `{{.}}` to the scalar item `list.<i>`.
 * **Plan** (the AOT artifact, stored in the card): a byte stream —
   `0x01 LEN_HI LEN_LO <bytes>`=literal, `0x02 KEYLEN <key>`=hole,
-  `0x03 KEYLEN <key>`=section, `0x04 …`=inverted section, `0x05`=section end.
+  `0x03/0x04 KEYLEN <key>`=section/inverted, `0x06 KEYLEN <list>`=each,
+  `0x05`=block end.
 * **Model**: a `key=value` (newline-separated) span. Missing keys render empty.
 
-Example: `Template.Compile(b"Hi {{#vip}}*{{/vip}}{{name}}!")` then
-`Render(plan, b"vip=1\nname=Bob")` → `Hi *Bob!`.
+Example: `Render(Compile(b"{{#each row}}<td>{{.}}</td>{{/each}}"), b"row.0=A\nrow.1=B")`
+→ `<td>A</td><td>B</td>`.
 
 ### Roadmap
-- Iteration over lists (`{{#each}}` with a list/array model) and partials
-  (`{{>name}}` including another compiled template).
+- Partials (`{{>name}}` including another compiled template).
 - Sourcing the model directly from a walfs card's fields (render a card via a
   template — picowal's schema-driven SSR, but data-driven).
 - Native `toC` lowering of the span/string model (the cross-cutting "native"

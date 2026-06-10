@@ -340,13 +340,18 @@ class HostApi:
                 if k < 0:
                     lit(src[j:]); break
                 inner = src[j + 2:k].strip(b" \t\r\n")
-                if inner[:1] == b"#":          # section: render inner if key truthy
-                    key = inner[1:].strip(b" \t\r\n")[:255]
-                    plan.extend((0x03, len(key))); plan.extend(key)
+                if inner[:1] == b"#":          # section {{#k}} or iteration {{#each list}}
+                    rest = inner[1:].strip(b" \t\r\n")
+                    if rest[:4] == b"each" and rest[4:5] in (b" ", b"\t", b""):
+                        lk = rest[4:].strip(b" \t\r\n")[:255]
+                        plan.extend((0x06, len(lk))); plan.extend(lk)
+                    else:
+                        key = rest[:255]
+                        plan.extend((0x03, len(key))); plan.extend(key)
                 elif inner[:1] == b"^":        # inverted section: render if key falsy
                     key = inner[1:].strip(b" \t\r\n")[:255]
                     plan.extend((0x04, len(key))); plan.extend(key)
-                elif inner[:1] == b"/":        # section end
+                elif inner[:1] == b"/":        # section / each end
                     plan.append(0x05)
                 else:                          # hole
                     key = inner[:255]
@@ -361,7 +366,42 @@ class HostApi:
                 if b"=" in line:
                     key, val = line.split(b"=", 1)
                     model[key] = val
+
+            def resolve(key, prefix):
+                if key == b".":
+                    return model.get(prefix, b"")
+                if prefix:
+                    v = model.get(prefix + b"." + key)
+                    if v is not None:
+                        return v
+                return model.get(key, b"")
+
+            def count_list(full):
+                c = 0
+                while True:
+                    base = full + b"." + str(c).encode()
+                    if base in model or any(kk.startswith(base + b".") for kk in model):
+                        c += 1
+                    else:
+                        return c
+
+            def skip_block(p):
+                depth = 1
+                while p < n and depth > 0:
+                    o = plan[p]; p += 1
+                    if o == 0x01:
+                        p += 2 + ((plan[p] << 8) | plan[p + 1])
+                    elif o == 0x02:
+                        p += 1 + plan[p]
+                    elif o in (0x03, 0x04, 0x06):
+                        p += 1 + plan[p]; depth += 1
+                    elif o == 0x05:
+                        depth -= 1
+                return p
+
             out = bytearray()
+            prefix = b""
+            stack = []                 # frames: [kind, saved_prefix, body_start, count, full, idx]
             i, n = 0, len(plan)
             while i < n:
                 op = plan[i]; i += 1
@@ -370,26 +410,36 @@ class HostApi:
                     out.extend(plan[i:i + ln]); i += ln
                 elif op == 0x02:
                     kl = plan[i]; i += 1
-                    out.extend(model.get(bytes(plan[i:i + kl]), b"")); i += kl
-                elif op == 0x03 or op == 0x04:           # (inverted) section begin
+                    out.extend(resolve(bytes(plan[i:i + kl]), prefix)); i += kl
+                elif op == 0x03 or op == 0x04:           # (inverted) section
                     kl = plan[i]; i += 1
                     key = bytes(plan[i:i + kl]); i += kl
-                    truthy = len(model.get(key, b"")) > 0
-                    render = truthy if op == 0x03 else (not truthy)
-                    if not render:                       # skip to matching end (nesting-aware)
-                        depth = 1
-                        while i < n and depth > 0:
-                            o = plan[i]; i += 1
-                            if o == 0x01:
-                                i += 2 + ((plan[i] << 8) | plan[i + 1])
-                            elif o == 0x02:
-                                i += 1 + plan[i]
-                            elif o == 0x03 or o == 0x04:
-                                i += 1 + plan[i]; depth += 1
-                            elif o == 0x05:
-                                depth -= 1
-                elif op == 0x05:                         # end of a rendered section
-                    pass
+                    truthy = len(resolve(key, prefix)) > 0
+                    if (truthy if op == 0x03 else (not truthy)):
+                        stack.append(["sec", prefix, 0, 0, b"", 0])
+                    else:
+                        i = skip_block(i)
+                elif op == 0x06:                         # each LIST
+                    kl = plan[i]; i += 1
+                    lk = bytes(plan[i:i + kl]); i += kl
+                    full = (prefix + b"." + lk) if prefix else lk
+                    cnt = count_list(full)
+                    if cnt == 0:
+                        i = skip_block(i)
+                    else:
+                        stack.append(["each", prefix, i, cnt, full, 0])
+                        prefix = full + b".0"
+                elif op == 0x05:                         # end of section / each
+                    if stack:
+                        fr = stack[-1]
+                        if fr[0] == "each":
+                            fr[5] += 1
+                            if fr[5] < fr[3]:
+                                prefix = fr[4] + b"." + str(fr[5]).encode(); i = fr[2]
+                            else:
+                                prefix = fr[1]; stack.pop()
+                        else:
+                            prefix = fr[1]; stack.pop()
                 else:
                     break
             vm.regs[rd] = self._new_span_bytes(vm, bytes(out))
