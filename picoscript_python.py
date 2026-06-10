@@ -27,13 +27,14 @@ Supported:
 from typing import List, Optional
 
 from picoscript_basic import (  # reuse AST + lowering unchanged
-    Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, ForTo, ForEach,
-    Sub, Return, Break, Skip, Print, CallStmt, Lowerer,
+    Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
+    Switch, Goto, Label, Sub, Return, Break, Skip, Print, CallStmt, Lowerer,
 )
 
 KEYWORDS = {
     "if", "elif", "else", "while", "for", "in", "range", "def", "return",
     "break", "continue", "pass", "and", "or", "not", "print", "true", "false",
+    "match", "case", "do", "until", "goto", "label",
 }
 
 # comparator symbols -> Cmp condition codes (matches picoscript_basic CMP codes)
@@ -226,6 +227,14 @@ class Parser:
                 return self.parse_while()
             if kw == "for":
                 return self.parse_for()
+            if kw == "match":
+                return self.parse_match()
+            if kw == "do":
+                return self.parse_do()
+            if kw == "goto":
+                self.next(); name = self.expect("id").value; self.expect("newline"); return Goto(name)
+            if kw == "label":
+                self.next(); name = self.expect("id").value; self.expect("newline"); return Label(name)
             if kw == "def":
                 return self.parse_def()
             if kw == "return":
@@ -295,6 +304,38 @@ class Parser:
         cond = self.parse_expr()
         body = self.parse_suite()
         return While(cond, body)
+
+    def parse_match(self) -> Switch:
+        self.expect_kw("match")
+        expr = self.parse_expr()
+        self.expect("op", ":")
+        self.expect("newline")
+        self.expect("indent")
+        cases = []
+        default = None
+        while not self.at("dedent"):
+            self.expect_kw("case")
+            if self.peek().kind == "id" and self.peek().value == "_":
+                self.next()
+                default = self.parse_suite()
+            else:
+                val = self.parse_expr()
+                cases.append((val, self.parse_suite()))
+        self.expect("dedent")
+        return Switch(expr, cases, default)
+
+    def parse_do(self) -> DoLoop:
+        """Post-test loop: ``do:`` <block> then ``while cond`` / ``until cond``."""
+        self.expect_kw("do")
+        body = self.parse_suite()
+        if self.at_kw("while"):
+            self.expect_kw("while"); cond = self.parse_expr(); until = False
+        elif self.at_kw("until"):
+            self.expect_kw("until"); cond = self.parse_expr(); until = True
+        else:
+            raise SyntaxError(f"line {self.peek().line}: 'do:' block must be followed by 'while' or 'until'")
+        self.expect("newline")
+        return DoLoop(None, False, cond, until, body)
 
     def parse_for(self):
         self.expect_kw("for")

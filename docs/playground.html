@@ -1044,7 +1044,7 @@
   // ========================================================================
   // C-SYNTAX FRONTEND (port of picoscript_cfront.py)
   // ========================================================================
-  var C_KW = { int:1, var:1, void:1, if:1, else:1, while:1, for:1, return:1, break:1, continue:1 };
+  var C_KW = { int:1, var:1, void:1, if:1, else:1, while:1, for:1, return:1, break:1, continue:1, switch:1, case:1, default:1, do:1, goto:1 };
   var C_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "&&":1, "||":1, "++":1, "--":1, "+=":1, "-=":1, "*=":1, "/=":1, "%=":1 };
   var C_ONE = "+-*/%()<>=;,{}.!?:";
   var C_PREC = { "||":1, "&&":2, "==":3, "!=":3, "<":4, ">":4, "<=":4, ">=":4, "+":5, "-":5, "*":6, "/":6, "%":6 };
@@ -1097,11 +1097,15 @@
         if (t.value === "if") return this.parseIf();
         if (t.value === "while") return this.parseWhile();
         if (t.value === "for") return this.parseFor();
+        if (t.value === "switch") return this.parseSwitch();
+        if (t.value === "do") return this.parseDo();
+        if (t.value === "goto") { this.next(); var gl = this.next().value; this.expect(";"); return { t: "Goto", label: gl }; }
         if (t.value === "return") { this.next(); if (this.accept(";")) return { t: "Return", value: null }; var v = this.parseExpr(); this.expect(";"); return { t: "Return", value: v }; }
         if (t.value === "break") { this.next(); this.expect(";"); return { t: "Break" }; }
         if (t.value === "continue") { this.next(); this.expect(";"); return { t: "Continue" }; }
       }
       if (t.value === "{") { return { t: "If", cond: { t: "Num", value: 1 }, then: this.parseBlock(), els: null }; }
+      if (t.kind === "id" && this.toks[this.i + 1].value === ":") { var lab = this.next().value; this.next(); return { t: "Label", name: lab }; }
       if (t.kind === "id" && this.toks[this.i + 1].value === "=") {
         var name = this.next().value; this.expect("="); var val = this.parseExpr(); this.expect(";"); return { t: "Assign", name: name, value: val };
       }
@@ -1133,6 +1137,34 @@
         else step = { t: "ExprStmt", expr: this.parseExpr() };
       }
       this.expect(")"); return { t: "For", init: init, cond: cond, step: step, body: this.parseBlock() };
+    },
+    parseSwitch: function () {
+      this.next(); this.expect("("); var expr = this.parseExpr(); this.expect(")"); this.expect("{");
+      var cases = [], def = null;
+      while (!this.accept("}")) {
+        var t = this.peek();
+        if (t.kind === "kw" && t.value === "case") { this.next(); var val = this.parseExpr(); this.expect(":"); cases.push([val, this.parseCaseBody()]); }
+        else if (t.kind === "kw" && t.value === "default") { this.next(); this.expect(":"); def = this.parseCaseBody(); }
+        else throw new Error("C: expected case/default in switch");
+      }
+      return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    parseCaseBody: function () {
+      var stmts = [];
+      while (true) {
+        var t = this.peek();
+        if (t.value === "}") break;
+        if (t.kind === "kw" && (t.value === "case" || t.value === "default")) break;
+        if (t.kind === "kw" && t.value === "break") { this.next(); this.expect(";"); break; }
+        stmts.push(this.parseStmt());
+      }
+      return stmts;
+    },
+    parseDo: function () {
+      this.next(); var body = this.parseBlock();
+      if (!(this.peek().kind === "kw" && this.peek().value === "while")) throw new Error("C: expected 'while' after do block");
+      this.next(); this.expect("("); var cond = this.parseExpr(); this.expect(")"); this.expect(";");
+      return { t: "DoWhile", cond: cond, until: false, body: body };
     },
     parseExpr: function (minp) { return this.parseTernary(); },
     parseTernary: function () {
@@ -1211,6 +1243,10 @@
       else if (s.t === "If") this.lowerIf(s);
       else if (s.t === "While") this.lowerWhile(s);
       else if (s.t === "For") this.lowerFor(s);
+      else if (s.t === "Switch") this.lowerSwitch(s);
+      else if (s.t === "DoWhile") this.lowerDoWhile(s);
+      else if (s.t === "Goto") this.b.jmp("lbl_" + s.label.toLowerCase());
+      else if (s.t === "Label") this.b.label("lbl_" + s.name.toLowerCase());
       else if (s.t === "Return") { if (s.value != null) { var rv = this.eval(s.value); this.b.mov(this.varOf("__ret__"), rv); } this.b.ret(); }
       else if (s.t === "ExprStmt") { if (s.expr != null) this.eval(s.expr, false); }
       else if (s.t === "Break") { if (!this.loop.length) throw new Error("break outside loop"); this.b.jmp(this.loop[this.loop.length - 1][1]); }
@@ -1244,6 +1280,31 @@
       this.b.label(top); if (s.cond) this.branchFalse(s.cond, end);
       this.loop.push([cont, end]); var self = this; s.body.forEach(function (st) { self.stmt(st); }); this.loop.pop();
       this.b.label(cont); if (s.step) this.stmt(s.step); this.b.jmp(top); this.b.label(end);
+    },
+    lowerSwitch: function (s) {
+      var val = this.eval(s.expr);
+      var end = this.b.newLabel("endsw");
+      var prevCont = this.loop.length ? this.loop[this.loop.length - 1][0] : end;
+      this.loop.push([prevCont, end]);
+      var self = this;
+      s.cases.forEach(function (cb) {
+        var nxt = self.b.newLabel("case");
+        self.branchFalse({ t: "Bin", op: "==", lhs: { t: "Raw", v: val }, rhs: cb[0] }, nxt);
+        cb[1].forEach(function (st) { self.stmt(st); });
+        self.b.jmp(end); self.b.label(nxt);
+      });
+      if (s.def) s.def.forEach(function (st) { self.stmt(st); });
+      this.loop.pop();
+      this.b.label(end);
+    },
+    lowerDoWhile: function (s) {
+      var top = this.b.newLabel("do"), cont = this.b.newLabel("docont"), end = this.b.newLabel("enddo");
+      this.b.label(top);
+      this.loop.push([cont, end]); var self = this; s.body.forEach(function (st) { self.stmt(st); }); this.loop.pop();
+      this.b.label(cont);
+      if (s.until) { this.branchFalse(s.cond, top); }
+      else { this.branchFalse(s.cond, end); this.b.jmp(top); }
+      this.b.label(end);
     },
     branchFalse: function (cond, falseL) {
       if (cond.t === "Bin" && CMP[cond.op]) { var a = this.eval(cond.lhs), b = this.eval(cond.rhs); this.b.cmpbr(COND_NEGATE[CMP[cond.op]], a, b, falseL); return; }
@@ -1720,7 +1781,7 @@
   // ========================================================================
 
   // ---- Python-style frontend (port of picoscript_python.py) ---------------
-  var PY_KW = {}; ["if","elif","else","while","for","in","range","def","return","break","continue","pass","and","or","not","print","true","false"].forEach(function (k) { PY_KW[k] = 1; });
+  var PY_KW = {}; ["if","elif","else","while","for","in","range","def","return","break","continue","pass","and","or","not","print","true","false","match","case","do","until","goto","label"].forEach(function (k) { PY_KW[k] = 1; });
   var PY_CMP = { "==":"EQ","!=":"NE","<":"LT",">":"GT","<=":"LE",">=":"GE" };
   var PY_AUG = { "+=":"+","-=":"-","*=":"*","/=":"/","%=":"MOD" };
   var PY_PREC = { or:1, and:2, "==":3, "!=":3, "<":3, ">":3, "<=":3, ">=":3, "+":5, "-":5, "*":6, "/":6, "%":6 };
@@ -1785,6 +1846,10 @@
         if (kw === "if") return this.parseIf();
         if (kw === "while") { this.expectKw("while"); var c = this.parseExpr(); return { t: "While", cond: c, body: this.parseSuite() }; }
         if (kw === "for") return this.parseFor();
+        if (kw === "match") return this.parseMatch();
+        if (kw === "do") return this.parseDo();
+        if (kw === "goto") { this.next(); var gl = this.expect("id").value; this.expect("newline"); return { t: "Goto", label: gl }; }
+        if (kw === "label") { this.next(); var ll = this.expect("id").value; this.expect("newline"); return { t: "Label", name: ll }; }
         if (kw === "def") return this.parseDef();
         if (kw === "return") { this.next(); this.expect("newline"); return { t: "Return" }; }
         if (kw === "break") { this.next(); this.expect("newline"); return { t: "Break" }; }
@@ -1816,6 +1881,27 @@
       if (args.length === 1) return { t: "ForEach", v: v, count: args[0], body: body };
       var end = (args[1].t === "Num") ? { t: "Num", value: args[1].value - 1 } : { t: "Bin", op: "-", lhs: args[1], rhs: { t: "Num", value: 1 } };
       return { t: "ForTo", v: v, start: args[0], end: end, step: args.length >= 3 ? args[2] : null, body: body };
+    },
+    parseMatch: function () {
+      this.expectKw("match"); var expr = this.parseExpr();
+      this.expect("op", ":"); this.expect("newline"); this.expect("indent");
+      var cases = [], def = null;
+      while (!this.at("dedent")) {
+        this.expectKw("case");
+        if (this.peek().kind === "id" && this.peek().value === "_") { this.next(); def = this.parseSuite(); }
+        else { var val = this.parseExpr(); cases.push([val, this.parseSuite()]); }
+      }
+      this.expect("dedent");
+      return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    parseDo: function () {
+      this.expectKw("do"); var body = this.parseSuite();
+      var cond, until;
+      if (this.atKw("while")) { this.expectKw("while"); cond = this.parseExpr(); until = false; }
+      else if (this.atKw("until")) { this.expectKw("until"); cond = this.parseExpr(); until = true; }
+      else throw new Error("Python: 'do:' block must be followed by 'while' or 'until'");
+      this.expect("newline");
+      return { t: "DoLoop", topCond: null, topUntil: false, botCond: cond, botUntil: until, body: body };
     },
     parseDef: function () { this.expectKw("def"); var name = this.expect("id").value; this.expect("op", "("); this.expect("op", ")"); return { t: "Sub", name: name, body: this.parseSuite() }; },
     parseCallFromId: function () { var ns = this.next().value; this.expect("op", "."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
@@ -1889,6 +1975,9 @@
         if (w === "if") return this.parseIf();
         if (w === "while") { this.next(); var wc = this.parseExpr(); return { t: "While", cond: wc, body: this.parseSuite() }; }
         if (w === "as") { this.next(); this.eatWord("long"); this.eatWord("as"); var ac = this.parseExpr(); return { t: "While", cond: ac, body: this.parseSuite() }; }
+        if (w === "choose") return this.parseChoose();
+        if (w === "label") { this.next(); var lname = this.expect("word").value; this.endStmt(); return { t: "Label", name: lname }; }
+        if (w === "go") { this.next(); this.eatWord("to"); var gname = this.expect("word").value; this.endStmt(); return { t: "Goto", label: gname }; }
         if (w === "repeat") return this.parseRepeat();
         if (w === "for") return this.parseFor();
         if (w === "define" || w === "to") {
@@ -1911,8 +2000,28 @@
       if (this.atWord("otherwise")) { this.eatWord("otherwise"); els = this.parseSuite(); }
       return { t: "If", arms: arms, els: els };
     },
+    parseChoose: function () {
+      this.eatWord("choose"); var expr = this.parseExpr();
+      this.expect("op", ":"); this.expect("newline"); this.expect("indent");
+      var cases = [], def = null;
+      while (!this.at("dedent")) {
+        if (this.atWord("when")) { this.eatWord("when"); var val = this.parseExpr(); cases.push([val, this.parseSuite()]); }
+        else if (this.atWord("otherwise")) { this.eatWord("otherwise"); def = this.parseSuite(); }
+        else throw new Error("English: expected 'When' or 'Otherwise' in Choose");
+      }
+      this.expect("dedent");
+      return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
     parseRepeat: function () {
       this.eatWord("repeat");
+      if (this.at("op", ":")) {
+        var body = this.parseSuite(); var cond, until;
+        if (this.atWord("until")) { this.eatWord("until"); cond = this.parseExpr(); until = true; }
+        else if (this.atWord("while")) { this.eatWord("while"); cond = this.parseExpr(); until = false; }
+        else throw new Error("English: 'Repeat:' block must be followed by 'Until' or 'While'");
+        this.endStmt();
+        return { t: "DoLoop", topCond: null, topUntil: false, botCond: cond, botUntil: until, body: body };
+      }
       if (this.atWord("while")) { this.eatWord("while"); var c = this.parseExpr(); return { t: "While", cond: c, body: this.parseSuite() }; }
       var count = this.parseExpr(); this.eatWord("times"); var v = "_i";
       if (this.atWord("with")) { this.eatWord("with"); v = this.expect("word").value; }
@@ -1956,6 +2065,7 @@
     },
     parseExpr: function (minp) {
       minp = minp || 0; var left = this.parseUnary();
+      if (minp === 0 && this.atWord("if")) { this.eatWord("if"); var cond = this.parseExpr(); this.eatWord("otherwise"); var els = this.parseExpr(); return { t: "Ternary", cond: cond, then: left, els: els }; }
       while (true) {
         var m = this.matchBinop();
         if (m === null || m[0] < minp) break;

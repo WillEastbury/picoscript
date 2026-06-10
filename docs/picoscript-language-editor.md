@@ -61,17 +61,37 @@ names**; `Namespace.Method` resolves case-insensitively to the canonical host na
 | Python-style | `picoscript_python.py` | `.ppy` | significant indentation, colon blocks |
 | Natural-English | `picoscript_english.py` | `.eng` | plain imperative sentences |
 
-All four frontends build the **same AST and reuse the same `Lowerer`**, so the same
+All four frontends build the **same AST and reuse the same lowering**, so the same
 program in any style lowers to **byte-for-byte identical bytecode** (the test suite
-asserts `python == basic` and `english == basic` for matching programs). The
-Python-style and English-style frontends are intentionally structured (they have
-no `goto`/`switch`/`do-loop`); everything else maps across all four surfaces.
+asserts `python == basic` and `english == basic` for matching programs). **Every
+construct is available in every frontend** — variables, arithmetic, comparisons,
+logical operators, the ternary, `if`/`elif`/`else`, `while`, the post-test do-loop,
+counted and index `for`, `switch`/`case`, `goto` + labels, subroutines, `break`,
+`continue`/`skip`, `print`, string output and host calls — each spelled idiomatically
+for its surface (see the per-frontend tables below).
+
+| Construct | C-syntax | BASIC | Python-style | Natural-English |
+|-----------|----------|-------|--------------|-----------------|
+| assign | `x = e;` | `x = e` / `DIM` | `x = e` | `Set x to e.` |
+| if / else | `if (c) {} else {}` | `IF c THEN … ELSE … ENDIF` | `if c:` / `elif` / `else:` | `If c:` / `Otherwise if c:` / `Otherwise:` |
+| while | `while (c) {}` | `WHILE c … ENDWHILE` | `while c:` | `While c:` / `As long as c:` |
+| do-loop (post-test) | `do {} while (c);` | `DO … LOOP UNTIL c` | `do:` … `until c` | `Repeat:` … `Until c.` |
+| counted for | `for (…) {}` | `FOR i = a TO b … NEXT` | `for i in range(a, b):` | `For each i from a to b:` |
+| index for (0..n-1) | `for (…) {}` | `FOREACH i IN n … ENDFOREACH` | `for i in range(n):` | `Repeat n times with i:` |
+| switch | `switch (x) { case … }` | `SWITCH x CASE … ENDSWITCH` | `match x:` / `case …` | `Choose x:` / `When …:` |
+| goto / label | `goto L;` / `L:` | `GOTO L` / `L:` | `goto L` / `label L` | `Go to L.` / `Label L.` |
+| subroutine | `void f(){}` / `f();` | `SUB f … ENDSUB` / `GOSUB f` | `def f():` / `f()` | `Define f:` / `Do f.` |
+| ternary | `c ? a : b` | `IIF(c, a, b)` | `a if c else b` | `a if c otherwise b` |
+| break / continue | `break;` / `continue;` | `BREAK` / `SKIP` | `break` / `continue` | `Stop.` / `Skip.` |
+
 
 **C-syntax constructs:** `int`/`var` declarations, assignment and compound
 assignment (`+= -= *= /= %=`), arithmetic `+ - * / %`, comparisons, logical
-`&& || !`, the ternary `?:`, pre/post `++`/`--`, `if/else`, `while`, `for`,
-`break`, `continue`, `return`, `void` subroutines and calls, `print(expr)`, and
-`Namespace.Method(...)` (Net/Storage/host) calls. Line comments `//`, block `/* */`.
+`&& || !`, the ternary `?:`, pre/post `++`/`--`, `if/else`, `while`,
+`do { … } while (c);`, `for`, `switch (x) { case N: … break; default: … }`,
+`goto L;` + `L:` labels, `break`, `continue`, `return`, `void` subroutines and
+calls, `print(expr)`, and `Namespace.Method(...)` (Net/Storage/host) calls. Line
+comments `//`, block `/* */`.
 
 **BASIC-like constructs:** `DIM`/`LET` declaration and `x = expr` assignment (plus
 compound `+= -= *= /=`), `INC`/`DEC`, arithmetic `+ - * / MOD`, comparisons by
@@ -86,10 +106,11 @@ guard at the `DO` for pre-test or at the `LOOP` for post-test), `FOR/TO/STEP/NEX
 **Python-style constructs:** first assignment declares (`x = expr`), augmented
 assignment (`+= -= *= /= %=`), arithmetic `+ - * / %`, comparisons `== != < > <= >=`,
 logical `and`/`or`/`not`, the conditional expression `a if c else b`, `if:` /
-`elif:` / `else:` indentation blocks, `while:`, `for i in range(n):` (0..n-1) and
-`for i in range(a, b[, step]):` (a..b-1), `def name():` subroutines and `name()`
-calls, `return` / `break` / `continue` / `pass`, `print(expr)`, and
-`Namespace.Method(...)` host calls. Line comments `#`. Example:
+`elif:` / `else:` indentation blocks, `while:`, the post-test `do:` … `until c` /
+`while c`, `for i in range(n):` (0..n-1) and `for i in range(a, b[, step]):`,
+`match x:` / `case N:` / `case _:` (switch), `goto L` + `label L`, `def name():`
+subroutines and `name()` calls, `return` / `break` / `continue` / `pass`,
+`print(expr)`, and `Namespace.Method(...)` host calls. Line comments `#`. Example:
 
 ```python
 total = 0
@@ -113,8 +134,12 @@ trailing `.` is allowed and idiomatic).
 | `Print <expr>.` / `Show <expr>.` / `Display <expr>.` | emit a value |
 | `If <cond>:` … `Otherwise if <cond>:` … `Otherwise:` | conditional block |
 | `While <cond>:` / `Repeat while <cond>:` / `As long as <cond>:` | pre-test loop |
+| `Repeat:` … `Until <cond>.` / `While <cond>.` | post-test (do) loop |
 | `Repeat <n> times with X:` | `X` counts `0..n-1` |
 | `For each X from <a> to <b>:` | `X` counts `a..b` inclusive |
+| `Choose <expr>:` … `When <v>:` … `Otherwise:` | switch / case |
+| `Label <name>.` / `Go to <name>.` | label and goto |
+| `<a> if <cond> otherwise <b>` | ternary expression |
 | `Define <name>:` / `To <name>:` | subroutine (globals; no params) |
 | `Do <name>.` / `Call <name>.` | invoke a subroutine |
 | `Return.` / `Stop.` (break) / `Skip.` (continue) | control flow |

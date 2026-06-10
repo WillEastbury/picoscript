@@ -601,9 +601,11 @@ print(total)
 </code></pre>
 <p>Supports: <code>x = expr</code> (first use declares) and augmented <code>+= -= *= /= %=</code>, arithmetic
 <code>+ - * / %</code>, comparisons <code>== != &lt; &gt; &lt;= &gt;=</code>, logical <code>and</code>/<code>or</code>/<code>not</code>, <code>a if c else b</code>,
-<code>if:</code>/<code>elif:</code>/<code>else:</code>, <code>while:</code>, <code>for i in range(n)</code> / <code>range(a, b[, step])</code>,
-<code>def name():</code> and <code>name()</code> calls, <code>return</code>/<code>break</code>/<code>continue</code>/<code>pass</code>, <code>print(...)</code>,
-and <code>Namespace.Method(...)</code> host calls. Line comments <code>#</code>.</p>
+<code>if:</code>/<code>elif:</code>/<code>else:</code>, <code>while:</code>, the post-test <code>do:</code> … <code>until c</code> / <code>while c</code>,
+<code>for i in range(n)</code> / <code>range(a, b[, step])</code>, <code>match x:</code> / <code>case N:</code> / <code>case _:</code>,
+<code>goto L</code> + <code>label L</code>, <code>def name():</code> and <code>name()</code> calls,
+<code>return</code>/<code>break</code>/<code>continue</code>/<code>pass</code>, <code>print(...)</code>, and <code>Namespace.Method(...)</code> host
+calls. Line comments <code>#</code>.</p>
 <p><strong>Natural-English frontend</strong> (<code>picoscript_english.py</code>, <code>.eng</code>) — the <em>pièce de
 résistance</em>: plain imperative sentences that compile to the very same bytecode (and,
 through the C backend, to machine code). Compound statements use a colon + indented
@@ -619,7 +621,9 @@ Otherwise:
 <p>Statements: <code>Set X to …</code> / <code>Let X be …</code>, <code>Add … to X</code> / <code>Subtract … from X</code>,
 <code>Increase/Decrease/Multiply/Divide X by …</code>, <code>Print/Show/Display …</code>, <code>If …:</code> /
 <code>Otherwise if …:</code> / <code>Otherwise:</code>, <code>While …:</code> / <code>Repeat while …:</code> / <code>As long as …:</code>,
-<code>Repeat n times with X:</code> (0..n-1), <code>For each X from a to b:</code> (a..b inclusive),
+the post-test <code>Repeat:</code> … <code>Until c.</code> / <code>While c.</code>, <code>Repeat n times with X:</code> (0..n-1),
+<code>For each X from a to b:</code> (a..b inclusive), <code>Choose x:</code> / <code>When v:</code> / <code>Otherwise:</code>
+(switch), <code>Label name.</code> / <code>Go to name.</code>, the <code>a if c otherwise b</code> ternary,
 <code>Define name:</code> / <code>To name:</code> and <code>Do name</code> / <code>Call name</code>, <code>Return</code> / <code>Stop</code> (break) /
 <code>Skip</code> (continue), and bare <code>Ns.Method(a, b).</code> host calls. Comparisons read as words
 (<code>is greater than</code>, <code>is at least</code>, <code>is</code>, <code>is not</code>, <code>exceeds</code>, …) joined by
@@ -1107,16 +1111,111 @@ names</strong>; <code>Namespace.Method</code> resolves case-insensitively to the
 </tr>
 </tbody>
 </table>
-<p>All four frontends build the <strong>same AST and reuse the same <code>Lowerer</code></strong>, so the same
+<p>All four frontends build the <strong>same AST and reuse the same lowering</strong>, so the same
 program in any style lowers to <strong>byte-for-byte identical bytecode</strong> (the test suite
-asserts <code>python == basic</code> and <code>english == basic</code> for matching programs). The
-Python-style and English-style frontends are intentionally structured (they have
-no <code>goto</code>/<code>switch</code>/<code>do-loop</code>); everything else maps across all four surfaces.</p>
+asserts <code>python == basic</code> and <code>english == basic</code> for matching programs). <strong>Every
+construct is available in every frontend</strong> — variables, arithmetic, comparisons,
+logical operators, the ternary, <code>if</code>/<code>elif</code>/<code>else</code>, <code>while</code>, the post-test do-loop,
+counted and index <code>for</code>, <code>switch</code>/<code>case</code>, <code>goto</code> + labels, subroutines, <code>break</code>,
+<code>continue</code>/<code>skip</code>, <code>print</code>, string output and host calls — each spelled idiomatically
+for its surface (see the per-frontend tables below).</p>
+<table>
+<thead>
+<tr>
+<th>Construct</th>
+<th>C-syntax</th>
+<th>BASIC</th>
+<th>Python-style</th>
+<th>Natural-English</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>assign</td>
+<td><code>x = e;</code></td>
+<td><code>x = e</code> / <code>DIM</code></td>
+<td><code>x = e</code></td>
+<td><code>Set x to e.</code></td>
+</tr>
+<tr>
+<td>if / else</td>
+<td><code>if (c) {} else {}</code></td>
+<td><code>IF c THEN … ELSE … ENDIF</code></td>
+<td><code>if c:</code> / <code>elif</code> / <code>else:</code></td>
+<td><code>If c:</code> / <code>Otherwise if c:</code> / <code>Otherwise:</code></td>
+</tr>
+<tr>
+<td>while</td>
+<td><code>while (c) {}</code></td>
+<td><code>WHILE c … ENDWHILE</code></td>
+<td><code>while c:</code></td>
+<td><code>While c:</code> / <code>As long as c:</code></td>
+</tr>
+<tr>
+<td>do-loop (post-test)</td>
+<td><code>do {} while (c);</code></td>
+<td><code>DO … LOOP UNTIL c</code></td>
+<td><code>do:</code> … <code>until c</code></td>
+<td><code>Repeat:</code> … <code>Until c.</code></td>
+</tr>
+<tr>
+<td>counted for</td>
+<td><code>for (…) {}</code></td>
+<td><code>FOR i = a TO b … NEXT</code></td>
+<td><code>for i in range(a, b):</code></td>
+<td><code>For each i from a to b:</code></td>
+</tr>
+<tr>
+<td>index for (0..n-1)</td>
+<td><code>for (…) {}</code></td>
+<td><code>FOREACH i IN n … ENDFOREACH</code></td>
+<td><code>for i in range(n):</code></td>
+<td><code>Repeat n times with i:</code></td>
+</tr>
+<tr>
+<td>switch</td>
+<td><code>switch (x) { case … }</code></td>
+<td><code>SWITCH x CASE … ENDSWITCH</code></td>
+<td><code>match x:</code> / <code>case …</code></td>
+<td><code>Choose x:</code> / <code>When …:</code></td>
+</tr>
+<tr>
+<td>goto / label</td>
+<td><code>goto L;</code> / <code>L:</code></td>
+<td><code>GOTO L</code> / <code>L:</code></td>
+<td><code>goto L</code> / <code>label L</code></td>
+<td><code>Go to L.</code> / <code>Label L.</code></td>
+</tr>
+<tr>
+<td>subroutine</td>
+<td><code>void f(){}</code> / <code>f();</code></td>
+<td><code>SUB f … ENDSUB</code> / <code>GOSUB f</code></td>
+<td><code>def f():</code> / <code>f()</code></td>
+<td><code>Define f:</code> / <code>Do f.</code></td>
+</tr>
+<tr>
+<td>ternary</td>
+<td><code>c ? a : b</code></td>
+<td><code>IIF(c, a, b)</code></td>
+<td><code>a if c else b</code></td>
+<td><code>a if c otherwise b</code></td>
+</tr>
+<tr>
+<td>break / continue</td>
+<td><code>break;</code> / <code>continue;</code></td>
+<td><code>BREAK</code> / <code>SKIP</code></td>
+<td><code>break</code> / <code>continue</code></td>
+<td><code>Stop.</code> / <code>Skip.</code></td>
+</tr>
+</tbody>
+</table>
 <p><strong>C-syntax constructs:</strong> <code>int</code>/<code>var</code> declarations, assignment and compound
 assignment (<code>+= -= *= /= %=</code>), arithmetic <code>+ - * / %</code>, comparisons, logical
-<code>&amp;&amp; || !</code>, the ternary <code>?:</code>, pre/post <code>++</code>/<code>--</code>, <code>if/else</code>, <code>while</code>, <code>for</code>,
-<code>break</code>, <code>continue</code>, <code>return</code>, <code>void</code> subroutines and calls, <code>print(expr)</code>, and
-<code>Namespace.Method(...)</code> (Net/Storage/host) calls. Line comments <code>//</code>, block <code>/* */</code>.</p>
+<code>&amp;&amp; || !</code>, the ternary <code>?:</code>, pre/post <code>++</code>/<code>--</code>, <code>if/else</code>, <code>while</code>,
+<code>do { … } while (c);</code>, <code>for</code>, <code>switch (x) { case N: … break; default: … }</code>,
+<code>goto L;</code> + <code>L:</code> labels, <code>break</code>, <code>continue</code>, <code>return</code>, <code>void</code> subroutines and
+calls, <code>print(expr)</code>, and <code>Namespace.Method(...)</code> (Net/Storage/host) calls. Line
+comments <code>//</code>, block <code>/* */</code>.</p>
 <p><strong>BASIC-like constructs:</strong> <code>DIM</code>/<code>LET</code> declaration and <code>x = expr</code> assignment (plus
 compound <code>+= -= *= /=</code>), <code>INC</code>/<code>DEC</code>, arithmetic <code>+ - * / MOD</code>, comparisons by
 symbol (<code>= &lt;&gt; &lt; &gt; &lt;= &gt;=</code>) or word (<code>EQ NE LT GT LE GE</code>) where <code>=</code> means equality
@@ -1129,10 +1228,11 @@ guard at the <code>DO</code> for pre-test or at the <code>LOOP</code> for post-t
 <p><strong>Python-style constructs:</strong> first assignment declares (<code>x = expr</code>), augmented
 assignment (<code>+= -= *= /= %=</code>), arithmetic <code>+ - * / %</code>, comparisons <code>== != &lt; &gt; &lt;= &gt;=</code>,
 logical <code>and</code>/<code>or</code>/<code>not</code>, the conditional expression <code>a if c else b</code>, <code>if:</code> /
-<code>elif:</code> / <code>else:</code> indentation blocks, <code>while:</code>, <code>for i in range(n):</code> (0..n-1) and
-<code>for i in range(a, b[, step]):</code> (a..b-1), <code>def name():</code> subroutines and <code>name()</code>
-calls, <code>return</code> / <code>break</code> / <code>continue</code> / <code>pass</code>, <code>print(expr)</code>, and
-<code>Namespace.Method(...)</code> host calls. Line comments <code>#</code>. Example:</p>
+<code>elif:</code> / <code>else:</code> indentation blocks, <code>while:</code>, the post-test <code>do:</code> … <code>until c</code> /
+<code>while c</code>, <code>for i in range(n):</code> (0..n-1) and <code>for i in range(a, b[, step]):</code>,
+<code>match x:</code> / <code>case N:</code> / <code>case _:</code> (switch), <code>goto L</code> + <code>label L</code>, <code>def name():</code>
+subroutines and <code>name()</code> calls, <code>return</code> / <code>break</code> / <code>continue</code> / <code>pass</code>,
+<code>print(expr)</code>, and <code>Namespace.Method(...)</code> host calls. Line comments <code>#</code>. Example:</p>
 <pre><code class="language-python">total = 0
 for i in range(1, 11):
     total += i
@@ -1180,12 +1280,28 @@ trailing <code>.</code> is allowed and idiomatic).</p>
 <td>pre-test loop</td>
 </tr>
 <tr>
+<td><code>Repeat:</code> … <code>Until &lt;cond&gt;.</code> / <code>While &lt;cond&gt;.</code></td>
+<td>post-test (do) loop</td>
+</tr>
+<tr>
 <td><code>Repeat &lt;n&gt; times with X:</code></td>
 <td><code>X</code> counts <code>0..n-1</code></td>
 </tr>
 <tr>
 <td><code>For each X from &lt;a&gt; to &lt;b&gt;:</code></td>
 <td><code>X</code> counts <code>a..b</code> inclusive</td>
+</tr>
+<tr>
+<td><code>Choose &lt;expr&gt;:</code> … <code>When &lt;v&gt;:</code> … <code>Otherwise:</code></td>
+<td>switch / case</td>
+</tr>
+<tr>
+<td><code>Label &lt;name&gt;.</code> / <code>Go to &lt;name&gt;.</code></td>
+<td>label and goto</td>
+</tr>
+<tr>
+<td><code>&lt;a&gt; if &lt;cond&gt; otherwise &lt;b&gt;</code></td>
+<td>ternary expression</td>
 </tr>
 <tr>
 <td><code>Define &lt;name&gt;:</code> / <code>To &lt;name&gt;:</code></td>
@@ -2512,7 +2628,7 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
   // ========================================================================
   // C-SYNTAX FRONTEND (port of picoscript_cfront.py)
   // ========================================================================
-  var C_KW = { int:1, var:1, void:1, if:1, else:1, while:1, for:1, return:1, break:1, continue:1 };
+  var C_KW = { int:1, var:1, void:1, if:1, else:1, while:1, for:1, return:1, break:1, continue:1, switch:1, case:1, default:1, do:1, goto:1 };
   var C_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "&&":1, "||":1, "++":1, "--":1, "+=":1, "-=":1, "*=":1, "/=":1, "%=":1 };
   var C_ONE = "+-*/%()<>=;,{}.!?:";
   var C_PREC = { "||":1, "&&":2, "==":3, "!=":3, "<":4, ">":4, "<=":4, ">=":4, "+":5, "-":5, "*":6, "/":6, "%":6 };
@@ -2565,11 +2681,15 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
         if (t.value === "if") return this.parseIf();
         if (t.value === "while") return this.parseWhile();
         if (t.value === "for") return this.parseFor();
+        if (t.value === "switch") return this.parseSwitch();
+        if (t.value === "do") return this.parseDo();
+        if (t.value === "goto") { this.next(); var gl = this.next().value; this.expect(";"); return { t: "Goto", label: gl }; }
         if (t.value === "return") { this.next(); if (this.accept(";")) return { t: "Return", value: null }; var v = this.parseExpr(); this.expect(";"); return { t: "Return", value: v }; }
         if (t.value === "break") { this.next(); this.expect(";"); return { t: "Break" }; }
         if (t.value === "continue") { this.next(); this.expect(";"); return { t: "Continue" }; }
       }
       if (t.value === "{") { return { t: "If", cond: { t: "Num", value: 1 }, then: this.parseBlock(), els: null }; }
+      if (t.kind === "id" && this.toks[this.i + 1].value === ":") { var lab = this.next().value; this.next(); return { t: "Label", name: lab }; }
       if (t.kind === "id" && this.toks[this.i + 1].value === "=") {
         var name = this.next().value; this.expect("="); var val = this.parseExpr(); this.expect(";"); return { t: "Assign", name: name, value: val };
       }
@@ -2601,6 +2721,34 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
         else step = { t: "ExprStmt", expr: this.parseExpr() };
       }
       this.expect(")"); return { t: "For", init: init, cond: cond, step: step, body: this.parseBlock() };
+    },
+    parseSwitch: function () {
+      this.next(); this.expect("("); var expr = this.parseExpr(); this.expect(")"); this.expect("{");
+      var cases = [], def = null;
+      while (!this.accept("}")) {
+        var t = this.peek();
+        if (t.kind === "kw" && t.value === "case") { this.next(); var val = this.parseExpr(); this.expect(":"); cases.push([val, this.parseCaseBody()]); }
+        else if (t.kind === "kw" && t.value === "default") { this.next(); this.expect(":"); def = this.parseCaseBody(); }
+        else throw new Error("C: expected case/default in switch");
+      }
+      return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    parseCaseBody: function () {
+      var stmts = [];
+      while (true) {
+        var t = this.peek();
+        if (t.value === "}") break;
+        if (t.kind === "kw" && (t.value === "case" || t.value === "default")) break;
+        if (t.kind === "kw" && t.value === "break") { this.next(); this.expect(";"); break; }
+        stmts.push(this.parseStmt());
+      }
+      return stmts;
+    },
+    parseDo: function () {
+      this.next(); var body = this.parseBlock();
+      if (!(this.peek().kind === "kw" && this.peek().value === "while")) throw new Error("C: expected 'while' after do block");
+      this.next(); this.expect("("); var cond = this.parseExpr(); this.expect(")"); this.expect(";");
+      return { t: "DoWhile", cond: cond, until: false, body: body };
     },
     parseExpr: function (minp) { return this.parseTernary(); },
     parseTernary: function () {
@@ -2679,6 +2827,10 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
       else if (s.t === "If") this.lowerIf(s);
       else if (s.t === "While") this.lowerWhile(s);
       else if (s.t === "For") this.lowerFor(s);
+      else if (s.t === "Switch") this.lowerSwitch(s);
+      else if (s.t === "DoWhile") this.lowerDoWhile(s);
+      else if (s.t === "Goto") this.b.jmp("lbl_" + s.label.toLowerCase());
+      else if (s.t === "Label") this.b.label("lbl_" + s.name.toLowerCase());
       else if (s.t === "Return") { if (s.value != null) { var rv = this.eval(s.value); this.b.mov(this.varOf("__ret__"), rv); } this.b.ret(); }
       else if (s.t === "ExprStmt") { if (s.expr != null) this.eval(s.expr, false); }
       else if (s.t === "Break") { if (!this.loop.length) throw new Error("break outside loop"); this.b.jmp(this.loop[this.loop.length - 1][1]); }
@@ -2712,6 +2864,31 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
       this.b.label(top); if (s.cond) this.branchFalse(s.cond, end);
       this.loop.push([cont, end]); var self = this; s.body.forEach(function (st) { self.stmt(st); }); this.loop.pop();
       this.b.label(cont); if (s.step) this.stmt(s.step); this.b.jmp(top); this.b.label(end);
+    },
+    lowerSwitch: function (s) {
+      var val = this.eval(s.expr);
+      var end = this.b.newLabel("endsw");
+      var prevCont = this.loop.length ? this.loop[this.loop.length - 1][0] : end;
+      this.loop.push([prevCont, end]);
+      var self = this;
+      s.cases.forEach(function (cb) {
+        var nxt = self.b.newLabel("case");
+        self.branchFalse({ t: "Bin", op: "==", lhs: { t: "Raw", v: val }, rhs: cb[0] }, nxt);
+        cb[1].forEach(function (st) { self.stmt(st); });
+        self.b.jmp(end); self.b.label(nxt);
+      });
+      if (s.def) s.def.forEach(function (st) { self.stmt(st); });
+      this.loop.pop();
+      this.b.label(end);
+    },
+    lowerDoWhile: function (s) {
+      var top = this.b.newLabel("do"), cont = this.b.newLabel("docont"), end = this.b.newLabel("enddo");
+      this.b.label(top);
+      this.loop.push([cont, end]); var self = this; s.body.forEach(function (st) { self.stmt(st); }); this.loop.pop();
+      this.b.label(cont);
+      if (s.until) { this.branchFalse(s.cond, top); }
+      else { this.branchFalse(s.cond, end); this.b.jmp(top); }
+      this.b.label(end);
     },
     branchFalse: function (cond, falseL) {
       if (cond.t === "Bin" && CMP[cond.op]) { var a = this.eval(cond.lhs), b = this.eval(cond.rhs); this.b.cmpbr(COND_NEGATE[CMP[cond.op]], a, b, falseL); return; }
@@ -3188,7 +3365,7 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
   // ========================================================================
 
   // ---- Python-style frontend (port of picoscript_python.py) ---------------
-  var PY_KW = {}; ["if","elif","else","while","for","in","range","def","return","break","continue","pass","and","or","not","print","true","false"].forEach(function (k) { PY_KW[k] = 1; });
+  var PY_KW = {}; ["if","elif","else","while","for","in","range","def","return","break","continue","pass","and","or","not","print","true","false","match","case","do","until","goto","label"].forEach(function (k) { PY_KW[k] = 1; });
   var PY_CMP = { "==":"EQ","!=":"NE","<":"LT",">":"GT","<=":"LE",">=":"GE" };
   var PY_AUG = { "+=":"+","-=":"-","*=":"*","/=":"/","%=":"MOD" };
   var PY_PREC = { or:1, and:2, "==":3, "!=":3, "<":3, ">":3, "<=":3, ">=":3, "+":5, "-":5, "*":6, "/":6, "%":6 };
@@ -3253,6 +3430,10 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
         if (kw === "if") return this.parseIf();
         if (kw === "while") { this.expectKw("while"); var c = this.parseExpr(); return { t: "While", cond: c, body: this.parseSuite() }; }
         if (kw === "for") return this.parseFor();
+        if (kw === "match") return this.parseMatch();
+        if (kw === "do") return this.parseDo();
+        if (kw === "goto") { this.next(); var gl = this.expect("id").value; this.expect("newline"); return { t: "Goto", label: gl }; }
+        if (kw === "label") { this.next(); var ll = this.expect("id").value; this.expect("newline"); return { t: "Label", name: ll }; }
         if (kw === "def") return this.parseDef();
         if (kw === "return") { this.next(); this.expect("newline"); return { t: "Return" }; }
         if (kw === "break") { this.next(); this.expect("newline"); return { t: "Break" }; }
@@ -3284,6 +3465,27 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
       if (args.length === 1) return { t: "ForEach", v: v, count: args[0], body: body };
       var end = (args[1].t === "Num") ? { t: "Num", value: args[1].value - 1 } : { t: "Bin", op: "-", lhs: args[1], rhs: { t: "Num", value: 1 } };
       return { t: "ForTo", v: v, start: args[0], end: end, step: args.length >= 3 ? args[2] : null, body: body };
+    },
+    parseMatch: function () {
+      this.expectKw("match"); var expr = this.parseExpr();
+      this.expect("op", ":"); this.expect("newline"); this.expect("indent");
+      var cases = [], def = null;
+      while (!this.at("dedent")) {
+        this.expectKw("case");
+        if (this.peek().kind === "id" && this.peek().value === "_") { this.next(); def = this.parseSuite(); }
+        else { var val = this.parseExpr(); cases.push([val, this.parseSuite()]); }
+      }
+      this.expect("dedent");
+      return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    parseDo: function () {
+      this.expectKw("do"); var body = this.parseSuite();
+      var cond, until;
+      if (this.atKw("while")) { this.expectKw("while"); cond = this.parseExpr(); until = false; }
+      else if (this.atKw("until")) { this.expectKw("until"); cond = this.parseExpr(); until = true; }
+      else throw new Error("Python: 'do:' block must be followed by 'while' or 'until'");
+      this.expect("newline");
+      return { t: "DoLoop", topCond: null, topUntil: false, botCond: cond, botUntil: until, body: body };
     },
     parseDef: function () { this.expectKw("def"); var name = this.expect("id").value; this.expect("op", "("); this.expect("op", ")"); return { t: "Sub", name: name, body: this.parseSuite() }; },
     parseCallFromId: function () { var ns = this.next().value; this.expect("op", "."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
@@ -3357,6 +3559,9 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
         if (w === "if") return this.parseIf();
         if (w === "while") { this.next(); var wc = this.parseExpr(); return { t: "While", cond: wc, body: this.parseSuite() }; }
         if (w === "as") { this.next(); this.eatWord("long"); this.eatWord("as"); var ac = this.parseExpr(); return { t: "While", cond: ac, body: this.parseSuite() }; }
+        if (w === "choose") return this.parseChoose();
+        if (w === "label") { this.next(); var lname = this.expect("word").value; this.endStmt(); return { t: "Label", name: lname }; }
+        if (w === "go") { this.next(); this.eatWord("to"); var gname = this.expect("word").value; this.endStmt(); return { t: "Goto", label: gname }; }
         if (w === "repeat") return this.parseRepeat();
         if (w === "for") return this.parseFor();
         if (w === "define" || w === "to") {
@@ -3379,8 +3584,28 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
       if (this.atWord("otherwise")) { this.eatWord("otherwise"); els = this.parseSuite(); }
       return { t: "If", arms: arms, els: els };
     },
+    parseChoose: function () {
+      this.eatWord("choose"); var expr = this.parseExpr();
+      this.expect("op", ":"); this.expect("newline"); this.expect("indent");
+      var cases = [], def = null;
+      while (!this.at("dedent")) {
+        if (this.atWord("when")) { this.eatWord("when"); var val = this.parseExpr(); cases.push([val, this.parseSuite()]); }
+        else if (this.atWord("otherwise")) { this.eatWord("otherwise"); def = this.parseSuite(); }
+        else throw new Error("English: expected 'When' or 'Otherwise' in Choose");
+      }
+      this.expect("dedent");
+      return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
     parseRepeat: function () {
       this.eatWord("repeat");
+      if (this.at("op", ":")) {
+        var body = this.parseSuite(); var cond, until;
+        if (this.atWord("until")) { this.eatWord("until"); cond = this.parseExpr(); until = true; }
+        else if (this.atWord("while")) { this.eatWord("while"); cond = this.parseExpr(); until = false; }
+        else throw new Error("English: 'Repeat:' block must be followed by 'Until' or 'While'");
+        this.endStmt();
+        return { t: "DoLoop", topCond: null, topUntil: false, botCond: cond, botUntil: until, body: body };
+      }
       if (this.atWord("while")) { this.eatWord("while"); var c = this.parseExpr(); return { t: "While", cond: c, body: this.parseSuite() }; }
       var count = this.parseExpr(); this.eatWord("times"); var v = "_i";
       if (this.atWord("with")) { this.eatWord("with"); v = this.expect("word").value; }
@@ -3424,6 +3649,7 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
     },
     parseExpr: function (minp) {
       minp = minp || 0; var left = this.parseUnary();
+      if (minp === 0 && this.atWord("if")) { this.eatWord("if"); var cond = this.parseExpr(); this.eatWord("otherwise"); var els = this.parseExpr(); return { t: "Ternary", cond: cond, then: left, els: els }; }
       while (true) {
         var m = this.matchBinop();
         if (m === null || m[0] < minp) break;

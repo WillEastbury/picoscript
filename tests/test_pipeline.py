@@ -471,6 +471,26 @@ Print an.
 Print the.
 """
 
+# Full-parity constructs: switch, do-loop (post-test), goto/label, ternary -- now
+# in every frontend. C uses its own lowerer (output-checked); python/english reuse
+# the BASIC lowerer (byte-identical to the BASIC equivalent).
+C_SWITCH = "int x = 2;\nswitch (x) {\n  case 1: print(10); break;\n  case 2: print(20); break;\n  default: print(0);\n}\n"
+C_DOWHILE = "int i = 0;\nint s = 0;\ndo {\n  i = i + 1;\n  s = s + i;\n} while (i < 5);\nprint(s);\n"
+C_GOTO = "int n = 0;\ntop:\nn = n + 1;\nif (n < 4) { goto top; }\nprint(n);\n"
+
+PY_MATCH = "x = 2\nmatch x:\n    case 1:\n        print(10)\n    case 2:\n        print(20)\n    case _:\n        print(0)\n"
+PY_DO = "i = 0\ns = 0\ndo:\n    i += 1\n    s += i\nuntil i >= 5\nprint(s)\n"
+PY_GOTO = "n = 0\nlabel top\nn += 1\nif n < 4:\n    goto top\nprint(n)\n"
+BASIC_SWITCH_EQ = "DIM X = 2\nSWITCH X\nCASE 1\nPRINT 10\nCASE 2\nPRINT 20\nDEFAULT\nPRINT 0\nENDSWITCH\n"
+BASIC_DO_EQ = "DIM I = 0\nDIM S = 0\nDO\nI += 1\nS += I\nLOOP UNTIL I >= 5\nPRINT S\n"
+BASIC_GOTO_EQ = "DIM N = 0\nTOP:\nN += 1\nIF N < 4 THEN\nGOTO TOP\nENDIF\nPRINT N\n"
+
+EN_CHOOSE = "Set x to 2.\nChoose x:\n    When 1:\n        Print 10.\n    When 2:\n        Print 20.\n    Otherwise:\n        Print 0.\n"
+EN_DO = "Set i to 0.\nSet s to 0.\nRepeat:\n    Increase i by 1.\n    Increase s by i.\nUntil i is at least 5.\nPrint s.\n"
+EN_GOTO = "Set n to 0.\nLabel top.\nIncrease n by 1.\nIf n is less than 4:\n    Go to top.\nPrint n.\n"
+EN_TERNARY = "Set t to 55.\nSet z to 100 if t exceeds 50 otherwise 0.\nPrint z.\n"
+BASIC_TERNARY_EQ = "DIM T = 55\nDIM Z = IIF(T > 50, 100, 0)\nPRINT Z\n"
+
 # Host-hook span program in the two new surfaces (Python VM == JS VM).
 PY_SPAN = """
 p = 100
@@ -786,6 +806,25 @@ def main():
     check_equiv("english == basic", lower_to_bytecode_safe(compile_english(EN_CTRL)),
                 lower_to_bytecode_safe(compile_basic(BASIC_CTRL)))
     check("english: var names a/an/the", lower_to_bytecode_safe(compile_english(EN_VARS)), expect_print=[14, 5, 2])
+
+    print("Full construct parity -- switch / do-loop / goto / ternary in every frontend:")
+    check("c: switch", lower_to_bytecode_safe(compile_c(C_SWITCH)), expect_print=[20])
+    check("c: do-while", lower_to_bytecode_safe(compile_c(C_DOWHILE)), expect_print=[15])
+    check("c: goto", lower_to_bytecode_safe(compile_c(C_GOTO)), expect_print=[4])
+    check("python: match", lower_to_bytecode_safe(compile_python(PY_MATCH)), expect_print=[20])
+    check("python: do-until", lower_to_bytecode_safe(compile_python(PY_DO)), expect_print=[15])
+    check("python: goto", lower_to_bytecode_safe(compile_python(PY_GOTO)), expect_print=[4])
+    check("english: choose", lower_to_bytecode_safe(compile_english(EN_CHOOSE)), expect_print=[20])
+    check("english: repeat-until", lower_to_bytecode_safe(compile_english(EN_DO)), expect_print=[15])
+    check("english: label-goto", lower_to_bytecode_safe(compile_english(EN_GOTO)), expect_print=[4])
+    check("english: ternary", lower_to_bytecode_safe(compile_english(EN_TERNARY)), expect_print=[100])
+    print("New constructs lower byte-identically vs the BASIC equivalent (python/english):")
+    check_equiv("python match == basic", lower_to_bytecode_safe(compile_python(PY_MATCH)), lower_to_bytecode_safe(compile_basic(BASIC_SWITCH_EQ)))
+    check_equiv("python do == basic", lower_to_bytecode_safe(compile_python(PY_DO)), lower_to_bytecode_safe(compile_basic(BASIC_DO_EQ)))
+    check_equiv("python goto == basic", lower_to_bytecode_safe(compile_python(PY_GOTO)), lower_to_bytecode_safe(compile_basic(BASIC_GOTO_EQ)))
+    check_equiv("english choose == basic", lower_to_bytecode_safe(compile_english(EN_CHOOSE)), lower_to_bytecode_safe(compile_basic(BASIC_SWITCH_EQ)))
+    check_equiv("english do == basic", lower_to_bytecode_safe(compile_english(EN_DO)), lower_to_bytecode_safe(compile_basic(BASIC_DO_EQ)))
+    check_equiv("english ternary == basic", lower_to_bytecode_safe(compile_english(EN_TERNARY)), lower_to_bytecode_safe(compile_basic(BASIC_TERNARY_EQ)))
     print("New frontends with host hooks [Python VM == JS VM]:")
     check_pyjs("python: span slice", lower_to_bytecode_safe(compile_python(PY_SPAN)), expect_print=[12, 4])
     check_pyjs("english: span slice", lower_to_bytecode_safe(compile_english(EN_SPAN)), expect_print=[12, 4])
@@ -869,6 +908,16 @@ def main():
     check_jscompile("jsc: json english", "english", JSON_EN, lower_to_bytecode_safe(compile_english(JSON_EN)))
     check_jscompile("jsc: xml python", "python", HTML_PY, lower_to_bytecode_safe(compile_python(HTML_PY)))
     check_jscompile("jsc: reader python", "python", READER_PY, lower_to_bytecode_safe(compile_python(READER_PY)))
+    check_jscompile("jsc: c switch", "c", C_SWITCH, lower_to_bytecode_safe(compile_c(C_SWITCH)))
+    check_jscompile("jsc: c do-while", "c", C_DOWHILE, lower_to_bytecode_safe(compile_c(C_DOWHILE)))
+    check_jscompile("jsc: c goto", "c", C_GOTO, lower_to_bytecode_safe(compile_c(C_GOTO)))
+    check_jscompile("jsc: python match", "python", PY_MATCH, lower_to_bytecode_safe(compile_python(PY_MATCH)))
+    check_jscompile("jsc: python do", "python", PY_DO, lower_to_bytecode_safe(compile_python(PY_DO)))
+    check_jscompile("jsc: python goto", "python", PY_GOTO, lower_to_bytecode_safe(compile_python(PY_GOTO)))
+    check_jscompile("jsc: english choose", "english", EN_CHOOSE, lower_to_bytecode_safe(compile_english(EN_CHOOSE)))
+    check_jscompile("jsc: english do", "english", EN_DO, lower_to_bytecode_safe(compile_english(EN_DO)))
+    check_jscompile("jsc: english goto", "english", EN_GOTO, lower_to_bytecode_safe(compile_english(EN_GOTO)))
+    check_jscompile("jsc: english ternary", "english", EN_TERNARY, lower_to_bytecode_safe(compile_english(EN_TERNARY)))
 
     print(f"\n{passed} passed, {failed} failed (parity + semantics)")
     sys.exit(1 if failed else 0)

@@ -40,8 +40,8 @@ combined with  and / or / not.
 from typing import List, Optional
 
 from picoscript_basic import (  # reuse AST + lowering unchanged
-    Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, ForTo, ForEach,
-    Sub, Gosub, Return, Break, Skip, Print, CallStmt, Lowerer,
+    Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
+    Switch, Goto, Label, Sub, Gosub, Return, Break, Skip, Print, CallStmt, Lowerer,
 )
 
 _TWO = {"==", "!=", "<=", ">=", "<>"}
@@ -258,6 +258,12 @@ class Parser:
                 self.next(); self.eat_word("long"); self.eat_word("as")
                 cond = self.parse_cond()
                 return While(cond, self.parse_suite())
+            if w == "choose":                   # "Choose <expr>:" / "When <v>:" / "Otherwise:"
+                return self.parse_choose()
+            if w == "label":                    # "Label <name>."
+                self.next(); name = self.expect("word").value; self.end_stmt(); return Label(name)
+            if w == "go":                       # "Go to <name>."
+                self.next(); self.eat_word("to"); name = self.expect("word").value; self.end_stmt(); return Goto(name)
             if w == "repeat":
                 return self.parse_repeat()
             if w == "for":                      # "For each X from a to b:"
@@ -315,8 +321,39 @@ class Parser:
             els = self.parse_suite()
         return If(arms, els)
 
+    def parse_choose(self) -> Switch:
+        self.eat_word("choose")
+        expr = self.parse_expr()
+        self.expect("op", ":")
+        self.expect("newline")
+        self.expect("indent")
+        cases = []
+        default = None
+        while not self.at("dedent"):
+            if self.at_word("when"):
+                self.eat_word("when")
+                val = self.parse_expr()
+                cases.append((val, self.parse_suite()))
+            elif self.at_word("otherwise"):
+                self.eat_word("otherwise")
+                default = self.parse_suite()
+            else:
+                raise SyntaxError(f"line {self.peek().line}: expected 'When' or 'Otherwise' in Choose")
+        self.expect("dedent")
+        return Switch(expr, cases, default)
+
     def parse_repeat(self):
         self.eat_word("repeat")
+        if self.at("op", ":"):                   # "Repeat:" <block> "Until cond." (post-test)
+            body = self.parse_suite()
+            if self.at_word("until"):
+                self.eat_word("until"); cond = self.parse_cond(); until = True
+            elif self.at_word("while"):
+                self.eat_word("while"); cond = self.parse_cond(); until = False
+            else:
+                raise SyntaxError(f"line {self.peek().line}: 'Repeat:' block must be followed by 'Until' or 'While'")
+            self.end_stmt()
+            return DoLoop(None, False, cond, until, body)
         if self.at_word("while"):                # "Repeat while <cond>:"
             self.eat_word("while")
             cond = self.parse_cond()
@@ -430,6 +467,13 @@ class Parser:
 
     def parse_expr(self, min_prec: int = 0) -> object:
         left = self.parse_unary()
+        # inline ternary: "<then> if <cond> otherwise <else>"
+        if min_prec == 0 and self.at_word("if"):
+            self.eat_word("if")
+            cond = self.parse_expr()
+            self.eat_word("otherwise")
+            els = self.parse_expr()
+            return Ternary(cond, left, els)
         while True:
             m = self._match_binop()
             if m is None or m[0] < min_prec:

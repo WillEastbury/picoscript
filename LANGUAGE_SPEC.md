@@ -174,9 +174,11 @@ print(total)
 
 Supports: `x = expr` (first use declares) and augmented `+= -= *= /= %=`, arithmetic
 `+ - * / %`, comparisons `== != < > <= >=`, logical `and`/`or`/`not`, `a if c else b`,
-`if:`/`elif:`/`else:`, `while:`, `for i in range(n)` / `range(a, b[, step])`,
-`def name():` and `name()` calls, `return`/`break`/`continue`/`pass`, `print(...)`,
-and `Namespace.Method(...)` host calls. Line comments `#`.
+`if:`/`elif:`/`else:`, `while:`, the post-test `do:` … `until c` / `while c`,
+`for i in range(n)` / `range(a, b[, step])`, `match x:` / `case N:` / `case _:`,
+`goto L` + `label L`, `def name():` and `name()` calls,
+`return`/`break`/`continue`/`pass`, `print(...)`, and `Namespace.Method(...)` host
+calls. Line comments `#`.
 
 **Natural-English frontend** (`picoscript_english.py`, `.eng`) — the *pièce de
 résistance*: plain imperative sentences that compile to the very same bytecode (and,
@@ -196,7 +198,9 @@ Otherwise:
 Statements: `Set X to …` / `Let X be …`, `Add … to X` / `Subtract … from X`,
 `Increase/Decrease/Multiply/Divide X by …`, `Print/Show/Display …`, `If …:` /
 `Otherwise if …:` / `Otherwise:`, `While …:` / `Repeat while …:` / `As long as …:`,
-`Repeat n times with X:` (0..n-1), `For each X from a to b:` (a..b inclusive),
+the post-test `Repeat:` … `Until c.` / `While c.`, `Repeat n times with X:` (0..n-1),
+`For each X from a to b:` (a..b inclusive), `Choose x:` / `When v:` / `Otherwise:`
+(switch), `Label name.` / `Go to name.`, the `a if c otherwise b` ternary,
 `Define name:` / `To name:` and `Do name` / `Call name`, `Return` / `Stop` (break) /
 `Skip` (continue), and bare `Ns.Method(a, b).` host calls. Comparisons read as words
 (`is greater than`, `is at least`, `is`, `is not`, `exceeds`, …) joined by

@@ -37,7 +37,7 @@ from picoscript_lang import encode_card_addr
 # ── tokens ──────────────────────────────────────────────────────────────────
 
 KEYWORDS = {"int", "var", "void", "if", "else", "while", "for", "return",
-            "break", "continue"}
+            "break", "continue", "switch", "case", "default", "do", "goto"}
 
 _TWO = {"==", "!=", "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/=", "%="}
 _ONE = set("+-*/%()<>=;,{}.!?:")
@@ -158,6 +158,18 @@ class Break: pass
 @dataclass
 class Continue: pass
 @dataclass
+class Switch:
+    expr: object; cases: list; default: Optional[list]   # cases = [(value, body), ...]
+@dataclass
+class DoWhile:
+    cond: object; until: bool; body: list
+@dataclass
+class Goto:
+    label: str
+@dataclass
+class Label:
+    name: str
+@dataclass
 class ExprStmt:
     expr: object
 @dataclass
@@ -236,6 +248,12 @@ class Parser:
                 return self.parse_while()
             if t.value == "for":
                 return self.parse_for()
+            if t.value == "switch":
+                return self.parse_switch()
+            if t.value == "do":
+                return self.parse_do()
+            if t.value == "goto":
+                self.next(); name = self.next().value; self.expect(";"); return Goto(name)
             if t.value == "return":
                 self.next()
                 if self.accept(";"):
@@ -247,6 +265,11 @@ class Parser:
                 self.next(); self.expect(";"); return Continue()
         if t.value == "{":
             return ExprStmt(None) if False else self._block_stmt()
+        # label:  name :
+        if t.kind == "id" and self.toks[self.i + 1].value == ":":
+            name = self.next().value
+            self.next()  # ':'
+            return Label(name)
         # assignment or expression statement
         if t.kind == "id" and self.toks[self.i + 1].value == "=":
             name = self.next().value
@@ -314,6 +337,52 @@ class Parser:
                 step = ExprStmt(self.parse_expr())   # e.g. i++
         self.expect(")")
         return For(init, cond, step, self.parse_block())
+
+    def parse_switch(self) -> Switch:
+        self.next(); self.expect("(")
+        expr = self.parse_expr()
+        self.expect(")"); self.expect("{")
+        cases = []
+        default = None
+        while not self.accept("}"):
+            t = self.peek()
+            if t.kind == "kw" and t.value == "case":
+                self.next()
+                val = self.parse_expr()
+                self.expect(":")
+                cases.append((val, self.parse_case_body()))
+            elif t.kind == "kw" and t.value == "default":
+                self.next(); self.expect(":")
+                default = self.parse_case_body()
+            else:
+                raise SyntaxError(f"line {t.line}: expected case/default in switch")
+        return Switch(expr, cases, default)
+
+    def parse_case_body(self) -> list:
+        """Statements until the next case/default/} ; a trailing `break;` is
+        consumed (each case is independent -- no C fall-through)."""
+        stmts = []
+        while True:
+            t = self.peek()
+            if t.value == "}":
+                break
+            if t.kind == "kw" and t.value in ("case", "default"):
+                break
+            if t.kind == "kw" and t.value == "break":
+                self.next(); self.expect(";")
+                break
+            stmts.append(self.parse_stmt())
+        return stmts
+
+    def parse_do(self) -> DoWhile:
+        self.next()                              # do
+        body = self.parse_block()
+        if not (self.peek().kind == "kw" and self.peek().value == "while"):
+            raise SyntaxError(f"line {self.peek().line}: expected 'while' after do block")
+        self.next(); self.expect("(")
+        cond = self.parse_expr()
+        self.expect(")"); self.expect(";")
+        return DoWhile(cond, False, body)
 
     def parse_decl_noeat_semicolon(self) -> Decl:
         self.next()
@@ -449,6 +518,14 @@ class Lowerer:
             self.lower_while(s)
         elif isinstance(s, For):
             self.lower_for(s)
+        elif isinstance(s, Switch):
+            self.lower_switch(s)
+        elif isinstance(s, DoWhile):
+            self.lower_dowhile(s)
+        elif isinstance(s, Goto):
+            self.b.jmp(f"lbl_{s.label.lower()}")
+        elif isinstance(s, Label):
+            self.b.label(f"lbl_{s.name.lower()}")
         elif isinstance(s, Return):
             if s.value is not None:
                 rv = self.eval(s.value)
@@ -527,6 +604,41 @@ class Lowerer:
         if s.step:
             self.stmt(s.step)
         self.b.jmp(top)
+        self.b.label(end)
+
+    def lower_switch(self, s: Switch):
+        val = self.eval(s.expr)
+        end = self.b.new_label("endsw")
+        prev_cont = self.loop_stack[-1][0] if self.loop_stack else end
+        self.loop_stack.append((prev_cont, end))     # break -> end; continue -> enclosing loop
+        for (cv, body) in s.cases:
+            nxt = self.b.new_label("case")
+            self.branch_false(Bin("==", _RawVReg(val), cv), nxt)
+            for st in body:
+                self.stmt(st)
+            self.b.jmp(end)
+            self.b.label(nxt)
+        if s.default:
+            for st in s.default:
+                self.stmt(st)
+        self.loop_stack.pop()
+        self.b.label(end)
+
+    def lower_dowhile(self, s: DoWhile):
+        top = self.b.new_label("do")
+        cont = self.b.new_label("docont")
+        end = self.b.new_label("enddo")
+        self.b.label(top)
+        self.loop_stack.append((cont, end))
+        for st in s.body:
+            self.stmt(st)
+        self.loop_stack.pop()
+        self.b.label(cont)
+        if s.until:
+            self.branch_false(s.cond, top)           # until: loop while cond false
+        else:
+            self.branch_false(s.cond, end)           # while: exit when cond false
+            self.b.jmp(top)
         self.b.label(end)
 
     def branch_false(self, cond, false_label: str):
