@@ -29,7 +29,7 @@ enum {
 };
 
 /* addressing / branch-mode encodings (bits [19:16]) */
-enum { PV_ADDR_IMM = 0x0, PV_ADDR_REG = 0x1 };
+enum { PV_ADDR_IMM = 0x0, PV_ADDR_REG = 0x1, PV_ADDR_REG_OFF = 0x3 };
 enum {
     PV_BR_EQ = 0, PV_BR_NE, PV_BR_LT, PV_BR_GT, PV_BR_LE, PV_BR_GE,
     PV_BR_Z, PV_BR_NZ, PV_BR_EOF, PV_BR_ERR

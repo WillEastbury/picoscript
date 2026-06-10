@@ -148,6 +148,14 @@ def cmd_native(args):
     print(f"wrote {out_obj} ({kind} via zig cc{tgt})")
 
 
+def cmd_stats(args):
+    from picoscript_metrics import measure, format_metrics
+    source = open(args.file, encoding="utf-8").read()
+    lang = detect_lang(args.file, args.lang)
+    m = measure(source, lang, backend=args.backend, run=args.run, opt=not args.no_opt)
+    print(format_metrics(m, title=os.path.basename(args.file) + f"  [lang={lang}]"))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="picoscript_build", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -176,6 +184,12 @@ def main(argv=None):
     pn.add_argument("-o", help="output executable")
     pn.add_argument("--target", help="zig cross target, e.g. thumb-freestanding-eabi, aarch64-linux")
     pn.set_defaults(func=cmd_native)
+
+    ps = sub.add_parser("stats", parents=[common], help="IL/bytecode/cycle metrics across backends")
+    ps.add_argument("--backend", choices=["bytecode", "c", "js"], default="bytecode",
+                    help="backend to highlight as 'chosen'")
+    ps.add_argument("--run", action="store_true", help="also profile a run for dynamic counts")
+    ps.set_defaults(func=cmd_stats)
 
     args = p.parse_args(argv)
     args.func(args)

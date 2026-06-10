@@ -61,7 +61,7 @@ OP_SUB      = 0x5   # Rd = Rs1 - Rs2 (or Rd = Rs1 - imm16)
 OP_MUL      = 0x6   # Rd = Rs1 * Rs2 (or Rd = Rs1 * imm16)
 OP_DIV      = 0x7   # Rd = Rs1 / Rs2 (or Rd = Rs1 / imm16)
 OP_INC      = 0x8   # Rd = Rd + 1
-OP_JUMP     = 0x9   # PC = imm16 (unconditional jump)
+OP_JUMP     = 0x9   # PC = imm16; Rs2=0x1: PC = Rs1; Rs2=0x3: PC = Rs1 + imm16 (indirect/indexed)
 OP_BRANCH   = 0xA   # if (Rs1 <cond> Rs2) PC += sign_extend(imm16)
 OP_CALL     = 0xB   # push PC; execute card[imm16] as subroutine
 OP_RETURN   = 0xC   # pop PC; resume caller
@@ -389,8 +389,12 @@ def disassemble(program):
             lines.append(f"  {i:3d}: {name:12s} R{d["rd"]}, R{d["rs1"]}, {d["imm16"]}")
         elif op == OP_INC:
             lines.append(f"  {i:3d}: INC          R{d["rd"]}")
+        elif op == OP_JUMP and d["rs2"] == ADDR_REGISTER:
+            lines.append(f"  {i:3d}: JUMP         [R{d['rs1']}]")
+        elif op == OP_JUMP and d["rs2"] == ADDR_REG_OFF:
+            lines.append(f"  {i:3d}: JUMP         [R{d['rs1']} + {d['imm16']}]")
         elif op == OP_JUMP:
-            lines.append(f"  {i:3d}: JUMP         @{d["imm16"]}")
+            lines.append(f"  {i:3d}: JUMP         @{d['imm16']}")
         elif op in (OP_RETURN, OP_NOOP, OP_WAIT):
             lines.append(f"  {i:3d}: {name}")
         elif op == OP_RAISE:

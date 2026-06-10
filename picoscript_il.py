@@ -129,6 +129,7 @@ class Inst:
     args: Tuple[Operand, ...] = ()
     imm: int = 0
     text: str = ""        # carried comment / string literal (e.g. Net.Type)
+    targets: Tuple[str, ...] = ()   # ordered case labels for a jump table (jmptab)
 
     def __repr__(self):
         if self.op == "label":
@@ -187,6 +188,12 @@ class ILBuilder:
 
     def jmp(self, label: str):
         self.insts.append(Inst("jmp", label=label))
+
+    def jmptab(self, selector: VReg, targets: Tuple[str, ...], default_label: str):
+        """Indexed jump table: PC dispatches on `selector` (assumed in [0, len(targets)))
+        to targets[selector].  `default_label` is the out-of-range target used by the
+        C/JS backends' switch default; callers must emit a bounds guard for bytecode."""
+        self.insts.append(Inst("jmptab", a=selector, targets=tuple(targets), label=default_label))
 
     def label(self, name: str):
         self.insts.append(Inst("label", label=name))
@@ -456,6 +463,9 @@ def _emit_word(ins: Inst, mapping, labels, pc: int) -> int:
     if op == "jmp":
         return E(isa.OP_JUMP, imm16=labels[ins.label])
 
+    if op == "jmptab":
+        raise ValueError("jmptab requires lower_to_bytecode_safe (multi-word expansion)")
+
     if op == "call":
         return E(isa.OP_CALL, imm16=labels[ins.label])
 
@@ -535,6 +545,8 @@ def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True) -> List[int]:
             return 2
         if ins.op == "mov" and isinstance(ins.a, Imm):
             return 2
+        if ins.op == "jmptab":
+            return len(ins.targets) + 1     # 1 computed jump + N inline table entries
         return 1
 
     labels: Dict[str, int] = {}
@@ -557,6 +569,14 @@ def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True) -> List[int]:
             words.append(E(isa.OP_SUB, rd=rd, rs1=rd, rs2=isa.ADDR_REGISTER, imm16=rd))  # rd = rd - rd = 0
             words.append(E(isa.OP_ADD, rd=rd, rs1=rd, imm16=value & 0xFFFF))             # rd = 0 + imm
             pc += 2
+            continue
+        if ins.op == "jmptab":
+            sel = _phys(mapping, ins.a)
+            # computed jump: PC = sel + (table base); table starts at the next word.
+            words.append(E(isa.OP_JUMP, rs1=sel, rs2=isa.ADDR_REG_OFF, imm16=(pc + 1) & 0xFFFF))
+            for tgt in ins.targets:                       # inline table: one absolute JUMP per case
+                words.append(E(isa.OP_JUMP, imm16=labels[tgt]))
+            pc += len(ins.targets) + 1
             continue
         try:
             words.append(_emit_word(ins, mapping, labels, pc))
@@ -700,6 +720,10 @@ def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool) -> str:
         return f"    if (pv_cond(ctx, {COND[ins.cond]})) goto {tgt};"
     if op == "jmp":
         return f"    goto {_c_ident(ins.label)};"
+    if op == "jmptab":
+        sel = opnd(ins.a)
+        arms = "".join(f" case {k}: goto {_c_ident(t)};" for k, t in enumerate(ins.targets))
+        return f"    switch ((int)({sel})) {{{arms} default: goto {_c_ident(ins.label)}; }}"
     if op == "call":
         return f"    {label_to_func[ins.label]}(ctx);"
     if op == "ret":
@@ -936,6 +960,11 @@ def _emit_js_inst(ins: Inst, jop, jname, label_block, label_to_func) -> Tuple[st
         return "return rt;", True
     if op == "raise":
         return f"/* raise {ins.imm} */", False
+    if op == "jmptab":
+        sel = jop(ins.a)
+        arms = " ".join(f"case {k}: {{ _b = {label_block[t]}; continue; }}"
+                        for k, t in enumerate(ins.targets))
+        return f"switch (({sel})|0) {{ {arms} default: {{ _b = {label_block[ins.label]}; continue; }} }}", True
     return f"/* unhandled {op} */", False
 
 

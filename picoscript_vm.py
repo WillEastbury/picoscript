@@ -471,6 +471,11 @@ class PicoVM:
         self.halted = False
         self.waiting = False
         self.retval = 0
+        # opt-in profiling (off by default; near-zero cost when disabled)
+        self.profile = False
+        self.op_hist: Dict[int, int] = {}
+        self.host_calls = 0
+        self.net_ops = 0
 
     # -- public API ------------------------------------------------------
     def load(self, words: List[int]):
@@ -506,6 +511,14 @@ class PicoVM:
         cur = self.pc
         self.pc += 1
 
+        if self.profile:
+            self.op_hist[op] = self.op_hist.get(op, 0) + 1
+            if op == isa.OP_NOOP:
+                if (imm16 & 0xFF00) == HOST_HOOK_BASE:
+                    self.host_calls += 1
+                elif imm16:
+                    self.net_ops += 1
+
         if op == isa.OP_NOOP:
             self._noop(rd, rs1, rs2, imm16)
         elif op == isa.OP_LOAD:
@@ -519,7 +532,12 @@ class PicoVM:
         elif op == isa.OP_INC:
             self.regs[rd] = (self.regs[rd] + 1) & MASK32
         elif op == isa.OP_JUMP:
-            self.pc = imm16
+            if rs2 == isa.ADDR_REGISTER:
+                self.pc = self.regs[rs1] & 0xFFFF                    # PC = Rs1 (indirect)
+            elif rs2 == isa.ADDR_REG_OFF:
+                self.pc = (self.regs[rs1] + imm16) & 0xFFFF          # PC = Rs1 + imm16 (indexed)
+            else:
+                self.pc = imm16
         elif op == isa.OP_BRANCH:
             if self._cond(rs2, self.regs[rd], self.regs[rs1]):
                 self.pc = cur + _sx16(imm16)

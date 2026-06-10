@@ -25,6 +25,7 @@
     WAIT: 0xD, RAISE: 0xE, DSP: 0xF
   };
   var ADDR_REG = 0x1;
+  var ADDR_REG_OFF = 0x3;
   var BR = { EQ: 0, NE: 1, LT: 2, GT: 3, LE: 4, GE: 5, Z: 6, NZ: 7, EOF: 8, ERR: 9 };
 
   function sx16(v) { v &= 0xFFFF; return (v & 0x8000) ? v - 0x10000 : v; }
@@ -107,7 +108,11 @@
         break;
       }
       case OP.INC: r[rd] = (r[rd] + 1) | 0; break;
-      case OP.JUMP: this.pc = imm; break;
+      case OP.JUMP:
+        if (rs2 === ADDR_REG) this.pc = r[rs1] & 0xFFFF;
+        else if (rs2 === ADDR_REG_OFF) this.pc = (r[rs1] + imm) & 0xFFFF;
+        else this.pc = imm;
+        break;
       case OP.BRANCH: if (this._cond(rs2, r[rd], r[rs1])) this.pc = cur + sx16(imm); break;
       case OP.CALL: this.callStack.push(this.pc); this.pc = imm; break;
       case OP.RETURN:

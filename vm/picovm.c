@@ -219,7 +219,9 @@ long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len)
             ctx->regs[rd] = ctx->regs[rd] + 1;
             break;
         case PV_OP_JUMP:
-            pc = imm16;
+            if (rs2 == PV_ADDR_REG)          pc = ctx->regs[rs1] & 0xFFFF;          /* PC = Rs1 */
+            else if (rs2 == PV_ADDR_REG_OFF) pc = (ctx->regs[rs1] + imm16) & 0xFFFF; /* PC = Rs1 + imm16 */
+            else                             pc = imm16;
             break;
         case PV_OP_BRANCH: {
             int off = (int)(int16_t)(uint16_t)imm16;
