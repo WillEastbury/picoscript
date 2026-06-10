@@ -169,7 +169,35 @@ CONSTRUCTS = [
      "Storage.SetField(QTY, 50)\nPRINT Storage.GetField(QTY)\n"
      "DIM N = Storage.QueryCard(QRY)\nPRINT N\n"
      "PRINT Storage.QueryResult(0)\nPRINT Storage.QueryResult(1)\nPRINT Storage.QueryResult(2)\n"
-     "Storage.DeleteCard(1)\nPRINT Storage.QueryCard(QRY)"),
+     "Storage.DeleteCard(1)\nPRINT Storage.QueryCard(QRY)",
+     "Memory.Set(200, 113)\nMemory.Set(201, 116)\nMemory.Set(202, 121)\n"
+     "qty = Span.Make(200, 3)\n"
+     "Memory.Set(210, 113)\nMemory.Set(211, 116)\nMemory.Set(212, 121)\nMemory.Set(213, 32)\n"
+     "Memory.Set(214, 62)\nMemory.Set(215, 32)\nMemory.Set(216, 52)\nMemory.Set(217, 48)\n"
+     "qry = Span.Make(210, 8)\n"
+     "Storage.UsePack(1)\n"
+     "a = Storage.AddCard()\nStorage.SetField(qty, 42)\n"
+     "b = Storage.AddCard()\nStorage.SetField(qty, 7)\n"
+     "c = Storage.AddCard()\nStorage.SetField(qty, 99)\n"
+     "Storage.EditCard(b)\nprint(Storage.GetField(qty))\n"
+     "Storage.SetField(qty, 50)\nprint(Storage.GetField(qty))\n"
+     "n = Storage.QueryCard(qry)\nprint(n)\n"
+     "print(Storage.QueryResult(0))\nprint(Storage.QueryResult(1))\nprint(Storage.QueryResult(2))\n"
+     "Storage.DeleteCard(1)\nprint(Storage.QueryCard(qry))",
+     "Memory.Set(200, 113).\nMemory.Set(201, 116).\nMemory.Set(202, 121).\n"
+     "Set qty to Span.Make(200, 3).\n"
+     "Memory.Set(210, 113).\nMemory.Set(211, 116).\nMemory.Set(212, 121).\nMemory.Set(213, 32).\n"
+     "Memory.Set(214, 62).\nMemory.Set(215, 32).\nMemory.Set(216, 52).\nMemory.Set(217, 48).\n"
+     "Set qry to Span.Make(210, 8).\n"
+     "Storage.UsePack(1).\n"
+     "Set a to Storage.AddCard().\nStorage.SetField(qty, 42).\n"
+     "Set b to Storage.AddCard().\nStorage.SetField(qty, 7).\n"
+     "Set c to Storage.AddCard().\nStorage.SetField(qty, 99).\n"
+     "Storage.EditCard(b).\nPrint Storage.GetField(qty).\n"
+     "Storage.SetField(qty, 50).\nPrint Storage.GetField(qty).\n"
+     "Set n to Storage.QueryCard(qry).\nPrint n.\n"
+     "Print Storage.QueryResult(0).\nPrint Storage.QueryResult(1).\nPrint Storage.QueryResult(2).\n"
+     "Storage.DeleteCard(1).\nPrint Storage.QueryCard(qry)."),
 ]
 
 
