@@ -226,6 +226,9 @@ class HostApi:
         if ns == "Html":
             if self._htmllib(vm, method, rd, rs1, rs2):
                 return
+        if ns == "Http":
+            if self._httplib(vm, method, rd, rs1, rs2):
+                return
         # Io: write raw bytes (UTF-8 strings) to the output buffer.
         if ns == "Io" and method == "Write":
             h = vm.regs[rs1]
@@ -398,6 +401,38 @@ class HostApi:
             out = (src.replace(b"&lt;", b"<").replace(b"&gt;", b">").replace(b"&quot;", b'"')
                       .replace(b"&#39;", b"'").replace(b"&amp;", b"&"))
             vm.regs[rd] = self._new_span_bytes(vm, out); return True
+        return False
+
+    @staticmethod
+    def _urldecode(b: bytes) -> bytes:
+        out = bytearray(); i = 0
+        while i < len(b):
+            c = b[i]
+            if c == 0x2B:                       # '+' -> space
+                out.append(0x20); i += 1
+            elif c == 0x25 and i + 2 < len(b):   # %XX
+                try:
+                    out.append(int(b[i + 1:i + 3], 16)); i += 3
+                except ValueError:
+                    out.append(c); i += 1
+            else:
+                out.append(c); i += 1
+        return bytes(out)
+
+    def _httplib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
+        # Pure HTTP parsing: query/form -> key=value lines (the Template model format).
+        src = self._span_raw(vm, vm.regs[rs1])
+        if method == "ParseQuery" or method == "ParseForm":
+            out = bytearray()
+            for pair in src.split(b"&"):
+                if not pair:
+                    continue
+                if b"=" in pair:
+                    k, v = pair.split(b"=", 1)
+                else:
+                    k, v = pair, b""
+                out += self._urldecode(k) + b"=" + self._urldecode(v) + b"\n"
+            vm.regs[rd] = self._new_span_bytes(vm, bytes(out)); return True
         return False
 
     def _templatelib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:

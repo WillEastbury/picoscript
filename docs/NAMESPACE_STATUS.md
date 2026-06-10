@@ -12,7 +12,8 @@ where that was my only objection I implemented a representative op to prove it.
 ## Implemented this session
 `Bits.*`, `Dot8.*` (NEON SDOT / SMLAD), native `Memory.*`/`Io`, `String.*`,
 `Number.*`, `Maths.Power/Sqrt`, `Template.*` (holes/sections/`{{#each}}`),
-`Compress.PicoCompress/PicoDecompress` (RLE), `Crypto.Sha256`, `Html.Encode/Decode`.
+`Compress.PicoCompress/PicoDecompress` (RLE), `Crypto.Sha256`, `Html.Encode/Decode`,
+`Http.ParseQuery/ParseForm` (url-decode -> Template model).
 (Already present: `Io`, `Json`, `Xml`, `Queue`, `Random`, `Req`, `Resp`, `Span`,
 `Storage`, `Utf8Reader`, `Utf8Writer`.)
 
@@ -55,9 +56,10 @@ implemented; the 64-bit ones are deferred for this reason.
   LZ77+Huffman bitstream codecs, bit-identical across Python and JS. The custom
   `PicoCompress` (RLE) is implemented and covers the embedded case.
 - **HTML DOM + HTTP parsing** — `Html.CreateNode/SetAttribute/QuerySelector/
-  ParseTree/Serialize` need a mutable tree model + parser; `Http.ParseQuery/
-  ParseForm/ParseJson/EncodeJson` are pure string parsing and could be added
-  next; `Http.ReadHeader/ReadBody` read the host connection (host-injected).
+  ParseTree/Serialize` need a mutable tree model + parser. `Http.ParseQuery/
+  ParseForm` (pure URL-decode -> `key=value` Template model) **are implemented**;
+  `Http.ParseJson/EncodeJson` are pure string parsing and could be added next;
+  `Http.ReadHeader/ReadBody` read the host connection (host-injected).
   `Html.Encode/Decode` (pure) are implemented.
 - **Asymmetric / symmetric crypto** — `Crypto.Sign/Verify/Encrypt/Decrypt/
   GenerateKeyPair/DeriveKey`, `X509.*`, `Auth.*`. Large security-sensitive

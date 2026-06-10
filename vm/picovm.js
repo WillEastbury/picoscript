@@ -279,6 +279,7 @@
     if (name.indexOf("Compress.") === 0) { if (this._compresslib(name.slice(9), rd, rs1, rs2)) return; }
     if (name.indexOf("Crypto.") === 0) { if (this._cryptolib(name.slice(7), rd, rs1, rs2)) return; }
     if (name.indexOf("Html.") === 0) { if (this._htmllib(name.slice(5), rd, rs1, rs2)) return; }
+    if (name.indexOf("Http.") === 0) { if (this._httplib(name.slice(5), rd, rs1, rs2)) return; }
     // ---- Io: write raw bytes (UTF-8 strings) to the output buffer ----------
     if (name === "Io.Write") {
       var sw = this.spans[this.regs[rs1]];
@@ -437,6 +438,41 @@
     if (method === "Decode") {
       s = s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
       this.regs[rd] = this._newSpanBytes(_strBytes(s)); return true;
+    }
+    return false;
+  };
+
+  function _urldecode(b) {
+    var out = [], i = 0;
+    while (i < b.length) {
+      var c = b[i];
+      if (c === 0x2b) { out.push(0x20); i += 1; }
+      else if (c === 0x25 && i + 2 < b.length) {
+        var hx = String.fromCharCode(b[i + 1], b[i + 2]);
+        if (/^[0-9a-fA-F]{2}$/.test(hx)) { out.push(parseInt(hx, 16)); i += 3; }
+        else { out.push(c); i += 1; }
+      } else { out.push(c); i += 1; }
+    }
+    return out;
+  }
+
+  PicoVM.prototype._httplib = function (method, rd, rs1, rs2) {
+    var src = this._spanBytes(this.regs[rs1]);
+    if (method === "ParseQuery" || method === "ParseForm") {
+      var out = [], pairs = [], cur = [];
+      for (var p = 0; p < src.length; p++) { if (src[p] === 0x26) { pairs.push(cur); cur = []; } else cur.push(src[p]); }
+      pairs.push(cur);
+      for (var pi = 0; pi < pairs.length; pi++) {
+        var pr = pairs[pi]; if (!pr.length) continue;
+        var eq = pr.indexOf(0x3d), k, v;
+        if (eq >= 0) { k = pr.slice(0, eq); v = pr.slice(eq + 1); } else { k = pr; v = []; }
+        var dk = _urldecode(k), dv = _urldecode(v), a;
+        for (a = 0; a < dk.length; a++) out.push(dk[a]);
+        out.push(0x3d);
+        for (a = 0; a < dv.length; a++) out.push(dv[a]);
+        out.push(0x0a);
+      }
+      this.regs[rd] = this._newSpanBytes(out); return true;
     }
     return false;
   };
