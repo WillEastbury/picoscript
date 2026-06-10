@@ -339,8 +339,18 @@ class HostApi:
                 k = src.find(b"}}", j + 2)
                 if k < 0:
                     lit(src[j:]); break
-                key = src[j + 2:k].strip(b" \t\r\n")[:255]
-                plan.extend((0x02, len(key))); plan.extend(key)
+                inner = src[j + 2:k].strip(b" \t\r\n")
+                if inner[:1] == b"#":          # section: render inner if key truthy
+                    key = inner[1:].strip(b" \t\r\n")[:255]
+                    plan.extend((0x03, len(key))); plan.extend(key)
+                elif inner[:1] == b"^":        # inverted section: render if key falsy
+                    key = inner[1:].strip(b" \t\r\n")[:255]
+                    plan.extend((0x04, len(key))); plan.extend(key)
+                elif inner[:1] == b"/":        # section end
+                    plan.append(0x05)
+                else:                          # hole
+                    key = inner[:255]
+                    plan.extend((0x02, len(key))); plan.extend(key)
                 i = k + 2
             vm.regs[rd] = self._new_span_bytes(vm, bytes(plan))
             return True
@@ -361,6 +371,25 @@ class HostApi:
                 elif op == 0x02:
                     kl = plan[i]; i += 1
                     out.extend(model.get(bytes(plan[i:i + kl]), b"")); i += kl
+                elif op == 0x03 or op == 0x04:           # (inverted) section begin
+                    kl = plan[i]; i += 1
+                    key = bytes(plan[i:i + kl]); i += kl
+                    truthy = len(model.get(key, b"")) > 0
+                    render = truthy if op == 0x03 else (not truthy)
+                    if not render:                       # skip to matching end (nesting-aware)
+                        depth = 1
+                        while i < n and depth > 0:
+                            o = plan[i]; i += 1
+                            if o == 0x01:
+                                i += 2 + ((plan[i] << 8) | plan[i + 1])
+                            elif o == 0x02:
+                                i += 1 + plan[i]
+                            elif o == 0x03 or o == 0x04:
+                                i += 1 + plan[i]; depth += 1
+                            elif o == 0x05:
+                                depth -= 1
+                elif op == 0x05:                         # end of a rendered section
+                    pass
                 else:
                     break
             vm.regs[rd] = self._new_span_bytes(vm, bytes(out))

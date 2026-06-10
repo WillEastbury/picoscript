@@ -383,11 +383,24 @@
         lit(src.slice(i, j));
         var k = _bfind2(src, 0x7d, 0x7d, j + 2);
         if (k < 0) { lit(src.slice(j)); break; }
-        var key = src.slice(j + 2, k), a0 = 0, a1 = key.length;
-        while (a0 < a1 && _ws(key[a0])) a0++;
-        while (a1 > a0 && _ws(key[a1 - 1])) a1--;
-        key = key.slice(a0, a1); if (key.length > 255) key = key.slice(0, 255);
-        plan.push(0x02, key.length); for (var y = 0; y < key.length; y++) plan.push(key[y]);
+        var inner = src.slice(j + 2, k), a0 = 0, a1 = inner.length;
+        while (a0 < a1 && _ws(inner[a0])) a0++;
+        while (a1 > a0 && _ws(inner[a1 - 1])) a1--;
+        inner = inner.slice(a0, a1);
+        var first = inner.length ? inner[0] : 0;
+        if (first === 0x23 || first === 0x5e) {        // '#' section / '^' inverted
+          var key = inner.slice(1), b0 = 0, b1 = key.length;
+          while (b0 < b1 && _ws(key[b0])) b0++;
+          while (b1 > b0 && _ws(key[b1 - 1])) b1--;
+          key = key.slice(b0, b1); if (key.length > 255) key = key.slice(0, 255);
+          plan.push(first === 0x23 ? 0x03 : 0x04, key.length);
+          for (var y = 0; y < key.length; y++) plan.push(key[y]);
+        } else if (first === 0x2f) {                    // '/' section end
+          plan.push(0x05);
+        } else {                                        // hole
+          var hk = inner; if (hk.length > 255) hk = hk.slice(0, 255);
+          plan.push(0x02, hk.length); for (var z = 0; z < hk.length; z++) plan.push(hk[z]);
+        }
         i = k + 2;
       }
       this.regs[rd] = this._newSpanBytes(plan); return true;
@@ -402,6 +415,21 @@
         var op = plan[i++];
         if (op === 0x01) { var ln2 = (plan[i] << 8) | plan[i + 1]; i += 2; for (var q = 0; q < ln2; q++) out.push(plan[i + q]); i += ln2; }
         else if (op === 0x02) { var kl = plan[i++], ks = _keystr(plan.slice(i, i + kl)); i += kl; var v = model[ks] || []; for (var r = 0; r < v.length; r++) out.push(v[r]); }
+        else if (op === 0x03 || op === 0x04) {
+          var kl2 = plan[i++], ks2 = _keystr(plan.slice(i, i + kl2)); i += kl2;
+          var truthy = (model[ks2] || []).length > 0;
+          if (!(op === 0x03 ? truthy : !truthy)) {     // skip section body (nesting-aware)
+            var depth = 1;
+            while (i < n && depth > 0) {
+              var o = plan[i++];
+              if (o === 0x01) { i += 2 + ((plan[i] << 8) | plan[i + 1]); }
+              else if (o === 0x02) { i += 1 + plan[i]; }
+              else if (o === 0x03 || o === 0x04) { i += 1 + plan[i]; depth++; }
+              else if (o === 0x05) { depth--; }
+            }
+          }
+        }
+        else if (op === 0x05) { /* end of rendered section */ }
         else break;
       }
       this.regs[rd] = this._newSpanBytes(out); return true;

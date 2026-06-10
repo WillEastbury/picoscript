@@ -59,8 +59,17 @@ def main():
     check(b"Hi {{name}}!", b"name=Bob", b"Hi Bob!")
     check(b"{{a}}-{{ b }}-{{x}}", b"a=1\nb=22", b"1-22-")        # whitespace-trimmed key, missing -> empty
     check(b"<p>{{title}}</p>", b"title=Hello & Bye", b"<p>Hello & Bye</p>")
+    # sections (truthy), inverted, nesting, mixed with holes
+    check(b"{{#show}}yes{{/show}}", b"show=1", b"yes")
+    check(b"{{#show}}yes{{/show}}", b"show=", b"")
+    check(b"{{^show}}no{{/show}}", b"show=", b"no")
+    check(b"{{^show}}no{{/show}}", b"show=1", b"")
+    check(b"{{#a}}A{{#b}}B{{/b}}C{{/a}}", b"a=1\nb=1", b"ABC")     # nested, both true
+    check(b"{{#a}}A{{#b}}B{{/b}}C{{/a}}", b"a=1\nb=", b"AC")       # nested, inner false
+    check(b"{{#a}}A{{/a}}", b"a=", b"")                           # outer false skips body
+    check(b"Hi {{#vip}}*{{/vip}}{{name}}", b"vip=1\nname=Bob", b"Hi *Bob")
     print("PASS Template.*: AOT compile-at-save + render, Python VM == JS VM byte-exact "
-          "(holes, trimmed keys, missing-key, literal passthrough)")
+          "(holes, sections, inverted, nesting, missing-key, literal passthrough)")
 
 
 if __name__ == "__main__":

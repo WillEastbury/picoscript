@@ -39,17 +39,20 @@ plan = Template.Compile(source_span)     // at SAVE time -> store `plan` in a ca
 out  = Template.Render(plan, model_span) // at RENDER time -> fast, no parse
 ```
 
-* **Source**: literal text + `{{key}}` holes (keys are whitespace-trimmed).
-* **Plan** (the AOT artifact): a byte stream — `0x01 LEN_HI LEN_LO <bytes>` for a
-  literal run, `0x02 KEYLEN <key>` for a hole. Store this in the template card.
+* **Source**: literal text, `{{key}}` holes, and **sections** `{{#key}}…{{/key}}`
+  (render the body when `key` is non-empty) / `{{^key}}…{{/key}}` (inverted —
+  render when empty/absent). Sections **nest**. Keys are whitespace-trimmed.
+* **Plan** (the AOT artifact, stored in the card): a byte stream —
+  `0x01 LEN_HI LEN_LO <bytes>`=literal, `0x02 KEYLEN <key>`=hole,
+  `0x03 KEYLEN <key>`=section, `0x04 …`=inverted section, `0x05`=section end.
 * **Model**: a `key=value` (newline-separated) span. Missing keys render empty.
 
-Example: `Template.Compile(b"Hi {{name}}!")` then `Render(plan, b"name=Bob")` →
-`Hi Bob!`.
+Example: `Template.Compile(b"Hi {{#vip}}*{{/vip}}{{name}}!")` then
+`Render(plan, b"vip=1\nname=Bob")` → `Hi *Bob!`.
 
 ### Roadmap
-- Sections / nesting (`{{#each}}`, `{{#if}}`, partials) — the plan format already
-  reserves opcodes 0x03+ for begin/end markers.
+- Iteration over lists (`{{#each}}` with a list/array model) and partials
+  (`{{>name}}` including another compiled template).
 - Sourcing the model directly from a walfs card's fields (render a card via a
   template — picowal's schema-driven SSR, but data-driven).
 - Native `toC` lowering of the span/string model (the cross-cutting "native"
