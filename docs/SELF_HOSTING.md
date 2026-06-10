@@ -84,10 +84,11 @@ the bytecode and VMs stay frozen.
 ## Suggested staged bootstrap
 
 - **Stage 0 — emit (done):** `examples/selfhost_emit.pc` proves codegen.
-- **Stage 1 — self-hosted assembler:** a PicoScript program that reads a tiny
-  textual listing (`ADD R0 R0 42`, one instruction per line) via `Utf8Reader`
-  and emits bytecode with the Stage-0 idiom. No grammar, no stack — just lex +
-  encode. This is the smallest *useful* self-hosted tool.
+- **Stage 1 — self-hosted assembler (done):** `examples/selfhost_asm.pc` reads
+  a numeric-field textual listing (`op rd rs1 rs2 imm`, one instruction per
+  line) via `Utf8Reader` and emits bytecode with the Stage-0 idiom. Verified by
+  `tests/test_selfhost_asm.py`, which assembles native bytecode, runs the
+  generated program, and asserts byte-for-byte equality with the native compiler.
 - **Stage 2 — tiny expression compiler:** add an explicit-stack expression parser
   (numbers, `+ - * /`, `print`) emitting bytecode directly (skip PicoIL). Proves
   the parse half works under the no-recursion constraint.

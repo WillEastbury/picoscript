@@ -1,0 +1,54 @@
+// Self-hosting Stage 1: numeric-field PicoScript assembler.
+//
+// Input contract:
+//   The host/test writes an ASCII listing at arena address 1024 and stores its
+//   byte length as big-endian bytes in Memory[1000] and Memory[1001].
+//   The assembler makes Span.Make(1024, length), scans it with Utf8Reader, and
+//   emits runnable PicoScript bytecode bytes with Io.WriteByte.
+//
+// Listing format:
+//   One instruction per line, five decimal fields separated by whitespace:
+//       op rd rs1 rs2 imm
+//   Blank lines and any whitespace are ignored; comments are not part of the
+//   input format. The fields are the raw ISA fields in the bytecode word:
+//       (op<<28)|(rd<<24)|(rs1<<20)|(rs2<<16)|imm16
+//
+// Example (const-build 80, PRINT, RETURN):
+//       5 0 0 1 0
+//       4 0 0 0 80
+//       2 0 0 0 65534
+//       3 0 0 0 65534
+//       12 0 0 0 0
+//
+// The emitted bytes use the Stage-0 overflow-safe big-endian idiom:
+//   byte0 = op*16 + rd     byte1 = rs1*16 + rs2
+//   byte2 = imm / 256      byte3 = imm % 256
+
+int input_ptr = 1024;
+int len_hi = Memory.Get(1000);
+int len_lo = Memory.Get(1001);
+int input_len = len_hi * 256 + len_lo;
+int input_span = Span.Make(input_ptr, input_len);
+int reader = Utf8Reader.New(input_span);
+
+int op = 0;
+int rd = 0;
+int rs1 = 0;
+int rs2 = 0;
+int imm = 0;
+
+Utf8Reader.SkipWs(reader);
+while (Utf8Reader.Eof(reader) == 0) {
+    op = Utf8Reader.Int(reader);
+    rd = Utf8Reader.Int(reader);
+    rs1 = Utf8Reader.Int(reader);
+    rs2 = Utf8Reader.Int(reader);
+    imm = Utf8Reader.Int(reader);
+
+    Io.WriteByte(op * 16 + rd);
+    Io.WriteByte(rs1 * 16 + rs2);
+    Io.WriteByte(imm / 256);
+    Io.WriteByte(imm % 256);
+
+    Utf8Reader.SkipWs(reader);
+}
