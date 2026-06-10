@@ -41,6 +41,7 @@ This document provides a comprehensive reference for all PicoScript methods, org
 - [Span](#span)
 - [Storage](#storage)
 - [String](#string)
+- [Template](#template)
 - [Thread](#thread)
 - [Utf8Reader](#utf8reader)
 - [Utf8Writer](#utf8writer)
@@ -528,7 +529,7 @@ Persistent storage: pack/card schema, CRUD, query.
 ## String
 
 **Conformance Level:** L2  
-**Methods:** 12
+**Methods:** 13
 
 String manipulation: concat, substring, split, trim, case conversion.
 
@@ -540,12 +541,23 @@ String manipulation: concat, substring, split, trim, case conversion.
 | Join | 0x00 | 0x7089 | `String.Join(...)` |
 | Length | 0x00 | 0x7081 | `String.Length(...)` |
 | Replace | 0x00 | 0x7084 | `String.Replace(...)` |
+| SetReplace | 0x00 | 0x708C | `String.SetReplace(...)` |
 | Split | 0x00 | 0x7088 | `String.Split(...)` |
 | StartsWith | 0x00 | 0x708A | `String.StartsWith(...)` |
 | Substring | 0x00 | 0x7082 | `String.Substring(...)` |
 | ToLower | 0x00 | 0x7086 | `String.ToLower(...)` |
 | ToUpper | 0x00 | 0x7085 | `String.ToUpper(...)` |
 | Trim | 0x00 | 0x7087 | `String.Trim(...)` |
+
+## Template
+
+**Conformance Level:** L0  
+**Methods:** 2
+
+| Method | Opcode | Hook Code | v2 Example |
+|--------|--------|-----------|----------|
+| Compile | 0x00 | 0x707A | `Template.Compile(...)` |
+| Render | 0x00 | 0x707B | `Template.Render(...)` |
 
 ## Thread
 
@@ -627,7 +639,7 @@ Thread preemption hints and cooperative yielding.
 
 ## Summary by Conformance Level
 
-### L0: 103 methods
+### L0: 105 methods
 
 - Auth.GetToken (0x7125)
 - Auth.GetUserCredentials (0x7120)
@@ -702,6 +714,8 @@ Thread preemption hints and cooperative yielding.
 - Json.Null (0x704D)
 - Json.Raw (0x704E)
 - Json.Str (0x704A)
+- Template.Compile (0x707A)
+- Template.Render (0x707B)
 - Utf8Reader.Eof (0x702D)
 - Utf8Reader.Int (0x702B)
 - Utf8Reader.Match (0x702F)
@@ -750,7 +764,7 @@ Thread preemption hints and cooperative yielding.
 - Net.Status (core)
 - Net.Type (core)
 
-### L2: 53 methods
+### L2: 54 methods
 
 - DateTime.AddDays (0x70B7)
 - DateTime.AddHours (0x70B6)
@@ -799,6 +813,7 @@ Thread preemption hints and cooperative yielding.
 - String.Join (0x7089)
 - String.Length (0x7081)
 - String.Replace (0x7084)
+- String.SetReplace (0x708C)
 - String.Split (0x7088)
 - String.StartsWith (0x708A)
 - String.Substring (0x7082)
@@ -942,7 +957,7 @@ Host hooks use reserved imm16 range 0x7000-0x7FFF:
 | 0x70E0-0x70EE | Context | 15 | Context |
 | 0x70F0-0x70FE | Crypto | 15 | Crypto |
 
-**Total:** 268 methods across 33 namespaces.
+**Total:** 271 methods across 34 namespaces.
 
 ## IDE Code Completion
 
