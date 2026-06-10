@@ -37,7 +37,8 @@ from picoscript_lang import encode_card_addr
 # ── tokens ──────────────────────────────────────────────────────────────────
 
 KEYWORDS = {"int", "var", "void", "if", "else", "while", "for", "return",
-            "break", "continue", "switch", "case", "default", "do", "goto"}
+            "break", "continue", "switch", "case", "default", "do", "goto",
+            "dispatch"}
 
 _TWO = {"==", "!=", "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/=", "%="}
 _ONE = set("+-*/%()<>=;,{}.!?:")
@@ -161,6 +162,9 @@ class Continue: pass
 class Switch:
     expr: object; cases: list; default: Optional[list]   # cases = [(value, body), ...]
 @dataclass
+class Dispatch:
+    expr: object; cases: list; default: Optional[list]   # jump-table switch (dense int cases)
+@dataclass
 class DoWhile:
     cond: object; until: bool; body: list
 @dataclass
@@ -250,6 +254,8 @@ class Parser:
                 return self.parse_for()
             if t.value == "switch":
                 return self.parse_switch()
+            if t.value == "dispatch":
+                return self.parse_dispatch()
             if t.value == "do":
                 return self.parse_do()
             if t.value == "goto":
@@ -357,6 +363,28 @@ class Parser:
             else:
                 raise SyntaxError(f"line {t.line}: expected case/default in switch")
         return Switch(expr, cases, default)
+
+    def parse_dispatch(self) -> Dispatch:
+        """dispatch (expr) { case N: ...; default: ... } -- a jump-table switch over
+        dense non-negative integer cases (compiles to an indexed jump)."""
+        self.next(); self.expect("(")
+        expr = self.parse_expr()
+        self.expect(")"); self.expect("{")
+        cases = []
+        default = None
+        while not self.accept("}"):
+            t = self.peek()
+            if t.kind == "kw" and t.value == "case":
+                self.next()
+                val = self.parse_expr()
+                self.expect(":")
+                cases.append((val, self.parse_case_body()))
+            elif t.kind == "kw" and t.value == "default":
+                self.next(); self.expect(":")
+                default = self.parse_case_body()
+            else:
+                raise SyntaxError(f"line {t.line}: expected case/default in dispatch")
+        return Dispatch(expr, cases, default)
 
     def parse_case_body(self) -> list:
         """Statements until the next case/default/} ; a trailing `break;` is
@@ -520,6 +548,8 @@ class Lowerer:
             self.lower_for(s)
         elif isinstance(s, Switch):
             self.lower_switch(s)
+        elif isinstance(s, Dispatch):
+            self.lower_dispatch(s)
         elif isinstance(s, DoWhile):
             self.lower_dowhile(s)
         elif isinstance(s, Goto):
@@ -618,6 +648,44 @@ class Lowerer:
                 self.stmt(st)
             self.b.jmp(end)
             self.b.label(nxt)
+        if s.default:
+            for st in s.default:
+                self.stmt(st)
+        self.loop_stack.pop()
+        self.b.label(end)
+
+    def lower_dispatch(self, s: Dispatch):
+        """Lower a dispatch to a bounds-checked jump table: guard the selector into
+        [0, N), then an indexed jump (jmptab) to the matching case (or default).
+        Cases do NOT fall through -- each is independent, like a state handler."""
+        sel = self.eval(s.expr)
+        end = self.b.new_label("enddisp")
+        default_lbl = self.b.new_label("dispdef")
+        prev_cont = self.loop_stack[-1][0] if self.loop_stack else end
+        self.loop_stack.append((prev_cont, end))     # break -> end; continue -> enclosing loop
+        pairs = []
+        for (cv, body) in s.cases:
+            if not isinstance(cv, Num) or cv.value < 0:
+                raise SyntaxError("dispatch case must be a constant non-negative integer")
+            pairs.append((cv.value, body))
+        n = max((v for v, _ in pairs), default=0) + 1
+        table = [default_lbl] * n
+        bodies = []
+        for v, body in pairs:
+            lbl = self.b.new_label("dcase")
+            table[v] = lbl
+            bodies.append((lbl, body))
+        nreg = self.b.vreg(); self.b.const(nreg, n)
+        self.b.cmpbr("GE", sel, nreg, default_lbl)   # selector >= N -> default
+        zreg = self.b.vreg(); self.b.const(zreg, 0)
+        self.b.cmpbr("LT", sel, zreg, default_lbl)   # selector < 0  -> default
+        self.b.jmptab(sel, tuple(table), default_lbl)
+        for lbl, body in bodies:
+            self.b.label(lbl)
+            for st in body:
+                self.stmt(st)
+            self.b.jmp(end)
+        self.b.label(default_lbl)
         if s.default:
             for st in s.default:
                 self.stmt(st)

@@ -29,12 +29,13 @@ from typing import List, Optional
 from picoscript_basic import (  # reuse AST + lowering unchanged
     Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
     Switch, Goto, Label, Sub, Return, Break, Skip, Print, CallStmt, Lowerer,
+    Dispatch,
 )
 
 KEYWORDS = {
     "if", "elif", "else", "while", "for", "in", "range", "def", "return",
     "break", "continue", "pass", "and", "or", "not", "print", "true", "false",
-    "match", "case", "do", "until", "goto", "label",
+    "match", "case", "do", "until", "goto", "label", "dispatch",
 }
 
 # comparator symbols -> Cmp condition codes (matches picoscript_basic CMP codes)
@@ -229,6 +230,8 @@ class Parser:
                 return self.parse_for()
             if kw == "match":
                 return self.parse_match()
+            if kw == "dispatch":
+                return self.parse_dispatch()
             if kw == "do":
                 return self.parse_do()
             if kw == "goto":
@@ -323,6 +326,27 @@ class Parser:
                 cases.append((val, self.parse_suite()))
         self.expect("dedent")
         return Switch(expr, cases, default)
+
+    def parse_dispatch(self) -> Dispatch:
+        """dispatch x: / case N: / case _:  -- a jump-table switch over dense
+        non-negative integer cases (compiles to an indexed jump)."""
+        self.expect_kw("dispatch")
+        expr = self.parse_expr()
+        self.expect("op", ":")
+        self.expect("newline")
+        self.expect("indent")
+        cases = []
+        default = None
+        while not self.at("dedent"):
+            self.expect_kw("case")
+            if self.peek().kind == "id" and self.peek().value == "_":
+                self.next()
+                default = self.parse_suite()
+            else:
+                val = self.parse_expr()
+                cases.append((val, self.parse_suite()))
+        self.expect("dedent")
+        return Dispatch(expr, cases, default)
 
     def parse_do(self) -> DoLoop:
         """Post-test loop: ``do:`` <block> then ``while cond`` / ``until cond``."""

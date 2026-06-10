@@ -42,6 +42,7 @@ from typing import List, Optional
 from picoscript_basic import (  # reuse AST + lowering unchanged
     Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
     Switch, Goto, Label, Sub, Gosub, Return, Break, Skip, Print, CallStmt, Lowerer,
+    Dispatch,
 )
 
 _TWO = {"==", "!=", "<=", ">=", "<>"}
@@ -260,6 +261,8 @@ class Parser:
                 return While(cond, self.parse_suite())
             if w == "choose":                   # "Choose <expr>:" / "When <v>:" / "Otherwise:"
                 return self.parse_choose()
+            if w == "dispatch":                 # "Dispatch on <expr>:" / "When <v>:" / "Otherwise:"
+                return self.parse_dispatch()
             if w == "label":                    # "Label <name>."
                 self.next(); name = self.expect("word").value; self.end_stmt(); return Label(name)
             if w == "go":                       # "Go to <name>."
@@ -341,6 +344,31 @@ class Parser:
                 raise SyntaxError(f"line {self.peek().line}: expected 'When' or 'Otherwise' in Choose")
         self.expect("dedent")
         return Switch(expr, cases, default)
+
+    def parse_dispatch(self) -> Dispatch:
+        """Dispatch on <expr>: / When <n>: / Otherwise:  -- a jump-table switch over
+        dense non-negative integer cases (compiles to an indexed jump)."""
+        self.eat_word("dispatch")
+        if self.at_word("on"):
+            self.eat_word("on")
+        expr = self.parse_expr()
+        self.expect("op", ":")
+        self.expect("newline")
+        self.expect("indent")
+        cases = []
+        default = None
+        while not self.at("dedent"):
+            if self.at_word("when"):
+                self.eat_word("when")
+                val = self.parse_expr()
+                cases.append((val, self.parse_suite()))
+            elif self.at_word("otherwise"):
+                self.eat_word("otherwise")
+                default = self.parse_suite()
+            else:
+                raise SyntaxError(f"line {self.peek().line}: expected 'When' or 'Otherwise' in Dispatch")
+        self.expect("dedent")
+        return Dispatch(expr, cases, default)
 
     def parse_repeat(self):
         self.eat_word("repeat")

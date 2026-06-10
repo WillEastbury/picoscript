@@ -22,6 +22,7 @@
   var OP = { NOOP:0, LOAD:1, SAVE:2, PIPE:3, ADD:4, SUB:5, MUL:6, DIV:7,
              INC:8, JUMP:9, BRANCH:10, CALL:11, RETURN:12, WAIT:13, RAISE:14, DSP:15 };
   var ADDR_REG = 1;
+  var ADDR_REG_OFF = 3;
   var COND = { EQ:0, NE:1, LT:2, GT:3, LE:4, GE:5, Z:6, NZ:7, EOF:8, ERR:9 };
   var COND_NEGATE = { EQ:"NE", NE:"EQ", LT:"GE", GE:"LT", GT:"LE", LE:"GT" };
   var ARITH = { add:OP.ADD, sub:OP.SUB, mul:OP.MUL, div:OP.DIV };
@@ -71,6 +72,7 @@
     inc: function (d) { this.insts.push(Inst("inc", { dst: d })); },
     cmpbr: function (c, a, b, l) { this.insts.push(Inst("cmpbr", { cond: c, a: a, b: b, label: l })); },
     jmp: function (l) { this.insts.push(Inst("jmp", { label: l })); },
+    jmptab: function (sel, targets, def) { this.insts.push(Inst("jmptab", { a: sel, targets: targets, label: def })); },
     label: function (n) { this.insts.push(Inst("label", { label: n })); },
     call: function (l) { this.insts.push(Inst("call", { label: l })); },
     ret: function () { this.insts.push(Inst("ret", {})); },
@@ -233,6 +235,7 @@
       if (ins.op === "label") return 0;
       if (ins.op === "const") return 2;
       if (ins.op === "mov" && isImm(ins.a)) return 2;
+      if (ins.op === "jmptab") return ins.targets.length + 1;
       return 1;
     }
     var labels = {}, pc = 0;
@@ -249,6 +252,12 @@
         words.push(enc(OP.ADD, rd, rd, 0, value & 0xFFFF));
         pc += 2; return;
       }
+      if (ins.op === "jmptab") {
+        var sel = phys(mapping, ins.a);
+        words.push(enc(OP.JUMP, 0, sel, ADDR_REG_OFF, (pc + 1) & 0xFFFF));   // PC = sel + tablebase
+        ins.targets.forEach(function (t) { words.push(enc(OP.JUMP, 0, 0, 0, labels[t])); });
+        pc += ins.targets.length + 1; return;
+      }
       words.push(emitWord(ins, mapping, labels, pc));
       pc += 1;
     });
@@ -258,7 +267,7 @@
   // ========================================================================
   // C-SYNTAX FRONTEND (port of picoscript_cfront.py)
   // ========================================================================
-  var C_KW = { int:1, var:1, void:1, if:1, else:1, while:1, for:1, return:1, break:1, continue:1, switch:1, case:1, default:1, do:1, goto:1 };
+  var C_KW = { int:1, var:1, void:1, if:1, else:1, while:1, for:1, return:1, break:1, continue:1, switch:1, case:1, default:1, do:1, goto:1, dispatch:1 };
   var C_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "&&":1, "||":1, "++":1, "--":1, "+=":1, "-=":1, "*=":1, "/=":1, "%=":1 };
   var C_ONE = "+-*/%()<>=;,{}.!?:";
   var C_PREC = { "||":1, "&&":2, "==":3, "!=":3, "<":4, ">":4, "<=":4, ">=":4, "+":5, "-":5, "*":6, "/":6, "%":6 };
@@ -312,6 +321,7 @@
         if (t.value === "while") return this.parseWhile();
         if (t.value === "for") return this.parseFor();
         if (t.value === "switch") return this.parseSwitch();
+        if (t.value === "dispatch") return this.parseDispatch();
         if (t.value === "do") return this.parseDo();
         if (t.value === "goto") { this.next(); var gl = this.next().value; this.expect(";"); return { t: "Goto", label: gl }; }
         if (t.value === "return") { this.next(); if (this.accept(";")) return { t: "Return", value: null }; var v = this.parseExpr(); this.expect(";"); return { t: "Return", value: v }; }
@@ -362,6 +372,17 @@
         else throw new Error("C: expected case/default in switch");
       }
       return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    parseDispatch: function () {
+      this.next(); this.expect("("); var expr = this.parseExpr(); this.expect(")"); this.expect("{");
+      var cases = [], def = null;
+      while (!this.accept("}")) {
+        var t = this.peek();
+        if (t.kind === "kw" && t.value === "case") { this.next(); var val = this.parseExpr(); this.expect(":"); cases.push([val, this.parseCaseBody()]); }
+        else if (t.kind === "kw" && t.value === "default") { this.next(); this.expect(":"); def = this.parseCaseBody(); }
+        else throw new Error("C: expected case/default in dispatch");
+      }
+      return { t: "Dispatch", expr: expr, cases: cases, def: def };
     },
     parseCaseBody: function () {
       var stmts = [];
@@ -458,6 +479,7 @@
       else if (s.t === "While") this.lowerWhile(s);
       else if (s.t === "For") this.lowerFor(s);
       else if (s.t === "Switch") this.lowerSwitch(s);
+      else if (s.t === "Dispatch") this.lowerDispatch(s);
       else if (s.t === "DoWhile") this.lowerDoWhile(s);
       else if (s.t === "Goto") this.b.jmp("lbl_" + s.label.toLowerCase());
       else if (s.t === "Label") this.b.label("lbl_" + s.name.toLowerCase());
@@ -507,6 +529,29 @@
         cb[1].forEach(function (st) { self.stmt(st); });
         self.b.jmp(end); self.b.label(nxt);
       });
+      if (s.def) s.def.forEach(function (st) { self.stmt(st); });
+      this.loop.pop();
+      this.b.label(end);
+    },
+    lowerDispatch: function (s) {
+      var sel = this.eval(s.expr);
+      var end = this.b.newLabel("enddisp"), defL = this.b.newLabel("dispdef");
+      var prevCont = this.loop.length ? this.loop[this.loop.length - 1][0] : end;
+      this.loop.push([prevCont, end]);
+      var self = this, pairs = [];
+      s.cases.forEach(function (cb) {
+        if (cb[0].t !== "Num" || cb[0].value < 0) throw new Error("dispatch case must be a constant non-negative integer");
+        pairs.push([cb[0].value, cb[1]]);
+      });
+      var n = 0; pairs.forEach(function (p) { if (p[0] + 1 > n) n = p[0] + 1; });
+      var table = []; for (var i = 0; i < n; i++) table.push(defL);
+      var bodies = [];
+      pairs.forEach(function (p) { var lbl = self.b.newLabel("dcase"); table[p[0]] = lbl; bodies.push([lbl, p[1]]); });
+      var nreg = this.b.vreg(); this.b.const_(nreg, n); this.b.cmpbr("GE", sel, nreg, defL);
+      var zreg = this.b.vreg(); this.b.const_(zreg, 0); this.b.cmpbr("LT", sel, zreg, defL);
+      this.b.jmptab(sel, table, defL);
+      bodies.forEach(function (bd) { self.b.label(bd[0]); bd[1].forEach(function (st) { self.stmt(st); }); self.b.jmp(end); });
+      this.b.label(defL);
       if (s.def) s.def.forEach(function (st) { self.stmt(st); });
       this.loop.pop();
       this.b.label(end);
@@ -628,7 +673,7 @@
   // ========================================================================
   // BASIC-LIKE FRONTEND (port of picoscript_basic.py)
   // ========================================================================
-  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD"].forEach(function (k) { B_KW[k] = 1; });
+  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","DISPATCH","ENDDISPATCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD"].forEach(function (k) { B_KW[k] = 1; });
   var B_CMPW = { EQ:"EQ", NE:"NE", LT:"LT", GT:"GT", LE:"LE", GE:"GE" };
   var B_CMPS = { "==":"EQ", "!=":"NE", "<>":"NE", "=":"EQ", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
   var B_COMPARATORS = {}; for (var _k in B_CMPW) B_COMPARATORS[_k] = B_CMPW[_k]; for (var _k2 in B_CMPS) B_COMPARATORS[_k2] = B_CMPS[_k2];
@@ -692,6 +737,7 @@
         if (kw === "FOR") return this.parseFor();
         if (kw === "FOREACH") return this.parseForeach();
         if (kw === "SWITCH") return this.parseSwitch();
+      if (kw === "DISPATCH") return this.parseDispatch();
         if (kw === "GOTO") { this.next(); var nm = this.next().value; this.endLine(); return { t: "Goto", label: nm }; }
         if (kw === "GOSUB") { this.next(); var nm2 = this.next().value; this.endLine(); return { t: "Gosub", name: nm2 }; }
         if (kw === "SUB") return this.parseSub();
@@ -757,6 +803,15 @@
       }
       this.eatKw("ENDSWITCH"); this.endLine(); return { t: "Switch", expr: expr, cases: cases, def: def };
     },
+    parseDispatch: function () {
+      this.eatKw("DISPATCH"); var expr = this.parseExpr(); this.endLine(); this.skipNl(); var cases = [], def = null;
+      while (!this.atKw("ENDDISPATCH")) {
+        if (this.atKw("CASE")) { this.eatKw("CASE"); var val = this.parseExpr(); this.endLine(); cases.push([val, this.parseBlock("CASE", "DEFAULT", "ENDDISPATCH")]); }
+        else if (this.atKw("DEFAULT")) { this.eatKw("DEFAULT"); this.endLine(); def = this.parseBlock("ENDDISPATCH"); }
+        else throw new Error("BASIC: expected CASE/DEFAULT/ENDDISPATCH");
+      }
+      this.eatKw("ENDDISPATCH"); this.endLine(); return { t: "Dispatch", expr: expr, cases: cases, def: def };
+    },
     parseSub: function () { this.eatKw("SUB"); var name = this.next().value; this.endLine(); var body = this.parseBlock("ENDSUB"); this.eatKw("ENDSUB"); this.endLine(); return { t: "Sub", name: name, body: body }; },
     parseCallFromId: function () { var ns = this.next().value; this.eatOp("."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
     parseArgs: function () { this.eatOp("("); var a = []; if (!(this.peek().kind === "op" && this.peek().value === ")")) { a.push(this.parseExpr()); while (this.peek().kind === "op" && this.peek().value === ",") { this.next(); a.push(this.parseExpr()); } } this.eatOp(")"); return a; },
@@ -819,6 +874,7 @@
       else if (s.t === "ForTo") this.lowerFor(s);
       else if (s.t === "ForEach") this.lowerForeach(s);
       else if (s.t === "Switch") this.lowerSwitch(s);
+      else if (s.t === "Dispatch") this.lowerDispatch(s);
       else if (s.t === "Print") { if (s.value.t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, s.value.value)], null); } else { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); } }
       else if (s.t === "CallStmt") this.lowerCall(s.call, false);
       else throw new Error("BASIC: cannot lower " + s.t);
@@ -909,6 +965,26 @@
       this.scopes.pop();
       this.b.label(end);
     },
+    lowerDispatch: function (s) {
+      var sel = this.eval(s.expr); var end = this.b.newLabel("enddisp"), defL = this.b.newLabel("dispdef"), self = this;
+      var pairs = [];
+      s.cases.forEach(function (cb) {
+        if (cb[0].t !== "Num" || cb[0].value < 0) throw new Error("DISPATCH case must be a constant non-negative integer");
+        pairs.push([cb[0].value, cb[1]]);
+      });
+      var n = 0; pairs.forEach(function (p) { if (p[0] + 1 > n) n = p[0] + 1; });
+      var table = []; for (var i = 0; i < n; i++) table.push(defL);
+      var bodies = [];
+      pairs.forEach(function (p) { var lbl = self.b.newLabel("dcase"); table[p[0]] = lbl; bodies.push([lbl, p[1]]); });
+      var nreg = this.b.vreg(); this.b.const_(nreg, n); this.b.cmpbr("GE", sel, nreg, defL);
+      var zreg = this.b.vreg(); this.b.const_(zreg, 0); this.b.cmpbr("LT", sel, zreg, defL);
+      this.b.jmptab(sel, table, defL);
+      this.scopes.push([null, end]);
+      bodies.forEach(function (bd) { self.b.label(bd[0]); bd[1].forEach(function (st) { self.stmt(st); }); self.b.jmp(end); });
+      this.b.label(defL); if (s.def) s.def.forEach(function (st) { self.stmt(st); });
+      this.scopes.pop();
+      this.b.label(end);
+    },
     eval: function (e) {
       if (e.t === "Num") { var v = this.b.vreg(); this.b.const_(v, e.value); return v; }
       if (e.t === "Var") return this.varOf(e.name);
@@ -995,7 +1071,7 @@
   // ========================================================================
 
   // ---- Python-style frontend (port of picoscript_python.py) ---------------
-  var PY_KW = {}; ["if","elif","else","while","for","in","range","def","return","break","continue","pass","and","or","not","print","true","false","match","case","do","until","goto","label"].forEach(function (k) { PY_KW[k] = 1; });
+  var PY_KW = {}; ["if","elif","else","while","for","in","range","def","return","break","continue","pass","and","or","not","print","true","false","match","case","do","until","goto","label","dispatch"].forEach(function (k) { PY_KW[k] = 1; });
   var PY_CMP = { "==":"EQ","!=":"NE","<":"LT",">":"GT","<=":"LE",">=":"GE" };
   var PY_AUG = { "+=":"+","-=":"-","*=":"*","/=":"/","%=":"MOD" };
   var PY_PREC = { or:1, and:2, "==":3, "!=":3, "<":3, ">":3, "<=":3, ">=":3, "+":5, "-":5, "*":6, "/":6, "%":6 };
@@ -1061,6 +1137,7 @@
         if (kw === "while") { this.expectKw("while"); var c = this.parseExpr(); return { t: "While", cond: c, body: this.parseSuite() }; }
         if (kw === "for") return this.parseFor();
         if (kw === "match") return this.parseMatch();
+      if (kw === "dispatch") return this.parseDispatch();
         if (kw === "do") return this.parseDo();
         if (kw === "goto") { this.next(); var gl = this.expect("id").value; this.expect("newline"); return { t: "Goto", label: gl }; }
         if (kw === "label") { this.next(); var ll = this.expect("id").value; this.expect("newline"); return { t: "Label", name: ll }; }
@@ -1107,6 +1184,18 @@
       }
       this.expect("dedent");
       return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    parseDispatch: function () {
+      this.expectKw("dispatch"); var expr = this.parseExpr();
+      this.expect("op", ":"); this.expect("newline"); this.expect("indent");
+      var cases = [], def = null;
+      while (!this.at("dedent")) {
+        this.expectKw("case");
+        if (this.peek().kind === "id" && this.peek().value === "_") { this.next(); def = this.parseSuite(); }
+        else { var val = this.parseExpr(); cases.push([val, this.parseSuite()]); }
+      }
+      this.expect("dedent");
+      return { t: "Dispatch", expr: expr, cases: cases, def: def };
     },
     parseDo: function () {
       this.expectKw("do"); var body = this.parseSuite();
@@ -1190,6 +1279,7 @@
         if (w === "while") { this.next(); var wc = this.parseExpr(); return { t: "While", cond: wc, body: this.parseSuite() }; }
         if (w === "as") { this.next(); this.eatWord("long"); this.eatWord("as"); var ac = this.parseExpr(); return { t: "While", cond: ac, body: this.parseSuite() }; }
         if (w === "choose") return this.parseChoose();
+      if (w === "dispatch") return this.parseDispatch();
         if (w === "label") { this.next(); var lname = this.expect("word").value; this.endStmt(); return { t: "Label", name: lname }; }
         if (w === "go") { this.next(); this.eatWord("to"); var gname = this.expect("word").value; this.endStmt(); return { t: "Goto", label: gname }; }
         if (w === "repeat") return this.parseRepeat();
@@ -1225,6 +1315,18 @@
       }
       this.expect("dedent");
       return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    parseDispatch: function () {
+      this.eatWord("dispatch"); if (this.atWord("on")) this.eatWord("on"); var expr = this.parseExpr();
+      this.expect("op", ":"); this.expect("newline"); this.expect("indent");
+      var cases = [], def = null;
+      while (!this.at("dedent")) {
+        if (this.atWord("when")) { this.eatWord("when"); var val = this.parseExpr(); cases.push([val, this.parseSuite()]); }
+        else if (this.atWord("otherwise")) { this.eatWord("otherwise"); def = this.parseSuite(); }
+        else throw new Error("English: expected 'When' or 'Otherwise' in Dispatch");
+      }
+      this.expect("dedent");
+      return { t: "Dispatch", expr: expr, cases: cases, def: def };
     },
     parseRepeat: function () {
       this.eatWord("repeat");

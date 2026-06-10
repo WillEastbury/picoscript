@@ -69,6 +69,7 @@ KEYWORDS = {
     "LET", "DIM", "IF", "THEN", "ELSEIF", "ELSE", "ENDIF", "WHILE", "ENDWHILE",
     "FOR", "TO", "STEP", "NEXT", "FOREACH", "IN", "ENDFOREACH",
     "SWITCH", "CASE", "DEFAULT", "ENDSWITCH", "GOTO", "GOSUB", "SUB",
+    "DISPATCH", "ENDDISPATCH",
     "ENDSUB", "RETURN", "PRINT", "AND", "OR", "NOT",
     "DO", "LOOP", "UNTIL",
     "BREAK", "SKIP", "INC", "DEC", "IIF",
@@ -193,6 +194,9 @@ class ForEach:
 class Switch:
     expr: object; cases: list; default: Optional[list]   # cases=[(value,body),...]
 @dataclass
+class Dispatch:
+    expr: object; cases: list; default: Optional[list]   # jump-table switch (dense int cases)
+@dataclass
 class Goto:
     label: str
 @dataclass
@@ -310,6 +314,8 @@ class Parser:
                 return self.parse_foreach()
             if kw == "SWITCH":
                 return self.parse_switch()
+            if kw == "DISPATCH":
+                return self.parse_dispatch()
             if kw == "GOTO":
                 self.next(); name = self.next().value; self.end_line(); return Goto(name)
             if kw == "GOSUB":
@@ -460,6 +466,30 @@ class Parser:
                 raise SyntaxError(f"line {self.peek().line}: expected CASE/DEFAULT/ENDSWITCH")
         self.eat_kw("ENDSWITCH"); self.end_line()
         return Switch(expr, cases, default)
+
+    def parse_dispatch(self) -> Dispatch:
+        """DISPATCH expr / CASE n / DEFAULT / ENDDISPATCH -- a jump-table switch over
+        dense non-negative integer cases (compiles to an indexed jump)."""
+        self.eat_kw("DISPATCH")
+        expr = self.parse_expr()
+        self.end_line()
+        self.skip_nl()
+        cases = []
+        default = None
+        while not self.at_kw("ENDDISPATCH"):
+            if self.at_kw("CASE"):
+                self.eat_kw("CASE")
+                val = self.parse_expr()
+                self.end_line()
+                body = self.parse_block("CASE", "DEFAULT", "ENDDISPATCH")
+                cases.append((val, body))
+            elif self.at_kw("DEFAULT"):
+                self.eat_kw("DEFAULT"); self.end_line()
+                default = self.parse_block("ENDDISPATCH")
+            else:
+                raise SyntaxError(f"line {self.peek().line}: expected CASE/DEFAULT/ENDDISPATCH")
+        self.eat_kw("ENDDISPATCH"); self.end_line()
+        return Dispatch(expr, cases, default)
 
     def parse_sub(self) -> Sub:
         self.eat_kw("SUB")
@@ -618,6 +648,8 @@ class Lowerer:
             self.lower_foreach(s)
         elif isinstance(s, Switch):
             self.lower_switch(s)
+        elif isinstance(s, Dispatch):
+            self.lower_dispatch(s)
         elif isinstance(s, Print):
             self.lower_print(s)
         elif isinstance(s, CallStmt):
@@ -769,6 +801,43 @@ class Lowerer:
         self.b.jmp(default_l)
         self.scopes.append((None, end))      # breakable (BREAK), not skippable
         for (_, body), lbl in zip(s.cases, case_labels):
+            self.b.label(lbl)
+            for st in body:
+                self.stmt(st)
+            self.b.jmp(end)
+        self.b.label(default_l)
+        if s.default:
+            for st in s.default:
+                self.stmt(st)
+        self.scopes.pop()
+        self.b.label(end)
+
+    def lower_dispatch(self, s: Dispatch):
+        """Lower DISPATCH to a bounds-checked jump table: guard the selector into
+        [0, N), then an indexed jump (jmptab) to the matching case (or default).
+        Cases do NOT fall through -- each is independent, like a state handler."""
+        sel = self.eval(s.expr)
+        end = self.b.new_label("enddisp")
+        default_l = self.b.new_label("dispdef")
+        pairs = []
+        for (val, body) in s.cases:
+            if not isinstance(val, Num) or val.value < 0:
+                raise SyntaxError("DISPATCH case must be a constant non-negative integer")
+            pairs.append((val.value, body))
+        n = max((v for v, _ in pairs), default=0) + 1
+        table = [default_l] * n
+        bodies = []
+        for v, body in pairs:
+            lbl = self.b.new_label("dcase")
+            table[v] = lbl
+            bodies.append((lbl, body))
+        nreg = self.b.vreg(); self.b.const(nreg, n)
+        self.b.cmpbr("GE", sel, nreg, default_l)     # selector >= N -> default
+        zreg = self.b.vreg(); self.b.const(zreg, 0)
+        self.b.cmpbr("LT", sel, zreg, default_l)     # selector < 0  -> default
+        self.b.jmptab(sel, tuple(table), default_l)
+        self.scopes.append((None, end))              # breakable (BREAK), not skippable
+        for lbl, body in bodies:
             self.b.label(lbl)
             for st in body:
                 self.stmt(st)

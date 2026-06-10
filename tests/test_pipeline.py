@@ -491,6 +491,18 @@ EN_GOTO = "Set n to 0.\nLabel top.\nIncrease n by 1.\nIf n is less than 4:\n    
 EN_TERNARY = "Set t to 55.\nSet z to 100 if t exceeds 50 otherwise 0.\nPrint z.\n"
 BASIC_TERNARY_EQ = "DIM T = 55\nDIM Z = IIF(T > 50, 100, 0)\nPRINT Z\n"
 
+# dispatch (jump-table switch) in all four surfaces -- selector 2 -> 20.
+C_DISPATCH = "int x = 2;\ndispatch (x) {\n  case 1: print(10); break;\n  case 2: print(20); break;\n  default: print(0);\n}\n"
+BASIC_DISPATCH_EQ = "DIM X = 2\nDISPATCH X\nCASE 1\nPRINT 10\nCASE 2\nPRINT 20\nDEFAULT\nPRINT 0\nENDDISPATCH\n"
+PY_DISPATCH = "x = 2\ndispatch x:\n    case 1:\n        print(10)\n    case 2:\n        print(20)\n    case _:\n        print(0)\n"
+EN_DISPATCH = "Set x to 2.\nDispatch on x:\n    When 1:\n        Print 10.\n    When 2:\n        Print 20.\n    Otherwise:\n        Print 0.\n"
+# out-of-range selector (5) falls through the bounds guard to the default.
+C_DISPATCH_OOR = "int x = 5;\ndispatch (x) {\n  case 0: print(10); break;\n  case 1: print(20); break;\n  default: print(99);\n}\n"
+# a real state machine: 3 states cycle for 7 steps via an indexed jump in a loop.
+C_DISPATCH_SM = ("int st = 0;\nint k = 0;\nwhile (k < 7) {\n  dispatch (st) {\n"
+                 "    case 0: st = 1; break;\n    case 1: st = 2; break;\n    case 2: st = 0; break;\n"
+                 "  }\n  k = k + 1;\n}\nprint(st);\n")
+
 # Host-hook span program in the two new surfaces (Python VM == JS VM).
 PY_SPAN = """
 p = 100
@@ -818,6 +830,13 @@ def main():
     check("english: repeat-until", lower_to_bytecode_safe(compile_english(EN_DO)), expect_print=[15])
     check("english: label-goto", lower_to_bytecode_safe(compile_english(EN_GOTO)), expect_print=[4])
     check("english: ternary", lower_to_bytecode_safe(compile_english(EN_TERNARY)), expect_print=[100])
+    print("Jump-table dispatch (indexed JUMP) -- 4 surfaces, cross-VM, bounds + state machine:")
+    check("c: dispatch", lower_to_bytecode_safe(compile_c(C_DISPATCH)), expect_print=[20])
+    check("basic: dispatch", lower_to_bytecode_safe(compile_basic(BASIC_DISPATCH_EQ)), expect_print=[20])
+    check("python: dispatch", lower_to_bytecode_safe(compile_python(PY_DISPATCH)), expect_print=[20])
+    check("english: dispatch", lower_to_bytecode_safe(compile_english(EN_DISPATCH)), expect_print=[20])
+    check("c: dispatch out-of-range", lower_to_bytecode_safe(compile_c(C_DISPATCH_OOR)), expect_print=[99])
+    check("c: dispatch state machine", lower_to_bytecode_safe(compile_c(C_DISPATCH_SM)), expect_print=[1])
     print("New constructs lower byte-identically vs the BASIC equivalent (python/english):")
     check_equiv("python match == basic", lower_to_bytecode_safe(compile_python(PY_MATCH)), lower_to_bytecode_safe(compile_basic(BASIC_SWITCH_EQ)))
     check_equiv("python do == basic", lower_to_bytecode_safe(compile_python(PY_DO)), lower_to_bytecode_safe(compile_basic(BASIC_DO_EQ)))
@@ -825,6 +844,8 @@ def main():
     check_equiv("english choose == basic", lower_to_bytecode_safe(compile_english(EN_CHOOSE)), lower_to_bytecode_safe(compile_basic(BASIC_SWITCH_EQ)))
     check_equiv("english do == basic", lower_to_bytecode_safe(compile_english(EN_DO)), lower_to_bytecode_safe(compile_basic(BASIC_DO_EQ)))
     check_equiv("english ternary == basic", lower_to_bytecode_safe(compile_english(EN_TERNARY)), lower_to_bytecode_safe(compile_basic(BASIC_TERNARY_EQ)))
+    check_equiv("python dispatch == basic", lower_to_bytecode_safe(compile_python(PY_DISPATCH)), lower_to_bytecode_safe(compile_basic(BASIC_DISPATCH_EQ)))
+    check_equiv("english dispatch == basic", lower_to_bytecode_safe(compile_english(EN_DISPATCH)), lower_to_bytecode_safe(compile_basic(BASIC_DISPATCH_EQ)))
     print("New frontends with host hooks [Python VM == JS VM]:")
     check_pyjs("python: span slice", lower_to_bytecode_safe(compile_python(PY_SPAN)), expect_print=[12, 4])
     check_pyjs("english: span slice", lower_to_bytecode_safe(compile_english(EN_SPAN)), expect_print=[12, 4])
@@ -918,6 +939,11 @@ def main():
     check_jscompile("jsc: english do", "english", EN_DO, lower_to_bytecode_safe(compile_english(EN_DO)))
     check_jscompile("jsc: english goto", "english", EN_GOTO, lower_to_bytecode_safe(compile_english(EN_GOTO)))
     check_jscompile("jsc: english ternary", "english", EN_TERNARY, lower_to_bytecode_safe(compile_english(EN_TERNARY)))
+    check_jscompile("jsc: c dispatch", "c", C_DISPATCH, lower_to_bytecode_safe(compile_c(C_DISPATCH)))
+    check_jscompile("jsc: basic dispatch", "basic", BASIC_DISPATCH_EQ, lower_to_bytecode_safe(compile_basic(BASIC_DISPATCH_EQ)))
+    check_jscompile("jsc: python dispatch", "python", PY_DISPATCH, lower_to_bytecode_safe(compile_python(PY_DISPATCH)))
+    check_jscompile("jsc: english dispatch", "english", EN_DISPATCH, lower_to_bytecode_safe(compile_english(EN_DISPATCH)))
+    check_jscompile("jsc: c dispatch sm", "c", C_DISPATCH_SM, lower_to_bytecode_safe(compile_c(C_DISPATCH_SM)))
 
     def check_selfhost(name, path, want):
         """examples/selfhost_emit.pc: a PicoScript program that EMITS a runnable
