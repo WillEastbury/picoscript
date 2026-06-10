@@ -63,7 +63,7 @@ def _build_dll():
         f.write(lower_to_c(il, func_name="pico_matvec", emit_main=False))
     with open(shim, "w", encoding="utf-8") as f:
         f.write(SHIM)
-    cmd = [sys.executable, "-m", "ziglang", "cc", "-O2", "-shared", f"-I{VM_DIR}",
+    cmd = [sys.executable, "-m", "ziglang", "cc", "-O3", "-shared", f"-I{VM_DIR}",
            entry, shim, os.path.join(VM_DIR, "picovm.c"), "-o", dll]
     r = subprocess.run(cmd, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr

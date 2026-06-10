@@ -31,6 +31,15 @@ from picoscript import disassemble
 
 VM_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vm")
 
+# Deploy presets: name -> (zig -target, -mcpu).  The mcpu turns on the hardware
+# Dot8 paths: cortex_a76 => AArch64 NEON SDOT (Pi 5), cortex_m33+dsp => SMLAD
+# (Pico 2), native => the host CPU's SIMD (AVX/NEON) for desktop runs.
+PROFILES = {
+    "host":  (None, "native"),
+    "pi5":   ("aarch64-linux-gnu", "cortex_a76"),
+    "pico2": ("thumb-freestanding-eabi", "cortex_m33+dsp"),
+}
+
 
 def detect_lang(path: str, forced: str | None) -> str:
     if forced:
@@ -121,7 +130,11 @@ def cmd_emit(args):
 def cmd_native(args):
     source = open(args.file, encoding="utf-8").read()
     lang = detect_lang(args.file, args.lang)
-    freestanding = bool(args.target) and "freestanding" in args.target
+    prof_target, prof_mcpu = PROFILES.get(args.profile, (None, None))
+    target = args.target or prof_target
+    mcpu = args.mcpu or prof_mcpu
+    opt = args.opt
+    freestanding = bool(target) and "freestanding" in target
     # Host builds get a runnable main(); freestanding cross builds emit a
     # linkable object (the emitted pico_main() is called from your firmware).
     csrc = lower_to_c(to_il(source, lang), func_name="pico_main",
@@ -130,11 +143,11 @@ def cmd_native(args):
     out_obj = args.o or (os.path.splitext(args.file)[0] + default_ext)
     cfile = out_obj + ".c"
     open(cfile, "w", encoding="utf-8").write(csrc)
-    cmd = [sys.executable, "-m", "ziglang", "cc", "-std=c99", "-O2", f"-I{VM_DIR}"]
-    if args.target:
-        cmd += ["-target", args.target]
-    if args.mcpu:
-        cmd += [f"-mcpu={args.mcpu}"]
+    cmd = [sys.executable, "-m", "ziglang", "cc", "-std=c99", f"-O{opt}", f"-I{VM_DIR}"]
+    if target:
+        cmd += ["-target", target]
+    if mcpu:
+        cmd += [f"-mcpu={mcpu}"]
     if freestanding:
         cmd += ["-c", cfile, os.path.join(VM_DIR, "picovm.c"), "-o", out_obj]
     else:
@@ -144,8 +157,8 @@ def cmd_native(args):
         print(r.stderr)
         raise SystemExit("native build failed")
     kind = "object" if freestanding else "executable"
-    tgt = f" -target {args.target}" if args.target else ""
-    print(f"wrote {out_obj} ({kind} via zig cc{tgt})")
+    flags = f" -O{opt}" + (f" -target {target}" if target else "") + (f" -mcpu={mcpu}" if mcpu else "")
+    print(f"wrote {out_obj} ({kind} via zig cc{flags})")
 
 
 def cmd_stats(args):
@@ -182,7 +195,11 @@ def main(argv=None):
 
     pn = sub.add_parser("native", parents=[common], help="emit C and compile with zig cc")
     pn.add_argument("-o", help="output executable")
-    pn.add_argument("--target", help="zig cross target, e.g. thumb-freestanding-eabi, aarch64-linux")
+    pn.add_argument("--target", help="zig cross target, e.g. thumb-freestanding-eabi, aarch64-linux-gnu")
+    pn.add_argument("--mcpu", help="zig -mcpu, e.g. cortex_a76 (Pi5 NEON SDOT), cortex_m33+dsp (Pico2 SMLAD), native")
+    pn.add_argument("--profile", choices=list(PROFILES),
+                    help="deploy preset: host (native SIMD), pi5 (NEON SDOT), pico2 (SMLAD)")
+    pn.add_argument("--opt", default="3", help="optimization level passed as -O<opt> (default 3)")
     pn.set_defaults(func=cmd_native)
 
     ps = sub.add_parser("stats", parents=[common], help="IL/bytecode/cycle metrics across backends")

@@ -70,7 +70,7 @@ def build_exe():
     il = compile_c(open(PC, encoding="utf-8").read())
     with open(cfile, "w", encoding="utf-8") as f:
         f.write(lower_to_c(il, func_name="pico_entry", emit_main=False))
-    cmd = [sys.executable, "-m", "ziglang", "cc", "-std=c99", "-O2", f"-I{VM_DIR}",
+    cmd = [sys.executable, "-m", "ziglang", "cc", "-std=c99", "-O3", f"-I{VM_DIR}",
            cfile, os.path.join(VM_DIR, "pico_arena_run.c"),
            os.path.join(VM_DIR, "picovm.c"), "-o", exe]
     r = subprocess.run(cmd, capture_output=True, text=True)
