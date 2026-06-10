@@ -219,9 +219,16 @@
     throw new Error("cannot lower IL op " + op);
   }
 
-  function lowerToBytecode(insts, opt) {
+  function lowerToBytecode(insts, opt, outVars) {
     if (opt !== false) insts = optimize(insts);
     var mapping = allocate(insts);
+    if (outVars) {
+      insts.forEach(function (ins) {
+        operandVRegs(ins).forEach(function (v) {
+          if (v.pinned && mapping[v.id] !== undefined) outVars[v.name] = mapping[v.id];
+        });
+      });
+    }
     function width(ins) {
       if (ins.op === "label") return 0;
       if (ins.op === "const") return 2;
@@ -1175,13 +1182,22 @@
   };
   function compileEnglish(src) { return new BLowerer().lowerProgram(new EnParser(entokenize(src)).parseProgram()); }
 
+  function compileIL(src, lang) {
+    return (lang === "basic") ? compileBasic(src)
+         : (lang === "python") ? compilePython(src)
+         : (lang === "english") ? compileEnglish(src)
+         : compileC(src);
+  }
+
   return {
     compile: function (src, lang) {
-      var il = (lang === "basic") ? compileBasic(src)
-             : (lang === "python") ? compilePython(src)
-             : (lang === "english") ? compileEnglish(src)
-             : compileC(src);
+      var il = compileIL(src, lang);
       return { words: lowerToBytecode(il, true), il: il };
+    },
+    compileDebug: function (src, lang) {
+      var vars = {};
+      var words = lowerToBytecode(compileIL(src, lang), true, vars);
+      return { words: words, vars: vars };
     },
     compileC: function (src) { return { words: lowerToBytecode(compileC(src), true), il: compileC(src) }; },
     compileBasic: function (src) { return { words: lowerToBytecode(compileBasic(src), true), il: compileBasic(src) }; },

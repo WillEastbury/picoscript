@@ -109,9 +109,13 @@ identical bytecode** — pick whichever surface reads best to you.
 construct in both styles side by side**. The whole compiler is ported to JS
 (`vm/picoc.js`), so you can **type C-syntax, BASIC, Python-style or natural-English
 source and compile it live** in the browser, then run and single-step it on the
-inlined JS VM with full register/output/PC inspection. You can also load a prebuilt
-example or paste bytecode hex from `emit --as bytecode --hex`. Rebuild with
-`python gen_playground.py`.
+inlined JS VM with full register/output/PC inspection. The GitHub Pages site
+(`docs/index.html`, built by `gen_site.py`) embeds the **Monaco editor** with
+syntax highlighting and `Namespace.Method` completion for all four dialects, plus a
+step debugger that shows the disassembly (current PC highlighted) and **auto-watches**
+(each named variable → its allocated register → live value) as you step. You can
+also load a prebuilt example or paste bytecode hex from `emit --as bytecode --hex`.
+Rebuild with `python gen_playground.py` / `python gen_site.py`.
 
 The in-browser compiler is verified **byte-for-byte identical** to the Python
 compiler (`tests/test_pipeline.py`), so what you debug in the browser is exactly

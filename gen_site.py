@@ -244,8 +244,9 @@ PAGE = r"""<!DOCTYPE html>
         <button class="ghost" onclick="loadLangSample('python')">Python sample</button>
         <button class="ghost" onclick="loadLangSample('english')">English sample</button>
       </div>
-      <select id="lang" style="margin-bottom:6px"><option value="c">C-style &#123; &#125;</option><option value="basic">BASIC block</option><option value="python">Python block</option><option value="english">English prose</option></select>
-      <textarea id="src" style="height:160px" spellcheck="false"></textarea>
+      <select id="lang" style="margin-bottom:6px" onchange="onLangChange()"><option value="c">C-style &#123; &#125;</option><option value="basic">BASIC block</option><option value="python">Python block</option><option value="english">English prose</option></select>
+      <div id="monaco" style="height:260px;border:1px solid #2c313f;border-radius:6px;overflow:hidden"></div>
+      <textarea id="src" style="height:160px;display:none" spellcheck="false"></textarea>
       <div class="controls">
         <button class="act" onclick="compileSrc(true)">Compile &amp; Run &#9654;</button>
         <button class="ghost" onclick="compileSrc(false)">Compile &amp; Step</button>
@@ -264,6 +265,8 @@ PAGE = r"""<!DOCTYPE html>
     <div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:4px">registers R0&ndash;R15:</div>
       <div class="regs" id="regs"></div>
+      <div style="font-size:11px;color:var(--muted);margin:12px 0 4px">auto-watches (variable &rarr; register &rarr; value):</div>
+      <div style="max-height:150px;overflow:auto"><table class="wal"><thead><tr><th>var</th><th>reg</th><th>value</th></tr></thead><tbody id="watches"></tbody></table></div>
       <div style="font-size:11px;color:var(--muted);margin:12px 0 4px">PicoWAL cards (localStorage):</div>
       <div style="max-height:160px;overflow:auto"><table class="wal"><tbody id="walbody"></tbody></table></div>
       <button class="ghost" style="margin-top:6px" onclick="walClear()">Clear PicoWAL</button>
@@ -356,6 +359,7 @@ PAGE = r"""<!DOCTYPE html>
 <script>/*__PICOC__*/</script>
 <script>/*__SER__*/</script>
 <script>/*__STORE__*/</script>
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
 <script>
 const DATA = /*__DATA__*/;
 const RESPONDER = /*__RESPONDER__*/;
@@ -489,12 +493,83 @@ function editIn(i,style){
 }
 
 // ---- debugger -------------------------------------------------------------
-var DBG = { words:[], disasm:[], vm:null };
-function compileSrc(run){
-  var lang=document.getElementById('lang').value, src=document.getElementById('src').value, err=document.getElementById('cerr');
+var DBG = { words:[], disasm:[], vm:null, vars:{} };
+
+// ---- Monaco editor (with graceful textarea fallback) ----------------------
+var EDITOR = null;
+function getSrc(){ return EDITOR ? EDITOR.getValue() : document.getElementById('src').value; }
+function setSrc(v){ document.getElementById('src').value = v; if (EDITOR) EDITOR.setValue(v); }
+function monacoLangId(lang){ return { c:'picoc', basic:'picobasic', python:'picopython', english:'picoenglish' }[lang] || 'picoc'; }
+function onLangChange(){ if (EDITOR) monaco.editor.setModelLanguage(EDITOR.getModel(), monacoLangId(document.getElementById('lang').value)); }
+function hookNames(){ var H=(typeof PV_HOOKS!=='undefined'&&PV_HOOKS.BY_CODE)?PV_HOOKS.BY_CODE:{}; var out=[]; for(var k in H) out.push(H[k]); return out; }
+var MONARCH = {
+  picoc: { keywords:['int','var','void','if','else','while','for','return','break','continue','print'],
+    tokenizer:{ root:[
+      [/\/\/.*$/,'comment'],[/\/\*/,'comment','@block'],
+      [/[A-Za-z_]\w*(?=\s*\.)/,'type'],
+      [/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],
+      [/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],
+      [/[{}()\[\];,.]/,'delimiter'],[/[+\-*/%=<>!&|?:]+/,'operator'] ],
+      block:[[/\*\//,'comment','@pop'],[/./,'comment']],
+      str:[[/[^"]+/,'string'],[/"/,'string','@pop']] } },
+  picobasic: { ignoreCase:true, keywords:['DIM','LET','IF','THEN','ELSEIF','ELSE','ENDIF','WHILE','ENDWHILE','FOR','TO','STEP','NEXT','FOREACH','IN','ENDFOREACH','SWITCH','CASE','DEFAULT','ENDSWITCH','GOTO','GOSUB','SUB','ENDSUB','RETURN','PRINT','AND','OR','NOT','DO','LOOP','UNTIL','BREAK','SKIP','INC','DEC','IIF','EQ','NE','LT','GT','LE','GE','MOD'],
+    tokenizer:{ root:[
+      [/'.*$/,'comment'],[/\/\/.*$/,'comment'],
+      [/[A-Za-z_]\w*(?=\s*\.)/,'type'],
+      [/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],
+      [/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],
+      [/[()\[\];,.:]/,'delimiter'],[/[+\-*/=<>]+/,'operator'] ],
+      str:[[/[^"]+/,'string'],[/"/,'string','@pop']] } },
+  picopython: { keywords:['if','elif','else','while','for','in','range','def','return','break','continue','pass','and','or','not','print','True','False'],
+    tokenizer:{ root:[
+      [/#.*$/,'comment'],
+      [/[A-Za-z_]\w*(?=\s*\.)/,'type'],
+      [/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],
+      [/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],[/'/,'string','@str2'],
+      [/[()\[\]:,.]/,'delimiter'],[/[+\-*/%=<>!]+/,'operator'] ],
+      str:[[/[^"]+/,'string'],[/"/,'string','@pop']],
+      str2:[[/[^']+/,'string'],[/'/,'string','@pop']] } },
+  picoenglish: { ignoreCase:true, keywords:['set','let','to','be','add','subtract','from','increase','decrease','multiply','divide','by','print','show','display','if','otherwise','while','repeat','as','long','for','each','times','with','define','do','call','return','stop','break','skip','continue','is','greater','less','than','at','least','most','equal','equals','exceeds','plus','minus','modulo','mod','over','and','or','not','the','a','an','true','false'],
+    tokenizer:{ root:[
+      [/#.*$/,'comment'],
+      [/[A-Za-z_]\w*(?=\s*\.\s*[A-Za-z_]\w*\s*\()/,'type'],
+      [/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],
+      [/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],
+      [/[()\[\],.:]/,'delimiter'],[/[+\-*/%=<>]+/,'operator'] ],
+      str:[[/[^"]+/,'string'],[/"/,'string','@pop']] } }
+};
+function registerLang(id){
+  monaco.languages.register({ id:id });
+  monaco.languages.setMonarchTokensProvider(id, MONARCH[id]);
+  monaco.languages.registerCompletionItemProvider(id, { provideCompletionItems:function(model,pos){
+    var kw = MONARCH[id].keywords || [];
+    var sug = kw.map(function(k){ return { label:k, kind:monaco.languages.CompletionItemKind.Keyword, insertText:k }; });
+    hookNames().forEach(function(name){ sug.push({ label:name, kind:monaco.languages.CompletionItemKind.Function, insertText:name+'(' }); });
+    return { suggestions:sug };
+  }});
+}
+function initMonaco(){
+  if (typeof require === 'undefined' || !require.config){ document.getElementById('monaco').style.display='none'; document.getElementById('src').style.display='block'; return; }
   try {
-    var r=PicoCompile.compile(src,lang);
-    DBG.words=r.words.map(function(w){return w>>>0;}); DBG.disasm=DBG.words.map(jsDisasm);
+    require.config({ paths:{ vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
+    require(['vs/editor/editor.main'], function(){
+      ['picoc','picobasic','picopython','picoenglish'].forEach(registerLang);
+      EDITOR = monaco.editor.create(document.getElementById('monaco'), {
+        value: document.getElementById('src').value,
+        language: monacoLangId(document.getElementById('lang').value),
+        theme:'vs-dark', minimap:{enabled:false}, fontSize:13, lineNumbers:'on',
+        scrollBeyondLastLine:false, automaticLayout:true, tabSize:4, insertSpaces:true
+      });
+      EDITOR.onDidChangeModelContent(function(){ document.getElementById('src').value = EDITOR.getValue(); });
+    }, function(){ document.getElementById('monaco').style.display='none'; document.getElementById('src').style.display='block'; });
+  } catch(e){ document.getElementById('monaco').style.display='none'; document.getElementById('src').style.display='block'; }
+}
+
+function compileSrc(run){
+  var lang=document.getElementById('lang').value, src=getSrc(), err=document.getElementById('cerr');
+  try {
+    var r=PicoCompile.compileDebug(src,lang);
+    DBG.words=r.words.map(function(w){return w>>>0;}); DBG.disasm=DBG.words.map(jsDisasm); DBG.vars=r.vars||{};
     err.textContent='compiled '+DBG.words.length+' words'; err.style.color='#7ee787';
     dbgReset(); if(run) dbgRun();
   } catch(e){ err.textContent=String(e.message||e); err.style.color='#ff7b72'; }
@@ -511,6 +586,11 @@ function render(){
     return '<div class="row'+(idx===vm.pc?' pc':'')+'">'+String(idx).padStart(3,' ')+'  '+esc(t)+'</div>'; }).join('');
   var pcrow=document.querySelector('#listing .row.pc'); if(pcrow) pcrow.scrollIntoView({block:'nearest'});
   document.getElementById('regs').innerHTML=Array.from(vm.regs).map(function(v,idx){return '<div class="r">R'+idx+' <b>'+v+'</b></div>';}).join('');
+  var wb=document.getElementById('watches');
+  if(wb){ var vars=DBG.vars||{}, ks=Object.keys(vars);
+    wb.innerHTML = ks.length ? ks.map(function(name){ var rr=vars[name]; return '<tr><td>'+esc(name)+'</td><td>R'+rr+'</td><td><b>'+vm.regs[rr]+'</b></td></tr>'; }).join('')
+                             : '<tr><td colspan="3" style="color:var(--muted)">(no named variables)</td></tr>';
+  }
   document.getElementById('state').textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;
   document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']';
 }
@@ -557,7 +637,7 @@ function writeDescriptor(wal, req){
 function sendRequest(){
   var text=document.getElementById('reqbox').value, isHex=document.getElementById('reqmode').value==='hex';
   var req=parseRequest(text,isHex), wal=walBackend(); writeDescriptor(wal,req);
-  var lang=document.getElementById('lang').value, src=document.getElementById('src').value, r;
+  var lang=document.getElementById('lang').value, src=getSrc(), r;
   try { r=PicoCompile.compile(src,lang); }
   catch(e){ document.getElementById('respout').textContent='compile error: '+(e.message||e); document.getElementById('respout').style.color='#ff7b72'; return; }
   var vm=new PicoVM({cards:wal}); vm.run(r.words);
@@ -576,7 +656,7 @@ function renderResponse(vm,req){
   L.push(''); L.push(JSON.stringify(body));
   el.textContent=L.join('\n');
 }
-function loadResponder(){ document.getElementById('lang').value='basic'; document.getElementById('src').value=RESPONDER; compileSrc(false); }
+function loadResponder(){ document.getElementById('lang').value='basic'; onLangChange(); setSrc(RESPONDER); compileSrc(false); }
 function loadSample(){
   document.getElementById('reqmode').value='text';
   document.getElementById('reqbox').value='POST /orders HTTP/1.1\r\nHost: pico.dev\r\nContent-Type: application/json\r\nContent-Length: 11\r\n\r\n{"qty": 42}';
@@ -591,7 +671,8 @@ buildGallery();
 function loadExample(style) {
   var i = parseInt(document.getElementById('example').value, 10) || 0;
   document.getElementById('lang').value = style;
-  document.getElementById('src').value = DATA[i][style].src;
+  onLangChange();
+  setSrc(DATA[i][style].src);
   compileSrc(false);
 }
 var PY_SAMPLE = "# Python-style: indentation blocks, = assignment\n" +
@@ -624,11 +705,13 @@ var EN_SAMPLE = "# English prose: the same logic, in plain sentences\n" +
   "Print total.\n";
 function loadLangSample(lang) {
   document.getElementById('lang').value = lang;
-  document.getElementById('src').value = (lang === 'python') ? PY_SAMPLE : EN_SAMPLE;
+  onLangChange();
+  setSrc((lang === 'python') ? PY_SAMPLE : EN_SAMPLE);
   compileSrc(false);
 }
 document.getElementById('lang').value='basic';
 document.getElementById('src').value=RESPONDER;
+initMonaco();
 compileSrc(false);
 loadResponder();
 loadSample();

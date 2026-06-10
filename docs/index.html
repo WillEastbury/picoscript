@@ -110,8 +110,9 @@
         <button class="ghost" onclick="loadLangSample('python')">Python sample</button>
         <button class="ghost" onclick="loadLangSample('english')">English sample</button>
       </div>
-      <select id="lang" style="margin-bottom:6px"><option value="c">C-style &#123; &#125;</option><option value="basic">BASIC block</option><option value="python">Python block</option><option value="english">English prose</option></select>
-      <textarea id="src" style="height:160px" spellcheck="false"></textarea>
+      <select id="lang" style="margin-bottom:6px" onchange="onLangChange()"><option value="c">C-style &#123; &#125;</option><option value="basic">BASIC block</option><option value="python">Python block</option><option value="english">English prose</option></select>
+      <div id="monaco" style="height:260px;border:1px solid #2c313f;border-radius:6px;overflow:hidden"></div>
+      <textarea id="src" style="height:160px;display:none" spellcheck="false"></textarea>
       <div class="controls">
         <button class="act" onclick="compileSrc(true)">Compile &amp; Run &#9654;</button>
         <button class="ghost" onclick="compileSrc(false)">Compile &amp; Step</button>
@@ -130,6 +131,8 @@
     <div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:4px">registers R0&ndash;R15:</div>
       <div class="regs" id="regs"></div>
+      <div style="font-size:11px;color:var(--muted);margin:12px 0 4px">auto-watches (variable &rarr; register &rarr; value):</div>
+      <div style="max-height:150px;overflow:auto"><table class="wal"><thead><tr><th>var</th><th>reg</th><th>value</th></tr></thead><tbody id="watches"></tbody></table></div>
       <div style="font-size:11px;color:var(--muted);margin:12px 0 4px">PicoWAL cards (localStorage):</div>
       <div style="max-height:160px;overflow:auto"><table class="wal"><tbody id="walbody"></tbody></table></div>
       <button class="ghost" style="margin-top:6px" onclick="walClear()">Clear PicoWAL</button>
@@ -391,9 +394,13 @@ identical bytecode</strong> — pick whichever surface reads best to you.</p>
 construct in both styles side by side</strong>. The whole compiler is ported to JS
 (<code>vm/picoc.js</code>), so you can <strong>type C-syntax, BASIC, Python-style or natural-English
 source and compile it live</strong> in the browser, then run and single-step it on the
-inlined JS VM with full register/output/PC inspection. You can also load a prebuilt
-example or paste bytecode hex from <code>emit --as bytecode --hex</code>. Rebuild with
-<code>python gen_playground.py</code>.</p>
+inlined JS VM with full register/output/PC inspection. The GitHub Pages site
+(<code>docs/index.html</code>, built by <code>gen_site.py</code>) embeds the <strong>Monaco editor</strong> with
+syntax highlighting and <code>Namespace.Method</code> completion for all four dialects, plus a
+step debugger that shows the disassembly (current PC highlighted) and <strong>auto-watches</strong>
+(each named variable → its allocated register → live value) as you step. You can
+also load a prebuilt example or paste bytecode hex from <code>emit --as bytecode --hex</code>.
+Rebuild with <code>python gen_playground.py</code> / <code>python gen_site.py</code>.</p>
 <p>The in-browser compiler is verified <strong>byte-for-byte identical</strong> to the Python
 compiler (<code>tests/test_pipeline.py</code>), so what you debug in the browser is exactly
 what runs on bare metal.</p>
@@ -2311,9 +2318,16 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
     throw new Error("cannot lower IL op " + op);
   }
 
-  function lowerToBytecode(insts, opt) {
+  function lowerToBytecode(insts, opt, outVars) {
     if (opt !== false) insts = optimize(insts);
     var mapping = allocate(insts);
+    if (outVars) {
+      insts.forEach(function (ins) {
+        operandVRegs(ins).forEach(function (v) {
+          if (v.pinned && mapping[v.id] !== undefined) outVars[v.name] = mapping[v.id];
+        });
+      });
+    }
     function width(ins) {
       if (ins.op === "label") return 0;
       if (ins.op === "const") return 2;
@@ -3267,13 +3281,22 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
   };
   function compileEnglish(src) { return new BLowerer().lowerProgram(new EnParser(entokenize(src)).parseProgram()); }
 
+  function compileIL(src, lang) {
+    return (lang === "basic") ? compileBasic(src)
+         : (lang === "python") ? compilePython(src)
+         : (lang === "english") ? compileEnglish(src)
+         : compileC(src);
+  }
+
   return {
     compile: function (src, lang) {
-      var il = (lang === "basic") ? compileBasic(src)
-             : (lang === "python") ? compilePython(src)
-             : (lang === "english") ? compileEnglish(src)
-             : compileC(src);
+      var il = compileIL(src, lang);
       return { words: lowerToBytecode(il, true), il: il };
+    },
+    compileDebug: function (src, lang) {
+      var vars = {};
+      var words = lowerToBytecode(compileIL(src, lang), true, vars);
+      return { words: words, vars: vars };
     },
     compileC: function (src) { return { words: lowerToBytecode(compileC(src), true), il: compileC(src) }; },
     compileBasic: function (src) { return { words: lowerToBytecode(compileBasic(src), true), il: compileBasic(src) }; },
@@ -3469,6 +3492,7 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
   return { PicoStore: PicoStore, MemBackend: MemBackend, compileQuery: compileQuery };
 });
 </script>
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
 <script>
 const DATA = [{"title": "Variables & arithmetic", "desc": "Declare variables with DIM and evaluate expressions. Both styles are case-insensitive for keywords and variable names; one global scope.", "c": {"src": "int a = 6;\nint b = 7;\nprint(a * b + 1);", "words": ["50010000", "40000006", "41000000", "50010000", "40000007", "42000000", "60110002", "43000001", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #6", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R2, R0, #0", "MUL R0, R1, R2", "ADD R3, R0, #1", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [43], "status": -1}, "basic": {"src": "DIM A = 6\nDIM B = 7\nPRINT A * B + 1", "words": ["50010000", "40000006", "41000000", "50010000", "40000007", "42000000", "60110002", "43000001", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #6", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R2, R0, #0", "MUL R0, R1, R2", "ADD R3, R0, #1", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [43], "status": -1}}, {"title": "Conditional (if / else)", "desc": "Branch on a comparison. C uses braces; BASIC uses IF/THEN/ELSE/ENDIF. BASIC accepts symbol (>, =, <>) or word (GT, EQ, NE) comparators.", "c": {"src": "int x = 7;\nif (x > 5) {\n    print(100);\n} else {\n    print(200);\n}", "words": ["50010000", "40000007", "41000000", "50010000", "40000005", "a1040006", "50010000", "40000064", "2000fffe", "3000fffe", "9000000f", "50010000", "400000c8", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #100", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 15", "SUB R0, R0, R0", "ADD R0, R0, #200", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [100], "status": -1}, "basic": {"src": "DIM X = 7\nIF X > 5 THEN\n    PRINT 100\nELSE\n    PRINT 200\nENDIF", "words": ["50010000", "40000007", "41000000", "50010000", "40000005", "a1040006", "50010000", "40000064", "2000fffe", "3000fffe", "9000000f", "50010000", "400000c8", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #100", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 15", "SUB R0, R0, R0", "ADD R0, R0, #200", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [100], "status": -1}}, {"title": "While loop", "desc": "Repeat while a condition holds (factorial of 5).", "c": {"src": "int n = 5;\nint f = 1;\nwhile (n > 1) {\n    f = f * n;\n    n = n - 1;\n}\nprint(f);", "words": ["50010000", "40000005", "41000000", "50010000", "40000001", "42000000", "50010000", "40000001", "a1040004", "62210001", "51100001", "90000006", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #5", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH LE R1, R0, +4", "MUL R2, R2, R1", "SUB R1, R1, #1", "JUMP 6", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [120], "status": -1}, "basic": {"src": "DIM N = 5\nDIM F = 1\nWHILE N > 1\n    F = F * N\n    DEC N\nENDWHILE\nPRINT F", "words": ["50010000", "40000005", "41000000", "50010000", "40000001", "42000000", "50010000", "40000001", "a1040004", "62210001", "51100001", "90000006", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #5", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH LE R1, R0, +4", "MUL R2, R2, R1", "SUB R1, R1, #1", "JUMP 6", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [120], "status": -1}}, {"title": "Counted loop (for)", "desc": "Sum 1..10. C uses a C-style for with i++; BASIC uses FOR/TO/NEXT.", "c": {"src": "int s = 0;\nfor (i = 1; i <= 10; i++) {\n    s += i;\n}\nprint(s);", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "a2030005", "41110002", "40200000", "82000000", "90000006", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R2, R0, +5", "ADD R1, R1, R2", "ADD R0, R2, #0", "INC R2", "JUMP 6", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [55], "status": -1}, "basic": {"src": "DIM S = 0\nFOR I = 1 TO 10\n    S += I\nNEXT\nPRINT S", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "43000000", "a2330004", "41110002", "82000000", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R3, R0, #0", "BRANCH GT R2, R3, +4", "ADD R1, R1, R2", "INC R2", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [55], "status": -1}}, {"title": "Index iteration (foreach)", "desc": "Iterate an index 0..N-1. C expresses it as a for loop; BASIC has FOREACH.", "c": {"src": "int a = 0;\nfor (j = 0; j < 5; j++) {\n    a += j;\n}\nprint(a);", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "50010000", "40000005", "a2050005", "41110002", "40200000", "82000000", "90000006", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH GE R2, R0, +5", "ADD R1, R1, R2", "ADD R0, R2, #0", "INC R2", "JUMP 6", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [10], "status": -1}, "basic": {"src": "DIM A = 0\nFOREACH J IN 5\n    A += J\nENDFOREACH\nPRINT A", "words": ["50010000", "40000000", "41000000", "50010000", "40000005", "43000000", "52210002", "42200000", "a2350004", "41110002", "82000000", "90000008", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "ADD R3, R0, #0", "SUB R2, R2, R2", "ADD R2, R2, #0", "BRANCH GE R2, R3, +4", "ADD R1, R1, R2", "INC R2", "JUMP 8", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [10], "status": -1}}, {"title": "Operators (++ -- ?: && % )", "desc": "Increment/decrement, the ternary ?: (IIF in BASIC), short-circuit AND/OR, real modulo (% / MOD) and compound assignment.", "c": {"src": "int x = 10;\nx++;\nx += 5;\nint y = x % 7;\nint z = (y == 2 && x > 10) ? 100 : 0;\nprint(x); print(y); print(z);", "words": ["50010000", "4000000a", "41000000", "40100000", "81000000", "41100005", "50010000", "40000007", "74110000", "65410000", "50110005", "42000000", "50010000", "40000002", "a2000004", "50010000", "40000000", "90000014", "50010000", "40000001", "a006000d", "50010000", "4000000a", "a1030004", "50010000", "40000000", "9000001d", "50010000", "40000001", "a0060004", "50010000", "40000001", "90000023", "50010000", "40000000", "a0060005", "50010000", "40000064", "44000000", "9000002b", "50010000", "40000000", "44000000", "43400000", "2010fffe", "3010fffe", "2020fffe", "3020fffe", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R1, R0, #0", "ADD R0, R1, #0", "INC R1", "ADD R1, R1, #5", "SUB R0, R0, R0", "ADD R0, R0, #7", "DIV R4, R1, R0", "MUL R5, R4, R0", "SUB R0, R1, R5", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH EQ R2, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 20", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +13", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R1, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 29", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #1", "JUMP 35", "SUB R0, R0, R0", "ADD R0, R0, #0", "BRANCH Z R0, R0, +5", "SUB R0, R0, R0", "ADD R0, R0, #100", "ADD R4, R0, #0", "JUMP 43", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R4, R0, #0", "ADD R3, R4, #0", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [16, 2, 100], "status": -1}, "basic": {"src": "DIM X = 10\nINC X\nX += 5\nDIM Y = X MOD 7\nDIM Z = IIF(Y = 2 AND X > 10, 100, 0)\nPRINT X\nPRINT Y\nPRINT Z", "words": ["50010000", "4000000a", "41000000", "81000000", "41100005", "50010000", "40000007", "74110000", "65410000", "50110005", "42000000", "50010000", "40000002", "a2000004", "50010000", "40000000", "90000013", "50010000", "40000001", "a006000d", "50010000", "4000000a", "a1030004", "50010000", "40000000", "9000001c", "50010000", "40000001", "a0060004", "50010000", "40000001", "90000022", "50010000", "40000000", "a0060005", "50010000", "40000064", "44000000", "9000002a", "50010000", "40000000", "44000000", "43400000", "2010fffe", "3010fffe", "2020fffe", "3020fffe", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R1, R0, #0", "INC R1", "ADD R1, R1, #5", "SUB R0, R0, R0", "ADD R0, R0, #7", "DIV R4, R1, R0", "MUL R5, R4, R0", "SUB R0, R1, R5", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH EQ R2, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 19", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +13", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R1, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 28", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #1", "JUMP 34", "SUB R0, R0, R0", "ADD R0, R0, #0", "BRANCH Z R0, R0, +5", "SUB R0, R0, R0", "ADD R0, R0, #100", "ADD R4, R0, #0", "JUMP 42", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R4, R0, #0", "ADD R3, R4, #0", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [16, 2, 100], "status": -1}}, {"title": "Multi-way branch (switch)", "desc": "Pick a branch by value. C uses an if/else-if chain; BASIC has SWITCH/CASE.", "c": {"src": "int code = 2;\nif (code == 1) {\n    print(10);\n} else if (code == 2) {\n    print(20);\n} else {\n    print(0);\n}", "words": ["50010000", "40000002", "41000000", "50010000", "40000001", "a1010006", "50010000", "4000000a", "2000fffe", "3000fffe", "90000017", "50010000", "40000002", "a1010006", "50010000", "40000014", "2000fffe", "3000fffe", "90000017", "50010000", "40000000", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #2", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH NE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #10", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 23", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH NE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #20", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 23", "SUB R0, R0, R0", "ADD R0, R0, #0", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [20], "status": -1}, "basic": {"src": "DIM CODE = 2\nSWITCH CODE\n    CASE 1\n        PRINT 10\n    CASE 2\n        PRINT 20\n    DEFAULT\n        PRINT 0\nENDSWITCH", "words": ["50010000", "40000002", "41000000", "50010000", "40000001", "a1000005", "50010000", "40000002", "a1000007", "90000014", "50010000", "4000000a", "2000fffe", "3000fffe", "90000018", "50010000", "40000014", "2000fffe", "3000fffe", "90000018", "50010000", "40000000", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #2", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH EQ R1, R0, +5", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH EQ R1, R0, +7", "JUMP 20", "SUB R0, R0, R0", "ADD R0, R0, #10", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 24", "SUB R0, R0, R0", "ADD R0, R0, #20", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 24", "SUB R0, R0, R0", "ADD R0, R0, #0", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [20], "status": -1}}, {"title": "Subroutine (call / gosub)", "desc": "Factor shared logic. C uses a void function + call; BASIC uses SUB + GOSUB. Variables are global, so the routine sees ACC.", "c": {"src": "void dbl() {\n    acc = acc + acc;\n}\nint acc = 21;\ndbl();\nprint(acc);", "words": ["50010000", "40000015", "41000000", "b0000007", "2010fffe", "3010fffe", "c0000000", "41110001", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #21", "ADD R1, R0, #0", "CALL 7", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN", "ADD R1, R1, R1", "RETURN"], "out": [42], "status": -1}, "basic": {"src": "DIM ACC = 21\nGOSUB DBL\nPRINT ACC\nRETURN\nSUB DBL\n    ACC = ACC + ACC\nENDSUB", "words": ["50010000", "40000015", "41000000", "b0000008", "2010fffe", "3010fffe", "c0000000", "c0000000", "41110001", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #21", "ADD R1, R0, #0", "CALL 8", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN", "RETURN", "ADD R1, R1, R1", "RETURN"], "out": [42], "status": -1}}, {"title": "Unconditional jump (goto)", "desc": "A back-jump loop. C expresses it structurally with while; BASIC uses a label + GOTO.", "c": {"src": "int n = 0;\nwhile (n < 4) {\n    n++;\n}\nprint(n);", "words": ["50010000", "40000000", "41000000", "50010000", "40000004", "a1050004", "40100000", "81000000", "90000003", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #4", "BRANCH GE R1, R0, +4", "ADD R0, R1, #0", "INC R1", "JUMP 3", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [4], "status": -1}, "basic": {"src": "DIM N = 0\nTOP:\nINC N\nIF N < 4 THEN\n    GOTO TOP\nENDIF\nPRINT N", "words": ["50010000", "40000000", "41000000", "81000000", "50010000", "40000004", "a1050003", "90000003", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "INC R1", "SUB R0, R0, R0", "ADD R0, R0, #4", "BRANCH GE R1, R0, +3", "JUMP 3", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [4], "status": -1}}, {"title": "Post-test loop (DO / LOOP)", "desc": "A loop whose body always runs at least once (condition checked at the bottom). C expresses it with while(1)+break; BASIC has the proper DO ... LOOP WHILE/UNTIL form.", "c": {"src": "int i = 0;\nint s = 0;\nwhile (1) {\n    i++;\n    s += i;\n    if (i >= 5) { break; }\n}\nprint(s);", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "50010000", "40000001", "a0060009", "40100000", "81000000", "42210001", "50010000", "40000005", "a1020002", "90000011", "90000006", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +9", "ADD R0, R1, #0", "INC R1", "ADD R2, R2, R1", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LT R1, R0, +2", "JUMP 17", "JUMP 6", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [15], "status": -1}, "basic": {"src": "DIM I = 0\nDIM S = 0\nDO\n    INC I\n    S += I\nLOOP UNTIL I >= 5\nPRINT S", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "81000000", "42210001", "50010000", "40000005", "a102fffc", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "INC R1", "ADD R2, R2, R1", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LT R1, R0, -4", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [15], "status": -1}}, {"title": "Early exit &amp; skip (break / skip)", "desc": "BREAK leaves the nearest loop or SWITCH; SKIP jumps to the next iteration (skipping a SWITCH to reach the enclosing loop). C uses break/continue. Here: sum 1..10 but skip multiples of 3 and stop once the sum passes 20.", "c": {"src": "int s = 0;\nfor (i = 1; i <= 10; i++) {\n    if (i % 3 == 0) { continue; }\n    s += i;\n    if (s > 20) { break; }\n}\nprint(s);", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "a2030012", "50010000", "40000003", "73210000", "64310000", "50210004", "53310003", "43300000", "a0310002", "90000017", "41110002", "50010000", "40000014", "a1040002", "9000001a", "40200000", "82000000", "90000006", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R2, R0, +18", "SUB R0, R0, R0", "ADD R0, R0, #3", "DIV R3, R2, R0", "MUL R4, R3, R0", "SUB R0, R2, R4", "SUB R3, R3, R3", "ADD R3, R3, #0", "BRANCH NE R0, R3, +2", "JUMP 23", "ADD R1, R1, R2", "SUB R0, R0, R0", "ADD R0, R0, #20", "BRANCH LE R1, R0, +2", "JUMP 26", "ADD R0, R2, #0", "INC R2", "JUMP 6", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [27], "status": -1}, "basic": {"src": "DIM S = 0\nFOR I = 1 TO 10\n    IF I MOD 3 = 0 THEN\n        SKIP\n    ENDIF\n    S += I\n    IF S > 20 THEN\n        BREAK\n    ENDIF\nNEXT\nPRINT S", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "43000000", "a2330013", "50010000", "40000003", "74210000", "65410000", "50210005", "54410004", "44400000", "a0410003", "9000001a", "90000014", "41110002", "50010000", "40000014", "a1040003", "9000001c", "9000001a", "82000000", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R3, R0, #0", "BRANCH GT R2, R3, +19", "SUB R0, R0, R0", "ADD R0, R0, #3", "DIV R4, R2, R0", "MUL R5, R4, R0", "SUB R0, R2, R5", "SUB R4, R4, R4", "ADD R4, R4, #0", "BRANCH NE R0, R4, +3", "JUMP 26", "JUMP 20", "ADD R1, R1, R2", "SUB R0, R0, R0", "ADD R0, R0, #20", "BRANCH LE R1, R0, +3", "JUMP 28", "JUMP 26", "INC R2", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [27], "status": -1}}, {"title": "HTTP response (Net.*)", "desc": "Set an HTTP status/type and emit a value. Namespaces are case-insensitive too.", "c": {"src": "Net.Status(200);\nNet.Type(\"application/json\");\nprint(42);", "words": ["000080c8", "0000a002", "50010000", "4000002a", "2000fffe", "3000fffe", "c0000000"], "disasm": ["NET.STATUS 200", "NET.TYPE #0xa002", "SUB R0, R0, R0", "ADD R0, R0, #42", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [42], "status": 200}, "basic": {"src": "NET.STATUS(200)\nNET.TYPE(\"application/json\")\nPRINT 42", "words": ["000080c8", "0000a002", "50010000", "4000002a", "2000fffe", "3000fffe", "c0000000"], "disasm": ["NET.STATUS 200", "NET.TYPE #0xa002", "SUB R0, R0, R0", "ADD R0, R0, #42", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [42], "status": 200}}, {"title": "Cards: CRUD &amp; query (Storage.*)", "desc": "Program-level card store. Field names and queries are UTF-8 byte-spans built in arena memory (Memory.Set + Span.Make); cards are serialized with the PicoBinarySerializer into a PicoStore. UsePack selects a pack, AddCard/EditCard select the current card, then SetField/GetField/QueryCard operate on it. This creates 3 cards, reads (7) and updates (50) one, queries qty&gt;40 (3 ids), then deletes one and re-queries (2).", "c": {"src": "Memory.Set(200,113); Memory.Set(201,116); Memory.Set(202,121);\nint qty = Span.Make(200, 3);\nMemory.Set(210,113); Memory.Set(211,116); Memory.Set(212,121); Memory.Set(213,32);\nMemory.Set(214,62); Memory.Set(215,32); Memory.Set(216,52); Memory.Set(217,48);\nint qry = Span.Make(210, 8);\nStorage.UsePack(1);\nint a = Storage.AddCard(); Storage.SetField(qty, 42);\nint b = Storage.AddCard(); Storage.SetField(qty, 7);\nint c = Storage.AddCard(); Storage.SetField(qty, 99);\nStorage.EditCard(b); print(Storage.GetField(qty));\nStorage.SetField(qty, 50); print(Storage.GetField(qty));\nint n = Storage.QueryCard(qry); print(n);\nprint(Storage.QueryResult(0)); print(Storage.QueryResult(1)); print(Storage.QueryResult(2));\nStorage.DeleteCard(1); print(Storage.QueryCard(qry));", "words": ["50010000", "400000c8", "57710007", "47700071", "00077036", "50010000", "400000c9", "57710007", "47700074", "00077036", "50010000", "400000ca", "57710007", "47700079", "00077036", "50010000", "400000c8", "57710007", "47700003", "08077040", "41800000", "50010000", "400000d2", "57710007", "47700071", "00077036", "50010000", "400000d3", "57710007", "47700074", "00077036", "50010000", "400000d4", "57710007", "47700079", "00077036", "50010000", "400000d5", "57710007", "47700020", "00077036", "50010000", "400000d6", "57710007", "4770003e", "00077036", "50010000", "400000d7", "57710007", "47700020", "00077036", "50010000", "400000d8", "57710007", "47700034", "00077036", "50010000", "400000d9", "57710007", "47700030", "00077036", "50010000", "400000d2", "57710007", "47700008", "08077040", "42800000", "50010000", "40000001", "00007068", "00007062", "43000000", "50010000", "4000002a", "0010706b", "00007062", "44000000", "50010000", "40000007", "0010706b", "00007062", "45000000", "50010000", "40000063", "0010706b", "00407069", "0010706a", "2000fffe", "3000fffe", "50010000", "40000032", "0010706b", "0010706a", "2000fffe", "3000fffe", "00207067", "46000000", "2060fffe", "3060fffe", "50010000", "40000000", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "0700706e", "2070fffe", "3070fffe", "50010000", "40000002", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "00007064", "00207067", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #201", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #202", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #3", "HOSTCALL #0x40", "ADD R1, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #211", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #212", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #213", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #214", "SUB R7, R7, R7", "ADD R7, R7, #62", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #215", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #216", "SUB R7, R7, R7", "ADD R7, R7, #52", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #217", "SUB R7, R7, R7", "ADD R7, R7, #48", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #8", "HOSTCALL #0x40", "ADD R2, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x68", "HOSTCALL #0x62", "ADD R3, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #42", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R4, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R5, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #99", "HOSTCALL #0x6b", "HOSTCALL #0x69", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #50", "HOSTCALL #0x6b", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "HOSTCALL #0x67", "ADD R6, R0, #0", "SAVE R6, [0xfffe]", "PIPE R6, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #0", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #2", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x64", "HOSTCALL #0x67", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [7, 50, 3, 1, 2, 3, 2], "status": -1}, "basic": {"src": "Memory.Set(200, 113)\nMemory.Set(201, 116)\nMemory.Set(202, 121)\nDIM QTY = Span.Make(200, 3)\nMemory.Set(210, 113)\nMemory.Set(211, 116)\nMemory.Set(212, 121)\nMemory.Set(213, 32)\nMemory.Set(214, 62)\nMemory.Set(215, 32)\nMemory.Set(216, 52)\nMemory.Set(217, 48)\nDIM QRY = Span.Make(210, 8)\nStorage.UsePack(1)\nDIM A = Storage.AddCard()\nStorage.SetField(QTY, 42)\nDIM B = Storage.AddCard()\nStorage.SetField(QTY, 7)\nDIM C = Storage.AddCard()\nStorage.SetField(QTY, 99)\nStorage.EditCard(B)\nPRINT Storage.GetField(QTY)\nStorage.SetField(QTY, 50)\nPRINT Storage.GetField(QTY)\nDIM N = Storage.QueryCard(QRY)\nPRINT N\nPRINT Storage.QueryResult(0)\nPRINT Storage.QueryResult(1)\nPRINT Storage.QueryResult(2)\nStorage.DeleteCard(1)\nPRINT Storage.QueryCard(QRY)", "words": ["50010000", "400000c8", "57710007", "47700071", "00077036", "50010000", "400000c9", "57710007", "47700074", "00077036", "50010000", "400000ca", "57710007", "47700079", "00077036", "50010000", "400000c8", "57710007", "47700003", "08077040", "41800000", "50010000", "400000d2", "57710007", "47700071", "00077036", "50010000", "400000d3", "57710007", "47700074", "00077036", "50010000", "400000d4", "57710007", "47700079", "00077036", "50010000", "400000d5", "57710007", "47700020", "00077036", "50010000", "400000d6", "57710007", "4770003e", "00077036", "50010000", "400000d7", "57710007", "47700020", "00077036", "50010000", "400000d8", "57710007", "47700034", "00077036", "50010000", "400000d9", "57710007", "47700030", "00077036", "50010000", "400000d2", "57710007", "47700008", "08077040", "42800000", "50010000", "40000001", "00007068", "00007062", "43000000", "50010000", "4000002a", "0010706b", "00007062", "44000000", "50010000", "40000007", "0010706b", "00007062", "45000000", "50010000", "40000063", "0010706b", "00407069", "0010706a", "2000fffe", "3000fffe", "50010000", "40000032", "0010706b", "0010706a", "2000fffe", "3000fffe", "00207067", "46000000", "2060fffe", "3060fffe", "50010000", "40000000", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "0700706e", "2070fffe", "3070fffe", "50010000", "40000002", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "00007064", "00207067", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #201", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #202", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #3", "HOSTCALL #0x40", "ADD R1, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #211", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #212", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #213", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #214", "SUB R7, R7, R7", "ADD R7, R7, #62", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #215", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #216", "SUB R7, R7, R7", "ADD R7, R7, #52", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #217", "SUB R7, R7, R7", "ADD R7, R7, #48", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #8", "HOSTCALL #0x40", "ADD R2, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x68", "HOSTCALL #0x62", "ADD R3, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #42", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R4, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R5, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #99", "HOSTCALL #0x6b", "HOSTCALL #0x69", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #50", "HOSTCALL #0x6b", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "HOSTCALL #0x67", "ADD R6, R0, #0", "SAVE R6, [0xfffe]", "PIPE R6, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #0", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #2", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x64", "HOSTCALL #0x67", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [7, 50, 3, 1, 2, 3, 2], "status": -1}}];
 const RESPONDER = "' HTTP responder -- reads the request descriptor from PicoWAL and replies.\n' The simulator writes these cards before running the program:\n'   (0,0,0)=request length  (0,0,1)=method  (0,0,2)=body length  (0,0,3)=checksum\nLET LEN = 0\nStorage.Load(0, 0, 0, LEN)\nLET METHOD = 0\nStorage.Load(0, 0, 1, METHOD)\nLET BODYLEN = 0\nStorage.Load(0, 0, 2, BODYLEN)\nLET SUM = 0\nStorage.Load(0, 0, 3, SUM)\nIF METHOD EQ 2 THEN\n    NET.STATUS(201)\nELSEIF LEN EQ 0 THEN\n    NET.STATUS(400)\nELSE\n    NET.STATUS(200)\nENDIF\nNET.TYPE(\"application/json\")\nPRINT LEN\nPRINT BODYLEN\nPRINT SUM\nRETURN\n";
@@ -3602,12 +3626,83 @@ function editIn(i,style){
 }
 
 // ---- debugger -------------------------------------------------------------
-var DBG = { words:[], disasm:[], vm:null };
-function compileSrc(run){
-  var lang=document.getElementById('lang').value, src=document.getElementById('src').value, err=document.getElementById('cerr');
+var DBG = { words:[], disasm:[], vm:null, vars:{} };
+
+// ---- Monaco editor (with graceful textarea fallback) ----------------------
+var EDITOR = null;
+function getSrc(){ return EDITOR ? EDITOR.getValue() : document.getElementById('src').value; }
+function setSrc(v){ document.getElementById('src').value = v; if (EDITOR) EDITOR.setValue(v); }
+function monacoLangId(lang){ return { c:'picoc', basic:'picobasic', python:'picopython', english:'picoenglish' }[lang] || 'picoc'; }
+function onLangChange(){ if (EDITOR) monaco.editor.setModelLanguage(EDITOR.getModel(), monacoLangId(document.getElementById('lang').value)); }
+function hookNames(){ var H=(typeof PV_HOOKS!=='undefined'&&PV_HOOKS.BY_CODE)?PV_HOOKS.BY_CODE:{}; var out=[]; for(var k in H) out.push(H[k]); return out; }
+var MONARCH = {
+  picoc: { keywords:['int','var','void','if','else','while','for','return','break','continue','print'],
+    tokenizer:{ root:[
+      [/\/\/.*$/,'comment'],[/\/\*/,'comment','@block'],
+      [/[A-Za-z_]\w*(?=\s*\.)/,'type'],
+      [/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],
+      [/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],
+      [/[{}()\[\];,.]/,'delimiter'],[/[+\-*/%=<>!&|?:]+/,'operator'] ],
+      block:[[/\*\//,'comment','@pop'],[/./,'comment']],
+      str:[[/[^"]+/,'string'],[/"/,'string','@pop']] } },
+  picobasic: { ignoreCase:true, keywords:['DIM','LET','IF','THEN','ELSEIF','ELSE','ENDIF','WHILE','ENDWHILE','FOR','TO','STEP','NEXT','FOREACH','IN','ENDFOREACH','SWITCH','CASE','DEFAULT','ENDSWITCH','GOTO','GOSUB','SUB','ENDSUB','RETURN','PRINT','AND','OR','NOT','DO','LOOP','UNTIL','BREAK','SKIP','INC','DEC','IIF','EQ','NE','LT','GT','LE','GE','MOD'],
+    tokenizer:{ root:[
+      [/'.*$/,'comment'],[/\/\/.*$/,'comment'],
+      [/[A-Za-z_]\w*(?=\s*\.)/,'type'],
+      [/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],
+      [/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],
+      [/[()\[\];,.:]/,'delimiter'],[/[+\-*/=<>]+/,'operator'] ],
+      str:[[/[^"]+/,'string'],[/"/,'string','@pop']] } },
+  picopython: { keywords:['if','elif','else','while','for','in','range','def','return','break','continue','pass','and','or','not','print','True','False'],
+    tokenizer:{ root:[
+      [/#.*$/,'comment'],
+      [/[A-Za-z_]\w*(?=\s*\.)/,'type'],
+      [/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],
+      [/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],[/'/,'string','@str2'],
+      [/[()\[\]:,.]/,'delimiter'],[/[+\-*/%=<>!]+/,'operator'] ],
+      str:[[/[^"]+/,'string'],[/"/,'string','@pop']],
+      str2:[[/[^']+/,'string'],[/'/,'string','@pop']] } },
+  picoenglish: { ignoreCase:true, keywords:['set','let','to','be','add','subtract','from','increase','decrease','multiply','divide','by','print','show','display','if','otherwise','while','repeat','as','long','for','each','times','with','define','do','call','return','stop','break','skip','continue','is','greater','less','than','at','least','most','equal','equals','exceeds','plus','minus','modulo','mod','over','and','or','not','the','a','an','true','false'],
+    tokenizer:{ root:[
+      [/#.*$/,'comment'],
+      [/[A-Za-z_]\w*(?=\s*\.\s*[A-Za-z_]\w*\s*\()/,'type'],
+      [/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],
+      [/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],
+      [/[()\[\],.:]/,'delimiter'],[/[+\-*/%=<>]+/,'operator'] ],
+      str:[[/[^"]+/,'string'],[/"/,'string','@pop']] } }
+};
+function registerLang(id){
+  monaco.languages.register({ id:id });
+  monaco.languages.setMonarchTokensProvider(id, MONARCH[id]);
+  monaco.languages.registerCompletionItemProvider(id, { provideCompletionItems:function(model,pos){
+    var kw = MONARCH[id].keywords || [];
+    var sug = kw.map(function(k){ return { label:k, kind:monaco.languages.CompletionItemKind.Keyword, insertText:k }; });
+    hookNames().forEach(function(name){ sug.push({ label:name, kind:monaco.languages.CompletionItemKind.Function, insertText:name+'(' }); });
+    return { suggestions:sug };
+  }});
+}
+function initMonaco(){
+  if (typeof require === 'undefined' || !require.config){ document.getElementById('monaco').style.display='none'; document.getElementById('src').style.display='block'; return; }
   try {
-    var r=PicoCompile.compile(src,lang);
-    DBG.words=r.words.map(function(w){return w>>>0;}); DBG.disasm=DBG.words.map(jsDisasm);
+    require.config({ paths:{ vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
+    require(['vs/editor/editor.main'], function(){
+      ['picoc','picobasic','picopython','picoenglish'].forEach(registerLang);
+      EDITOR = monaco.editor.create(document.getElementById('monaco'), {
+        value: document.getElementById('src').value,
+        language: monacoLangId(document.getElementById('lang').value),
+        theme:'vs-dark', minimap:{enabled:false}, fontSize:13, lineNumbers:'on',
+        scrollBeyondLastLine:false, automaticLayout:true, tabSize:4, insertSpaces:true
+      });
+      EDITOR.onDidChangeModelContent(function(){ document.getElementById('src').value = EDITOR.getValue(); });
+    }, function(){ document.getElementById('monaco').style.display='none'; document.getElementById('src').style.display='block'; });
+  } catch(e){ document.getElementById('monaco').style.display='none'; document.getElementById('src').style.display='block'; }
+}
+
+function compileSrc(run){
+  var lang=document.getElementById('lang').value, src=getSrc(), err=document.getElementById('cerr');
+  try {
+    var r=PicoCompile.compileDebug(src,lang);
+    DBG.words=r.words.map(function(w){return w>>>0;}); DBG.disasm=DBG.words.map(jsDisasm); DBG.vars=r.vars||{};
     err.textContent='compiled '+DBG.words.length+' words'; err.style.color='#7ee787';
     dbgReset(); if(run) dbgRun();
   } catch(e){ err.textContent=String(e.message||e); err.style.color='#ff7b72'; }
@@ -3624,6 +3719,11 @@ function render(){
     return '<div class="row'+(idx===vm.pc?' pc':'')+'">'+String(idx).padStart(3,' ')+'  '+esc(t)+'</div>'; }).join('');
   var pcrow=document.querySelector('#listing .row.pc'); if(pcrow) pcrow.scrollIntoView({block:'nearest'});
   document.getElementById('regs').innerHTML=Array.from(vm.regs).map(function(v,idx){return '<div class="r">R'+idx+' <b>'+v+'</b></div>';}).join('');
+  var wb=document.getElementById('watches');
+  if(wb){ var vars=DBG.vars||{}, ks=Object.keys(vars);
+    wb.innerHTML = ks.length ? ks.map(function(name){ var rr=vars[name]; return '<tr><td>'+esc(name)+'</td><td>R'+rr+'</td><td><b>'+vm.regs[rr]+'</b></td></tr>'; }).join('')
+                             : '<tr><td colspan="3" style="color:var(--muted)">(no named variables)</td></tr>';
+  }
   document.getElementById('state').textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;
   document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']';
 }
@@ -3670,7 +3770,7 @@ function writeDescriptor(wal, req){
 function sendRequest(){
   var text=document.getElementById('reqbox').value, isHex=document.getElementById('reqmode').value==='hex';
   var req=parseRequest(text,isHex), wal=walBackend(); writeDescriptor(wal,req);
-  var lang=document.getElementById('lang').value, src=document.getElementById('src').value, r;
+  var lang=document.getElementById('lang').value, src=getSrc(), r;
   try { r=PicoCompile.compile(src,lang); }
   catch(e){ document.getElementById('respout').textContent='compile error: '+(e.message||e); document.getElementById('respout').style.color='#ff7b72'; return; }
   var vm=new PicoVM({cards:wal}); vm.run(r.words);
@@ -3689,7 +3789,7 @@ function renderResponse(vm,req){
   L.push(''); L.push(JSON.stringify(body));
   el.textContent=L.join('\n');
 }
-function loadResponder(){ document.getElementById('lang').value='basic'; document.getElementById('src').value=RESPONDER; compileSrc(false); }
+function loadResponder(){ document.getElementById('lang').value='basic'; onLangChange(); setSrc(RESPONDER); compileSrc(false); }
 function loadSample(){
   document.getElementById('reqmode').value='text';
   document.getElementById('reqbox').value='POST /orders HTTP/1.1\r\nHost: pico.dev\r\nContent-Type: application/json\r\nContent-Length: 11\r\n\r\n{"qty": 42}';
@@ -3704,7 +3804,8 @@ buildGallery();
 function loadExample(style) {
   var i = parseInt(document.getElementById('example').value, 10) || 0;
   document.getElementById('lang').value = style;
-  document.getElementById('src').value = DATA[i][style].src;
+  onLangChange();
+  setSrc(DATA[i][style].src);
   compileSrc(false);
 }
 var PY_SAMPLE = "# Python-style: indentation blocks, = assignment\n" +
@@ -3737,11 +3838,13 @@ var EN_SAMPLE = "# English prose: the same logic, in plain sentences\n" +
   "Print total.\n";
 function loadLangSample(lang) {
   document.getElementById('lang').value = lang;
-  document.getElementById('src').value = (lang === 'python') ? PY_SAMPLE : EN_SAMPLE;
+  onLangChange();
+  setSrc((lang === 'python') ? PY_SAMPLE : EN_SAMPLE);
   compileSrc(false);
 }
 document.getElementById('lang').value='basic';
 document.getElementById('src').value=RESPONDER;
+initMonaco();
 compileSrc(false);
 loadResponder();
 loadSample();
