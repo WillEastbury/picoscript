@@ -22,6 +22,10 @@ PicoScript runs inside picoweb as deterministic, bounded userland logic for:
 - Lease-based type-hinted span access to process memory
 - Arena allocation and zero-copy descriptor shipping
 - Optional batching, profiling, and fast-path validation hooks
+- **Bitwise/shift (`Bits.*`)** and a **hardware-accelerated int8 dot product
+  (`Dot8.*` → NEON SDOT / Cortex-M33 SMLAD / scalar)**, with `Memory.*`/`Io`
+  compiling to a native byte arena — enough to run a full BitNet ternary
+  inference forward pass in arena memory (see `docs/SYSTEMS_LANGUAGE.md`).
 
 ## Files
 

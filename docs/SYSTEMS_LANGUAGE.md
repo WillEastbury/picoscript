@@ -39,15 +39,22 @@ surface. That's why this is more than "hello world with interrupts."
 **Have today**
 - Integer arithmetic, comparisons, full control flow, **jump-table dispatch**
   (ideal for interrupt vectors / syscall tables / driver state machines).
-- `Memory.*` (byte memory), `Span.*` (zero-copy views), arena allocation,
-  `Descriptor.*` / `Lease.*` hooks, the host-hook ABI (extensible at will).
-- The **`toC` backend** (the native bridge) and cross-target parity testing.
-- The card store (State) and the descriptor/FIFO IO model (IO).
-
-**Landing now**
-- **Bitwise + shift** (`Bits.And/Or/Xor/Not/Shl/Shr/Sar`) — register/flag
-  manipulation, bit-packing, MMIO field extract/insert. Native in `toC`. (The
-  self-hosted assembler's `*256 / %256` workaround becomes real `<<`/`>>`.)
+- **`Bits.*`** (And/Or/Xor/Not/Shl/Shr/Sar) — register/flag manipulation,
+  bit-packing, MMIO field extract/insert; lowers to native `<<`/`&` in `toC`
+  (the self-hosted assembler's `*256 / %256` workaround becomes real shifts).
+- **`Dot8.*`** (Len/Of) — signed int8 span dot product that lowers to
+  **AArch64 NEON `SDOT`** (`--profile pi5`), **Cortex-M33 `SMLAD`**
+  (`--profile pico2`), or a portable scalar loop: hardware-accelerated matvec
+  for quantized inference.
+- **`Memory.*` / `Io.WriteByte` native in `toC`** over a caller-provided
+  `ctx->mem` arena (default 520 KB = Pico 2 SRAM); PicoScript-compiled code
+  touches a real byte-addressable arena at native speed (no `pv_host` round-trip).
+  All three VMs (Python / JS / C, interpreter + compiled) are at parity.
+- `Span.*` (zero-copy views), arena allocation, `Descriptor.*` / `Lease.*`,
+  the host-hook ABI (extensible at will).
+- The **`toC` backend** with `-O3` + `--profile {host,pi5,pico2}` to turn on the
+  SIMD paths, cross-target parity testing, the card store (State) and the
+  descriptor/FIFO IO model (IO).
 
 **The dragons (what's still missing, and how to close each)**
 
