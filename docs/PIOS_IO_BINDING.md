@@ -6,7 +6,7 @@ code expresses **application intent** (read the request, construct a response
 graph); the kernel expresses **transport reality** (TCP, TLS, HTTP framing, DMA,
 connection lifecycle).
 
-This is the contract a worker can rely on. It is the realization of eight design
+This is the contract a worker can rely on. It is the realization of explicit design
 decisions — each rule below cites the decision (`[D#]`) it comes from.
 
 > **Status:** design spec. The kernel side lives in the PIOS repo; this document
@@ -195,7 +195,76 @@ the point of no return for the status, **not** "the whole response is done":
 
 Chunk framing is the kernel's call: all body descriptors known before commit ⇒
 `Content-Length`; otherwise chunked `TE` (or a transform/compression forces
-no-CL — see §9). **EL0 never frames chunks.**
+no-CL unless buffered — see §4.1). **EL0 never frames chunks.**
+
+### 4.1 Body transform policy [D1,D7,D9]
+
+Compression is modeled as a **body-phase transform policy**, not as a new
+`DESC_CONTROL` marker. The policy has a per-port default and a per-response
+hint/override on the response graph: `identity`, `negotiate`, or an allowed set
+such as `{gzip, br}`. This keeps compression a kernel/DMA-stage concern over the
+whole representation instead of an EL0-visible ordering event; a control marker
+would imply a phase boundary EL0 must reason about, which is exactly what **I6**
+avoids.
+
+The kernel owns request headers (**I1/D1**), so it parses `Accept-Encoding`,
+combines it with port policy and the response hint, chooses `identity` / `gzip` /
+`br`, and sets `Content-Encoding` (and `Vary: Accept-Encoding`) as needed. EL0 may
+say what transforms are acceptable for this response; EL0 never compresses bytes
+itself. That preserves the descriptor graph as application intent, while making
+compression an explicit exception to pure zero-copy for that body.
+
+A transform changes the body length, so it runs **before** length finalization and
+before the kernel chooses `Content-Length` vs streaming framing:
+
+| transform applied? | full body known before `DESC_COMMIT`? | binding result |
+|--------------------|----------------------------------------|----------------|
+| no                 | yes                                    | emit `Content-Length` over the original body bytes |
+| no                 | no                                     | stream with chunked `TE` (HTTP/1.1) / data frames |
+| yes                | yes                                    | either buffer-transform-then-`Content-Length` if within quota, or stream transformed bytes with chunked `TE` |
+| yes                | no                                     | stream transformed bytes with chunked `TE`; `Content-Length` is illegal |
+
+If EL0 supplied a stale `Content-Length`, the binding canonicalizes or removes it;
+EL0 cannot force an illegal combination (**I6**). The transform is an intra-`body`
+stage, so it may coalesce or remap `DESC_BODY` spans only within that phase and
+must not cross `FLUSH`, `trailer`, `commit`, or `upgrade` boundaries (**I7**).
+
+### 4.2 Range mode policy [D1,D7,D10]
+
+`range_mode` is an explicit port/binding policy (`off`, `single`, `multi`). When
+it is enabled, the kernel parses `Range` / `If-Range` with the other request
+headers (**I1/D1**) and validates ranges against the selected representation
+length. EL0 still produces the **full** successful response body graph, or a
+kernel-visible length for it; the kernel slices the body phase to the requested
+offset span(s). This is the one sanctioned exception to "no cross-offset body
+reorder", and it is legal only because `range_mode` opens it explicitly under
+**I7**.
+
+Range handling applies only to a successful `200` representation with known
+length. If there is no usable length, the binding ignores `Range` and sends the
+normal `200` response. If the range set is syntactically valid but unsatisfiable,
+the kernel discards the body graph and emits `416 Range Not Satisfiable` with
+`Content-Range: bytes */LEN`, then ACKs/releases descriptors normally (**I8**).
+
+Single and multi-range responses are kernel-framed:
+
+| range result | descriptor mapping |
+|--------------|--------------------|
+| one satisfiable span | final preamble becomes `206`; kernel emits `Content-Range: bytes A-B/LEN`, a `Content-Length` for the selected span when legal, and only the sliced `DESC_BODY` bytes |
+| multiple satisfiable spans and `range_mode = multi` | final preamble becomes `206`; kernel synthesizes `multipart/byteranges` `Content-Type`, boundaries, per-part `Content-Range` headers, and body slices |
+| multiple ranges with `range_mode = single` | kernel may coalesce overlapping/adjacent ranges into one span; otherwise it ignores `Range` and sends the normal `200` response rather than making EL0 frame multipart |
+
+EL0 never writes multipart boundaries, just as it never writes chunk framing.
+Those bytes are transport/binding reality, not application body intent (**I6**).
+
+Range plus dynamic transform is deliberately narrow. RFC range semantics apply to
+the selected representation bytes, including any content encoding; serving ranges
+over a freshly compressed stream would require a complete encoded buffer or an
+index. Therefore dynamic kernel transforms are disabled for ranged responses:
+a satisfiable range forces `identity` unless the selected representation is
+already pre-encoded with a known encoded length. Range wins over `negotiate`
+because it preserves streaming and avoids making compression a hidden whole-body
+buffering requirement.
 
 ### Ownership move at `seal` [D6]
 `seal` **consumes** the `iso` response arena (linear/move semantics) → ownership
@@ -230,9 +299,11 @@ request to `duplex`):
 
 ```c
 struct port_cfg {
-    uint16_t reorder_mode;    /* strict | bounded | all   [D7]                 */
-    uint32_t body_inline_max; /* <= this many bytes ⇒ inline spans, else cursor [D4] */
-    uint16_t default_kind;    /* binding kind for new connections [D5]         */
+    uint16_t reorder_mode;     /* strict | bounded | all   [D7]                */
+    uint32_t body_inline_max;  /* <= this many bytes ⇒ inline spans, else cursor [D4] */
+    uint16_t default_kind;     /* binding kind for new connections [D5]        */
+    uint16_t transform_policy; /* identity | negotiate | allowed-set default [D9] */
+    uint8_t  range_mode;       /* off | single | multi [D10]                   */
     /* + TLS identity, principal-binding policy, timeouts, quotas …            */
 };
 ```
@@ -345,10 +416,10 @@ HTTP. Each oddity maps to an explicit mechanism — none is left to a heuristic:
 | 3 | **1xx informational** (`100 Continue`, `103 Early Hints`) | `DESC_CONTROL/CONTINUE_100` and `…/EARLY_HINTS_103` emit an **informational phase** before the final preamble. A response may have many info phases then exactly one final `preamble`. |
 | 4 | **CONNECT / WebSocket / Upgrade** | a `DESC_UPGRADE` boundary descriptor; after it the port's `reorder_mode` flips `bounded → strict` and the binding becomes `duplex` — HTTP framing stops. |
 | 5 | **Error after partial stream** | `seal` = *headers committed*, not *complete*. Pre-flush `DESC_ABORT` ⇒ clean error/500; **post-flush** `DESC_ABORT` can only **tear down the connection** (you cannot un-send a 200). |
-| 6 | **Content-Length vs chunked** | binding policy + a descriptor flag: all `DESC_BODY` known before `DESC_COMMIT` ⇒ `Content-Length`; otherwise chunked `TE` / streaming. |
+| 6 | **Content-Length vs chunked** | binding policy + a descriptor flag: all `DESC_BODY` known before `DESC_COMMIT` ⇒ `Content-Length`; otherwise chunked `TE` / streaming; transform may force streaming unless buffered (§4.1). |
 | 7 | **Header mutability boundary** | after `seal`, `preamble` + `header` descriptors are **immutable**; `body` still accepts `write` in `stream` mode, not in `unary` (already finalized). |
-| 8 | **Compression / transform** | a transform (gzip/brotli) changes body length, so it must run **before length finalization** or force chunked / no-CL. Modeled as a transform attribute on the `body` phase, applied before the kernel picks CL vs chunked (#6). |
-| 9 | **Range responses (`206`)** | an explicit **range mode** on the binding permits the kernel to **slice / reorder `body` spans** — the one sanctioned exception to "no cross-offset body reorder". |
+| 8 | **Compression / transform** | see §4.1: transform is a body-phase policy chosen by the kernel from `Accept-Encoding` + EL0 hints, and it runs before length/framing finalization. |
+| 9 | **Range responses (`206`)** | see §4.2: explicit `range_mode` lets the kernel slice body spans, synthesize `206` / multipart framing, or emit `416`. |
 | 10 | **Flush / low-latency** (SSE, logs) | `DESC_CONTROL/FLUSH` pushes buffered body immediately and is a **hard coalescing barrier** — the kernel must not merge body across it. `END_STREAM` closes the stream phase. |
 
 **Invariant tying it together:** reordering/coalescing is permitted only *within*
@@ -364,7 +435,7 @@ unless the binding policy (range mode, `reorder_mode = all`) explicitly opens it
 | No pin / slowloris / UAF on read  | **I4,I8** — scope-bound leases + kernel revoke + eventual release [D3]|
 | Use-after-seal is a **compile** error | **I2,I3** — `iso` arena consumed at seal [D6]   |
 | Deferred status keeps clean 500   | **I3,I6** — nothing on the wire until `end` [D2]    |
-| Zero body copies                  | **I4,I7** — leased spans in/out; coalesce intra-phase only [D3,D7]|
+| Zero body copies (untransformed)  | **I4,I7** — leased spans in/out; coalesce intra-phase only; transform is an explicit opt-out [D3,D7,D9]|
 | One substrate, honest lifecycles  | **I5,I6** — typed binding kinds over shared pooldesc+FIFO [D5]|
 | No hot-path malloc / no leaks     | **I8** — capsule micro-pools, kernel-ACK release [D3,D8]|
 
@@ -382,3 +453,5 @@ unless the binding policy (range mode, `reorder_mode = all`) explicitly opens it
 | 6 | Ownership move | layered: `iso` lease consumed at `seal` (compile-time) + runtime owner-flag backstop |
 | 7 | Reorder policy | per-port `reorder_mode` (`strict`\|`bounded`\|`all`) over a typed **phased** descriptor graph (PREAMBLE/HEADER/BODY/TRAILER/CONTROL/COMMIT/ABORT/UPGRADE); reorder only within a phase, never across a boundary unless policy opens it |
 | 8 | Write ordering | kernel-ACK FIFO release + kernel-assigned connection-scoped sequence/stream id |
+| 9 | Transform policy | compression is a body-phase kernel policy (not an EL0 descriptor); dynamic transforms run before length finalization and may opt out of pure zero-copy |
+| 10 | Range mode | `range_mode` is the explicit opener that lets the kernel slice body spans, synthesize `206` / multipart framing, and disables dynamic transforms for ranged responses |
