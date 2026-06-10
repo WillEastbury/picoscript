@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PicoScript Complete Reference</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; display: flex; flex-direction: column; }
+.top-bar { background: white; padding: 20px 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.top-bar h1 { color: #667eea; margin: 0; font-size: 28px; }
+.top-bar p { color: #666; margin: 5px 0 0 0; font-size: 12px; }
+.main-container { display: flex; flex: 1; overflow: hidden; }
+.sidebar { width: 280px; background: white; border-right: 1px solid #e0e0e0; overflow-y: auto; padding: 20px 0; box-shadow: 2px 0 8px rgba(0,0,0,0.05); }
+.content-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.tabs { display: flex; gap: 0; border-bottom: 1px solid #e0e0e0; background: white; padding: 0 20px; overflow-x: auto; }
+.tab-btn { padding: 14px 20px; background: none; border: none; cursor: pointer; font-weight: 600; color: #666; border-bottom: 3px solid transparent; white-space: nowrap; }
+.tab-btn.active { color: #667eea; border-bottom-color: #667eea; }
+.tab-content { display: none; flex: 1; overflow-y: auto; background: white; padding: 30px; }
+.tab-content.active { display: block; }
+.tree-section { padding: 0 15px; margin: 5px 0; }
+.tree-title { font-weight: 700; color: #333; padding: 10px 8px; font-size: 13px; display: flex; align-items: center; cursor: pointer; user-select: none; }
+.tree-title:hover { color: #667eea; }
+.tree-toggle { display: inline-block; width: 16px; text-align: center; color: #667eea; margin-right: 6px; font-size: 12px; }
+.tree-items { }
+.tree-item { padding: 6px 20px; font-size: 12px; color: #555; cursor: pointer; border-left: 2px solid transparent; display: flex; align-items: center; user-select: none; }
+.tree-item:hover { background: #f0f0f0; color: #667eea; }
+.tree-item.active { background: #e8eaf6; color: #667eea; border-left-color: #667eea; font-weight: 600; }
+.tree-item.parent { padding-left: 8px; }
+.tree-item .toggle { display: inline-block; width: 14px; text-align: center; margin-right: 4px; color: #999; font-size: 12px; }
+.tree-item .indent { margin-left: 20px; }
+.stat-box { display: inline-block; margin: 10px 20px 10px 0; padding: 15px; background: #f8f9fa; border-radius: 6px; border-left: 4px solid #667eea; }
+.stat-num { font-size: 24px; font-weight: bold; color: #667eea; }
+.stat-label { font-size: 12px; color: #666; margin-top: 5px; }
+.namespace { margin: 30px 0; }
+.namespace h2 { color: #667eea; border-bottom: 2px solid #667eea; padding-bottom: 10px; margin-bottom: 20px; }
+.method { margin: 15px 0; padding: 15px; background: #f8f9fa; border-radius: 6px; border-left: 4px solid #667eea; }
+.method.highlight { background: #fff3cd; border-left-color: #ffc107; }
+.method h3 { color: #333; margin: 0 0 10px 0; }
+.method-sig { background: white; padding: 10px; border-radius: 4px; font-family: monospace; margin: 10px 0; font-size: 11px; border-left: 3px solid #667eea; }
+.method-desc { color: #555; margin: 10px 0; font-size: 14px; }
+.method-section { margin: 8px 0; padding: 8px 0; }
+.method-section-title { font-weight: 600; color: #333; font-size: 12px; }
+.method-section-content { font-size: 12px; color: #666; margin-left: 10px; }
+.code-example { background: #2d2d2d; color: #f8f8f2; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 11px; margin-top: 8px; overflow-x: auto; }
+.conformance { display: inline-block; padding: 4px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; background: #e0e7ff; color: #667eea; margin: 5px 5px 5px 0; }
+.syntax-item { margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 6px; border-left: 4px solid #667eea; }
+.syntax-item h3 { color: #333; margin: 0 0 10px 0; }
+.syntax-syntax { background: white; padding: 10px; border-radius: 4px; font-family: monospace; margin: 10px 0; font-size: 11px; border-left: 3px solid #667eea; }
+table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+th { background: #667eea; color: white; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #f1f1f1; }
+::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #555; }
+</style>
+</head>
+<body>
+<div class="top-bar">
+<h1>PicoScript Complete Reference Manual</h1>
+<p>Generated: 2026-06-09 17:07:39</p>
+</div>
+
+<div class="main-container">
+<div class="sidebar" id="sidebar">
+<div class="tree-section">
+<div class="tree-title" onclick="toggleLanguageSyntax(event)">
+<span class="tree-toggle">v</span>
+<span>LANGUAGE SYNTAX</span>
+</div>
+<div class="tree-items" id="lang-items">
+<div class="tree-item" onclick="selectSyntax(event, 'FOR')">FOR</div>
+<div class="tree-item" onclick="selectSyntax(event, 'FOREACH')">FOREACH</div>
+<div class="tree-item" onclick="selectSyntax(event, 'GOSUB')">GOSUB</div>
+<div class="tree-item" onclick="selectSyntax(event, 'GOTO')">GOTO</div>
+<div class="tree-item" onclick="selectSyntax(event, 'IF')">IF</div>
+<div class="tree-item" onclick="selectSyntax(event, 'RETURN')">RETURN</div>
+<div class="tree-item" onclick="selectSyntax(event, 'SWITCH')">SWITCH</div>
+<div class="tree-item" onclick="selectSyntax(event, 'WHILE')">WHILE</div>
+
+</div>
+</div>
+
+<div class="tree-section">
+<div class="tree-title" onclick="toggleNamespacesSection(event)">
+<span class="tree-toggle">v</span>
+<span>NAMESPACES & METHODS</span>
+</div>
+<div class="tree-items" id="namespaces-items">
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Auth')">
+<span class="toggle">v</span>
+<span>Auth</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Auth">
+<div class="tree-item indent" onclick="selectMethod(event, 'Auth', 'GetToken')">GetToken</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Auth', 'GetUserCredentials')">GetUserCredentials</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Auth', 'GetUserPermissions')">GetUserPermissions</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Auth', 'RefreshToken')">RefreshToken</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Auth', 'RequestToken')">RequestToken</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Auth', 'RevokeToken')">RevokeToken</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Auth', 'SwitchTokenContext')">SwitchTokenContext</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Auth', 'SwitchUserContext')">SwitchUserContext</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Auth', 'ValidateCredentials')">ValidateCredentials</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Auth', 'ValidateToken')">ValidateToken</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Compress')">
+<span class="toggle">v</span>
+<span>Compress</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Compress">
+<div class="tree-item indent" onclick="selectMethod(event, 'Compress', 'BrotliCompress')">BrotliCompress</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Compress', 'BrotliDecompress')">BrotliDecompress</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Compress', 'DeflateCompress')">DeflateCompress</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Compress', 'DeflateDecompress')">DeflateDecompress</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Compress', 'GzipCompress')">GzipCompress</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Compress', 'GzipDecompress')">GzipDecompress</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Compress', 'PicoCompress')">PicoCompress</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Compress', 'PicoDecompress')">PicoDecompress</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Context')">
+<span class="toggle">v</span>
+<span>Context</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Context">
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetBody')">GetBody</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetClientCert')">GetClientCert</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetHeaders')">GetHeaders</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetHost')">GetHost</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetPath')">GetPath</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetPermissions')">GetPermissions</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetPort')">GetPort</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetQueryString')">GetQueryString</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetRemoteAddr')">GetRemoteAddr</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetRequestId')">GetRequestId</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetScratchValue')">GetScratchValue</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetTraceId')">GetTraceId</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetUser')">GetUser</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'GetVerb')">GetVerb</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Context', 'SetScratchValue')">SetScratchValue</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Crypto')">
+<span class="toggle">v</span>
+<span>Crypto</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Crypto">
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'Blake2b')">Blake2b</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'Blake3')">Blake3</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'Decrypt')">Decrypt</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'DeriveKey')">DeriveKey</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'Encrypt')">Encrypt</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'GenerateKeyPair')">GenerateKeyPair</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'HmacSha256')">HmacSha256</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'HmacSha512')">HmacSha512</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'Md5')">Md5</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'RandomBytes')">RandomBytes</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'Sha1')">Sha1</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'Sha256')">Sha256</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'Sha512')">Sha512</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'Sign')">Sign</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Crypto', 'Verify')">Verify</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'DateTime')">
+<span class="toggle">v</span>
+<span>DateTime</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-DateTime">
+<div class="tree-item indent" onclick="selectMethod(event, 'DateTime', 'AddDays')">AddDays</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'DateTime', 'AddHours')">AddHours</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'DateTime', 'AddMinutes')">AddMinutes</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'DateTime', 'AddSeconds')">AddSeconds</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'DateTime', 'Format')">Format</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'DateTime', 'GetDayOfWeek')">GetDayOfWeek</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'DateTime', 'GetDayOfYear')">GetDayOfYear</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'DateTime', 'Now')">Now</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'DateTime', 'Parse')">Parse</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'DateTime', 'UnixTimestamp')">UnixTimestamp</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'DateTime', 'UtcNow')">UtcNow</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Descriptor')">
+<span class="toggle">v</span>
+<span>Descriptor</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Descriptor">
+<div class="tree-item indent" onclick="selectMethod(event, 'Descriptor', 'CopyBatch')">CopyBatch</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Descriptor', 'GetFlags')">GetFlags</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Descriptor', 'GetLen')">GetLen</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Descriptor', 'GetPtr')">GetPtr</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Descriptor', 'Make')">Make</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Descriptor', 'SetFlags')">SetFlags</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Dsp')">
+<span class="toggle">v</span>
+<span>Dsp</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Dsp">
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'Concat')">Concat</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'Dequant')">Dequant</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'Dot')">Dot</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'Embed')">Embed</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'Gelu')">Gelu</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'Mask')">Mask</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'MatMul')">MatMul</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'Norm')">Norm</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'Quant')">Quant</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'Relu')">Relu</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'Scale')">Scale</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'Softmax')">Softmax</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'Split')">Split</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'TopK')">TopK</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'Transpose')">Transpose</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Dsp', 'VAdd')">VAdd</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Environment')">
+<span class="toggle">v</span>
+<span>Environment</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Environment">
+<div class="tree-item indent" onclick="selectMethod(event, 'Environment', 'GetCpuCount')">GetCpuCount</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Environment', 'GetElapsedTime')">GetElapsedTime</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Environment', 'GetHostname')">GetHostname</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Environment', 'GetMemoryFree')">GetMemoryFree</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Environment', 'GetMemoryTotal')">GetMemoryTotal</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Environment', 'GetOsVersion')">GetOsVersion</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Environment', 'GetProcessId')">GetProcessId</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Environment', 'GetThreadId')">GetThreadId</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Environment', 'GetTimeZone')">GetTimeZone</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Flow')">
+<span class="toggle">v</span>
+<span>Flow</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Flow">
+<div class="tree-item indent" onclick="selectMethod(event, 'Flow', 'Branch')">Branch</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Flow', 'Call')">Call</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Flow', 'Jump')">Jump</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Flow', 'Return')">Return</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Html')">
+<span class="toggle">v</span>
+<span>Html</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Html">
+<div class="tree-item indent" onclick="selectMethod(event, 'Html', 'AddChildNode')">AddChildNode</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Html', 'CreateNode')">CreateNode</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Html', 'Decode')">Decode</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Html', 'Encode')">Encode</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Html', 'GetAttribute')">GetAttribute</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Html', 'ParseTree')">ParseTree</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Html', 'QuerySelector')">QuerySelector</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Html', 'RemoveChildNode')">RemoveChildNode</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Html', 'Serialize')">Serialize</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Html', 'SetAttribute')">SetAttribute</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Http')">
+<span class="toggle">v</span>
+<span>Http</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Http">
+<div class="tree-item indent" onclick="selectMethod(event, 'Http', 'EncodeJson')">EncodeJson</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Http', 'GenerateHeaders')">GenerateHeaders</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Http', 'GenerateResponse')">GenerateResponse</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Http', 'ParseForm')">ParseForm</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Http', 'ParseJson')">ParseJson</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Http', 'ParseQuery')">ParseQuery</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Http', 'ReadBody')">ReadBody</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Http', 'ReadHeader')">ReadHeader</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Kernel')">
+<span class="toggle">v</span>
+<span>Kernel</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Kernel">
+<div class="tree-item indent" onclick="selectMethod(event, 'Kernel', 'FireSWIRQ')">FireSWIRQ</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Kernel', 'ProfileEnd')">ProfileEnd</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Kernel', 'ProfileStart')">ProfileStart</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Kernel', 'TracePoint')">TracePoint</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Kernel', 'WaitIRQ')">WaitIRQ</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Kernel', 'WaitSWIRQ')">WaitSWIRQ</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Lease')">
+<span class="toggle">v</span>
+<span>Lease</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Lease">
+<div class="tree-item indent" onclick="selectMethod(event, 'Lease', 'Acquire')">Acquire</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Lease', 'CachedValidate')">CachedValidate</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Lease', 'GetSpan')">GetSpan</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Lease', 'GetTypeHint')">GetTypeHint</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Lease', 'Release')">Release</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Lease', 'Validate')">Validate</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Locale')">
+<span class="toggle">v</span>
+<span>Locale</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Locale">
+<div class="tree-item indent" onclick="selectMethod(event, 'Locale', 'FormatCurrency')">FormatCurrency</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Locale', 'FormatDate')">FormatDate</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Locale', 'FormatNumber')">FormatNumber</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Locale', 'FormatTime')">FormatTime</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Locale', 'GetCurrentLocale')">GetCurrentLocale</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Locale', 'SetLocale')">SetLocale</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Locale', 'Translate')">Translate</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Math')">
+<span class="toggle">v</span>
+<span>Math</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Math">
+<div class="tree-item indent" onclick="selectMethod(event, 'Math', 'Add')">Add</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Math', 'Div')">Div</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Math', 'Inc')">Inc</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Math', 'Mul')">Mul</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Math', 'Sub')">Sub</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Maths')">
+<span class="toggle">v</span>
+<span>Maths</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Maths">
+<div class="tree-item indent" onclick="selectMethod(event, 'Maths', 'Clamp')">Clamp</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Maths', 'Cos')">Cos</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Maths', 'Exp')">Exp</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Maths', 'Lerp')">Lerp</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Maths', 'Log')">Log</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Maths', 'Log10')">Log10</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Maths', 'Power')">Power</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Maths', 'Random')">Random</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Maths', 'RandomRange')">RandomRange</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Maths', 'Sin')">Sin</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Maths', 'Sqrt')">Sqrt</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Maths', 'Tan')">Tan</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Memory')">
+<span class="toggle">v</span>
+<span>Memory</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Memory">
+<div class="tree-item indent" onclick="selectMethod(event, 'Memory', 'ArenaAlloc')">ArenaAlloc</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Memory', 'ArenaInit')">ArenaInit</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Memory', 'ArenaReset')">ArenaReset</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Memory', 'ArenaStats')">ArenaStats</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Memory', 'Peek')">Peek</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Memory', 'Poke')">Poke</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Net')">
+<span class="toggle">v</span>
+<span>Net</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Net">
+<div class="tree-item indent" onclick="selectMethod(event, 'Net', 'Body')">Body</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Net', 'Close')">Close</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Net', 'Header')">Header</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Net', 'Status')">Status</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Net', 'Type')">Type</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Number')">
+<span class="toggle">v</span>
+<span>Number</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Number">
+<div class="tree-item indent" onclick="selectMethod(event, 'Number', 'Abs')">Abs</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Number', 'Ceiling')">Ceiling</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Number', 'Floor')">Floor</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Number', 'Max')">Max</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Number', 'Min')">Min</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Number', 'Parse')">Parse</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Number', 'Round')">Round</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Number', 'ToBinary')">ToBinary</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Number', 'ToHex')">ToHex</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Number', 'ToOctal')">ToOctal</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Number', 'ToString')">ToString</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Queue')">
+<span class="toggle">v</span>
+<span>Queue</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Queue">
+<div class="tree-item indent" onclick="selectMethod(event, 'Queue', 'Depth')">Depth</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Queue', 'Dequeue')">Dequeue</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Queue', 'DequeueBatch')">DequeueBatch</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Queue', 'Enqueue')">Enqueue</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Queue', 'EnqueueBatch')">EnqueueBatch</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Random')">
+<span class="toggle">v</span>
+<span>Random</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Random">
+<div class="tree-item indent" onclick="selectMethod(event, 'Random', 'U32')">U32</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Span')">
+<span class="toggle">v</span>
+<span>Span</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Span">
+<div class="tree-item indent" onclick="selectMethod(event, 'Span', 'Make')">Make</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Span', 'Slice')">Slice</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Storage')">
+<span class="toggle">v</span>
+<span>Storage</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Storage">
+<div class="tree-item indent" onclick="selectMethod(event, 'Storage', 'AddCard')">AddCard</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Storage', 'DeleteCard')">DeleteCard</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Storage', 'GetSchemaForPack')">GetSchemaForPack</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Storage', 'Load')">Load</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Storage', 'PatchCard')">PatchCard</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Storage', 'Pipe')">Pipe</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Storage', 'QueryCard')">QueryCard</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Storage', 'ReadCard')">ReadCard</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Storage', 'Save')">Save</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Storage', 'SetSchemaForPack')">SetSchemaForPack</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Storage', 'UpdateCard')">UpdateCard</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'String')">
+<span class="toggle">v</span>
+<span>String</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-String">
+<div class="tree-item indent" onclick="selectMethod(event, 'String', 'Concat')">Concat</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'String', 'EndsWith')">EndsWith</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'String', 'IndexOf')">IndexOf</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'String', 'Join')">Join</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'String', 'Length')">Length</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'String', 'Replace')">Replace</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'String', 'Split')">Split</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'String', 'StartsWith')">StartsWith</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'String', 'Substring')">Substring</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'String', 'ToLower')">ToLower</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'String', 'ToUpper')">ToUpper</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'String', 'Trim')">Trim</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'Thread')">
+<span class="toggle">v</span>
+<span>Thread</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-Thread">
+<div class="tree-item indent" onclick="selectMethod(event, 'Thread', 'Raise')">Raise</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Thread', 'Skip')">Skip</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Thread', 'Wait')">Wait</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'Thread', 'YieldCounted')">YieldCounted</div>
+</div>
+<div class="tree-item parent" onclick="toggleNamespace(event, 'X509')">
+<span class="toggle">v</span>
+<span>X509</span>
+</div>
+<div class="tree-items tree-ns-methods" id="tree-ns-X509">
+<div class="tree-item indent" onclick="selectMethod(event, 'X509', 'FetchCertificate')">FetchCertificate</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'X509', 'GenerateCSR')">GenerateCSR</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'X509', 'GenerateKeyPair')">GenerateKeyPair</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'X509', 'GetCertInfo')">GetCertInfo</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'X509', 'GetKeyHandle')">GetKeyHandle</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'X509', 'IsCertValid')">IsCertValid</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'X509', 'StoreCertificate')">StoreCertificate</div>
+<div class="tree-item indent" onclick="selectMethod(event, 'X509', 'VerifyCertChain')">VerifyCertChain</div>
+</div>
+
+</div>
+</div>
+</div>
+
+<div class="content-area">
+<div class="tabs" id="tabs"></div>
+
+<div id="overview" class="tab-content active">
+<h2>Overview</h2>
+<div>
+<div class="stat-box"><div class="stat-num">26</div><div class="stat-label">Namespaces</div></div>
+<div class="stat-box"><div class="stat-num">213</div><div class="stat-label">Methods</div></div>
+<div class="stat-box"><div class="stat-num">8</div><div class="stat-label">Language Keywords</div></div>
+<div class="stat-box"><div class="stat-num">6</div><div class="stat-label">Conformance Levels</div></div>
+</div>
+<p>PicoScript is a deterministic bytecode language for userland message processing in the PIOS kernel. Each method compiles to a single 32-bit instruction (OP_NOOP + hook code).</p>
+<h3>Hook Code Allocation</h3>
+<table>
+<thead><tr><th>Range</th><th>Category</th><th>Methods</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td>0x01-0x70</td><td>Core (Hardware)</td><td>44</td><td>Kernel, Memory, Threading</td></tr>
+<tr><td>0x80-0xC6</td><td>Standard Library</td><td>63</td><td>String, Number, Math</td></tr>
+<tr><td>0xD0-0xFE</td><td>Context/System</td><td>39</td><td>Environment, Crypto</td></tr>
+<tr><td>0x0100-0x0149</td><td>Application Features</td><td>44</td><td>Http, Auth, Html, X509</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="syntax" class="tab-content">
+<h2>Language Syntax & Keywords</h2>
+<div class="syntax-item" id="syntax-FOR">
+<h3>FOR</h3>
+<div class="syntax-syntax"><code>FOR (init; condition; increment) { statements }</code></div>
+<div class="method-section">
+<div class="method-section-title">Description:</div>
+<div class="method-section-content">C-style loop with init, condition, and increment.</div>
+</div>
+<div class="method-section">
+<div class="method-section-title">Example:</div>
+<div class="code-example">FOR (i = 0; i < 100; i++) { Memory.Poke(addr + i, 1, 0); }</div>
+</div>
+</div>
+<div class="syntax-item" id="syntax-FOREACH">
+<h3>FOREACH</h3>
+<div class="syntax-syntax"><code>FOREACH (item IN collection) { statements }</code></div>
+<div class="method-section">
+<div class="method-section-title">Description:</div>
+<div class="method-section-content">Iterate over elements in a collection or descriptor array.</div>
+</div>
+<div class="method-section">
+<div class="method-section-title">Example:</div>
+<div class="code-example">FOREACH (header IN headers) { process_header(header); }</div>
+</div>
+</div>
+<div class="syntax-item" id="syntax-GOSUB">
+<h3>GOSUB</h3>
+<div class="syntax-syntax"><code>GOSUB subroutine_name;</code></div>
+<div class="method-section">
+<div class="method-section-title">Description:</div>
+<div class="method-section-content">Call a subroutine; returns to next instruction after call.</div>
+</div>
+<div class="method-section">
+<div class="method-section-title">Example:</div>
+<div class="code-example">GOSUB validate_request;</div>
+</div>
+</div>
+<div class="syntax-item" id="syntax-GOTO">
+<h3>GOTO</h3>
+<div class="syntax-syntax"><code>GOTO label_name;</code></div>
+<div class="method-section">
+<div class="method-section-title">Description:</div>
+<div class="method-section-content">Jump to a labeled location in code.</div>
+</div>
+<div class="method-section">
+<div class="method-section-title">Example:</div>
+<div class="code-example">GOTO error_handler;</div>
+</div>
+</div>
+<div class="syntax-item" id="syntax-IF">
+<h3>IF</h3>
+<div class="syntax-syntax"><code>IF (condition) { statements }</code></div>
+<div class="method-section">
+<div class="method-section-title">Description:</div>
+<div class="method-section-content">Conditional execution. Executes the block if condition evaluates to true.</div>
+</div>
+<div class="method-section">
+<div class="method-section-title">Example:</div>
+<div class="code-example">IF (x > 5) { Memory.Poke(0x1000, 1, 42); }</div>
+</div>
+</div>
+<div class="syntax-item" id="syntax-RETURN">
+<h3>RETURN</h3>
+<div class="syntax-syntax"><code>RETURN [value];</code></div>
+<div class="method-section">
+<div class="method-section-title">Description:</div>
+<div class="method-section-content">Exit function/subroutine with optional return value.</div>
+</div>
+<div class="method-section">
+<div class="method-section-title">Example:</div>
+<div class="code-example">RETURN Http.GenerateResponse(200, headers, body);</div>
+</div>
+</div>
+<div class="syntax-item" id="syntax-SWITCH">
+<h3>SWITCH</h3>
+<div class="syntax-syntax"><code>SWITCH (expr) { CASE val: statements; DEFAULT: statements; }</code></div>
+<div class="method-section">
+<div class="method-section-title">Description:</div>
+<div class="method-section-content">Multi-way branching based on expression value.</div>
+</div>
+<div class="method-section">
+<div class="method-section-title">Example:</div>
+<div class="code-example">SWITCH (status) { CASE 200: handle_ok; CASE 404: handle_not_found; }</div>
+</div>
+</div>
+<div class="syntax-item" id="syntax-WHILE">
+<h3>WHILE</h3>
+<div class="syntax-syntax"><code>WHILE (condition) { statements }</code></div>
+<div class="method-section">
+<div class="method-section-title">Description:</div>
+<div class="method-section-content">Loop that executes while condition is true.</div>
+</div>
+<div class="method-section">
+<div class="method-section-title">Example:</div>
+<div class="code-example">WHILE (remaining > 0) { chunk = read_next(); remaining--; }</div>
+</div>
+</div>
+
+</div>
+
+<div id="namespaces" class="tab-content">
+<h2>Namespaces and Methods</h2>
+<div class="namespace" id="ns-Auth"><h2>Auth (10 methods)</h2><div class="method" id="method-Auth_GetToken"><h3>GetToken</h3><span class="conformance">L1</span><span class="conformance">0x0125</span></div><div class="method" id="method-Auth_GetUserCredentials"><h3>GetUserCredentials</h3><span class="conformance">L6</span><span class="conformance">0x0120</span><div class="method-desc">Retrieve user credentials from the authentication context.</div><div class="method-section"><div class="method-section-title">Signature:</div><div class="method-sig"><code>GetUserCredentials(user_id: string) -> credentials_descriptor</code></div></div><div class="method-section"><div class="method-section-title">Calling Syntax:</div><div class="code-example">creds = Auth.GetUserCredentials("user_42");</div></div><div class="method-section"><div class="method-section-title">Parameters:</div><div class="method-section-content">user_id: The user identifier to fetch credentials for.</div></div><div class="method-section"><div class="method-section-title">Returns:</div><div class="method-section-content">Descriptor containing encrypted credentials.</div></div></div><div class="method" id="method-Auth_GetUserPermissions"><h3>GetUserPermissions</h3><span class="conformance">L1</span><span class="conformance">0x0123</span></div><div class="method" id="method-Auth_RefreshToken"><h3>RefreshToken</h3><span class="conformance">L1</span><span class="conformance">0x0128</span></div><div class="method" id="method-Auth_RequestToken"><h3>RequestToken</h3><span class="conformance">L1</span><span class="conformance">0x0124</span></div><div class="method" id="method-Auth_RevokeToken"><h3>RevokeToken</h3><span class="conformance">L1</span><span class="conformance">0x0129</span></div><div class="method" id="method-Auth_SwitchTokenContext"><h3>SwitchTokenContext</h3><span class="conformance">L1</span><span class="conformance">0x0127</span></div><div class="method" id="method-Auth_SwitchUserContext"><h3>SwitchUserContext</h3><span class="conformance">L6</span><span class="conformance">0x0122</span><div class="method-desc">Atomically switch the execution context to run as authenticated user.</div><div class="method-section"><div class="method-section-title">Signature:</div><div class="method-sig"><code>SwitchUserContext(user_id: string) -> bool</code></div></div><div class="method-section"><div class="method-section-title">Calling Syntax:</div><div class="code-example">Auth.SwitchUserContext("user_42");</div></div><div class="method-section"><div class="method-section-title">Parameters:</div><div class="method-section-content">user_id: User identifier to switch to.</div></div><div class="method-section"><div class="method-section-title">Returns:</div><div class="method-section-content">true if context switch succeeded.</div></div></div><div class="method" id="method-Auth_ValidateCredentials"><h3>ValidateCredentials</h3><span class="conformance">L6</span><span class="conformance">0x0121</span><div class="method-desc">Validate a username/password pair against the system credential store.</div><div class="method-section"><div class="method-section-title">Signature:</div><div class="method-sig"><code>ValidateCredentials(username: string, password: string) -> bool</code></div></div><div class="method-section"><div class="method-section-title">Calling Syntax:</div><div class="code-example">valid = Auth.ValidateCredentials("alice", "secret");</div></div><div class="method-section"><div class="method-section-title">Parameters:</div><div class="method-section-content">username: Login name; password: User password (clear text during call).</div></div><div class="method-section"><div class="method-section-title">Returns:</div><div class="method-section-content">true if credentials are valid, false otherwise.</div></div></div><div class="method" id="method-Auth_ValidateToken"><h3>ValidateToken</h3><span class="conformance">L1</span><span class="conformance">0x0126</span></div></div><div class="namespace" id="ns-Compress"><h2>Compress (8 methods)</h2><div class="method" id="method-Compress_BrotliCompress"><h3>BrotliCompress</h3><span class="conformance">L1</span><span class="conformance">0x0100</span></div><div class="method" id="method-Compress_BrotliDecompress"><h3>BrotliDecompress</h3><span class="conformance">L1</span><span class="conformance">0x0101</span></div><div class="method" id="method-Compress_DeflateCompress"><h3>DeflateCompress</h3><span class="conformance">L1</span><span class="conformance">0x0106</span></div><div class="method" id="method-Compress_DeflateDecompress"><h3>DeflateDecompress</h3><span class="conformance">L1</span><span class="conformance">0x0107</span></div><div class="method" id="method-Compress_GzipCompress"><h3>GzipCompress</h3><span class="conformance">L1</span><span class="conformance">0x0104</span></div><div class="method" id="method-Compress_GzipDecompress"><h3>GzipDecompress</h3><span class="conformance">L1</span><span class="conformance">0x0105</span></div><div class="method" id="method-Compress_PicoCompress"><h3>PicoCompress</h3><span class="conformance">L1</span><span class="conformance">0x0102</span></div><div class="method" id="method-Compress_PicoDecompress"><h3>PicoDecompress</h3><span class="conformance">L1</span><span class="conformance">0x0103</span></div></div><div class="namespace" id="ns-Context"><h2>Context (15 methods)</h2><div class="method" id="method-Context_GetBody"><h3>GetBody</h3><span class="conformance">L1</span><span class="conformance">0x00E9</span></div><div class="method" id="method-Context_GetClientCert"><h3>GetClientCert</h3><span class="conformance">L1</span><span class="conformance">0x00ED</span></div><div class="method" id="method-Context_GetHeaders"><h3>GetHeaders</h3><span class="conformance">L1</span><span class="conformance">0x00E7</span></div><div class="method" id="method-Context_GetHost"><h3>GetHost</h3><span class="conformance">L1</span><span class="conformance">0x00E2</span></div><div class="method" id="method-Context_GetPath"><h3>GetPath</h3><span class="conformance">L1</span><span class="conformance">0x00E1</span></div><div class="method" id="method-Context_GetPermissions"><h3>GetPermissions</h3><span class="conformance">L1</span><span class="conformance">0x00E6</span></div><div class="method" id="method-Context_GetPort"><h3>GetPort</h3><span class="conformance">L1</span><span class="conformance">0x00E3</span></div><div class="method" id="method-Context_GetQueryString"><h3>GetQueryString</h3><span class="conformance">L1</span><span class="conformance">0x00E8</span></div><div class="method" id="method-Context_GetRemoteAddr"><h3>GetRemoteAddr</h3><span class="conformance">L1</span><span class="conformance">0x00E4</span></div><div class="method" id="method-Context_GetRequestId"><h3>GetRequestId</h3><span class="conformance">L1</span><span class="conformance">0x00EC</span></div><div class="method" id="method-Context_GetScratchValue"><h3>GetScratchValue</h3><span class="conformance">L1</span><span class="conformance">0x00EB</span></div><div class="method" id="method-Context_GetTraceId"><h3>GetTraceId</h3><span class="conformance">L1</span><span class="conformance">0x00EE</span></div><div class="method" id="method-Context_GetUser"><h3>GetUser</h3><span class="conformance">L1</span><span class="conformance">0x00E5</span></div><div class="method" id="method-Context_GetVerb"><h3>GetVerb</h3><span class="conformance">L1</span><span class="conformance">0x00E0</span></div><div class="method" id="method-Context_SetScratchValue"><h3>SetScratchValue</h3><span class="conformance">L1</span><span class="conformance">0x00EA</span></div></div><div class="namespace" id="ns-Crypto"><h2>Crypto (15 methods)</h2><div class="method" id="method-Crypto_Blake2b"><h3>Blake2b</h3><span class="conformance">L1</span><span class="conformance">0x00F2</span></div><div class="method" id="method-Crypto_Blake3"><h3>Blake3</h3><span class="conformance">L1</span><span class="conformance">0x00F3</span></div><div class="method" id="method-Crypto_Decrypt"><h3>Decrypt</h3><span class="conformance">L1</span><span class="conformance">0x00F9</span></div><div class="method" id="method-Crypto_DeriveKey"><h3>DeriveKey</h3><span class="conformance">L1</span><span class="conformance">0x00FB</span></div><div class="method" id="method-Crypto_Encrypt"><h3>Encrypt</h3><span class="conformance">L1</span><span class="conformance">0x00F8</span></div><div class="method" id="method-Crypto_GenerateKeyPair"><h3>GenerateKeyPair</h3><span class="conformance">L1</span><span class="conformance">0x00FA</span></div><div class="method" id="method-Crypto_HmacSha256"><h3>HmacSha256</h3><span class="conformance">L1</span><span class="conformance">0x00F4</span></div><div class="method" id="method-Crypto_HmacSha512"><h3>HmacSha512</h3><span class="conformance">L1</span><span class="conformance">0x00F5</span></div><div class="method" id="method-Crypto_Md5"><h3>Md5</h3><span class="conformance">L1</span><span class="conformance">0x00FD</span></div><div class="method" id="method-Crypto_RandomBytes"><h3>RandomBytes</h3><span class="conformance">L1</span><span class="conformance">0x00FC</span></div><div class="method" id="method-Crypto_Sha1"><h3>Sha1</h3><span class="conformance">L1</span><span class="conformance">0x00FE</span></div><div class="method" id="method-Crypto_Sha256"><h3>Sha256</h3><span class="conformance">L6</span><span class="conformance">0x00F0</span><div class="method-desc">Compute SHA-256 hash of input data (hardware-accelerated).</div><div class="method-section"><div class="method-section-title">Signature:</div><div class="method-sig"><code>Sha256(data: bytes) -> bytes[32]</code></div></div><div class="method-section"><div class="method-section-title">Calling Syntax:</div><div class="code-example">hash = Crypto.Sha256(payload);</div></div><div class="method-section"><div class="method-section-title">Parameters:</div><div class="method-section-content">data: Bytes to hash.</div></div><div class="method-section"><div class="method-section-title">Returns:</div><div class="method-section-content">32-byte SHA-256 hash.</div></div></div><div class="method" id="method-Crypto_Sha512"><h3>Sha512</h3><span class="conformance">L6</span><span class="conformance">0x00F1</span><div class="method-desc">Compute SHA-512 hash of input data (hardware-accelerated).</div><div class="method-section"><div class="method-section-title">Signature:</div><div class="method-sig"><code>Sha512(data: bytes) -> bytes[64]</code></div></div><div class="method-section"><div class="method-section-title">Calling Syntax:</div><div class="code-example">hash = Crypto.Sha512(payload);</div></div><div class="method-section"><div class="method-section-title">Parameters:</div><div class="method-section-content">data: Bytes to hash.</div></div><div class="method-section"><div class="method-section-title">Returns:</div><div class="method-section-content">64-byte SHA-512 hash.</div></div></div><div class="method" id="method-Crypto_Sign"><h3>Sign</h3><span class="conformance">L1</span><span class="conformance">0x00F6</span></div><div class="method" id="method-Crypto_Verify"><h3>Verify</h3><span class="conformance">L1</span><span class="conformance">0x00F7</span></div></div><div class="namespace" id="ns-DateTime"><h2>DateTime (11 methods)</h2><div class="method" id="method-DateTime_AddDays"><h3>AddDays</h3><span class="conformance">L1</span><span class="conformance">0x00B7</span></div><div class="method" id="method-DateTime_AddHours"><h3>AddHours</h3><span class="conformance">L1</span><span class="conformance">0x00B6</span></div><div class="method" id="method-DateTime_AddMinutes"><h3>AddMinutes</h3><span class="conformance">L1</span><span class="conformance">0x00B5</span></div><div class="method" id="method-DateTime_AddSeconds"><h3>AddSeconds</h3><span class="conformance">L1</span><span class="conformance">0x00B4</span></div><div class="method" id="method-DateTime_Format"><h3>Format</h3><span class="conformance">L1</span><span class="conformance">0x00B3</span></div><div class="method" id="method-DateTime_GetDayOfWeek"><h3>GetDayOfWeek</h3><span class="conformance">L1</span><span class="conformance">0x00B8</span></div><div class="method" id="method-DateTime_GetDayOfYear"><h3>GetDayOfYear</h3><span class="conformance">L1</span><span class="conformance">0x00B9</span></div><div class="method" id="method-DateTime_Now"><h3>Now</h3><span class="conformance">L1</span><span class="conformance">0x00B0</span></div><div class="method" id="method-DateTime_Parse"><h3>Parse</h3><span class="conformance">L1</span><span class="conformance">0x00B2</span></div><div class="method" id="method-DateTime_UnixTimestamp"><h3>UnixTimestamp</h3><span class="conformance">L1</span><span class="conformance">0x00BA</span></div><div class="method" id="method-DateTime_UtcNow"><h3>UtcNow</h3><span class="conformance">L1</span><span class="conformance">0x00B1</span></div></div><div class="namespace" id="ns-Descriptor"><h2>Descriptor (6 methods)</h2><div class="method" id="method-Descriptor_CopyBatch"><h3>CopyBatch</h3><span class="conformance">L1</span><span class="conformance">0x0055</span></div><div class="method" id="method-Descriptor_GetFlags"><h3>GetFlags</h3><span class="conformance">L1</span><span class="conformance">0x0054</span></div><div class="method" id="method-Descriptor_GetLen"><h3>GetLen</h3><span class="conformance">L1</span><span class="conformance">0x0053</span></div><div class="method" id="method-Descriptor_GetPtr"><h3>GetPtr</h3><span class="conformance">L1</span><span class="conformance">0x0052</span></div><div class="method" id="method-Descriptor_Make"><h3>Make</h3><span class="conformance">L1</span><span class="conformance">0x0050</span></div><div class="method" id="method-Descriptor_SetFlags"><h3>SetFlags</h3><span class="conformance">L1</span><span class="conformance">0x0051</span></div></div><div class="namespace" id="ns-Dsp"><h2>Dsp (16 methods)</h2><div class="method" id="method-Dsp_Concat"><h3>Concat</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_Dequant"><h3>Dequant</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_Dot"><h3>Dot</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_Embed"><h3>Embed</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_Gelu"><h3>Gelu</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_Mask"><h3>Mask</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_MatMul"><h3>MatMul</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_Norm"><h3>Norm</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_Quant"><h3>Quant</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_Relu"><h3>Relu</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_Scale"><h3>Scale</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_Softmax"><h3>Softmax</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_Split"><h3>Split</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_TopK"><h3>TopK</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_Transpose"><h3>Transpose</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Dsp_VAdd"><h3>VAdd</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div></div><div class="namespace" id="ns-Environment"><h2>Environment (9 methods)</h2><div class="method" id="method-Environment_GetCpuCount"><h3>GetCpuCount</h3><span class="conformance">L1</span><span class="conformance">0x00D1</span></div><div class="method" id="method-Environment_GetElapsedTime"><h3>GetElapsedTime</h3><span class="conformance">L1</span><span class="conformance">0x00D8</span></div><div class="method" id="method-Environment_GetHostname"><h3>GetHostname</h3><span class="conformance">L1</span><span class="conformance">0x00D4</span></div><div class="method" id="method-Environment_GetMemoryFree"><h3>GetMemoryFree</h3><span class="conformance">L1</span><span class="conformance">0x00D3</span></div><div class="method" id="method-Environment_GetMemoryTotal"><h3>GetMemoryTotal</h3><span class="conformance">L1</span><span class="conformance">0x00D2</span></div><div class="method" id="method-Environment_GetOsVersion"><h3>GetOsVersion</h3><span class="conformance">L1</span><span class="conformance">0x00D0</span></div><div class="method" id="method-Environment_GetProcessId"><h3>GetProcessId</h3><span class="conformance">L1</span><span class="conformance">0x00D6</span></div><div class="method" id="method-Environment_GetThreadId"><h3>GetThreadId</h3><span class="conformance">L1</span><span class="conformance">0x00D7</span></div><div class="method" id="method-Environment_GetTimeZone"><h3>GetTimeZone</h3><span class="conformance">L1</span><span class="conformance">0x00D5</span></div></div><div class="namespace" id="ns-Flow"><h2>Flow (4 methods)</h2><div class="method" id="method-Flow_Branch"><h3>Branch</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Flow_Call"><h3>Call</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Flow_Jump"><h3>Jump</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Flow_Return"><h3>Return</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div></div><div class="namespace" id="ns-Html"><h2>Html (10 methods)</h2><div class="method" id="method-Html_AddChildNode"><h3>AddChildNode</h3><span class="conformance">L1</span><span class="conformance">0x0141</span></div><div class="method" id="method-Html_CreateNode"><h3>CreateNode</h3><span class="conformance">L1</span><span class="conformance">0x0140</span></div><div class="method" id="method-Html_Decode"><h3>Decode</h3><span class="conformance">L1</span><span class="conformance">0x0147</span></div><div class="method" id="method-Html_Encode"><h3>Encode</h3><span class="conformance">L1</span><span class="conformance">0x0146</span></div><div class="method" id="method-Html_GetAttribute"><h3>GetAttribute</h3><span class="conformance">L1</span><span class="conformance">0x0144</span></div><div class="method" id="method-Html_ParseTree"><h3>ParseTree</h3><span class="conformance">L1</span><span class="conformance">0x0145</span></div><div class="method" id="method-Html_QuerySelector"><h3>QuerySelector</h3><span class="conformance">L1</span><span class="conformance">0x0149</span></div><div class="method" id="method-Html_RemoveChildNode"><h3>RemoveChildNode</h3><span class="conformance">L1</span><span class="conformance">0x0142</span></div><div class="method" id="method-Html_Serialize"><h3>Serialize</h3><span class="conformance">L1</span><span class="conformance">0x0148</span></div><div class="method" id="method-Html_SetAttribute"><h3>SetAttribute</h3><span class="conformance">L1</span><span class="conformance">0x0143</span></div></div><div class="namespace" id="ns-Http"><h2>Http (8 methods)</h2><div class="method" id="method-Http_EncodeJson"><h3>EncodeJson</h3><span class="conformance">L1</span><span class="conformance">0x0137</span></div><div class="method" id="method-Http_GenerateHeaders"><h3>GenerateHeaders</h3><span class="conformance">L1</span><span class="conformance">0x0132</span></div><div class="method" id="method-Http_GenerateResponse"><h3>GenerateResponse</h3><span class="conformance">L5</span><span class="conformance">0x0133</span><div class="method-desc">Generate HTTP response with status code, headers, and body.</div><div class="method-section"><div class="method-section-title">Signature:</div><div class="method-sig"><code>GenerateResponse(status: u32, headers: descriptor[], body: descriptor) -> void</code></div></div><div class="method-section"><div class="method-section-title">Calling Syntax:</div><div class="code-example">Http.GenerateResponse(200, header_list, body);</div></div><div class="method-section"><div class="method-section-title">Parameters:</div><div class="method-section-content">status: HTTP status (200, 404, etc.); headers: Array of header descriptors; body: Response body descriptor.</div></div><div class="method-section"><div class="method-section-title">Returns:</div><div class="method-section-content">No return value; response is queued for transmission.</div></div></div><div class="method" id="method-Http_ParseForm"><h3>ParseForm</h3><span class="conformance">L1</span><span class="conformance">0x0135</span></div><div class="method" id="method-Http_ParseJson"><h3>ParseJson</h3><span class="conformance">L1</span><span class="conformance">0x0136</span></div><div class="method" id="method-Http_ParseQuery"><h3>ParseQuery</h3><span class="conformance">L1</span><span class="conformance">0x0134</span></div><div class="method" id="method-Http_ReadBody"><h3>ReadBody</h3><span class="conformance">L5</span><span class="conformance">0x0131</span><div class="method-desc">Read HTTP body from request descriptor with optional offset and length.</div><div class="method-section"><div class="method-section-title">Signature:</div><div class="method-sig"><code>ReadBody(descriptor: u32, offset: u32, length: u32) -> bytes</code></div></div><div class="method-section"><div class="method-section-title">Calling Syntax:</div><div class="code-example">body = Http.ReadBody(R0, 0, 1024);</div></div><div class="method-section"><div class="method-section-title">Parameters:</div><div class="method-section-content">descriptor: Request handle; offset: Start position in body; length: Bytes to read.</div></div><div class="method-section"><div class="method-section-title">Returns:</div><div class="method-section-content">Byte array containing body data.</div></div></div><div class="method" id="method-Http_ReadHeader"><h3>ReadHeader</h3><span class="conformance">L5</span><span class="conformance">0x0130</span><div class="method-desc">Read an HTTP header value from the incoming request descriptor.</div><div class="method-section"><div class="method-section-title">Signature:</div><div class="method-sig"><code>ReadHeader(header_name: string, descriptor: u32) -> string</code></div></div><div class="method-section"><div class="method-section-title">Calling Syntax:</div><div class="code-example">ct = Http.ReadHeader("Content-Type", R0);</div></div><div class="method-section"><div class="method-section-title">Parameters:</div><div class="method-section-content">header_name: HTTP header name (case-insensitive); descriptor: Request descriptor handle.</div></div><div class="method-section"><div class="method-section-title">Returns:</div><div class="method-section-content">Header value as string, or empty if not present.</div></div></div></div><div class="namespace" id="ns-Kernel"><h2>Kernel (6 methods)</h2><div class="method" id="method-Kernel_FireSWIRQ"><h3>FireSWIRQ</h3><span class="conformance">L1</span><span class="conformance">0x0003</span></div><div class="method" id="method-Kernel_ProfileEnd"><h3>ProfileEnd</h3><span class="conformance">L1</span><span class="conformance">0x0005</span></div><div class="method" id="method-Kernel_ProfileStart"><h3>ProfileStart</h3><span class="conformance">L1</span><span class="conformance">0x0004</span></div><div class="method" id="method-Kernel_TracePoint"><h3>TracePoint</h3><span class="conformance">L1</span><span class="conformance">0x0006</span></div><div class="method" id="method-Kernel_WaitIRQ"><h3>WaitIRQ</h3><span class="conformance">L1</span><span class="conformance">0x0001</span></div><div class="method" id="method-Kernel_WaitSWIRQ"><h3>WaitSWIRQ</h3><span class="conformance">L1</span><span class="conformance">0x0002</span></div></div><div class="namespace" id="ns-Lease"><h2>Lease (6 methods)</h2><div class="method" id="method-Lease_Acquire"><h3>Acquire</h3><span class="conformance">L1</span><span class="conformance">0x0058</span></div><div class="method" id="method-Lease_CachedValidate"><h3>CachedValidate</h3><span class="conformance">L1</span><span class="conformance">0x005B</span></div><div class="method" id="method-Lease_GetSpan"><h3>GetSpan</h3><span class="conformance">L1</span><span class="conformance">0x005C</span></div><div class="method" id="method-Lease_GetTypeHint"><h3>GetTypeHint</h3><span class="conformance">L1</span><span class="conformance">0x005D</span></div><div class="method" id="method-Lease_Release"><h3>Release</h3><span class="conformance">L1</span><span class="conformance">0x0059</span></div><div class="method" id="method-Lease_Validate"><h3>Validate</h3><span class="conformance">L1</span><span class="conformance">0x005A</span></div></div><div class="namespace" id="ns-Locale"><h2>Locale (7 methods)</h2><div class="method" id="method-Locale_FormatCurrency"><h3>FormatCurrency</h3><span class="conformance">L1</span><span class="conformance">0x00C2</span></div><div class="method" id="method-Locale_FormatDate"><h3>FormatDate</h3><span class="conformance">L1</span><span class="conformance">0x00C4</span></div><div class="method" id="method-Locale_FormatNumber"><h3>FormatNumber</h3><span class="conformance">L1</span><span class="conformance">0x00C3</span></div><div class="method" id="method-Locale_FormatTime"><h3>FormatTime</h3><span class="conformance">L1</span><span class="conformance">0x00C5</span></div><div class="method" id="method-Locale_GetCurrentLocale"><h3>GetCurrentLocale</h3><span class="conformance">L1</span><span class="conformance">0x00C0</span></div><div class="method" id="method-Locale_SetLocale"><h3>SetLocale</h3><span class="conformance">L1</span><span class="conformance">0x00C1</span></div><div class="method" id="method-Locale_Translate"><h3>Translate</h3><span class="conformance">L1</span><span class="conformance">0x00C6</span></div></div><div class="namespace" id="ns-Math"><h2>Math (5 methods)</h2><div class="method" id="method-Math_Add"><h3>Add</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Math_Div"><h3>Div</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Math_Inc"><h3>Inc</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Math_Mul"><h3>Mul</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Math_Sub"><h3>Sub</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div></div><div class="namespace" id="ns-Maths"><h2>Maths (12 methods)</h2><div class="method" id="method-Maths_Clamp"><h3>Clamp</h3><span class="conformance">L1</span><span class="conformance">0x00AA</span></div><div class="method" id="method-Maths_Cos"><h3>Cos</h3><span class="conformance">L1</span><span class="conformance">0x00A1</span></div><div class="method" id="method-Maths_Exp"><h3>Exp</h3><span class="conformance">L1</span><span class="conformance">0x00A7</span></div><div class="method" id="method-Maths_Lerp"><h3>Lerp</h3><span class="conformance">L1</span><span class="conformance">0x00AB</span></div><div class="method" id="method-Maths_Log"><h3>Log</h3><span class="conformance">L1</span><span class="conformance">0x00A5</span></div><div class="method" id="method-Maths_Log10"><h3>Log10</h3><span class="conformance">L1</span><span class="conformance">0x00A6</span></div><div class="method" id="method-Maths_Power"><h3>Power</h3><span class="conformance">L1</span><span class="conformance">0x00A4</span></div><div class="method" id="method-Maths_Random"><h3>Random</h3><span class="conformance">L1</span><span class="conformance">0x00A8</span></div><div class="method" id="method-Maths_RandomRange"><h3>RandomRange</h3><span class="conformance">L1</span><span class="conformance">0x00A9</span></div><div class="method" id="method-Maths_Sin"><h3>Sin</h3><span class="conformance">L1</span><span class="conformance">0x00A0</span></div><div class="method" id="method-Maths_Sqrt"><h3>Sqrt</h3><span class="conformance">L1</span><span class="conformance">0x00A3</span></div><div class="method" id="method-Maths_Tan"><h3>Tan</h3><span class="conformance">L1</span><span class="conformance">0x00A2</span></div></div><div class="namespace" id="ns-Memory"><h2>Memory (6 methods)</h2><div class="method" id="method-Memory_ArenaAlloc"><h3>ArenaAlloc</h3><span class="conformance">L1</span><span class="conformance">0x0031</span></div><div class="method" id="method-Memory_ArenaInit"><h3>ArenaInit</h3><span class="conformance">L1</span><span class="conformance">0x0030</span></div><div class="method" id="method-Memory_ArenaReset"><h3>ArenaReset</h3><span class="conformance">L1</span><span class="conformance">0x0032</span></div><div class="method" id="method-Memory_ArenaStats"><h3>ArenaStats</h3><span class="conformance">L1</span><span class="conformance">0x0033</span></div><div class="method" id="method-Memory_Peek"><h3>Peek</h3><span class="conformance">L1</span><span class="conformance">0x0034</span><div class="method-desc">Read typed memory at a memory offset. Type determines byte width.</div><div class="method-section"><div class="method-section-title">Signature:</div><div class="method-sig"><code>Peek(offset: u32, type: u8) -> value</code></div></div><div class="method-section"><div class="method-section-title">Calling Syntax:</div><div class="code-example">val = Memory.Peek(0x1000, 1);</div></div><div class="method-section"><div class="method-section-title">Parameters:</div><div class="method-section-content">offset: Memory address to read from; type: Data type (0=u8, 1=u32, 2=u64).</div></div><div class="method-section"><div class="method-section-title">Returns:</div><div class="method-section-content">Value read from memory as specified type.</div></div></div><div class="method" id="method-Memory_Poke"><h3>Poke</h3><span class="conformance">L1</span><span class="conformance">0x0035</span><div class="method-desc">Write typed memory at a memory offset.</div><div class="method-section"><div class="method-section-title">Signature:</div><div class="method-sig"><code>Poke(offset: u32, type: u8, value: i64) -> void</code></div></div><div class="method-section"><div class="method-section-title">Calling Syntax:</div><div class="code-example">Memory.Poke(0x1000, 1, 42);</div></div><div class="method-section"><div class="method-section-title">Parameters:</div><div class="method-section-content">offset: Address to write; type: Data type; value: Value to write.</div></div><div class="method-section"><div class="method-section-title">Returns:</div><div class="method-section-content">No return value.</div></div></div></div><div class="namespace" id="ns-Net"><h2>Net (5 methods)</h2><div class="method" id="method-Net_Body"><h3>Body</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Net_Close"><h3>Close</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Net_Header"><h3>Header</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Net_Status"><h3>Status</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Net_Type"><h3>Type</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div></div><div class="namespace" id="ns-Number"><h2>Number (11 methods)</h2><div class="method" id="method-Number_Abs"><h3>Abs</h3><span class="conformance">L1</span><span class="conformance">0x0095</span></div><div class="method" id="method-Number_Ceiling"><h3>Ceiling</h3><span class="conformance">L1</span><span class="conformance">0x0097</span></div><div class="method" id="method-Number_Floor"><h3>Floor</h3><span class="conformance">L1</span><span class="conformance">0x0096</span></div><div class="method" id="method-Number_Max"><h3>Max</h3><span class="conformance">L1</span><span class="conformance">0x009A</span></div><div class="method" id="method-Number_Min"><h3>Min</h3><span class="conformance">L1</span><span class="conformance">0x0099</span></div><div class="method" id="method-Number_Parse"><h3>Parse</h3><span class="conformance">L1</span><span class="conformance">0x0090</span></div><div class="method" id="method-Number_Round"><h3>Round</h3><span class="conformance">L1</span><span class="conformance">0x0098</span></div><div class="method" id="method-Number_ToBinary"><h3>ToBinary</h3><span class="conformance">L1</span><span class="conformance">0x0094</span></div><div class="method" id="method-Number_ToHex"><h3>ToHex</h3><span class="conformance">L1</span><span class="conformance">0x0092</span></div><div class="method" id="method-Number_ToOctal"><h3>ToOctal</h3><span class="conformance">L1</span><span class="conformance">0x0093</span></div><div class="method" id="method-Number_ToString"><h3>ToString</h3><span class="conformance">L1</span><span class="conformance">0x0091</span></div></div><div class="namespace" id="ns-Queue"><h2>Queue (5 methods)</h2><div class="method" id="method-Queue_Depth"><h3>Depth</h3><span class="conformance">L1</span><span class="conformance">0x0012</span></div><div class="method" id="method-Queue_Dequeue"><h3>Dequeue</h3><span class="conformance">L1</span><span class="conformance">0x0010</span></div><div class="method" id="method-Queue_DequeueBatch"><h3>DequeueBatch</h3><span class="conformance">L1</span><span class="conformance">0x0013</span></div><div class="method" id="method-Queue_Enqueue"><h3>Enqueue</h3><span class="conformance">L1</span><span class="conformance">0x0011</span></div><div class="method" id="method-Queue_EnqueueBatch"><h3>EnqueueBatch</h3><span class="conformance">L1</span><span class="conformance">0x0014</span></div></div><div class="namespace" id="ns-Random"><h2>Random (1 methods)</h2><div class="method" id="method-Random_U32"><h3>U32</h3><span class="conformance">L1</span><span class="conformance">0x0020</span></div></div><div class="namespace" id="ns-Span"><h2>Span (2 methods)</h2><div class="method" id="method-Span_Make"><h3>Make</h3><span class="conformance">L1</span><span class="conformance">0x0040</span></div><div class="method" id="method-Span_Slice"><h3>Slice</h3><span class="conformance">L1</span><span class="conformance">0x0041</span></div></div><div class="namespace" id="ns-Storage"><h2>Storage (11 methods)</h2><div class="method" id="method-Storage_AddCard"><h3>AddCard</h3><span class="conformance">L1</span><span class="conformance">0x0062</span></div><div class="method" id="method-Storage_DeleteCard"><h3>DeleteCard</h3><span class="conformance">L1</span><span class="conformance">0x0064</span></div><div class="method" id="method-Storage_GetSchemaForPack"><h3>GetSchemaForPack</h3><span class="conformance">L1</span><span class="conformance">0x0060</span></div><div class="method" id="method-Storage_Load"><h3>Load</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Storage_PatchCard"><h3>PatchCard</h3><span class="conformance">L1</span><span class="conformance">0x0065</span></div><div class="method" id="method-Storage_Pipe"><h3>Pipe</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Storage_QueryCard"><h3>QueryCard</h3><span class="conformance">L1</span><span class="conformance">0x0067</span></div><div class="method" id="method-Storage_ReadCard"><h3>ReadCard</h3><span class="conformance">L1</span><span class="conformance">0x0066</span></div><div class="method" id="method-Storage_Save"><h3>Save</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Storage_SetSchemaForPack"><h3>SetSchemaForPack</h3><span class="conformance">L1</span><span class="conformance">0x0061</span></div><div class="method" id="method-Storage_UpdateCard"><h3>UpdateCard</h3><span class="conformance">L1</span><span class="conformance">0x0063</span></div></div><div class="namespace" id="ns-String"><h2>String (12 methods)</h2><div class="method" id="method-String_Concat"><h3>Concat</h3><span class="conformance">L2</span><span class="conformance">0x0080</span><div class="method-desc">Concatenate two strings.</div><div class="method-section"><div class="method-section-title">Signature:</div><div class="method-sig"><code>Concat(str1: string, str2: string) -> string</code></div></div><div class="method-section"><div class="method-section-title">Calling Syntax:</div><div class="code-example">result = String.Concat("hello", "world");</div></div><div class="method-section"><div class="method-section-title">Parameters:</div><div class="method-section-content">str1: First string; str2: Second string.</div></div><div class="method-section"><div class="method-section-title">Returns:</div><div class="method-section-content">Concatenated result.</div></div></div><div class="method" id="method-String_EndsWith"><h3>EndsWith</h3><span class="conformance">L1</span><span class="conformance">0x008B</span></div><div class="method" id="method-String_IndexOf"><h3>IndexOf</h3><span class="conformance">L1</span><span class="conformance">0x0083</span></div><div class="method" id="method-String_Join"><h3>Join</h3><span class="conformance">L1</span><span class="conformance">0x0089</span></div><div class="method" id="method-String_Length"><h3>Length</h3><span class="conformance">L2</span><span class="conformance">0x0081</span><div class="method-desc">Get the length of a string in bytes.</div><div class="method-section"><div class="method-section-title">Signature:</div><div class="method-sig"><code>Length(str: string) -> u32</code></div></div><div class="method-section"><div class="method-section-title">Calling Syntax:</div><div class="code-example">len = String.Length("hello");</div></div><div class="method-section"><div class="method-section-title">Parameters:</div><div class="method-section-content">str: String to measure.</div></div><div class="method-section"><div class="method-section-title">Returns:</div><div class="method-section-content">Length in bytes.</div></div></div><div class="method" id="method-String_Replace"><h3>Replace</h3><span class="conformance">L1</span><span class="conformance">0x0084</span></div><div class="method" id="method-String_Split"><h3>Split</h3><span class="conformance">L1</span><span class="conformance">0x0088</span></div><div class="method" id="method-String_StartsWith"><h3>StartsWith</h3><span class="conformance">L1</span><span class="conformance">0x008A</span></div><div class="method" id="method-String_Substring"><h3>Substring</h3><span class="conformance">L1</span><span class="conformance">0x0082</span></div><div class="method" id="method-String_ToLower"><h3>ToLower</h3><span class="conformance">L1</span><span class="conformance">0x0086</span></div><div class="method" id="method-String_ToUpper"><h3>ToUpper</h3><span class="conformance">L1</span><span class="conformance">0x0085</span></div><div class="method" id="method-String_Trim"><h3>Trim</h3><span class="conformance">L1</span><span class="conformance">0x0087</span></div></div><div class="namespace" id="ns-Thread"><h2>Thread (4 methods)</h2><div class="method" id="method-Thread_Raise"><h3>Raise</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Thread_Skip"><h3>Skip</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Thread_Wait"><h3>Wait</h3><span class="conformance">L1</span><span class="conformance">N/A</span></div><div class="method" id="method-Thread_YieldCounted"><h3>YieldCounted</h3><span class="conformance">L1</span><span class="conformance">0x0070</span></div></div><div class="namespace" id="ns-X509"><h2>X509 (8 methods)</h2><div class="method" id="method-X509_FetchCertificate"><h3>FetchCertificate</h3><span class="conformance">L1</span><span class="conformance">0x0110</span></div><div class="method" id="method-X509_GenerateCSR"><h3>GenerateCSR</h3><span class="conformance">L1</span><span class="conformance">0x0112</span></div><div class="method" id="method-X509_GenerateKeyPair"><h3>GenerateKeyPair</h3><span class="conformance">L1</span><span class="conformance">0x0113</span></div><div class="method" id="method-X509_GetCertInfo"><h3>GetCertInfo</h3><span class="conformance">L1</span><span class="conformance">0x0115</span></div><div class="method" id="method-X509_GetKeyHandle"><h3>GetKeyHandle</h3><span class="conformance">L1</span><span class="conformance">0x0117</span></div><div class="method" id="method-X509_IsCertValid"><h3>IsCertValid</h3><span class="conformance">L1</span><span class="conformance">0x0116</span></div><div class="method" id="method-X509_StoreCertificate"><h3>StoreCertificate</h3><span class="conformance">L1</span><span class="conformance">0x0111</span></div><div class="method" id="method-X509_VerifyCertChain"><h3>VerifyCertChain</h3><span class="conformance">L1</span><span class="conformance">0x0114</span></div></div>
+</div>
+
+<div id="conformance" class="tab-content">
+<h2>Conformance Levels</h2>
+<table>
+<thead><tr><th>Level</th><th>Description</th><th>Examples</th></tr></thead>
+<tbody>
+<tr><td>L1</td><td>Memory, threading, basic I/O</td><td>Memory.Peek, Thread.Create, Queue.Send</td></tr>
+<tr><td>L2</td><td>String operations and utilities</td><td>String.Length, String.Concat, String.Slice</td></tr>
+<tr><td>L3</td><td>Math and DSP operations</td><td>Math.Add, Math.Mul, Dsp.Correlate</td></tr>
+<tr><td>L4</td><td>Compression and binary ops</td><td>Compress.Brotli, Compress.Picocompress</td></tr>
+<tr><td>L5</td><td>HTTP and web features</td><td>Http.ReadHeader, Http.ReadBody, Html.ParseTree</td></tr>
+<tr><td>L6</td><td>Cryptography and PKI</td><td>Crypto.SHA256, X509.Sign, X509.Verify</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+
+<script>
+let selectedItem = null;
+let nsExpanded = {};
+
+// Initialize namespace expand state
+nsExpanded['Auth'] = true;
+nsExpanded['Compress'] = true;
+nsExpanded['Context'] = true;
+nsExpanded['Crypto'] = true;
+nsExpanded['DateTime'] = true;
+nsExpanded['Descriptor'] = true;
+nsExpanded['Dsp'] = true;
+nsExpanded['Environment'] = true;
+nsExpanded['Flow'] = true;
+nsExpanded['Html'] = true;
+nsExpanded['Http'] = true;
+nsExpanded['Kernel'] = true;
+nsExpanded['Lease'] = true;
+nsExpanded['Locale'] = true;
+nsExpanded['Math'] = true;
+nsExpanded['Maths'] = true;
+nsExpanded['Memory'] = true;
+nsExpanded['Net'] = true;
+nsExpanded['Number'] = true;
+nsExpanded['Queue'] = true;
+nsExpanded['Random'] = true;
+nsExpanded['Span'] = true;
+nsExpanded['Storage'] = true;
+nsExpanded['String'] = true;
+nsExpanded['Thread'] = true;
+nsExpanded['X509'] = true;
+
+
+function toggleLanguageSyntax(e) {
+    e.stopPropagation();
+    const items = document.getElementById('lang-items');
+    const toggle = e.currentTarget.querySelector('.tree-toggle');
+    if (items.style.display === 'none') {
+        items.style.display = 'block';
+        toggle.textContent = 'v';
+    } else {
+        items.style.display = 'none';
+        toggle.textContent = '>';
+    }
+}
+
+function toggleNamespacesSection(e) {
+    e.stopPropagation();
+    const items = document.getElementById('namespaces-items');
+    const toggle = e.currentTarget.querySelector('.tree-toggle');
+    if (items.style.display === 'none') {
+        items.style.display = 'block';
+        toggle.textContent = 'v';
+    } else {
+        items.style.display = 'none';
+        toggle.textContent = '>';
+    }
+}
+
+function toggleNamespace(e, ns) {
+    e.stopPropagation();
+    const methodsDiv = document.getElementById('tree-ns-' + ns);
+    const toggle = e.currentTarget.querySelector('.toggle');
+    
+    if (methodsDiv) {
+        if (nsExpanded[ns]) {
+            methodsDiv.style.display = 'none';
+            toggle.textContent = '>';
+            nsExpanded[ns] = false;
+        } else {
+            methodsDiv.style.display = 'block';
+            toggle.textContent = 'v';
+            nsExpanded[ns] = true;
+        }
+    }
+}
+
+function selectSyntax(e, keyword) {
+    e.stopPropagation();
+    clearSelection();
+    e.currentTarget.classList.add('active');
+    selectedItem = e.currentTarget;
+    
+    // Switch to syntax tab
+    const syntaxTab = document.querySelector('[data-tab="syntax"]');
+    if (syntaxTab) {
+        syntaxTab.click();
+    }
+    
+    // Scroll to syntax item
+    const syntaxId = 'syntax-' + keyword;
+    const syntaxEl = document.getElementById(syntaxId);
+    if (syntaxEl) {
+        syntaxEl.classList.add('highlight');
+        syntaxEl.scrollIntoView({behavior: 'smooth', block: 'center'});
+        setTimeout(() => {
+            syntaxEl.classList.remove('highlight');
+        }, 2000);
+    }
+}
+
+function selectMethod(e, ns, method) {
+    e.stopPropagation();
+    clearSelection();
+    e.currentTarget.classList.add('active');
+    selectedItem = e.currentTarget;
+    
+    // Switch to namespaces tab
+    const nsTab = document.querySelector('[data-tab="namespaces"]');
+    if (nsTab) {
+        nsTab.click();
+    }
+    
+    // Scroll to method
+    const methodId = 'method-' + ns + '_' + method;
+    const methodEl = document.getElementById(methodId);
+    if (methodEl) {
+        methodEl.classList.add('highlight');
+        methodEl.scrollIntoView({behavior: 'smooth', block: 'center'});
+        setTimeout(() => {
+            methodEl.classList.remove('highlight');
+        }, 2000);
+    }
+}
+
+function clearSelection() {
+    if (selectedItem) {
+        selectedItem.classList.remove('active');
+    }
+}
+
+// Initialize tabs
+const tabs = [
+    {id: 'overview', label: 'Overview'},
+    {id: 'syntax', label: 'Syntax'},
+    {id: 'namespaces', label: 'Namespaces'},
+    {id: 'conformance', label: 'Conformance'}
+];
+const tabsContainer = document.getElementById('tabs');
+tabs.forEach((t, idx) => {
+    const btn = document.createElement('button');
+    btn.className = 'tab-btn' + (idx === 0 ? ' active' : '');
+    btn.textContent = t.label;
+    btn.setAttribute('data-tab', t.id);
+    btn.onclick = () => {
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+        document.getElementById(t.id).classList.add('active');
+        btn.classList.add('active');
+    };
+    tabsContainer.appendChild(btn);
+});
+</script>
+</body>
+</html>

@@ -88,12 +88,78 @@ ENDSWITCH
 - Whitespace-ignorant: comments (`//`), indentation, blank lines ignored
 - Line endings: CRLF or LF (tracked for diagnostics)
 - No semicolons or curly brackets required
-- Explicit block delimiters: `IF/THEN/ELSE/ENDIF`, `WHILE/ENDWHILE`, `FOREACH/IN/ENDFOREACH`, `SWITCH/CASE/ELSE/ENDSWITCH`
+- Explicit block delimiters: `IF/THEN/ELSEIF/ELSE/ENDIF`, `WHILE/ENDWHILE`, `DO/LOOP` (with `WHILE`/`UNTIL` at either end), `FOR/TO/STEP/NEXT`, `FOREACH/IN/ENDFOREACH`, `SWITCH/CASE/DEFAULT/ENDSWITCH`
+- Loop control: `BREAK` (exit nearest loop or `SWITCH`), `SKIP` (continue nearest loop); also `GOTO label`, `GOSUB/SUB/ENDSUB`, `RETURN`
 - Same v1 bytecode ISA (no new opcodes)
 
 **Namespaces (v2 = v1 + Library):**
 - **v1 core:** `Storage`, `Thread`, `Math`, `Flow`, `Dsp`, `Net`, `Kernel`, `Queue`, `Random`, `Memory`, `Span`, `Descriptor`, `Lease`
 - **v2 new:** `String`, `Number`, `Maths`, `DateTime`, `Locale` (compile to host hooks like v1 extended namespaces)
+
+### High-level frontends (implemented): C-syntax & BASIC
+
+Two high-level imperative frontends compile through a shared intermediate language
+(**PicoIL**, `picoscript_il.py`) rather than mapping one statement to one
+instruction. They introduce **named variables** (auto-allocated to `R0`–`R15` by a
+loop-aware register allocator) and **integer expressions** with operator
+precedence, then lower to the same frozen v1 bytecode — and also to C (`toC`) and
+JavaScript (`toJS`).
+
+Both are **case-insensitive for keywords and variable names**; `namespace.method`
+resolves case-insensitively to the canonical host-ABI spelling.
+
+**C-syntax frontend** (`picoscript_cfront.py`, `.pc`) — curly-brace, C-like:
+
+```c
+int total = 0;
+for (i = 1; i <= 10; i++) {
+    if (i % 3 == 0) { continue; }       // skip multiples of 3
+    total += i;
+}
+int parity = (total % 2 == 0) ? 1 : 0;  // ternary
+Net.Status(200);
+print(total);
+```
+
+Supports: `int`/`var` declarations, assignment and compound assignment
+(`+= -= *= /= %=`), arithmetic `+ - * / %`, comparisons, logical `&& || !`, the
+ternary `?:`, pre/post `++`/`--`, `if/else`, `while`, `for`, `break`/`continue`,
+`return`, `void` subroutines and calls, `print(...)`, and `Namespace.Method(...)`
+host/Net/Storage calls.
+
+**BASIC-like frontend** (`picoscript_basic.py`, `.pbas`) — block-structured:
+
+```basic
+DIM TOTAL = 0
+FOR I = 1 TO 10
+    IF I MOD 3 = 0 THEN
+        SKIP                    ' continue to next iteration
+    ENDIF
+    TOTAL += I
+    IF TOTAL > 20 THEN
+        BREAK                   ' exit the loop
+    ENDIF
+NEXT
+PRINT TOTAL
+
+DO                              ' post-test loop: body runs at least once
+    DEC TOTAL
+LOOP UNTIL TOTAL <= 0
+```
+
+Supports: `DIM`/`LET` declaration and `x = expr` assignment (and `+= -= *= /=`),
+`INC`/`DEC`, arithmetic `+ - * / MOD`, comparisons by symbol (`= <> < > <= >=`, where
+`=` is equality inside a test) or word (`EQ NE LT GT LE GE`), logical `AND OR NOT`,
+the `IIF(cond,a,b)` ternary, `IF/THEN/ELSEIF/ELSE/ENDIF`, `WHILE/ENDWHILE`,
+`DO/LOOP` (`WHILE`/`UNTIL` guard at `DO` for pre-test or at `LOOP` for post-test),
+`FOR/TO/STEP/NEXT`, `FOREACH/IN/ENDFOREACH`, `SWITCH/CASE/DEFAULT/ENDSWITCH`,
+`GOTO`/labels, `GOSUB/SUB/ENDSUB`, `RETURN`, `BREAK`, `SKIP`, `PRINT`, and
+`Namespace.Method(...)` calls.
+
+The same compiler is ported to JavaScript (`vm/picoc.js`) so both frontends
+compile **in the browser**, byte-for-byte identical to the Python compiler; see
+`docs/playground.html` and `docs/COMPILER_ARCHITECTURE.md`.
+
 
 ### Interoperability
 
@@ -227,11 +293,12 @@ Recommended host hook primitive surface (all namespaces compile to `NOOP` + rese
 - `Queue.Dequeue/Enqueue/Depth(...)` for per-item queue operations.
 - `Queue.DequeueBatch/EnqueueBatch(...)` for amortized batching (10-100x throughput gain).
 - `Random.U32(Rdest)` for host-backed random generation.
-- `Memory.ArenaInit/Alloc/Reset/Stats(...)` for arena lifecycle and allocation control.
-- `Span.Make/Slice(...)` for zero-copy span construction and slicing.
+- `Memory.ArenaInit/Alloc/Reset/Stats(...)` for arena lifecycle and allocation control; `Memory.Set/Get(span, idx[, val])` for byte-addressable read/write into a span's backing arena.
+- `Span.Make/Slice/Materialize/Len/Get(...)` for span construction and access: `Slice` returns a **zero-copy view** (shared backing bytes), `Materialize` **memcpys** to a fresh contiguous arena region (independent copy), `Len`/`Get` read length and elements.
 - `Descriptor.Make/SetFlags/GetPtr/GetLen/GetFlags/CopyBatch(...)` for descriptor flow and bulk transfer.
 - `Lease.Acquire/Release/Validate/CachedValidate/GetSpan/GetTypeHint(...)` for capability/lease-mediated access with fast-path validation.
-- `Storage.GetSchemaForPack`, `Storage.SetSchemaForPack`, `Storage.AddCard`, `Storage.UpdateCard`, `Storage.DeleteCard`, `Storage.PatchCard`, `Storage.ReadCard`, `Storage.QueryCard` as backend-swappable storage API hooks.
+- `Storage.GetSchemaForPack`, `Storage.SetSchemaForPack`, `Storage.AddCard`, `Storage.UpdateCard`, `Storage.DeleteCard`, `Storage.PatchCard`, `Storage.ReadCard`, `Storage.QueryCard` as backend-swappable storage API hooks. Cards are encoded with the **PicoBinarySerializer** (magic `PSC1`, self-describing, fields sorted by UTF-8 name bytes for determinism) and `QueryCard` accepts the card **query language** (`field OP value [AND|OR ...]`, `OP ∈ = == != <> < > <= >= ~`).
+- **Program-level card CRUD/query** (executable in the reference + JS VMs, PicoStore-backed): a context model keeps every op within the 2-in/1-out host ABI. `Storage.UsePack(packId)` selects the pack; `Storage.AddCard() → id` creates an empty card and selects it; `Storage.EditCard(id) → id` selects an existing card; `Storage.SetField(nameSpan, intVal)` / `Storage.SetFieldStr(nameSpan, valSpan)` write a field; `Storage.GetField(nameSpan) → intVal` / `Storage.GetFieldStr(nameSpan) → span` read one; `Storage.DeleteCard(id) → ok`; `Storage.QueryCard(querySpan) → count` runs the query language and `Storage.QueryResult(idx) → id` iterates matches. Field names and queries are UTF-8 **byte-spans** the program builds in arena memory via `Memory.Set` + `Span.Make` (the fixed-width bytecode carries no string pool), so no instruction-format change is needed; ids and integer values travel in plain registers.
 - `String.Concat/Length/Substring/IndexOf/Split/Trim/ToUpper/ToLower/Replace/Format/Parse/Equals(...)` for string manipulation.
 - `Number.Parse/Format/Round/Floor/Ceiling/Abs/Min/Max/Clamp/ToInt/ToFloat(...)` for numeric formatting and conversion.
 - `Maths.Sqrt/Pow/Sin/Cos/Tan/Log/Exp/Abs/Min/Max/Gcd/Lcm(...)` for mathematical operations.
@@ -399,15 +466,29 @@ Randomness policy:
 
 ## 10. Compilation targets
 
-PicoScript supports multiple execution targets:
+PicoScript supports multiple execution targets, all from one shared IL (PicoIL):
 
-1. PicoScript bytecode VM (default, deterministic runtime target)
-2. C emission (`toC`) for native toolchain builds (Thumb/AArch64 via host toolchains)
-3. C# emission (`toCSharp`) for managed-host integration
+1. **PicoScript bytecode VM** (default, deterministic runtime target), with three
+   bit-compatible implementations:
+   - Python reference — `picoscript_vm.py`
+   - Portable C for bare metal (RP2354B/PIOS) — `vm/picovm.c` (freestanding-clean)
+   - JavaScript for browser/Node with a step-debugging API — `vm/picovm.js`
+2. **C emission** (`toC`) for native toolchain builds (Thumb/AArch64 via host toolchains) — `lower_to_c`
+3. **JavaScript emission** (`toJS`) for direct browser/Node execution — `lower_to_js`
+4. **C# emission** (`toCSharp`) for managed-host integration (planned)
 
-Target choice must preserve deterministic contract and queue ABI semantics.
+Target choice must preserve deterministic contract and queue ABI semantics. A test
+harness (`tests/test_pipeline.py`) asserts cross-target parity: the Python, C and JS
+VMs produce identical register files, output bytes and HTTP status from the same
+bytecode; emitted C/JS run and match; and the in-browser compiler's bytecode is
+byte-for-byte identical to the Python compiler.
 
-Compilation note: Both v1 (namespace/method) and v2 (block-structured) source syntax produce identical bytecode. Editors can round-trip: load bytecode, display in either v1 or v2 view, re-save (output matches input).
+Compilation note: v1 (namespace/method), v2 (block-structured), and the high-level
+C-syntax and BASIC frontends all produce bytecode for the same frozen 16-opcode
+ISA. The high-level frontends lower through PicoIL (optimizer + loop-aware
+register allocator); the in-browser compiler (`vm/picoc.js`) mirrors the Python
+compiler exactly. Editors can round-trip register-level views (load bytecode,
+display in a v1/v2 view, re-save; output matches input).
 
 ## 11. Conformance levels
 
@@ -415,13 +496,13 @@ Compilation note: Both v1 (namespace/method) and v2 (block-structured) source sy
 - **L1 (Queue host):** inbound queue drain + outbound queue emit integration.
 - **L2 (Kernel-coupled):** IRQ/SW_IRQ wake-fire lifecycle integrated with FIFO ownership transfer.
 - **L3 (Profiling & amortization):** optional performance hooks (batching, profiling, fast-path validation).
-- **L4 (v2 syntax):** case-insensitive, block-structured source syntax + library namespaces (String, Number, Maths, DateTime, Locale).
+- **L4 (v2 syntax):** case-insensitive, block-structured source syntax + library namespaces (String, Number, Maths, DateTime, Locale). Includes the high-level C-syntax and BASIC frontends (named variables, expressions, structured control flow: `IF`, `WHILE`, `DO/LOOP`, `FOR`, `FOREACH`, `SWITCH`, `BREAK`/`SKIP`, `GOTO`/`GOSUB`) lowering through PicoIL.
 - **L5 (Context & environment):** lazy/on-demand context decoding (Environment.*, Context.* with cheap/expensive split + scratch bucket).
 - **L6 (Cryptography):** userland hashing (hardware-accelerated) + kernel-wrapped keyed operations (HMAC, Sign, Verify, Encrypt, Decrypt) with audit logging and handle-based key access.
 
 ## 12. Open items for v0.3
 
-- v2 parser completion and round-trip decompiler (bytecode → v2 syntax)
+- ~~v2 parser completion~~ (done: high-level C-syntax + BASIC frontends via PicoIL); round-trip decompiler (bytecode → v2 syntax) still open
 - fixed descriptor binary schema (header fields, endian, size limits)
 - host hook namespace hardening and ABI freeze with crypto + context + library hooks
 - formal memory model for shared RAM windows
@@ -429,3 +510,5 @@ Compilation note: Both v1 (namespace/method) and v2 (block-structured) source sy
 - profiling hook payload schema and buffer management
 - v2 language completions and diagnostics in editor
 - crypto key handle encoding and kernel key store interface
+- `toCSharp` backend (toC and toJS implemented)
+- register spill path for >16 simultaneously-live values (allocator currently errors)

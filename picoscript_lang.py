@@ -120,6 +120,13 @@ NAMESPACE_MAP = {
         "PatchCard":        OP_NOOP,
         "ReadCard":         OP_NOOP,
         "QueryCard":        OP_NOOP,
+        "UsePack":          OP_NOOP,
+        "EditCard":         OP_NOOP,
+        "GetField":         OP_NOOP,
+        "SetField":         OP_NOOP,
+        "SetFieldStr":      OP_NOOP,
+        "GetFieldStr":      OP_NOOP,
+        "QueryResult":      OP_NOOP,
     },
     "Thread": {
         "Skip":  OP_NOOP,
@@ -195,10 +202,15 @@ NAMESPACE_MAP = {
         "ArenaStats": OP_NOOP,
         "Peek":       OP_NOOP,  # Read typed memory at offset
         "Poke":       OP_NOOP,  # Write typed memory at offset
+        "Set":        OP_NOOP,  # Set(addr, byte) -> write one byte
+        "Get":        OP_NOOP,  # Get(addr) -> read one byte
     },
     "Span": {
-        "Make":  OP_NOOP,
-        "Slice": OP_NOOP,
+        "Make":        OP_NOOP,
+        "Slice":       OP_NOOP,  # Slice(span, offset) -> zero-copy sub-span view
+        "Materialize": OP_NOOP,  # Materialize(span) -> memcpy to a new contiguous span
+        "Len":         OP_NOOP,  # Len(span) -> length
+        "Get":         OP_NOOP,  # Get(span, index) -> byte at span[index]
     },
     "Descriptor": {
         "Make":      OP_NOOP,
@@ -414,9 +426,14 @@ HOST_HOOK_CODES = {
     ("Memory", "ArenaStats"):   0x33,
     ("Memory", "Peek"):         0x34,
     ("Memory", "Poke"):         0x35,
-    # Span hooks (0x40-0x41)
+    ("Memory", "Set"):          0x36,
+    ("Memory", "Get"):          0x37,
+    # Span hooks (0x40-0x44)
     ("Span", "Make"):           0x40,
     ("Span", "Slice"):          0x41,
+    ("Span", "Materialize"):    0x42,
+    ("Span", "Len"):            0x43,
+    ("Span", "Get"):            0x44,
     # Descriptor hooks (0x50-0x55)
     ("Descriptor", "Make"):     0x50,
     ("Descriptor", "SetFlags"): 0x51,
@@ -431,7 +448,7 @@ HOST_HOOK_CODES = {
     ("Lease", "CachedValidate"):0x5B,
     ("Lease", "GetSpan"):       0x5C,
     ("Lease", "GetTypeHint"):   0x5D,
-    # Storage hooks (0x60-0x67)
+    # Storage hooks (0x60-0x6E)
     ("Storage", "GetSchemaForPack"): 0x60,
     ("Storage", "SetSchemaForPack"): 0x61,
     ("Storage", "AddCard"):     0x62,
@@ -440,6 +457,13 @@ HOST_HOOK_CODES = {
     ("Storage", "PatchCard"):   0x65,
     ("Storage", "ReadCard"):    0x66,
     ("Storage", "QueryCard"):   0x67,
+    ("Storage", "UsePack"):     0x68,
+    ("Storage", "EditCard"):    0x69,
+    ("Storage", "GetField"):    0x6A,
+    ("Storage", "SetField"):    0x6B,
+    ("Storage", "SetFieldStr"): 0x6C,
+    ("Storage", "GetFieldStr"): 0x6D,
+    ("Storage", "QueryResult"): 0x6E,
     # Thread hints (0x70)
     ("Thread", "YieldCounted"): 0x70,
     # String library (0x80-0x8B)

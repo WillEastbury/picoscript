@@ -1,0 +1,1904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PicoScript Playground &amp; Language Guide</title>
+<style>
+  :root { --accent:#667eea; --bg:#0f1117; --panel:#1a1d27; --panel2:#232734;
+          --text:#e6e8ef; --muted:#9aa0ad; --c:#7ee787; --b:#79c0ff; --warn:#ffd866; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { padding:22px 28px; background:linear-gradient(120deg,#1a1d27,#232734);
+           border-bottom:1px solid #2c313f; }
+  header h1 { margin:0; font-size:24px; color:var(--accent); }
+  header p { margin:6px 0 0; color:var(--muted); font-size:13px; }
+  .wrap { display:grid; grid-template-columns:1fr 1fr; gap:0; }
+  @media (max-width:1100px){ .wrap{ grid-template-columns:1fr; } }
+  .col { padding:20px 24px; }
+  h2.section { font-size:14px; text-transform:uppercase; letter-spacing:.08em;
+               color:var(--muted); border-bottom:1px solid #2c313f; padding-bottom:8px; }
+  .card { background:var(--panel); border:1px solid #2c313f; border-radius:10px;
+          margin:0 0 18px; overflow:hidden; }
+  .card h3 { margin:0; padding:12px 16px; font-size:15px; background:var(--panel2); }
+  .card .desc { padding:8px 16px; color:var(--muted); font-size:12.5px; }
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:#2c313f; }
+  @media (max-width:680px){ .pair{ grid-template-columns:1fr; } }
+  .pane { background:var(--panel); }
+  .pane .lbl { font-size:11px; font-weight:700; padding:6px 12px; color:#0f1117; }
+  .pane.cstyle .lbl { background:var(--c); }
+  .pane.bstyle .lbl { background:var(--b); }
+  pre { margin:0; padding:12px; font-family:"SF Mono",Consolas,monospace; font-size:12px;
+        line-height:1.5; white-space:pre; overflow-x:auto; }
+  .cstyle pre { color:#cde9c8; } .bstyle pre { color:#cfe4ff; }
+  .runbar { display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--panel2);
+            border-top:1px solid #2c313f; }
+  button { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:7px 14px;
+           font-weight:600; cursor:pointer; font-size:12.5px; }
+  button:hover { filter:brightness(1.1); } button.ghost { background:#2c313f; color:var(--text); }
+  .out { font-family:"SF Mono",Consolas,monospace; font-size:12.5px; color:var(--warn); }
+  /* debugger */
+  .debugger { position:sticky; top:0; z-index:5; background:#11141c; border-bottom:1px solid #2c313f;
+              padding:14px 24px; }
+  .dbg-grid { display:grid; grid-template-columns:340px 1fr 260px; gap:16px; }
+  @media (max-width:1100px){ .dbg-grid{ grid-template-columns:1fr; } }
+  select, textarea { background:#0c0e14; color:var(--text); border:1px solid #2c313f;
+                     border-radius:6px; padding:7px; font-family:inherit; font-size:12px; width:100%; }
+  textarea { font-family:"SF Mono",Consolas,monospace; height:64px; resize:vertical; }
+  .listing { background:#0c0e14; border:1px solid #2c313f; border-radius:6px; max-height:240px;
+             overflow:auto; font-family:"SF Mono",Consolas,monospace; font-size:12px; }
+  .listing .row { padding:2px 10px; white-space:pre; color:#9aa0ad; }
+  .listing .row.pc { background:#2d3550; color:#fff; }
+  .regs { display:grid; grid-template-columns:repeat(2,1fr); gap:3px 10px; font-family:"SF Mono",monospace;
+          font-size:12px; }
+  .regs .r { color:var(--muted); } .regs .r b { color:var(--text); }
+  .state { font-family:"SF Mono",Consolas,monospace; font-size:12px; color:var(--muted); margin-top:8px; }
+  .controls { display:flex; gap:8px; margin:10px 0; flex-wrap:wrap; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600;
+          background:#2c313f; color:var(--muted); }
+  a { color:var(--b); }
+</style>
+</head>
+<body>
+<header>
+  <h1>PicoScript Playground &amp; Language Guide</h1>
+  <p>Every construct in both surface styles, side by side &mdash; runnable and steppable in your
+     browser on the same VM that runs on bare metal. <span class="pill">case-insensitive</span>
+     <span class="pill">C-style &#123;&#125;</span> <span class="pill">BASIC block</span></p>
+</header>
+
+<div class="debugger">
+  <h2 class="section" style="margin-top:0">Live debugger &mdash; step the bytecode in the browser</h2>
+  <div class="dbg-grid">
+    <div>
+      <div style="font-size:11px;color:#9aa0ad;margin-bottom:4px">compile your own source in the browser:</div>
+      <select id="lang" style="margin-bottom:6px">
+        <option value="c">C-style &#123; &#125;</option>
+        <option value="basic">BASIC block</option>
+      </select>
+      <textarea id="src" style="height:120px" spellcheck="false"></textarea>
+      <div class="controls">
+        <button onclick="compileSrc(true)">Compile &amp; Run &#9654;</button>
+        <button class="ghost" onclick="compileSrc(false)">Compile &amp; Step</button>
+      </div>
+      <div id="cerr" style="color:#ff7b72;font-size:11.5px;font-family:monospace;min-height:14px"></div>
+      <hr style="border-color:#2c313f;margin:10px 0">
+      <div style="font-size:11px;color:#9aa0ad;margin-bottom:4px">&hellip;or load a prebuilt example:</div>
+      <select id="prog"></select>
+      <div class="controls">
+        <button onclick="dbgRun()">Run &#9654;</button>
+        <button class="ghost" onclick="dbgStep()">Step</button>
+        <button class="ghost" onclick="dbgReset()">Reset</button>
+      </div>
+      <div style="font-size:11px;color:#9aa0ad;margin-bottom:4px">&hellip;or paste bytecode hex
+        (<code>emit &hellip; --as bytecode --hex</code>):</div>
+      <textarea id="hex" placeholder="04000064&#10;48000001&hellip;"></textarea>
+      <button class="ghost" style="margin-top:6px" onclick="loadHex()">Load hex</button>
+    </div>
+    <div>
+      <div style="font-size:11px;color:#9aa0ad;margin-bottom:4px">disassembly (current PC highlighted):</div>
+      <div class="listing" id="listing"></div>
+      <div class="state" id="state"></div>
+      <div class="out" id="out" style="margin-top:6px"></div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:#9aa0ad;margin-bottom:4px">registers R0&ndash;R15:</div>
+      <div class="regs" id="regs"></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap" id="gallery"></div>
+
+<script>// AUTO-GENERATED from picoscript_lang.py -- do not edit by hand.
+(function (root) {
+  var H = {
+    HOST_HOOK_BASE: 0x7000,
+    NET_STATUS_BASE: 0x8000,
+    NET_HEADER_BASE: 0x9000,
+    NET_BODY_MARKER: 0xB000,
+    NET_CLOSE_MARKER: 0xC000,
+    CONTENT_TYPES: {
+      0xA000: "text/html",
+      0xA001: "text/plain",
+      0xA002: "application/json",
+      0xA003: "text/css",
+      0xA004: "text/javascript",
+      0xA005: "image/png",
+      0xA006: "image/jpeg",
+      0xA007: "application/octet-stream",
+    },
+    BY_CODE: {
+      0x01: "Kernel.WaitIRQ",
+      0x02: "Kernel.WaitSWIRQ",
+      0x03: "Kernel.FireSWIRQ",
+      0x04: "Kernel.ProfileStart",
+      0x05: "Kernel.ProfileEnd",
+      0x06: "Kernel.TracePoint",
+      0x10: "Queue.Dequeue",
+      0x11: "Queue.Enqueue",
+      0x12: "Queue.Depth",
+      0x13: "Queue.DequeueBatch",
+      0x14: "Queue.EnqueueBatch",
+      0x20: "Random.U32",
+      0x30: "Memory.ArenaInit",
+      0x31: "Memory.ArenaAlloc",
+      0x32: "Memory.ArenaReset",
+      0x33: "Memory.ArenaStats",
+      0x34: "Memory.Peek",
+      0x35: "Memory.Poke",
+      0x36: "Memory.Set",
+      0x37: "Memory.Get",
+      0x40: "Span.Make",
+      0x41: "Span.Slice",
+      0x42: "Span.Materialize",
+      0x43: "Span.Len",
+      0x44: "Span.Get",
+      0x50: "Descriptor.Make",
+      0x51: "Descriptor.SetFlags",
+      0x52: "Descriptor.GetPtr",
+      0x53: "Descriptor.GetLen",
+      0x54: "Descriptor.GetFlags",
+      0x55: "Descriptor.CopyBatch",
+      0x58: "Lease.Acquire",
+      0x59: "Lease.Release",
+      0x5A: "Lease.Validate",
+      0x5B: "Lease.CachedValidate",
+      0x5C: "Lease.GetSpan",
+      0x5D: "Lease.GetTypeHint",
+      0x60: "Storage.GetSchemaForPack",
+      0x61: "Storage.SetSchemaForPack",
+      0x62: "Storage.AddCard",
+      0x63: "Storage.UpdateCard",
+      0x64: "Storage.DeleteCard",
+      0x65: "Storage.PatchCard",
+      0x66: "Storage.ReadCard",
+      0x67: "Storage.QueryCard",
+      0x68: "Storage.UsePack",
+      0x69: "Storage.EditCard",
+      0x6A: "Storage.GetField",
+      0x6B: "Storage.SetField",
+      0x6C: "Storage.SetFieldStr",
+      0x6D: "Storage.GetFieldStr",
+      0x6E: "Storage.QueryResult",
+      0x70: "Thread.YieldCounted",
+      0x80: "String.Concat",
+      0x81: "String.Length",
+      0x82: "String.Substring",
+      0x83: "String.IndexOf",
+      0x84: "String.Replace",
+      0x85: "String.ToUpper",
+      0x86: "String.ToLower",
+      0x87: "String.Trim",
+      0x88: "String.Split",
+      0x89: "String.Join",
+      0x8A: "String.StartsWith",
+      0x8B: "String.EndsWith",
+      0x90: "Number.Parse",
+      0x91: "Number.ToString",
+      0x92: "Number.ToHex",
+      0x93: "Number.ToOctal",
+      0x94: "Number.ToBinary",
+      0x95: "Number.Abs",
+      0x96: "Number.Floor",
+      0x97: "Number.Ceiling",
+      0x98: "Number.Round",
+      0x99: "Number.Min",
+      0x9A: "Number.Max",
+      0xA0: "Maths.Sin",
+      0xA1: "Maths.Cos",
+      0xA2: "Maths.Tan",
+      0xA3: "Maths.Sqrt",
+      0xA4: "Maths.Power",
+      0xA5: "Maths.Log",
+      0xA6: "Maths.Log10",
+      0xA7: "Maths.Exp",
+      0xA8: "Maths.Random",
+      0xA9: "Maths.RandomRange",
+      0xAA: "Maths.Clamp",
+      0xAB: "Maths.Lerp",
+      0xB0: "DateTime.Now",
+      0xB1: "DateTime.UtcNow",
+      0xB2: "DateTime.Parse",
+      0xB3: "DateTime.Format",
+      0xB4: "DateTime.AddSeconds",
+      0xB5: "DateTime.AddMinutes",
+      0xB6: "DateTime.AddHours",
+      0xB7: "DateTime.AddDays",
+      0xB8: "DateTime.GetDayOfWeek",
+      0xB9: "DateTime.GetDayOfYear",
+      0xBA: "DateTime.UnixTimestamp",
+      0xC0: "Locale.GetCurrentLocale",
+      0xC1: "Locale.SetLocale",
+      0xC2: "Locale.FormatCurrency",
+      0xC3: "Locale.FormatNumber",
+      0xC4: "Locale.FormatDate",
+      0xC5: "Locale.FormatTime",
+      0xC6: "Locale.Translate",
+      0xD0: "Environment.GetOsVersion",
+      0xD1: "Environment.GetCpuCount",
+      0xD2: "Environment.GetMemoryTotal",
+      0xD3: "Environment.GetMemoryFree",
+      0xD4: "Environment.GetHostname",
+      0xD5: "Environment.GetTimeZone",
+      0xD6: "Environment.GetProcessId",
+      0xD7: "Environment.GetThreadId",
+      0xD8: "Environment.GetElapsedTime",
+      0xE0: "Context.GetVerb",
+      0xE1: "Context.GetPath",
+      0xE2: "Context.GetHost",
+      0xE3: "Context.GetPort",
+      0xE4: "Context.GetRemoteAddr",
+      0xE5: "Context.GetUser",
+      0xE6: "Context.GetPermissions",
+      0xE7: "Context.GetHeaders",
+      0xE8: "Context.GetQueryString",
+      0xE9: "Context.GetBody",
+      0xEA: "Context.SetScratchValue",
+      0xEB: "Context.GetScratchValue",
+      0xEC: "Context.GetRequestId",
+      0xED: "Context.GetClientCert",
+      0xEE: "Context.GetTraceId",
+      0xF0: "Crypto.Sha256",
+      0xF1: "Crypto.Sha512",
+      0xF2: "Crypto.Blake2b",
+      0xF3: "Crypto.Blake3",
+      0xF4: "Crypto.HmacSha256",
+      0xF5: "Crypto.HmacSha512",
+      0xF6: "Crypto.Sign",
+      0xF7: "Crypto.Verify",
+      0xF8: "Crypto.Encrypt",
+      0xF9: "Crypto.Decrypt",
+      0xFA: "Crypto.GenerateKeyPair",
+      0xFB: "Crypto.DeriveKey",
+      0xFC: "Crypto.RandomBytes",
+      0xFD: "Crypto.Md5",
+      0xFE: "Crypto.Sha1",
+      0x100: "Compress.BrotliCompress",
+      0x101: "Compress.BrotliDecompress",
+      0x102: "Compress.PicoCompress",
+      0x103: "Compress.PicoDecompress",
+      0x104: "Compress.GzipCompress",
+      0x105: "Compress.GzipDecompress",
+      0x106: "Compress.DeflateCompress",
+      0x107: "Compress.DeflateDecompress",
+      0x110: "X509.FetchCertificate",
+      0x111: "X509.StoreCertificate",
+      0x112: "X509.GenerateCSR",
+      0x113: "X509.GenerateKeyPair",
+      0x114: "X509.VerifyCertChain",
+      0x115: "X509.GetCertInfo",
+      0x116: "X509.IsCertValid",
+      0x117: "X509.GetKeyHandle",
+      0x120: "Auth.GetUserCredentials",
+      0x121: "Auth.ValidateCredentials",
+      0x122: "Auth.SwitchUserContext",
+      0x123: "Auth.GetUserPermissions",
+      0x124: "Auth.RequestToken",
+      0x125: "Auth.GetToken",
+      0x126: "Auth.ValidateToken",
+      0x127: "Auth.SwitchTokenContext",
+      0x128: "Auth.RefreshToken",
+      0x129: "Auth.RevokeToken",
+      0x130: "Http.ReadHeader",
+      0x131: "Http.ReadBody",
+      0x132: "Http.GenerateHeaders",
+      0x133: "Http.GenerateResponse",
+      0x134: "Http.ParseQuery",
+      0x135: "Http.ParseForm",
+      0x136: "Http.ParseJson",
+      0x137: "Http.EncodeJson",
+      0x140: "Html.CreateNode",
+      0x141: "Html.AddChildNode",
+      0x142: "Html.RemoveChildNode",
+      0x143: "Html.SetAttribute",
+      0x144: "Html.GetAttribute",
+      0x145: "Html.ParseTree",
+      0x146: "Html.Encode",
+      0x147: "Html.Decode",
+      0x148: "Html.Serialize",
+      0x149: "Html.QuerySelector",
+    }
+  };
+  if (typeof module !== "undefined" && module.exports) { module.exports = H; }
+  else { root.PV_HOOKS = H; }
+})(typeof globalThis !== "undefined" ? globalThis : this);
+</script>
+<script>// picovm.js -- PicoScript 16-opcode VM in JavaScript (browser + Node).
+//
+// Mirrors picoscript_vm.PicoVM and vm/picovm.c exactly (int32 semantics) so the
+// same bytecode yields the same register file, output bytes and HTTP status in
+// the browser as on host and bare metal. Exposes a step API for debugging.
+//
+// Usage:
+//   const vm = new PicoVM();          // optional: new PicoVM({hooks: PV_HOOKS})
+//   vm.load(words);                   // words: array of uint32
+//   vm.run();                         // or: while (vm.step()) { inspect vm.regs }
+//   vm.regs, vm.output, vm.httpStatus, vm.pc, vm.steps, vm.halted
+(function (root, factory) {
+  var hooks = (typeof module !== "undefined" && module.exports)
+    ? require("./pico_hooks.js")
+    : root.PV_HOOKS;
+  var PicoVM = factory(hooks);
+  if (typeof module !== "undefined" && module.exports) module.exports = PicoVM;
+  else root.PicoVM = PicoVM;
+})(typeof globalThis !== "undefined" ? globalThis : this, function (PV_HOOKS) {
+  "use strict";
+
+  var OP = {
+    NOOP: 0x0, LOAD: 0x1, SAVE: 0x2, PIPE: 0x3, ADD: 0x4, SUB: 0x5, MUL: 0x6,
+    DIV: 0x7, INC: 0x8, JUMP: 0x9, BRANCH: 0xA, CALL: 0xB, RETURN: 0xC,
+    WAIT: 0xD, RAISE: 0xE, DSP: 0xF
+  };
+  var ADDR_REG = 0x1;
+  var BR = { EQ: 0, NE: 1, LT: 2, GT: 3, LE: 4, GE: 5, Z: 6, NZ: 7, EOF: 8, ERR: 9 };
+
+  function sx16(v) { v &= 0xFFFF; return (v & 0x8000) ? v - 0x10000 : v; }
+
+  function PicoVM(opts) {
+    opts = opts || {};
+    this.hooks = opts.hooks || PV_HOOKS || { HOST_HOOK_BASE: 0x7000,
+      NET_STATUS_BASE: 0x8000, NET_BODY_MARKER: 0xB000, NET_CLOSE_MARKER: 0xC000,
+      NET_HEADER_BASE: 0x9000, CONTENT_TYPES: {}, BY_CODE: {} };
+    this.maxSteps = opts.maxSteps || 1000000;
+    // Optional external card store (PicoWAL). Must expose get(addr)->int and
+    // set(addr,int); when present it persists across reset()/load(), modelling a
+    // disk-backed card store. Default is an in-memory Map (VM parity unchanged).
+    this._extCards = opts.cards || null;
+    this.reset();
+  }
+
+  PicoVM.prototype.reset = function () {
+    this.regs = new Int32Array(16);
+    this.cards = this._extCards || new Map();   // PicoWAL store persists if external
+    this.callStack = [];
+    this.output = [];          // array of byte values (0..255)
+    this.httpStatus = -1;
+    this.httpType = null;
+    this.queues = {};
+    this.rng = 0x4F6CDD1D >>> 0;
+    this.mem = new Uint8Array(65536);   // process arena (byte-addressable)
+    this.arenaTop = 0x8000;             // bump pointer for Span.Materialize copies
+    this.spans = [null];                // span table; handle = index (1-based)
+    this.pc = 0;
+    this.steps = 0;
+    this.halted = false;
+    this.waiting = false;
+    this.program = [];
+    this.log = [];
+  };
+
+  PicoVM.prototype.load = function (words) {
+    this.reset();
+    this.program = Array.prototype.slice.call(words);
+  };
+
+  PicoVM.prototype.run = function (words) {
+    if (words) this.load(words);
+    while (!this.halted && this.pc < this.program.length) {
+      if (this.steps >= this.maxSteps) throw new Error("step budget exceeded");
+      this.step();
+    }
+    return this;
+  };
+
+  // Execute one instruction. Returns false when halted / past end (for steppers).
+  PicoVM.prototype.step = function () {
+    if (this.halted || this.pc >= this.program.length) { this.halted = true; return false; }
+    this.steps++;
+    var w = this.program[this.pc] >>> 0;
+    var op = (w >>> 28) & 0xF;
+    var rd = (w >>> 24) & 0xF;
+    var rs1 = (w >>> 20) & 0xF;
+    var rs2 = (w >>> 16) & 0xF;
+    var imm = w & 0xFFFF;
+    var cur = this.pc;
+    this.pc++;
+    var r = this.regs;
+
+    switch (op) {
+      case OP.NOOP: this._noop(rd, rs1, rs2, imm); break;
+      case OP.LOAD: r[rd] = this.cards.get(imm) | 0; break;
+      case OP.SAVE: this.cards.set(imm, r[rs1] | 0); break;
+      case OP.PIPE: this._emit(this.cards.get(imm) | 0); break;
+      case OP.ADD: case OP.SUB: case OP.MUL: case OP.DIV: {
+        var a = r[rs1] | 0;
+        var b = (rs2 === ADDR_REG) ? (r[imm & 0xF] | 0) : sx16(imm);
+        var res;
+        if (op === OP.ADD) res = (a + b) | 0;
+        else if (op === OP.SUB) res = (a - b) | 0;
+        else if (op === OP.MUL) res = Math.imul(a, b);
+        else res = (b !== 0) ? ((a / b) | 0) : 0;
+        r[rd] = res;
+        break;
+      }
+      case OP.INC: r[rd] = (r[rd] + 1) | 0; break;
+      case OP.JUMP: this.pc = imm; break;
+      case OP.BRANCH: if (this._cond(rs2, r[rd], r[rs1])) this.pc = cur + sx16(imm); break;
+      case OP.CALL: this.callStack.push(this.pc); this.pc = imm; break;
+      case OP.RETURN:
+        if (this.callStack.length) this.pc = this.callStack.pop();
+        else this.halted = true;
+        break;
+      case OP.WAIT: this.waiting = true; this.halted = true; break;
+      case OP.RAISE: this.log.push("raise " + imm); break;
+      case OP.DSP: this._dsp(rd, rs1, rs2, imm); break;
+      default: this.halted = true; break;
+    }
+    return !this.halted;
+  };
+
+  PicoVM.prototype._cond = function (mode, a, b) {
+    a = a | 0; b = b | 0;
+    switch (mode) {
+      case BR.EQ: return a === b;
+      case BR.NE: return a !== b;
+      case BR.LT: return a < b;
+      case BR.GT: return a > b;
+      case BR.LE: return a <= b;
+      case BR.GE: return a >= b;
+      case BR.Z: return a === 0;
+      case BR.NZ: return a !== 0;
+      default: return false;
+    }
+  };
+
+  PicoVM.prototype._emit = function (val) {
+    var v = val >>> 0;
+    this.output.push((v >>> 24) & 0xFF, (v >>> 16) & 0xFF, (v >>> 8) & 0xFF, v & 0xFF);
+  };
+
+  PicoVM.prototype._noop = function (rd, rs1, rs2, imm) {
+    var H = this.hooks;
+    if ((imm & 0xFF00) === H.HOST_HOOK_BASE) {
+      this._host(imm & 0xFF, rd, rs1, rs2, imm);
+    } else if ((imm & 0xF000) === H.NET_STATUS_BASE) {
+      this.httpStatus = imm & 0x0FFF;
+    } else if ((imm & 0xF000) === 0xA000) {
+      this.httpType = (H.CONTENT_TYPES && H.CONTENT_TYPES[imm]) || "application/octet-stream";
+    } else if (imm === H.NET_CLOSE_MARKER) {
+      this.halted = true;
+    }
+    // body / header / genuine noop: nothing
+  };
+
+  PicoVM.prototype._host = function (code, rd, rs1, rs2, imm) {
+    var name = (this.hooks.BY_CODE && this.hooks.BY_CODE[code]) || ("hook_" + code);
+    if (name === "Random.U32") {
+      var x = this.rng >>> 0;
+      x ^= (x << 13); x >>>= 0;
+      x ^= (x >>> 7);
+      x ^= (x << 17); x >>>= 0;
+      this.rng = x >>> 0;
+      this.regs[rd] = this.rng | 0;
+      return;
+    }
+    // ---- memory + span / slice / materialize -----------------------------
+    if (name === "Memory.Set") { this.mem[this.regs[rs1] & 0xFFFF] = this.regs[rs2] & 0xFF; return; }
+    if (name === "Memory.Get") { this.regs[rd] = this.mem[this.regs[rs1] & 0xFFFF]; return; }
+    if (name === "Span.Make") {
+      this.spans.push({ ptr: this.regs[rs1] & 0xFFFF, len: Math.max(0, this.regs[rs2] | 0) });
+      this.regs[rd] = this.spans.length - 1; return;
+    }
+    if (name === "Span.Slice") {                       // zero-copy sub-span VIEW
+      var s = this.spans[this.regs[rs1]] || { ptr: 0, len: 0 };
+      var off = Math.max(0, Math.min(this.regs[rs2] | 0, s.len));
+      this.spans.push({ ptr: s.ptr + off, len: s.len - off });
+      this.regs[rd] = this.spans.length - 1; return;
+    }
+    if (name === "Span.Materialize") {                 // memcpy to a new region (COPY)
+      var sm = this.spans[this.regs[rs1]] || { ptr: 0, len: 0 };
+      var dst = this.arenaTop; this.arenaTop += sm.len;
+      for (var i = 0; i < sm.len; i++) this.mem[dst + i] = this.mem[sm.ptr + i];
+      this.spans.push({ ptr: dst, len: sm.len });
+      this.regs[rd] = this.spans.length - 1; return;
+    }
+    if (name === "Span.Len") { var sl = this.spans[this.regs[rs1]]; this.regs[rd] = sl ? sl.len : 0; return; }
+    if (name === "Span.Get") {
+      var sg = this.spans[this.regs[rs1]] || { ptr: 0, len: 0 };
+      var idx = this.regs[rs2] | 0;
+      this.regs[rd] = (idx >= 0 && idx < sg.len) ? this.mem[sg.ptr + idx] : 0; return;
+    }
+    if (name === "Queue.Enqueue") {
+      (this.queues[rs1] = this.queues[rs1] || []).push(this.regs[rd] | 0);
+      return;
+    }
+    if (name === "Queue.Dequeue") {
+      var q = this.queues[rs1] || [];
+      this.regs[rd] = q.length ? q.shift() : 0;
+      return;
+    }
+    if (name === "Queue.Depth") {
+      this.regs[rd] = (this.queues[rs1] || []).length;
+      return;
+    }
+    // ---- program-level card store: Storage.* over a PicoStore --------------
+    if (name.indexOf("Storage.") === 0) {
+      if (this._storage(name.slice(8), rd, rs1, rs2)) return;
+    }
+    this.log.push("host " + name + " R" + rd + " R" + rs1);
+  };
+
+  // Resolve the optional PicoStore library (Node require / browser global).
+  function storeLib() {
+    if (typeof module !== "undefined" && module.exports) return require("./picostore.js");
+    var g = (typeof globalThis !== "undefined") ? globalThis
+          : (typeof self !== "undefined") ? self : this;
+    return g.PicoStore;
+  }
+
+  PicoVM.prototype._spanStr = function (handle) {
+    if (handle <= 0 || handle >= this.spans.length) return "";
+    var s = this.spans[handle];
+    if (!s) return "";
+    return new TextDecoder("utf-8").decode(this.mem.subarray(s.ptr, s.ptr + s.len));
+  };
+
+  PicoVM.prototype._strSpan = function (text) {
+    var b = new TextEncoder().encode(text);
+    var dst = this.arenaTop; this.arenaTop += b.length;
+    for (var i = 0; i < b.length; i++) this.mem[dst + i] = b[i];
+    this.spans.push({ ptr: dst, len: b.length });
+    return this.spans.length - 1;
+  };
+
+  // Mirrors picoscript_vm HostApi._storage. Context model (cur pack + card)
+  // keeps every op within the 2-in/1-out host ABI; field names and queries are
+  // UTF-8 byte-spans the program builds in arena memory.
+  PicoVM.prototype._storage = function (method, rd, rs1, rs2) {
+    if (!this._st) {
+      var ST = storeLib();
+      this._st = { store: new ST.PicoStore(), pack: 0, card: 0, results: [] };
+    }
+    var st = this._st;
+    var pack = String(st.pack);
+    if (method === "UsePack") { st.pack = this.regs[rs1] | 0; this.regs[rd] = st.pack; return true; }
+    if (method === "AddCard") { var cid = st.store.create(pack, {}); st.card = cid; this.regs[rd] = cid; return true; }
+    if (method === "EditCard") {
+      var eid = this.regs[rs1] | 0, ok = st.store.read(pack, eid) !== null;
+      st.card = ok ? eid : 0; this.regs[rd] = ok ? eid : 0; return true;
+    }
+    if (method === "DeleteCard") {
+      var did = this.regs[rs1] | 0, dok = st.store.delete(pack, did);
+      if (did === st.card) st.card = 0;
+      this.regs[rd] = dok ? 1 : 0; return true;
+    }
+    if (method === "GetField") {
+      var grec = st.store.read(pack, st.card) || {}, gn = this._spanStr(this.regs[rs1]);
+      var gv = grec.hasOwnProperty(gn) ? grec[gn] : 0;
+      this.regs[rd] = (typeof gv === "number") ? (gv | 0) : 0; return true;
+    }
+    if (method === "SetField") {
+      var sn = this._spanStr(this.regs[rs1]), srec = st.store.read(pack, st.card);
+      if (srec === null) { this.regs[rd] = 0; return true; }
+      srec[sn] = this.regs[rs2] | 0;
+      this.regs[rd] = st.store.update(pack, st.card, srec) ? 1 : 0; return true;
+    }
+    if (method === "SetFieldStr") {
+      var tn = this._spanStr(this.regs[rs1]), trec = st.store.read(pack, st.card);
+      if (trec === null) { this.regs[rd] = 0; return true; }
+      trec[tn] = this._spanStr(this.regs[rs2]);
+      this.regs[rd] = st.store.update(pack, st.card, trec) ? 1 : 0; return true;
+    }
+    if (method === "GetFieldStr") {
+      var frec = st.store.read(pack, st.card) || {}, fn = this._spanStr(this.regs[rs1]);
+      var fv = frec.hasOwnProperty(fn) ? frec[fn] : "";
+      this.regs[rd] = this._strSpan(typeof fv === "string" ? fv : String(fv)); return true;
+    }
+    if (method === "QueryCard") {
+      var q = this._spanStr(this.regs[rs1]);
+      st.results = st.store.query(pack, q).map(function (e) { return e[0]; });
+      this.regs[rd] = st.results.length; return true;
+    }
+    if (method === "QueryResult") {
+      var qi = this.regs[rs1] | 0;
+      this.regs[rd] = (qi >= 0 && qi < st.results.length) ? st.results[qi] : 0; return true;
+    }
+    return false;
+  };
+
+  PicoVM.prototype._dsp = function (rd, rs1, rs2, imm) {
+    var a = this.regs[rs1] | 0;
+    if (rs2 === 0x4) this.regs[rd] = a < 0 ? 0 : a;          // RELU
+    else if (rs2 === 0x3) this.regs[rd] = Math.imul(a, sx16(imm)); // SCALE
+    else if (rs2 === 0x9) this.regs[rd] = (a + (this.regs[imm & 0xF] | 0)) | 0; // VADD
+    else this.log.push("dsp " + rs2);
+  };
+
+  // Convenience: signed-32 PRINT/PIPE output as integers (4-byte big-endian).
+  PicoVM.prototype.outputInts = function () {
+    var out = [];
+    for (var i = 0; i + 3 < this.output.length; i += 4) {
+      var v = ((this.output[i] << 24) | (this.output[i + 1] << 16) |
+               (this.output[i + 2] << 8) | this.output[i + 3]) | 0;
+      out.push(v);
+    }
+    return out;
+  };
+
+  return PicoVM;
+});
+</script>
+<script>// picoc.js -- PicoScript compiler in JavaScript (browser + Node).
+//
+// Faithful port of picoscript_il.py + picoscript_cfront.py + picoscript_basic.py.
+// Lets the browser compile C-syntax and BASIC-like source to the *identical*
+// bytecode the Python toolchain produces, so you can compile AND debug in-browser.
+//
+//   PicoCompile.compile(src, "c" | "basic") -> { words:[uint32...], il:[...] }
+//
+// Verified against the Python compiler (byte-for-byte) by tests/test_jscompiler.js.
+(function (root, factory) {
+  var hooks = (typeof module !== "undefined" && module.exports)
+    ? require("./pico_hooks.js") : root.PV_HOOKS;
+  var P = factory(hooks);
+  if (typeof module !== "undefined" && module.exports) module.exports = P;
+  else root.PicoCompile = P;
+})(typeof globalThis !== "undefined" ? globalThis : this, function (PV_HOOKS) {
+  "use strict";
+
+  // ── ISA constants ────────────────────────────────────────────────────────
+  var OP = { NOOP:0, LOAD:1, SAVE:2, PIPE:3, ADD:4, SUB:5, MUL:6, DIV:7,
+             INC:8, JUMP:9, BRANCH:10, CALL:11, RETURN:12, WAIT:13, RAISE:14, DSP:15 };
+  var ADDR_REG = 1;
+  var COND = { EQ:0, NE:1, LT:2, GT:3, LE:4, GE:5, Z:6, NZ:7, EOF:8, ERR:9 };
+  var COND_NEGATE = { EQ:"NE", NE:"EQ", LT:"GE", GE:"LT", GT:"LE", LE:"GT" };
+  var ARITH = { add:OP.ADD, sub:OP.SUB, mul:OP.MUL, div:OP.DIV };
+  var H = PV_HOOKS;
+
+  // host-hook name<->code tables from the generated map
+  var HOOK_BY_NAME = {}, HOOK_CANON = {}, CT_BY_NAME = {};
+  Object.keys(H.BY_CODE).forEach(function (code) {
+    var name = H.BY_CODE[code];            // "Ns.Method"
+    HOOK_BY_NAME[name] = parseInt(code, 10);
+    var dot = name.indexOf(".");
+    var ns = name.slice(0, dot), m = name.slice(dot + 1);
+    HOOK_CANON[(ns + "." + m).toLowerCase()] = [ns, m];
+  });
+  Object.keys(H.CONTENT_TYPES).forEach(function (v) {
+    CT_BY_NAME[H.CONTENT_TYPES[v]] = parseInt(v, 10);
+  });
+  function canonHost(ns, m) {
+    return HOOK_CANON[(ns + "." + m).toLowerCase()] || [ns, m];
+  }
+
+  function enc(op, rd, rs1, rs2, imm) {
+    rd = rd || 0; rs1 = rs1 || 0; rs2 = rs2 || 0; imm = imm || 0;
+    return (((op << 28) | (rd << 24) | (rs1 << 20) | (rs2 << 16) | (imm & 0xFFFF)) >>> 0);
+  }
+  function encodeCardAddr(tenant, pack, card) {
+    return ((tenant << 11) | (pack << 5) | card) & 0xFFFF;
+  }
+
+  // ── operand + instruction model ─────────────────────────────────────────
+  var _vid = 0;
+  function VReg(name, pinned) { this.id = _vid++; this.name = name || ("v" + this.id); this.pinned = !!pinned; }
+  function Imm(v) { this.value = v; }
+  function isImm(x) { return x instanceof Imm; }
+  function isVReg(x) { return x instanceof VReg; }
+
+  // Inst is a plain object: { op, dst, a, b, cond, label, ns, method, args, imm, text }
+  function Inst(op, f) { f = f || {}; f.op = op; if (!f.args) f.args = []; return f; }
+
+  function ILBuilder() { this.insts = []; this._ln = 0; }
+  ILBuilder.prototype = {
+    vreg: function (n) { return new VReg(n); },
+    newLabel: function (h) { this._ln++; return (h || "L") + this._ln; },
+    const_: function (d, v) { this.insts.push(Inst("const", { dst: d, imm: v })); },
+    mov: function (d, s) { this.insts.push(Inst("mov", { dst: d, a: s })); },
+    arith: function (op, d, a, b) { this.insts.push(Inst(op, { dst: d, a: a, b: b })); },
+    inc: function (d) { this.insts.push(Inst("inc", { dst: d })); },
+    cmpbr: function (c, a, b, l) { this.insts.push(Inst("cmpbr", { cond: c, a: a, b: b, label: l })); },
+    jmp: function (l) { this.insts.push(Inst("jmp", { label: l })); },
+    label: function (n) { this.insts.push(Inst("label", { label: n })); },
+    call: function (l) { this.insts.push(Inst("call", { label: l })); },
+    ret: function () { this.insts.push(Inst("ret", {})); },
+    host: function (ns, m, args, d) { this.insts.push(Inst("host", { ns: ns, method: m, args: args || [], dst: d || null })); },
+    load: function (d, a) { this.insts.push(Inst("load", { dst: d, imm: a })); },
+    save: function (s, a) { this.insts.push(Inst("save", { a: s, imm: a })); },
+    pipe: function (s, a) { this.insts.push(Inst("pipe", { a: s, imm: a })); },
+    net: function (k, v) { this.insts.push(Inst("net", { method: k, imm: (typeof v === "number" ? v : 0), text: (typeof v === "string" ? v : "") })); }
+  };
+
+  function operandVRegs(ins) {
+    var out = [];
+    [ins.dst, ins.a, ins.b].forEach(function (x) { if (isVReg(x)) out.push(x); });
+    (ins.args || []).forEach(function (x) { if (isVReg(x)) out.push(x); });
+    return out;
+  }
+
+  // ── optimizer ────────────────────────────────────────────────────────────
+  function optimize(insts) {
+    var out = [];
+    insts.forEach(function (ins) {
+      if (ARITH[ins.op] !== undefined && isImm(ins.a) && isImm(ins.b)) {
+        var av = ins.a.value, bv = ins.b.value, r;
+        if (ins.op === "add") r = av + bv;
+        else if (ins.op === "sub") r = av - bv;
+        else if (ins.op === "mul") r = av * bv;
+        else r = bv !== 0 ? Math.trunc(av / bv) : 0;
+        out.push(Inst("const", { dst: ins.dst, imm: r })); return;
+      }
+      if (ins.op === "add" && isVReg(ins.a) && ins.dst === ins.a && isImm(ins.b) && ins.b.value === 1) {
+        out.push(Inst("inc", { dst: ins.dst })); return;
+      }
+      if (ins.op === "mov" && isVReg(ins.a) && ins.dst === ins.a) return;
+      out.push(ins);
+    });
+    return out;
+  }
+
+  // ── register allocation (loop-aware linear scan) ──────────────────────────
+  function allocate(insts) {
+    var first = {}, last = {}, order = [], vregs = {};
+    insts.forEach(function (ins, i) {
+      operandVRegs(ins).forEach(function (v) {
+        if (!(v.id in first)) { first[v.id] = i; order.push(v.id); vregs[v.id] = v; }
+        last[v.id] = i;
+      });
+    });
+    var labelPos = {};
+    insts.forEach(function (ins, i) { if (ins.op === "label") labelPos[ins.label] = i; });
+    insts.forEach(function (ins, i) {
+      if ((ins.op === "jmp" || ins.op === "cmpbr") && (ins.label in labelPos)) {
+        var t = labelPos[ins.label];
+        if (t <= i) {
+          Object.keys(first).forEach(function (vid) {
+            if (first[vid] < t && t <= last[vid] && last[vid] < i) last[vid] = i;
+          });
+        }
+      }
+    });
+    var n = Math.max(1, insts.length);
+    var callIdx = [];
+    insts.forEach(function (ins, i) { if (ins.op === "call") callIdx.push(i); });
+    Object.keys(vregs).forEach(function (vid) {
+      var spansCall = callIdx.some(function (ci) { return first[vid] <= ci && ci <= last[vid]; });
+      if (vregs[vid].pinned || spansCall) { first[vid] = 0; last[vid] = n; }
+    });
+
+    var usable = 16;
+    var free = []; for (var k = 0; k < usable; k++) free.push(k);
+    var active = [];           // [endIndex, vid]
+    var mapping = {};
+    function expire(at) {
+      var keep = [];
+      active.forEach(function (e) {
+        if (e[0] < at) free.push(mapping[e[1]]);
+        else keep.push(e);
+      });
+      keep.sort(function (a, b) { return a[0] - b[0]; });
+      active = keep;
+    }
+    var ord = order.slice().sort(function (a, b) { return first[a] - first[b]; });
+    ord.forEach(function (vid) {
+      expire(first[vid]);
+      if (free.length) {
+        free.sort(function (a, b) { return a - b; });
+        var reg = free.shift();
+        mapping[vid] = reg;
+        active.push([last[vid], vid]);
+        active.sort(function (a, b) { return a[0] - b[0]; });
+      } else {
+        throw new Error("register pressure exceeds 16 live values; simplify the program");
+      }
+    });
+    return mapping;
+  }
+
+  function phys(mapping, v) {
+    var r = mapping[v.id];
+    if (r === undefined) throw new Error("vreg " + v.name + " unallocated");
+    return r;
+  }
+
+  // ── bytecode lowering (CONST/MOV-imm expand to 2 words) ───────────────────
+  function emitWord(ins, mapping, labels, pc) {
+    var op = ins.op;
+    if (op === "mov") {
+      var rd = phys(mapping, ins.dst);
+      var rs1 = phys(mapping, ins.a);  // a is VReg here (imm handled by caller)
+      return enc(OP.ADD, rd, rs1, 0, 0);
+    }
+    if (ARITH[op] !== undefined) {
+      var d = phys(mapping, ins.dst), s1 = phys(mapping, ins.a);
+      if (isImm(ins.b)) return enc(ARITH[op], d, s1, 0, ins.b.value & 0xFFFF);
+      return enc(ARITH[op], d, s1, ADDR_REG, phys(mapping, ins.b));
+    }
+    if (op === "inc") return enc(OP.INC, phys(mapping, ins.dst));
+    if (op === "cmpbr") {
+      var ra = phys(mapping, ins.a), rb = phys(mapping, ins.b);
+      var off = (labels[ins.label] - pc) & 0xFFFF;
+      return enc(OP.BRANCH, ra, rb, COND[ins.cond], off);
+    }
+    if (op === "jmp") return enc(OP.JUMP, 0, 0, 0, labels[ins.label]);
+    if (op === "call") return enc(OP.CALL, 0, 0, 0, labels[ins.label]);
+    if (op === "ret") return enc(OP.RETURN);
+    if (op === "load") return enc(OP.LOAD, phys(mapping, ins.dst), 0, 0, ins.imm);
+    if (op === "save") return enc(OP.SAVE, 0, phys(mapping, ins.a), 0, ins.imm);
+    if (op === "pipe") return enc(OP.PIPE, 0, phys(mapping, ins.a), 0, ins.imm);
+    if (op === "net") {
+      var k = ins.method;
+      if (k === "status") return enc(OP.NOOP, 0, 0, 0, (H.NET_STATUS_BASE | (ins.imm & 0x0FFF)));
+      if (k === "type") return enc(OP.NOOP, 0, 0, 0, (CT_BY_NAME[ins.text] || 0xA000));
+      if (k === "header") return enc(OP.NOOP, 0, 0, 0, H.NET_HEADER_BASE);
+      if (k === "body") return enc(OP.NOOP, 0, 0, 0, H.NET_BODY_MARKER);
+      if (k === "close") return enc(OP.NOOP, 0, 0, 0, H.NET_CLOSE_MARKER);
+      throw new Error("unknown net kind " + k);
+    }
+    if (op === "host") {
+      var hook = HOOK_BY_NAME[ins.ns + "." + ins.method];
+      if (hook === undefined) throw new Error("unknown host hook " + ins.ns + "." + ins.method);
+      var imm = (H.HOST_HOOK_BASE | hook);
+      var hrd = isVReg(ins.dst) ? phys(mapping, ins.dst) : 0;
+      var hrs1 = (ins.args[0] && isVReg(ins.args[0])) ? phys(mapping, ins.args[0]) : 0;
+      var hrs2 = (ins.args[1] && isVReg(ins.args[1])) ? phys(mapping, ins.args[1]) : 0;
+      return enc(OP.NOOP, hrd, hrs1, hrs2, imm);
+    }
+    throw new Error("cannot lower IL op " + op);
+  }
+
+  function lowerToBytecode(insts, opt) {
+    if (opt !== false) insts = optimize(insts);
+    var mapping = allocate(insts);
+    function width(ins) {
+      if (ins.op === "label") return 0;
+      if (ins.op === "const") return 2;
+      if (ins.op === "mov" && isImm(ins.a)) return 2;
+      return 1;
+    }
+    var labels = {}, pc = 0;
+    insts.forEach(function (ins) {
+      if (ins.op === "label") labels[ins.label] = pc; else pc += width(ins);
+    });
+    var words = []; pc = 0;
+    insts.forEach(function (ins) {
+      if (ins.op === "label") return;
+      if (ins.op === "const" || (ins.op === "mov" && isImm(ins.a))) {
+        var rd = phys(mapping, ins.dst);
+        var value = (ins.op === "const") ? ins.imm : ins.a.value;
+        words.push(enc(OP.SUB, rd, rd, ADDR_REG, rd));   // rd = rd - rd = 0
+        words.push(enc(OP.ADD, rd, rd, 0, value & 0xFFFF));
+        pc += 2; return;
+      }
+      words.push(emitWord(ins, mapping, labels, pc));
+      pc += 1;
+    });
+    return words;
+  }
+
+  // ========================================================================
+  // C-SYNTAX FRONTEND (port of picoscript_cfront.py)
+  // ========================================================================
+  var C_KW = { int:1, var:1, void:1, if:1, else:1, while:1, for:1, return:1, break:1, continue:1 };
+  var C_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "&&":1, "||":1, "++":1, "--":1, "+=":1, "-=":1, "*=":1, "/=":1, "%=":1 };
+  var C_ONE = "+-*/%()<>=;,{}.!?:";
+  var C_PREC = { "||":1, "&&":2, "==":3, "!=":3, "<":4, ">":4, "<=":4, ">=":4, "+":5, "-":5, "*":6, "/":6, "%":6 };
+  var C_COMPOUND = { "+=":"+", "-=":"-", "*=":"*", "/=":"/", "%=":"%" };
+  var CMP = { "<":"LT", ">":"GT", "<=":"LE", ">=":"GE", "==":"EQ", "!=":"NE" };
+  var COP = { "+":"add", "-":"sub", "*":"mul", "/":"div" };
+
+  function numval(s) { return /^0[xX]/.test(s) ? parseInt(s, 16) : parseInt(s, 10); }
+  function isAlpha(c) { return /[A-Za-z_]/.test(c); }
+  function isAlnum(c) { return /[A-Za-z0-9_]/.test(c); }
+  function isDigit(c) { return c >= "0" && c <= "9"; }
+
+  function ctokenize(src) {
+    var toks = [], i = 0, n = src.length;
+    function push(k, v) { toks.push({ kind: k, value: v }); }
+    while (i < n) {
+      var c = src[i];
+      if (c === " " || c === "\t" || c === "\r" || c === "\n") { i++; continue; }
+      if (c === "/" && src[i + 1] === "/") { while (i < n && src[i] !== "\n") i++; continue; }
+      if (c === "/" && src[i + 1] === "*") { i += 2; while (i + 1 < n && !(src[i] === "*" && src[i + 1] === "/")) i++; i += 2; continue; }
+      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { if (src[j] === "\\" && j + 1 < n) { b += src[j + 1]; j += 2; continue; } b += src[j]; j++; } push("str", b); i = j + 1; continue; }
+      if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2)); i = j2; continue; }
+      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; var w = src.slice(i, j3); var low = w.toLowerCase(); if (C_KW[low]) push("kw", low); else push("id", w); i = j3; continue; }
+      var two = src.slice(i, i + 2);
+      if (C_TWO[two]) { push("op", two); i += 2; continue; }
+      if (C_ONE.indexOf(c) >= 0) { push("op", c); i++; continue; }
+      throw new Error("C: unexpected char " + JSON.stringify(c));
+    }
+    push("eof", "");
+    return toks;
+  }
+
+  function CParser(toks) { this.toks = toks; this.i = 0; }
+  CParser.prototype = {
+    peek: function () { return this.toks[this.i]; },
+    next: function () { return this.toks[this.i++]; },
+    accept: function (v) { var t = this.peek(); if (t.value === v && (t.kind === "op" || t.kind === "kw")) { this.i++; return true; } return false; },
+    expect: function (v) { var t = this.peek(); if (t.value !== v) throw new Error("C: expected " + v + " got " + t.value); return this.next(); },
+    parseProgram: function () { var s = []; while (this.peek().kind !== "eof") s.push(this.parseToplevel()); return s; },
+    parseToplevel: function () {
+      var t = this.peek();
+      if (t.kind === "kw" && t.value === "void") { this.next(); var name = this.next().value; this.expect("("); this.expect(")"); return { t: "Func", name: name, body: this.parseBlock() }; }
+      return this.parseStmt();
+    },
+    parseBlock: function () { this.expect("{"); var s = []; while (!this.accept("}")) { if (this.peek().kind === "eof") throw new Error("C: unterminated block"); s.push(this.parseStmt()); } return s; },
+    parseStmt: function () {
+      var t = this.peek();
+      if (t.kind === "kw") {
+        if (t.value === "int" || t.value === "var") return this.parseDecl();
+        if (t.value === "if") return this.parseIf();
+        if (t.value === "while") return this.parseWhile();
+        if (t.value === "for") return this.parseFor();
+        if (t.value === "return") { this.next(); if (this.accept(";")) return { t: "Return", value: null }; var v = this.parseExpr(); this.expect(";"); return { t: "Return", value: v }; }
+        if (t.value === "break") { this.next(); this.expect(";"); return { t: "Break" }; }
+        if (t.value === "continue") { this.next(); this.expect(";"); return { t: "Continue" }; }
+      }
+      if (t.value === "{") { return { t: "If", cond: { t: "Num", value: 1 }, then: this.parseBlock(), els: null }; }
+      if (t.kind === "id" && this.toks[this.i + 1].value === "=") {
+        var name = this.next().value; this.expect("="); var val = this.parseExpr(); this.expect(";"); return { t: "Assign", name: name, value: val };
+      }
+      if (t.kind === "id" && C_COMPOUND[this.toks[this.i + 1].value]) {
+        var cn = this.next().value; var cop = C_COMPOUND[this.next().value]; var cv = this.parseExpr(); this.expect(";");
+        return { t: "Assign", name: cn, value: { t: "Bin", op: cop, lhs: { t: "Var", name: cn }, rhs: cv } };
+      }
+      var e = this.parseExpr(); this.expect(";"); return { t: "ExprStmt", expr: e };
+    },
+    parseDecl: function () { this.next(); var name = this.next().value; var init = null; if (this.accept("=")) init = this.parseExpr(); this.expect(";"); return { t: "Decl", name: name, init: init }; },
+    parseDeclNoSemi: function () { this.next(); var name = this.next().value; var init = null; if (this.accept("=")) init = this.parseExpr(); this.expect(";"); return { t: "Decl", name: name, init: init }; },
+    parseIf: function () {
+      this.next(); this.expect("("); var cond = this.parseExpr(); this.expect(")"); var then = this.parseBlock(); var els = null;
+      if (this.accept("else")) { els = (this.peek().value === "{") ? this.parseBlock() : [this.parseIf()]; }
+      return { t: "If", cond: cond, then: then, els: els };
+    },
+    parseWhile: function () { this.next(); this.expect("("); var cond = this.parseExpr(); this.expect(")"); return { t: "While", cond: cond, body: this.parseBlock() }; },
+    parseFor: function () {
+      this.next(); this.expect("("); var init = null;
+      if (!this.accept(";")) {
+        if (this.peek().value === "int" || this.peek().value === "var") init = this.parseDeclNoSemi();
+        else { var nm = this.next().value; this.expect("="); init = { t: "Assign", name: nm, value: this.parseExpr() }; this.expect(";"); }
+      }
+      var cond = null; if (!this.accept(";")) { cond = this.parseExpr(); this.expect(";"); }
+      var step = null;
+      if (this.peek().value !== ")") {
+        if (this.peek().kind === "id" && this.toks[this.i + 1].value === "=") { var nm2 = this.next().value; this.expect("="); step = { t: "Assign", name: nm2, value: this.parseExpr() }; }
+        else if (this.peek().kind === "id" && C_COMPOUND[this.toks[this.i + 1].value]) { var nm3 = this.next().value; var sop = C_COMPOUND[this.next().value]; step = { t: "Assign", name: nm3, value: { t: "Bin", op: sop, lhs: { t: "Var", name: nm3 }, rhs: this.parseExpr() } }; }
+        else step = { t: "ExprStmt", expr: this.parseExpr() };
+      }
+      this.expect(")"); return { t: "For", init: init, cond: cond, step: step, body: this.parseBlock() };
+    },
+    parseExpr: function (minp) { return this.parseTernary(); },
+    parseTernary: function () {
+      var cond = this.parseBinary(0);
+      if (this.peek().kind === "op" && this.peek().value === "?") {
+        this.next(); var then = this.parseExpr(); this.expect(":"); var els = this.parseTernary();
+        return { t: "Ternary", cond: cond, then: then, els: els };
+      }
+      return cond;
+    },
+    parseBinary: function (minp) {
+      minp = minp || 0; var left = this.parseUnary();
+      while (true) { var t = this.peek(); if (t.kind !== "op" || C_PREC[t.value] === undefined || C_PREC[t.value] < minp) break; var op = this.next().value; var right = this.parseBinary(C_PREC[op] + 1); left = { t: "Bin", op: op, lhs: left, rhs: right }; }
+      return left;
+    },
+    parseUnary: function () {
+      var t = this.peek();
+      if (t.kind === "op" && (t.value === "++" || t.value === "--")) { var po = this.next().value; return { t: "IncDec", op: po, target: this.parseUnary(), prefix: true }; }
+      if ((t.value === "-" || t.value === "!") && t.kind === "op") { var op = this.next().value; return { t: "Unary", op: op, operand: this.parseUnary() }; }
+      return this.parseAtom();
+    },
+    parseAtom: function () {
+      var node = this.parsePrimary();
+      while (this.peek().kind === "op" && (this.peek().value === "++" || this.peek().value === "--")) { var o = this.next().value; node = { t: "IncDec", op: o, target: node, prefix: false }; }
+      return node;
+    },
+    parsePrimary: function () {
+      var t = this.next();
+      if (t.kind === "num") return { t: "Num", value: numval(t.value) };
+      if (t.kind === "str") return { t: "Str", value: t.value };
+      if (t.value === "(") { var e = this.parseExpr(); this.expect(")"); return e; }
+      if (t.kind === "id") {
+        if (this.peek().value === ".") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; }
+        if (this.peek().value === "(") return { t: "Call", ns: null, method: t.value, args: this.parseArgs() };
+        return { t: "Var", name: t.value };
+      }
+      throw new Error("C: unexpected token " + t.value);
+    },
+    parseArgs: function () { this.expect("("); var a = []; if (!this.accept(")")) { a.push(this.parseExpr()); while (this.accept(",")) a.push(this.parseExpr()); this.expect(")"); } return a; }
+  };
+
+  function CLowerer() { this.b = new ILBuilder(); this.vars = {}; this.funcs = []; this.loop = []; }
+  CLowerer.prototype = {
+    varOf: function (name) { var k = name.toLowerCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
+    lowerProgram: function (prog) {
+      var self = this, body = [];
+      prog.forEach(function (s) { if (s.t === "Func") self.funcs.push(s); else body.push(s); });
+      body.forEach(function (s) { self.stmt(s); });
+      this.b.ret();
+      this.funcs.forEach(function (f) { self.b.label("fn_" + f.name.toLowerCase()); f.body.forEach(function (s) { self.stmt(s); }); self.b.ret(); });
+      return this.b.insts;
+    },
+    stmt: function (s) {
+      var self = this;
+      if (s.t === "Decl") { var v = this.varOf(s.name); if (s.init != null) this.assignTo(v, s.init); else this.b.const_(v, 0); }
+      else if (s.t === "Assign") this.assignTo(this.varOf(s.name), s.value);
+      else if (s.t === "If") this.lowerIf(s);
+      else if (s.t === "While") this.lowerWhile(s);
+      else if (s.t === "For") this.lowerFor(s);
+      else if (s.t === "Return") { if (s.value != null) { var rv = this.eval(s.value); this.b.mov(this.varOf("__ret__"), rv); } this.b.ret(); }
+      else if (s.t === "ExprStmt") { if (s.expr != null) this.eval(s.expr, false); }
+      else if (s.t === "Break") { if (!this.loop.length) throw new Error("break outside loop"); this.b.jmp(this.loop[this.loop.length - 1][1]); }
+      else if (s.t === "Continue") { if (!this.loop.length) throw new Error("continue outside loop"); this.b.jmp(this.loop[this.loop.length - 1][0]); }
+      else throw new Error("C: cannot lower " + s.t);
+    },
+    assignTo: function (dst, e) {
+      if (e.t === "Bin" && COP[e.op]) {
+        var a = this.eval(e.lhs);
+        if (e.rhs.t === "Num" && e.rhs.value >= -32768 && e.rhs.value <= 65535) { this.b.arith(COP[e.op], dst, a, new Imm(e.rhs.value)); return; }
+        var bb = this.eval(e.rhs); this.b.arith(COP[e.op], dst, a, bb); return;
+      }
+      this.b.mov(dst, this.eval(e));
+    },
+    lowerIf: function (s) {
+      var elseL = this.b.newLabel("else"), endL = this.b.newLabel("endif");
+      this.branchFalse(s.cond, elseL);
+      var self = this; s.then.forEach(function (st) { self.stmt(st); });
+      if (s.els) { this.b.jmp(endL); this.b.label(elseL); s.els.forEach(function (st) { self.stmt(st); }); this.b.label(endL); }
+      else this.b.label(elseL);
+    },
+    lowerWhile: function (s) {
+      var top = this.b.newLabel("while"), end = this.b.newLabel("endwhile");
+      this.b.label(top); this.branchFalse(s.cond, end);
+      this.loop.push([top, end]); var self = this; s.body.forEach(function (st) { self.stmt(st); }); this.loop.pop();
+      this.b.jmp(top); this.b.label(end);
+    },
+    lowerFor: function (s) {
+      if (s.init) this.stmt(s.init);
+      var top = this.b.newLabel("for"), cont = this.b.newLabel("forcont"), end = this.b.newLabel("endfor");
+      this.b.label(top); if (s.cond) this.branchFalse(s.cond, end);
+      this.loop.push([cont, end]); var self = this; s.body.forEach(function (st) { self.stmt(st); }); this.loop.pop();
+      this.b.label(cont); if (s.step) this.stmt(s.step); this.b.jmp(top); this.b.label(end);
+    },
+    branchFalse: function (cond, falseL) {
+      if (cond.t === "Bin" && CMP[cond.op]) { var a = this.eval(cond.lhs), b = this.eval(cond.rhs); this.b.cmpbr(COND_NEGATE[CMP[cond.op]], a, b, falseL); return; }
+      var v = this.eval(cond); this.b.cmpbr("Z", v, v, falseL);
+    },
+    eval: function (e, want) {
+      if (want === undefined) want = true;
+      if (e.t === "Num") { var v = this.b.vreg(); this.b.const_(v, e.value); return v; }
+      if (e.t === "Var") return this.varOf(e.name);
+      if (e.t === "Raw") return e.v;
+      if (e.t === "Bin") {
+        if (CMP[e.op]) return this.evalBool(e);
+        if (e.op === "&&" || e.op === "||") return this.evalLogical(e);
+        if (e.op === "%") return this.evalMod(e.lhs, e.rhs);
+        var a = this.eval(e.lhs), dst = this.b.vreg();
+        if (e.rhs.t === "Num" && e.rhs.value >= -32768 && e.rhs.value <= 65535) this.b.arith(COP[e.op], dst, a, new Imm(e.rhs.value));
+        else { var b = this.eval(e.rhs); this.b.arith(COP[e.op], dst, a, b); }
+        return dst;
+      }
+      if (e.t === "IncDec") return this.evalIncDec(e);
+      if (e.t === "Ternary") return this.evalTernary(e);
+      if (e.t === "Unary") {
+        if (e.op === "-") { var z = this.b.vreg(); this.b.const_(z, 0); var inner = this.eval(e.operand); var d = this.b.vreg(); this.b.arith("sub", d, z, inner); return d; }
+        if (e.op === "!") { var iv = this.eval(e.operand); return this.evalBool({ t: "Bin", op: "==", lhs: { t: "Raw", v: iv }, rhs: { t: "Num", value: 0 } }); }
+      }
+      if (e.t === "Call") return this.lowerCall(e, want);
+      throw new Error("C: cannot evaluate " + e.t);
+    },
+    evalBool: function (e) {
+      var a = this.eval(e.lhs), b = this.eval(e.rhs), dst = this.b.vreg();
+      var tl = this.b.newLabel("bt"), el = this.b.newLabel("be");
+      this.b.cmpbr(CMP[e.op], a, b, tl); this.b.const_(dst, 0); this.b.jmp(el);
+      this.b.label(tl); this.b.const_(dst, 1); this.b.label(el); return dst;
+    },
+    evalMod: function (lhs, rhs) {
+      var a = this.eval(lhs), b = this.eval(rhs);
+      var q = this.b.vreg(); this.b.arith("div", q, a, b);
+      var m = this.b.vreg(); this.b.arith("mul", m, q, b);
+      var dst = this.b.vreg(); this.b.arith("sub", dst, a, m);
+      return dst;
+    },
+    evalLogical: function (e) {
+      var dst = this.b.vreg(); var a = this.eval(e.lhs); var endL = this.b.newLabel("lend");
+      if (e.op === "&&") {
+        var falseL = this.b.newLabel("land0");
+        this.b.cmpbr("Z", a, a, falseL);
+        var b = this.eval(e.rhs); this.b.cmpbr("Z", b, b, falseL);
+        this.b.const_(dst, 1); this.b.jmp(endL);
+        this.b.label(falseL); this.b.const_(dst, 0);
+      } else {
+        var trueL = this.b.newLabel("lor1");
+        this.b.cmpbr("NZ", a, a, trueL);
+        var b2 = this.eval(e.rhs); this.b.cmpbr("NZ", b2, b2, trueL);
+        this.b.const_(dst, 0); this.b.jmp(endL);
+        this.b.label(trueL); this.b.const_(dst, 1);
+      }
+      this.b.label(endL); return dst;
+    },
+    evalIncDec: function (e) {
+      if (e.target.t !== "Var") throw new Error("++/-- requires a variable");
+      var v = this.varOf(e.target.name);
+      if (e.prefix) { if (e.op === "++") this.b.inc(v); else this.b.arith("sub", v, v, new Imm(1)); return v; }
+      var old = this.b.vreg(); this.b.mov(old, v);
+      if (e.op === "++") this.b.inc(v); else this.b.arith("sub", v, v, new Imm(1));
+      return old;
+    },
+    evalTernary: function (e) {
+      var dst = this.b.vreg(); var elseL = this.b.newLabel("telse"), endL = this.b.newLabel("tend");
+      this.branchFalse(e.cond, elseL);
+      var tv = this.eval(e.then); this.b.mov(dst, tv); this.b.jmp(endL);
+      this.b.label(elseL); var ev = this.eval(e.els); this.b.mov(dst, ev);
+      this.b.label(endL); return dst;
+    },
+    lowerCall: function (c, want) {
+      var ns = c.ns, m = c.method;
+      if (ns == null) {
+        if (m.toLowerCase() === "print") { var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
+        this.b.call("fn_" + m.toLowerCase()); return null;
+      }
+      if (ns.toUpperCase() === "NET") {
+        var M = m.toUpperCase();
+        if (M === "STATUS") this.b.net("status", intlit(c.args[0]));
+        else if (M === "TYPE") this.b.net("type", strlit(c.args[0]));
+        else if (M === "BODY") this.b.net("body");
+        else if (M === "CLOSE") this.b.net("close");
+        else if (M === "HEADER") this.b.net("header");
+        else throw new Error("unknown Net." + m);
+        return null;
+      }
+      if (ns.toUpperCase() === "STORAGE" && ["LOAD", "SAVE", "PIPE"].indexOf(m.toUpperCase()) >= 0) {
+        var addr = encodeCardAddr(intlit(c.args[0]), intlit(c.args[1]), intlit(c.args[2]));
+        var reg = this.eval(c.args[3]); var MM = m.toUpperCase();
+        if (MM === "LOAD") this.b.load(reg, addr); else if (MM === "SAVE") this.b.save(reg, addr); else this.b.pipe(reg, addr);
+        return reg;
+      }
+      var cn = canonHost(ns, m); var self = this;
+      var argregs = c.args.slice(0, 2).map(function (a) { return self.eval(a); });
+      var dst = want ? this.b.vreg() : null;
+      this.b.host(cn[0], cn[1], argregs, dst); return dst;
+    }
+  };
+  function intlit(node) { if (node.t === "Num") return node.value; throw new Error("expected integer literal"); }
+  function strlit(node) { if (node.t === "Str") return node.value; throw new Error("expected string literal"); }
+  function compileC(src) { return new CLowerer().lowerProgram(new CParser(ctokenize(src)).parseProgram()); }
+
+  // ========================================================================
+  // BASIC-LIKE FRONTEND (port of picoscript_basic.py)
+  // ========================================================================
+  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD"].forEach(function (k) { B_KW[k] = 1; });
+  var B_CMPW = { EQ:"EQ", NE:"NE", LT:"LT", GT:"GT", LE:"LE", GE:"GE" };
+  var B_CMPS = { "==":"EQ", "!=":"NE", "<>":"NE", "=":"EQ", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
+  var B_COMPARATORS = {}; for (var _k in B_CMPW) B_COMPARATORS[_k] = B_CMPW[_k]; for (var _k2 in B_CMPS) B_COMPARATORS[_k2] = B_CMPS[_k2];
+  var B_ASSIGN = { "+=":"+", "-=":"-", "*=":"*", "/=":"/" };
+  var B_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "<>":1, "+=":1, "-=":1, "*=":1, "/=":1 };
+  var B_ONE = "+-*/()<>=,.:";
+  var B_PREC = { OR:1, AND:2, "+":5, "-":5, "*":6, "/":6, MOD:6 };
+  for (var _c in B_COMPARATORS) B_PREC[_c] = 3;
+  var B_ARITH = { "+":"add", "-":"sub", "*":"mul", "/":"div" };
+  var B_PRINT_CARD = 0xFFFE;
+
+  function btokenize(src) {
+    var toks = [], i = 0, n = src.length;
+    function push(k, v) { toks.push({ kind: k, value: v }); }
+    while (i < n) {
+      var c = src[i];
+      if (c === "\n") { push("nl", "\\n"); i++; continue; }
+      if (c === " " || c === "\t" || c === "\r") { i++; continue; }
+      if (c === "'" || (c === "/" && src[i + 1] === "/")) { while (i < n && src[i] !== "\n") i++; continue; }
+      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { b += src[j]; j++; } push("str", b); i = j + 1; continue; }
+      if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2)); i = j2; continue; }
+      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; var w = src.slice(i, j3); var up = w.toUpperCase(); if (B_KW[up]) push("kw", up); else push("id", w); i = j3; continue; }
+      var two = src.slice(i, i + 2);
+      if (B_TWO[two]) { push("op", two); i += 2; continue; }
+      if (B_ONE.indexOf(c) >= 0) { push("op", c); i++; continue; }
+      throw new Error("BASIC: unexpected char " + JSON.stringify(c));
+    }
+    push("nl", "\\n"); push("eof", "");
+    return toks;
+  }
+
+  function BParser(toks) { this.toks = toks; this.i = 0; }
+  BParser.prototype = {
+    peek: function () { return this.toks[this.i]; },
+    peek2: function () { return this.toks[this.i + 1]; },
+    next: function () { return this.toks[this.i++]; },
+    skipNl: function () { while (this.peek().kind === "nl") this.i++; },
+    atKw: function () { var t = this.peek(); if (t.kind !== "kw") return false; for (var k = 0; k < arguments.length; k++) if (t.value === arguments[k]) return true; return false; },
+    eatKw: function (name) { var t = this.next(); if (!(t.kind === "kw" && t.value === name)) throw new Error("BASIC: expected " + name + " got " + t.value); },
+    eatOp: function (v) { var t = this.next(); if (!(t.kind === "op" && t.value === v)) throw new Error("BASIC: expected " + v + " got " + t.value); },
+    endLine: function () { var t = this.peek(); if (t.kind === "nl" || t.kind === "eof") { this.skipNl(); return; } throw new Error("BASIC: expected EOL got " + t.value); },
+    parseProgram: function () { var s = []; this.skipNl(); while (this.peek().kind !== "eof") { s.push(this.parseStmt()); this.skipNl(); } return s; },
+    parseBlock: function () {
+      var terms = Array.prototype.slice.call(arguments); var s = []; this.skipNl();
+      while (!this.atKwArr(terms)) { if (this.peek().kind === "eof") throw new Error("BASIC: unexpected EOF expecting " + terms); s.push(this.parseStmt()); this.skipNl(); }
+      return s;
+    },
+    atKwArr: function (arr) { var t = this.peek(); return t.kind === "kw" && arr.indexOf(t.value) >= 0; },
+    parseStmt: function () {
+      var t = this.peek();
+      if (t.kind === "id" && this.peek2().kind === "op" && this.peek2().value === ":") { var name = this.next().value; this.next(); this.endLine(); return { t: "Label", name: name }; }
+      if (t.kind === "kw") {
+        var kw = t.value;
+        if (kw === "LET") return this.parseLet(true);
+        if (kw === "DIM") return this.parseDim();
+        if (kw === "INC") { this.next(); var ni = this.next().value; this.endLine(); return { t: "IncDec", name: ni, delta: 1 }; }
+        if (kw === "DEC") { this.next(); var nd = this.next().value; this.endLine(); return { t: "IncDec", name: nd, delta: -1 }; }
+        if (kw === "IF") return this.parseIf();
+        if (kw === "WHILE") return this.parseWhile();
+        if (kw === "DO") return this.parseDo();
+        if (kw === "FOR") return this.parseFor();
+        if (kw === "FOREACH") return this.parseForeach();
+        if (kw === "SWITCH") return this.parseSwitch();
+        if (kw === "GOTO") { this.next(); var nm = this.next().value; this.endLine(); return { t: "Goto", label: nm }; }
+        if (kw === "GOSUB") { this.next(); var nm2 = this.next().value; this.endLine(); return { t: "Gosub", name: nm2 }; }
+        if (kw === "SUB") return this.parseSub();
+        if (kw === "RETURN") { this.next(); this.endLine(); return { t: "Return" }; }
+        if (kw === "BREAK") { this.next(); this.endLine(); return { t: "Break" }; }
+        if (kw === "SKIP") { this.next(); this.endLine(); return { t: "Skip" }; }
+        if (kw === "PRINT") { this.next(); var v = this.parseExpr(); this.endLine(); return { t: "Print", value: v }; }
+        throw new Error("BASIC: unexpected keyword " + kw);
+      }
+      if (t.kind === "id") {
+        var nx = this.peek2();
+        if (nx.kind === "op" && nx.value === "=") return this.parseLet(false);
+        if (nx.kind === "op" && B_ASSIGN[nx.value]) {
+          var an = this.next().value; var aop = B_ASSIGN[this.next().value];
+          var arhs = this.parseExpr(); this.endLine();
+          return { t: "Let", name: an, value: { t: "Bin", op: aop, lhs: { t: "Var", name: an }, rhs: arhs } };
+        }
+        if (nx.kind === "op" && nx.value === ".") { var call = this.parseCallFromId(); this.endLine(); return { t: "CallStmt", call: call }; }
+      }
+      throw new Error("BASIC: cannot parse statement at " + t.value);
+    },
+    parseDim: function () {
+      this.eatKw("DIM"); var name = this.next().value; var init = null;
+      if (this.peek().kind === "op" && this.peek().value === "=") { this.next(); init = this.parseExpr(); }
+      this.endLine(); return { t: "Dim", name: name, init: init };
+    },
+    parseLet: function (eat) { if (eat) this.eatKw("LET"); var name = this.next().value; this.eatOp("="); var v = this.parseExpr(); this.endLine(); return { t: "Let", name: name, value: v }; },
+    parseIf: function () {
+      this.eatKw("IF"); var cond = this.parseCondition(); this.eatKw("THEN"); this.endLine();
+      var body = this.parseBlock("ELSEIF", "ELSE", "ENDIF"); var arms = [[cond, body]]; var els = null;
+      while (this.atKw("ELSEIF")) { this.eatKw("ELSEIF"); var c2 = this.parseCondition(); this.eatKw("THEN"); this.endLine(); arms.push([c2, this.parseBlock("ELSEIF", "ELSE", "ENDIF")]); }
+      if (this.atKw("ELSE")) { this.eatKw("ELSE"); this.endLine(); els = this.parseBlock("ENDIF"); }
+      this.eatKw("ENDIF"); this.endLine(); return { t: "If", arms: arms, els: els };
+    },
+    parseWhile: function () { this.eatKw("WHILE"); var cond = this.parseCondition(); this.endLine(); var body = this.parseBlock("ENDWHILE"); this.eatKw("ENDWHILE"); this.endLine(); return { t: "While", cond: cond, body: body }; },
+    parseDo: function () {
+      this.eatKw("DO");
+      var topCond = null, topUntil = false;
+      if (this.atKw("WHILE")) { this.eatKw("WHILE"); topCond = this.parseCondition(); }
+      else if (this.atKw("UNTIL")) { this.eatKw("UNTIL"); topCond = this.parseCondition(); topUntil = true; }
+      this.endLine();
+      var body = this.parseBlock("LOOP");
+      this.eatKw("LOOP");
+      var botCond = null, botUntil = false;
+      if (this.atKw("WHILE")) { this.eatKw("WHILE"); botCond = this.parseCondition(); }
+      else if (this.atKw("UNTIL")) { this.eatKw("UNTIL"); botCond = this.parseCondition(); botUntil = true; }
+      this.endLine();
+      if ((topCond === null) === (botCond === null)) throw new Error("DO/LOOP needs a WHILE or UNTIL condition at exactly one of DO or LOOP");
+      return { t: "DoLoop", topCond: topCond, topUntil: topUntil, botCond: botCond, botUntil: botUntil, body: body };
+    },
+    parseFor: function () {
+      this.eatKw("FOR"); var v = this.next().value; this.eatOp("="); var start = this.parseExpr(); this.eatKw("TO"); var end = this.parseExpr();
+      var step = null; if (this.atKw("STEP")) { this.eatKw("STEP"); step = this.parseExpr(); }
+      this.endLine(); var body = this.parseBlock("NEXT"); this.eatKw("NEXT"); this.endLine(); return { t: "ForTo", v: v, start: start, end: end, step: step, body: body };
+    },
+    parseForeach: function () { this.eatKw("FOREACH"); var v = this.next().value; this.eatKw("IN"); var count = this.parseExpr(); this.endLine(); var body = this.parseBlock("ENDFOREACH"); this.eatKw("ENDFOREACH"); this.endLine(); return { t: "ForEach", v: v, count: count, body: body }; },
+    parseSwitch: function () {
+      this.eatKw("SWITCH"); var expr = this.parseExpr(); this.endLine(); this.skipNl(); var cases = [], def = null;
+      while (!this.atKw("ENDSWITCH")) {
+        if (this.atKw("CASE")) { this.eatKw("CASE"); var val = this.parseExpr(); this.endLine(); cases.push([val, this.parseBlock("CASE", "DEFAULT", "ENDSWITCH")]); }
+        else if (this.atKw("DEFAULT")) { this.eatKw("DEFAULT"); this.endLine(); def = this.parseBlock("ENDSWITCH"); }
+        else throw new Error("BASIC: expected CASE/DEFAULT/ENDSWITCH");
+      }
+      this.eatKw("ENDSWITCH"); this.endLine(); return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    parseSub: function () { this.eatKw("SUB"); var name = this.next().value; this.endLine(); var body = this.parseBlock("ENDSUB"); this.eatKw("ENDSUB"); this.endLine(); return { t: "Sub", name: name, body: body }; },
+    parseCallFromId: function () { var ns = this.next().value; this.eatOp("."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
+    parseArgs: function () { this.eatOp("("); var a = []; if (!(this.peek().kind === "op" && this.peek().value === ")")) { a.push(this.parseExpr()); while (this.peek().kind === "op" && this.peek().value === ",") { this.next(); a.push(this.parseExpr()); } } this.eatOp(")"); return a; },
+    parseCondition: function () { return this.parseExpr(); },
+    parseExpr: function (minp) {
+      minp = minp || 0; var left = this.parseUnary();
+      while (true) {
+        var t = this.peek(); var ov = null;
+        if (t.kind === "op" && B_PREC[t.value] !== undefined) ov = t.value;
+        else if (t.kind === "kw" && B_PREC[t.value] !== undefined) ov = t.value;
+        if (ov === null || B_PREC[ov] < minp) break;
+        this.next();
+        var right = this.parseExpr(B_PREC[ov] + 1);
+        if (B_COMPARATORS[ov]) left = { t: "Cmp", cond: B_COMPARATORS[ov], lhs: left, rhs: right };
+        else left = { t: "Bin", op: ov, lhs: left, rhs: right };
+      }
+      return left;
+    },
+    parseUnary: function () { var t = this.peek(); if (t.kind === "op" && t.value === "-") { this.next(); return { t: "Bin", op: "-", lhs: { t: "Num", value: 0 }, rhs: this.parseUnary() }; } if (t.kind === "kw" && t.value === "NOT") { this.next(); return { t: "Cmp", cond: "EQ", lhs: this.parseUnary(), rhs: { t: "Num", value: 0 } }; } return this.parseAtom(); },
+    parseAtom: function () {
+      var t = this.next();
+      if (t.kind === "num") return { t: "Num", value: numval(t.value) };
+      if (t.kind === "str") return { t: "Str", value: t.value };
+      if (t.kind === "kw" && t.value === "IIF") {
+        this.eatOp("("); var c = this.parseExpr(); this.eatOp(",");
+        var th = this.parseExpr(); this.eatOp(","); var el = this.parseExpr(); this.eatOp(")");
+        return { t: "Ternary", cond: c, then: th, els: el };
+      }
+      if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.eatOp(")"); return e; }
+      if (t.kind === "id") { if (this.peek().kind === "op" && this.peek().value === ".") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; } return { t: "Var", name: t.value }; }
+      throw new Error("BASIC: unexpected token " + t.value);
+    }
+  };
+
+  function BLowerer() { this.b = new ILBuilder(); this.vars = {}; this.subs = []; this.scopes = []; }
+  BLowerer.prototype = {
+    varOf: function (name) { var k = name.toUpperCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
+    lowerProgram: function (prog) {
+      var self = this, body = [];
+      prog.forEach(function (s) { if (s.t === "Sub") self.subs.push(s); else body.push(s); });
+      body.forEach(function (s) { self.stmt(s); });
+      this.b.ret();
+      this.subs.forEach(function (sub) { self.b.label("sub_" + sub.name.toUpperCase()); sub.body.forEach(function (s) { self.stmt(s); }); self.b.ret(); });
+      return this.b.insts;
+    },
+    stmt: function (s) {
+      var self = this;
+      if (s.t === "Let") this.assignTo(this.varOf(s.name), s.value);
+      else if (s.t === "Dim") { var dv = this.varOf(s.name); if (s.init === null) this.b.const_(dv, 0); else this.assignTo(dv, s.init); }
+      else if (s.t === "IncDec") { var iv = this.varOf(s.name); if (s.delta === 1) this.b.inc(iv); else this.b.arith("sub", iv, iv, new Imm(1)); }
+      else if (s.t === "Label") this.b.label("lbl_" + s.name.toUpperCase());
+      else if (s.t === "Goto") this.b.jmp("lbl_" + s.label.toUpperCase());
+      else if (s.t === "Gosub") this.b.call("sub_" + s.name.toUpperCase());
+      else if (s.t === "Return") this.b.ret();
+      else if (s.t === "Break") this.lowerBreak();
+      else if (s.t === "Skip") this.lowerSkip();
+      else if (s.t === "If") this.lowerIf(s);
+      else if (s.t === "While") this.lowerWhile(s);
+      else if (s.t === "DoLoop") this.lowerDo(s);
+      else if (s.t === "ForTo") this.lowerFor(s);
+      else if (s.t === "ForEach") this.lowerForeach(s);
+      else if (s.t === "Switch") this.lowerSwitch(s);
+      else if (s.t === "Print") { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); }
+      else if (s.t === "CallStmt") this.lowerCall(s.call, false);
+      else throw new Error("BASIC: cannot lower " + s.t);
+    },
+    assignTo: function (dst, e) {
+      if (e.t === "Bin" && B_ARITH[e.op]) {
+        var a = this.eval(e.lhs);
+        if (e.rhs.t === "Num" && e.rhs.value >= -32768 && e.rhs.value <= 65535) { this.b.arith(B_ARITH[e.op], dst, a, new Imm(e.rhs.value)); return; }
+        var bb = this.eval(e.rhs); this.b.arith(B_ARITH[e.op], dst, a, bb); return;
+      }
+      this.b.mov(dst, this.eval(e));
+    },
+    branchFalse: function (cond, falseL) {
+      if (cond.t === "Cmp") { var a = this.eval(cond.lhs), b = this.eval(cond.rhs); this.b.cmpbr(COND_NEGATE[cond.cond], a, b, falseL); return; }
+      var v = this.eval(cond); this.b.cmpbr("Z", v, v, falseL);
+    },
+    branchTrue: function (cond, trueL) {
+      if (cond.t === "Cmp") { var a = this.eval(cond.lhs), b = this.eval(cond.rhs); this.b.cmpbr(cond.cond, a, b, trueL); return; }
+      var v = this.eval(cond); this.b.cmpbr("NZ", v, v, trueL);
+    },
+    lowerBreak: function () {
+      if (!this.scopes.length) throw new Error("BREAK outside a loop or SWITCH");
+      this.b.jmp(this.scopes[this.scopes.length - 1][1]);
+    },
+    lowerSkip: function () {
+      for (var i = this.scopes.length - 1; i >= 0; i--) {
+        if (this.scopes[i][0] !== null) { this.b.jmp(this.scopes[i][0]); return; }
+      }
+      throw new Error("SKIP outside a loop");
+    },
+    lowerIf: function (s) {
+      var end = this.b.newLabel("endif"), self = this;
+      s.arms.forEach(function (arm) { var nxt = self.b.newLabel("arm"); self.branchFalse(arm[0], nxt); arm[1].forEach(function (st) { self.stmt(st); }); self.b.jmp(end); self.b.label(nxt); });
+      if (s.els) s.els.forEach(function (st) { self.stmt(st); });
+      this.b.label(end);
+    },
+    lowerWhile: function (s) { var top = this.b.newLabel("while"), end = this.b.newLabel("endwhile"), self = this; this.b.label(top); this.branchFalse(s.cond, end); this.scopes.push([top, end]); s.body.forEach(function (st) { self.stmt(st); }); this.scopes.pop(); this.b.jmp(top); this.b.label(end); },
+    lowerDo: function (s) {
+      var top = this.b.newLabel("do"), cont = this.b.newLabel("docont"), end = this.b.newLabel("enddo"), self = this;
+      this.b.label(top);
+      if (s.topCond !== null) {
+        if (s.topUntil) this.branchTrue(s.topCond, end); else this.branchFalse(s.topCond, end);
+      }
+      this.scopes.push([cont, end]);
+      s.body.forEach(function (st) { self.stmt(st); });
+      this.scopes.pop();
+      this.b.label(cont);
+      if (s.botCond !== null) {
+        if (s.botUntil) this.branchFalse(s.botCond, top); else this.branchTrue(s.botCond, top);
+      } else {
+        this.b.jmp(top);
+      }
+      this.b.label(end);
+    },
+    lowerFor: function (s) {
+      var v = this.varOf(s.v); this.assignTo(v, s.start);
+      var endv = this.b.vreg("__for_end__"); this.b.mov(endv, this.eval(s.end));
+      var top = this.b.newLabel("for"), cont = this.b.newLabel("forcont"), end = this.b.newLabel("endfor"), self = this;
+      this.b.label(top); this.b.cmpbr("GT", v, endv, end);
+      this.scopes.push([cont, end]);
+      s.body.forEach(function (st) { self.stmt(st); });
+      this.scopes.pop();
+      this.b.label(cont);
+      if (s.step != null && s.step.t === "Num") this.b.arith("add", v, v, new Imm(s.step.value));
+      else if (s.step != null) this.b.arith("add", v, v, this.eval(s.step));
+      else this.b.inc(v);
+      this.b.jmp(top); this.b.label(end);
+    },
+    lowerForeach: function (s) {
+      var v = this.varOf(s.v); var cnt = this.b.vreg("__fe_count__"); this.b.mov(cnt, this.eval(s.count)); this.b.const_(v, 0);
+      var top = this.b.newLabel("foreach"), cont = this.b.newLabel("fecont"), end = this.b.newLabel("endforeach"), self = this;
+      this.b.label(top); this.b.cmpbr("GE", v, cnt, end);
+      this.scopes.push([cont, end]);
+      s.body.forEach(function (st) { self.stmt(st); });
+      this.scopes.pop();
+      this.b.label(cont);
+      this.b.inc(v); this.b.jmp(top); this.b.label(end);
+    },
+    lowerSwitch: function (s) {
+      var sel = this.eval(s.expr); var end = this.b.newLabel("endswitch"), self = this;
+      var caseLabels = s.cases.map(function () { return self.b.newLabel("case"); });
+      var defL = this.b.newLabel("default");
+      s.cases.forEach(function (cse, idx) { var cv = self.eval(cse[0]); self.b.cmpbr("EQ", sel, cv, caseLabels[idx]); });
+      this.b.jmp(defL);
+      this.scopes.push([null, end]);
+      s.cases.forEach(function (cse, idx) { self.b.label(caseLabels[idx]); cse[1].forEach(function (st) { self.stmt(st); }); self.b.jmp(end); });
+      this.b.label(defL); if (s.def) s.def.forEach(function (st) { self.stmt(st); });
+      this.scopes.pop();
+      this.b.label(end);
+    },
+    eval: function (e) {
+      if (e.t === "Num") { var v = this.b.vreg(); this.b.const_(v, e.value); return v; }
+      if (e.t === "Var") return this.varOf(e.name);
+      if (e.t === "Bin") {
+        if (e.op === "AND" || e.op === "OR") return this.evalLogical(e);
+        if (e.op === "MOD") return this.evalMod(e.lhs, e.rhs);
+        var a = this.eval(e.lhs), dst = this.b.vreg();
+        if (e.rhs.t === "Num" && e.rhs.value >= -32768 && e.rhs.value <= 65535) this.b.arith(B_ARITH[e.op], dst, a, new Imm(e.rhs.value));
+        else { var b = this.eval(e.rhs); this.b.arith(B_ARITH[e.op], dst, a, b); }
+        return dst;
+      }
+      if (e.t === "Cmp") return this.evalBool(e);
+      if (e.t === "Ternary") return this.evalTernary(e);
+      if (e.t === "Call") { var r = this.lowerCall(e, true); if (r == null) throw new Error(e.ns + "." + e.method + " has no value"); return r; }
+      throw new Error("BASIC: cannot evaluate " + e.t);
+    },
+    evalBool: function (e) {
+      var a = this.eval(e.lhs), b = this.eval(e.rhs), dst = this.b.vreg();
+      var tl = this.b.newLabel("bt"), el = this.b.newLabel("be");
+      this.b.cmpbr(e.cond, a, b, tl); this.b.const_(dst, 0); this.b.jmp(el);
+      this.b.label(tl); this.b.const_(dst, 1); this.b.label(el); return dst;
+    },
+    evalMod: function (lhs, rhs) {
+      var a = this.eval(lhs), b = this.eval(rhs);
+      var q = this.b.vreg(); this.b.arith("div", q, a, b);
+      var m = this.b.vreg(); this.b.arith("mul", m, q, b);
+      var dst = this.b.vreg(); this.b.arith("sub", dst, a, m);
+      return dst;
+    },
+    evalLogical: function (e) {
+      var dst = this.b.vreg(); var a = this.eval(e.lhs); var endL = this.b.newLabel("lend");
+      if (e.op === "AND") {
+        var falseL = this.b.newLabel("land0");
+        this.b.cmpbr("Z", a, a, falseL);
+        var b = this.eval(e.rhs); this.b.cmpbr("Z", b, b, falseL);
+        this.b.const_(dst, 1); this.b.jmp(endL);
+        this.b.label(falseL); this.b.const_(dst, 0);
+      } else {
+        var trueL = this.b.newLabel("lor1");
+        this.b.cmpbr("NZ", a, a, trueL);
+        var b2 = this.eval(e.rhs); this.b.cmpbr("NZ", b2, b2, trueL);
+        this.b.const_(dst, 0); this.b.jmp(endL);
+        this.b.label(trueL); this.b.const_(dst, 1);
+      }
+      this.b.label(endL); return dst;
+    },
+    evalTernary: function (e) {
+      var dst = this.b.vreg(); var elseL = this.b.newLabel("telse"), endL = this.b.newLabel("tend");
+      this.branchFalse(e.cond, elseL);
+      var tv = this.eval(e.then); this.b.mov(dst, tv); this.b.jmp(endL);
+      this.b.label(elseL); var ev = this.eval(e.els); this.b.mov(dst, ev);
+      this.b.label(endL); return dst;
+    },
+    lowerCall: function (c, want) {
+      var ns = c.ns, m = c.method;
+      if (ns != null && ns.toUpperCase() === "NET") {
+        var M = m.toUpperCase();
+        if (M === "STATUS") this.b.net("status", intlit(c.args[0]));
+        else if (M === "TYPE") this.b.net("type", strlit(c.args[0]));
+        else if (M === "BODY") this.b.net("body");
+        else if (M === "CLOSE") this.b.net("close");
+        else if (M === "HEADER") this.b.net("header");
+        else throw new Error("unknown Net." + m);
+        return null;
+      }
+      if (ns != null && ns.toUpperCase() === "STORAGE" && ["LOAD", "SAVE", "PIPE"].indexOf(m.toUpperCase()) >= 0) {
+        var addr = encodeCardAddr(intlit(c.args[0]), intlit(c.args[1]), intlit(c.args[2]));
+        var reg = this.eval(c.args[3]); var MM = m.toUpperCase();
+        if (MM === "LOAD") this.b.load(reg, addr); else if (MM === "SAVE") this.b.save(reg, addr); else this.b.pipe(reg, addr);
+        return reg;
+      }
+      var self = this; var argregs = c.args.slice(0, 2).map(function (a) { return self.eval(a); });
+      var dst = want ? this.b.vreg() : null;
+      var cn = canonHost(ns, m); this.b.host(cn[0], cn[1], argregs, dst); return dst;
+    }
+  };
+  function compileBasic(src) { return new BLowerer().lowerProgram(new BParser(btokenize(src)).parseProgram()); }
+
+
+  return {
+    compile: function (src, lang) {
+      var il = (lang === "basic") ? compileBasic(src) : compileC(src);
+      return { words: lowerToBytecode(il, true), il: il };
+    },
+    compileC: function (src) { return { words: lowerToBytecode(compileC(src), true), il: compileC(src) }; },
+    compileBasic: function (src) { return { words: lowerToBytecode(compileBasic(src), true), il: compileBasic(src) }; },
+    _lowerToBytecode: lowerToBytecode,
+    _VReg: VReg, _Imm: Imm, _ILBuilder: ILBuilder, _canonHost: canonHost, _encodeCardAddr: encodeCardAddr,
+    _COND: COND, _COND_NEGATE: COND_NEGATE
+  };
+
+  // ========================================================================
+  // FRONTENDS (defined after return via hoisted function declarations)
+  // ========================================================================
+});
+</script>
+<script>// picoserializer.js -- PicoBinarySerializer in JavaScript (browser + Node).
+// Byte-for-byte identical to picoserializer.py. See that file for the layout.
+(function (root, factory) {
+  var P = factory();
+  if (typeof module !== "undefined" && module.exports) module.exports = P;
+  else root.PicoSerializer = P;
+})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  "use strict";
+  var MAGIC = 0x50534331, T_INT = 1, T_STR = 2;
+  var enc = new TextEncoder(), dec = new TextDecoder();
+
+  function utf8(s) { return enc.encode(s); }
+  function cmpBytes(a, b) {
+    var n = Math.min(a.length, b.length);
+    for (var i = 0; i < n; i++) { if (a[i] !== b[i]) return a[i] - b[i]; }
+    return a.length - b.length;
+  }
+
+  function serializeCard(record) {
+    var keys = Object.keys(record).sort(function (x, y) { return cmpBytes(utf8(x), utf8(y)); });
+    var out = [];
+    out.push((MAGIC >>> 24) & 255, (MAGIC >>> 16) & 255, (MAGIC >>> 8) & 255, MAGIC & 255);
+    out.push((keys.length >>> 8) & 255, keys.length & 255);
+    keys.forEach(function (k) {
+      var kb = utf8(k);
+      if (kb.length > 255) throw new Error("field name too long: " + k);
+      out.push(kb.length);
+      for (var i = 0; i < kb.length; i++) out.push(kb[i]);
+      var v = record[k];
+      if (typeof v === "boolean") v = v ? 1 : 0;
+      if (typeof v === "number") {
+        var x = v | 0;
+        out.push(T_INT, (x >>> 24) & 255, (x >>> 16) & 255, (x >>> 8) & 255, x & 255);
+      } else if (typeof v === "string") {
+        var vb = utf8(v);
+        if (vb.length > 0xFFFF) throw new Error("string field too long");
+        out.push(T_STR, (vb.length >>> 8) & 255, vb.length & 255);
+        for (var j = 0; j < vb.length; j++) out.push(vb[j]);
+      } else {
+        throw new Error("unsupported field type for " + k);
+      }
+    });
+    return out;   // array of byte values (0..255)
+  }
+
+  function deserializeCard(buf) {
+    if (buf.length < 6) throw new Error("bad card magic");
+    var magic = ((buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3]) >>> 0;
+    if (magic !== (MAGIC >>> 0)) throw new Error("bad card magic");
+    var count = (buf[4] << 8) | buf[5], pos = 6, rec = {};
+    for (var n = 0; n < count; n++) {
+      var nlen = buf[pos++];
+      var name = dec.decode(new Uint8Array(buf.slice(pos, pos + nlen))); pos += nlen;
+      var t = buf[pos++];
+      if (t === T_INT) {
+        var x = ((buf[pos] << 24) | (buf[pos + 1] << 16) | (buf[pos + 2] << 8) | buf[pos + 3]) | 0;
+        pos += 4; rec[name] = x;
+      } else if (t === T_STR) {
+        var vlen = (buf[pos] << 8) | buf[pos + 1]; pos += 2;
+        rec[name] = dec.decode(new Uint8Array(buf.slice(pos, pos + vlen))); pos += vlen;
+      } else {
+        throw new Error("unknown field type " + t);
+      }
+    }
+    return rec;
+  }
+
+  function toHex(b) { return b.map(function (x) { return ("0" + (x & 255).toString(16)).slice(-2); }).join(""); }
+  function fromHex(s) { var a = []; for (var i = 0; i + 1 < s.length; i += 2) a.push(parseInt(s.substr(i, 2), 16)); return a; }
+
+  return { serializeCard: serializeCard, deserializeCard: deserializeCard, toHex: toHex, fromHex: fromHex, MAGIC: MAGIC };
+});
+</script>
+<script>// picostore.js -- PicoStore (packs + CRUD) and the card query language, in JS.
+// Mirrors picostore.py; result-identical queries and byte-identical card encoding
+// (via picoserializer.js). A pluggable backend exposes get/set/remove/keys; the
+// default is in-memory, but localStorage works directly (see the site).
+(function (root, factory) {
+  var SER = (typeof module !== "undefined" && module.exports) ? require("./picoserializer.js") : root.PicoSerializer;
+  var P = factory(SER);
+  if (typeof module !== "undefined" && module.exports) module.exports = P;
+  else root.PicoStore = P;
+})(typeof globalThis !== "undefined" ? globalThis : this, function (SER) {
+  "use strict";
+
+  function MemBackend() { this.d = {}; }
+  MemBackend.prototype = {
+    get: function (k) { return (k in this.d) ? this.d[k] : null; },
+    set: function (k, v) { this.d[k] = v; },
+    remove: function (k) { delete this.d[k]; },
+    keys: function () { return Object.keys(this.d); }
+  };
+
+  // ---- query language ----
+  var CMP2 = { "==": 1, "!=": 1, "<=": 1, ">=": 1, "<>": 1 };
+  function qTokens(q) {
+    var toks = [], i = 0, n = q.length;
+    while (i < n) {
+      var c = q[i];
+      if (/\s/.test(c)) { i++; continue; }
+      if (c === '"' || c === "'") { var j = i + 1, b = ""; while (j < n && q[j] !== c) { b += q[j]; j++; } toks.push(["str", b]); i = j + 1; continue; }
+      var two = q.substr(i, 2);
+      if (CMP2[two]) { toks.push(["op", two]); i += 2; continue; }
+      if ("<>=~".indexOf(c) >= 0) { toks.push(["op", c]); i++; continue; }
+      if (c === "(" || c === ")") { toks.push(["paren", c]); i++; continue; }
+      var k = i; while (k < n && !/\s/.test(q[k]) && "<>=~()\"'".indexOf(q[k]) < 0) k++;
+      var w = q.slice(i, k); i = k;
+      var up = w.toUpperCase();
+      if (up === "AND" || up === "OR") toks.push(["kw", up]); else toks.push(["word", w]);
+    }
+    return toks;
+  }
+  function coerce(tok) {
+    if (tok[0] === "str") return tok[1];
+    var t = tok[1];
+    if (/^-?\d+$/.test(t)) return parseInt(t, 10);
+    if (/^0[xX][0-9a-fA-F]+$/.test(t)) return parseInt(t, 16);
+    return t;
+  }
+  function QParser(toks) { this.toks = toks; this.i = 0; }
+  QParser.prototype = {
+    peek: function () { return this.i < this.toks.length ? this.toks[this.i] : null; },
+    nxt: function () { return this.toks[this.i++]; },
+    parse: function () { return this.parseOr(); },
+    parseOr: function () { var left = this.parseAnd(); var p; while ((p = this.peek()) && p[0] === "kw" && p[1] === "OR") { this.nxt(); left = ["or", left, this.parseAnd()]; } return left; },
+    parseAnd: function () { var left = this.parseCmp(); var p; while ((p = this.peek()) && p[0] === "kw" && p[1] === "AND") { this.nxt(); left = ["and", left, this.parseCmp()]; } return left; },
+    parseCmp: function () {
+      var p = this.peek();
+      if (p && p[0] === "paren" && p[1] === "(") { this.nxt(); var node = this.parseOr(); var q = this.peek(); if (q && q[0] === "paren" && q[1] === ")") this.nxt(); return node; }
+      var field = this.nxt(); if (!field || field[0] !== "word") throw new Error("query: expected field");
+      var op = this.nxt(); if (!op || op[0] !== "op") throw new Error("query: expected operator");
+      var val = this.nxt(); if (!val) throw new Error("query: expected value");
+      return ["cmp", field[1], op[1], coerce(val)];
+    }
+  };
+  function evalCmp(field, op, value, rec) {
+    if (!(field in rec)) return false;
+    var fv = rec[field];
+    if (op === "=" || op === "==") return fv === value;
+    if (op === "!=" || op === "<>") return fv !== value;
+    if (op === "~") return String(fv).indexOf(String(value)) >= 0;
+    if (typeof fv !== typeof value) return false;
+    if (op === "<") return fv < value;
+    if (op === ">") return fv > value;
+    if (op === "<=") return fv <= value;
+    if (op === ">=") return fv >= value;
+    throw new Error("query: unknown operator " + op);
+  }
+  function evalNode(node, rec) {
+    if (node[0] === "and") return evalNode(node[1], rec) && evalNode(node[2], rec);
+    if (node[0] === "or") return evalNode(node[1], rec) || evalNode(node[2], rec);
+    return evalCmp(node[1], node[2], node[3], rec);
+  }
+  function compileQuery(q) {
+    q = (q || "").trim();
+    if (!q) return function () { return true; };
+    var ast = new QParser(qTokens(q)).parse();
+    return function (rec) { return evalNode(ast, rec); };
+  }
+
+  // ---- store ----
+  function PicoStore(backend) { this.b = backend || new MemBackend(); }
+  PicoStore.prototype = {
+    _ids: function (pack) { var raw = this.b.get(pack + ":ids"); return raw ? raw.split(",").filter(Boolean).map(Number) : []; },
+    _setIds: function (pack, ids) { this.b.set(pack + ":ids", ids.join(",")); },
+    create: function (pack, record) {
+      var nxt = parseInt(this.b.get(pack + ":next") || "1", 10);
+      this.b.set(pack + ":card:" + nxt, SER.toHex(SER.serializeCard(record)));
+      this._setIds(pack, this._ids(pack).concat([nxt]));
+      this.b.set(pack + ":next", String(nxt + 1));
+      return nxt;
+    },
+    read: function (pack, id) { var h = this.b.get(pack + ":card:" + id); return h ? SER.deserializeCard(SER.fromHex(h)) : null; },
+    update: function (pack, id, record) { if (this._ids(pack).indexOf(id) < 0) return false; this.b.set(pack + ":card:" + id, SER.toHex(SER.serializeCard(record))); return true; },
+    patch: function (pack, id, fields) { var r = this.read(pack, id); if (!r) return false; for (var k in fields) r[k] = fields[k]; return this.update(pack, id, r); },
+    delete: function (pack, id) { var ids = this._ids(pack); var idx = ids.indexOf(id); if (idx < 0) return false; ids.splice(idx, 1); this._setIds(pack, ids); this.b.remove(pack + ":card:" + id); return true; },
+    all: function (pack) { var self = this; return this._ids(pack).map(function (id) { return [id, self.read(pack, id)]; }).filter(function (e) { return e[1] !== null; }); },
+    query: function (pack, q) { var pred = compileQuery(q); return this.all(pack).filter(function (e) { return pred(e[1]); }); },
+    cardBytesHex: function (pack, id) { return this.b.get(pack + ":card:" + id); }
+  };
+
+  return { PicoStore: PicoStore, MemBackend: MemBackend, compileQuery: compileQuery };
+});
+</script>
+<script>
+const DATA = [{"title": "Variables & arithmetic", "desc": "Declare variables with DIM and evaluate expressions. Both styles are case-insensitive for keywords and variable names; one global scope.", "c": {"src": "int a = 6;\nint b = 7;\nprint(a * b + 1);", "words": ["50010000", "40000006", "41000000", "50010000", "40000007", "42000000", "60110002", "43000001", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #6", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R2, R0, #0", "MUL R0, R1, R2", "ADD R3, R0, #1", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [43], "status": -1}, "basic": {"src": "DIM A = 6\nDIM B = 7\nPRINT A * B + 1", "words": ["50010000", "40000006", "41000000", "50010000", "40000007", "42000000", "60110002", "43000001", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #6", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R2, R0, #0", "MUL R0, R1, R2", "ADD R3, R0, #1", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [43], "status": -1}}, {"title": "Conditional (if / else)", "desc": "Branch on a comparison. C uses braces; BASIC uses IF/THEN/ELSE/ENDIF. BASIC accepts symbol (>, =, <>) or word (GT, EQ, NE) comparators.", "c": {"src": "int x = 7;\nif (x > 5) {\n    print(100);\n} else {\n    print(200);\n}", "words": ["50010000", "40000007", "41000000", "50010000", "40000005", "a1040006", "50010000", "40000064", "2000fffe", "3000fffe", "9000000f", "50010000", "400000c8", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #100", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 15", "SUB R0, R0, R0", "ADD R0, R0, #200", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [100], "status": -1}, "basic": {"src": "DIM X = 7\nIF X > 5 THEN\n    PRINT 100\nELSE\n    PRINT 200\nENDIF", "words": ["50010000", "40000007", "41000000", "50010000", "40000005", "a1040006", "50010000", "40000064", "2000fffe", "3000fffe", "9000000f", "50010000", "400000c8", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #100", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 15", "SUB R0, R0, R0", "ADD R0, R0, #200", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [100], "status": -1}}, {"title": "While loop", "desc": "Repeat while a condition holds (factorial of 5).", "c": {"src": "int n = 5;\nint f = 1;\nwhile (n > 1) {\n    f = f * n;\n    n = n - 1;\n}\nprint(f);", "words": ["50010000", "40000005", "41000000", "50010000", "40000001", "42000000", "50010000", "40000001", "a1040004", "62210001", "51100001", "90000006", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #5", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH LE R1, R0, +4", "MUL R2, R2, R1", "SUB R1, R1, #1", "JUMP 6", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [120], "status": -1}, "basic": {"src": "DIM N = 5\nDIM F = 1\nWHILE N > 1\n    F = F * N\n    DEC N\nENDWHILE\nPRINT F", "words": ["50010000", "40000005", "41000000", "50010000", "40000001", "42000000", "50010000", "40000001", "a1040004", "62210001", "51100001", "90000006", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #5", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH LE R1, R0, +4", "MUL R2, R2, R1", "SUB R1, R1, #1", "JUMP 6", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [120], "status": -1}}, {"title": "Counted loop (for)", "desc": "Sum 1..10. C uses a C-style for with i++; BASIC uses FOR/TO/NEXT.", "c": {"src": "int s = 0;\nfor (i = 1; i <= 10; i++) {\n    s += i;\n}\nprint(s);", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "a2030005", "41110002", "40200000", "82000000", "90000006", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R2, R0, +5", "ADD R1, R1, R2", "ADD R0, R2, #0", "INC R2", "JUMP 6", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [55], "status": -1}, "basic": {"src": "DIM S = 0\nFOR I = 1 TO 10\n    S += I\nNEXT\nPRINT S", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "43000000", "a2330004", "41110002", "82000000", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R3, R0, #0", "BRANCH GT R2, R3, +4", "ADD R1, R1, R2", "INC R2", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [55], "status": -1}}, {"title": "Index iteration (foreach)", "desc": "Iterate an index 0..N-1. C expresses it as a for loop; BASIC has FOREACH.", "c": {"src": "int a = 0;\nfor (j = 0; j < 5; j++) {\n    a += j;\n}\nprint(a);", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "50010000", "40000005", "a2050005", "41110002", "40200000", "82000000", "90000006", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH GE R2, R0, +5", "ADD R1, R1, R2", "ADD R0, R2, #0", "INC R2", "JUMP 6", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [10], "status": -1}, "basic": {"src": "DIM A = 0\nFOREACH J IN 5\n    A += J\nENDFOREACH\nPRINT A", "words": ["50010000", "40000000", "41000000", "50010000", "40000005", "43000000", "52210002", "42200000", "a2350004", "41110002", "82000000", "90000008", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "ADD R3, R0, #0", "SUB R2, R2, R2", "ADD R2, R2, #0", "BRANCH GE R2, R3, +4", "ADD R1, R1, R2", "INC R2", "JUMP 8", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [10], "status": -1}}, {"title": "Operators (++ -- ?: && % )", "desc": "Increment/decrement, the ternary ?: (IIF in BASIC), short-circuit AND/OR, real modulo (% / MOD) and compound assignment.", "c": {"src": "int x = 10;\nx++;\nx += 5;\nint y = x % 7;\nint z = (y == 2 && x > 10) ? 100 : 0;\nprint(x); print(y); print(z);", "words": ["50010000", "4000000a", "41000000", "40100000", "81000000", "41100005", "50010000", "40000007", "74110000", "65410000", "50110005", "42000000", "50010000", "40000002", "a2000004", "50010000", "40000000", "90000014", "50010000", "40000001", "a006000d", "50010000", "4000000a", "a1030004", "50010000", "40000000", "9000001d", "50010000", "40000001", "a0060004", "50010000", "40000001", "90000023", "50010000", "40000000", "a0060005", "50010000", "40000064", "44000000", "9000002b", "50010000", "40000000", "44000000", "43400000", "2010fffe", "3010fffe", "2020fffe", "3020fffe", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R1, R0, #0", "ADD R0, R1, #0", "INC R1", "ADD R1, R1, #5", "SUB R0, R0, R0", "ADD R0, R0, #7", "DIV R4, R1, R0", "MUL R5, R4, R0", "SUB R0, R1, R5", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH EQ R2, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 20", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +13", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R1, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 29", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #1", "JUMP 35", "SUB R0, R0, R0", "ADD R0, R0, #0", "BRANCH Z R0, R0, +5", "SUB R0, R0, R0", "ADD R0, R0, #100", "ADD R4, R0, #0", "JUMP 43", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R4, R0, #0", "ADD R3, R4, #0", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [16, 2, 100], "status": -1}, "basic": {"src": "DIM X = 10\nINC X\nX += 5\nDIM Y = X MOD 7\nDIM Z = IIF(Y = 2 AND X > 10, 100, 0)\nPRINT X\nPRINT Y\nPRINT Z", "words": ["50010000", "4000000a", "41000000", "81000000", "41100005", "50010000", "40000007", "74110000", "65410000", "50110005", "42000000", "50010000", "40000002", "a2000004", "50010000", "40000000", "90000013", "50010000", "40000001", "a006000d", "50010000", "4000000a", "a1030004", "50010000", "40000000", "9000001c", "50010000", "40000001", "a0060004", "50010000", "40000001", "90000022", "50010000", "40000000", "a0060005", "50010000", "40000064", "44000000", "9000002a", "50010000", "40000000", "44000000", "43400000", "2010fffe", "3010fffe", "2020fffe", "3020fffe", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R1, R0, #0", "INC R1", "ADD R1, R1, #5", "SUB R0, R0, R0", "ADD R0, R0, #7", "DIV R4, R1, R0", "MUL R5, R4, R0", "SUB R0, R1, R5", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH EQ R2, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 19", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +13", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R1, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 28", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #1", "JUMP 34", "SUB R0, R0, R0", "ADD R0, R0, #0", "BRANCH Z R0, R0, +5", "SUB R0, R0, R0", "ADD R0, R0, #100", "ADD R4, R0, #0", "JUMP 42", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R4, R0, #0", "ADD R3, R4, #0", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [16, 2, 100], "status": -1}}, {"title": "Multi-way branch (switch)", "desc": "Pick a branch by value. C uses an if/else-if chain; BASIC has SWITCH/CASE.", "c": {"src": "int code = 2;\nif (code == 1) {\n    print(10);\n} else if (code == 2) {\n    print(20);\n} else {\n    print(0);\n}", "words": ["50010000", "40000002", "41000000", "50010000", "40000001", "a1010006", "50010000", "4000000a", "2000fffe", "3000fffe", "90000017", "50010000", "40000002", "a1010006", "50010000", "40000014", "2000fffe", "3000fffe", "90000017", "50010000", "40000000", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #2", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH NE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #10", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 23", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH NE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #20", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 23", "SUB R0, R0, R0", "ADD R0, R0, #0", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [20], "status": -1}, "basic": {"src": "DIM CODE = 2\nSWITCH CODE\n    CASE 1\n        PRINT 10\n    CASE 2\n        PRINT 20\n    DEFAULT\n        PRINT 0\nENDSWITCH", "words": ["50010000", "40000002", "41000000", "50010000", "40000001", "a1000005", "50010000", "40000002", "a1000007", "90000014", "50010000", "4000000a", "2000fffe", "3000fffe", "90000018", "50010000", "40000014", "2000fffe", "3000fffe", "90000018", "50010000", "40000000", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #2", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH EQ R1, R0, +5", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH EQ R1, R0, +7", "JUMP 20", "SUB R0, R0, R0", "ADD R0, R0, #10", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 24", "SUB R0, R0, R0", "ADD R0, R0, #20", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 24", "SUB R0, R0, R0", "ADD R0, R0, #0", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [20], "status": -1}}, {"title": "Subroutine (call / gosub)", "desc": "Factor shared logic. C uses a void function + call; BASIC uses SUB + GOSUB. Variables are global, so the routine sees ACC.", "c": {"src": "void dbl() {\n    acc = acc + acc;\n}\nint acc = 21;\ndbl();\nprint(acc);", "words": ["50010000", "40000015", "41000000", "b0000007", "2010fffe", "3010fffe", "c0000000", "41110001", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #21", "ADD R1, R0, #0", "CALL 7", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN", "ADD R1, R1, R1", "RETURN"], "out": [42], "status": -1}, "basic": {"src": "DIM ACC = 21\nGOSUB DBL\nPRINT ACC\nRETURN\nSUB DBL\n    ACC = ACC + ACC\nENDSUB", "words": ["50010000", "40000015", "41000000", "b0000008", "2010fffe", "3010fffe", "c0000000", "c0000000", "41110001", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #21", "ADD R1, R0, #0", "CALL 8", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN", "RETURN", "ADD R1, R1, R1", "RETURN"], "out": [42], "status": -1}}, {"title": "Unconditional jump (goto)", "desc": "A back-jump loop. C expresses it structurally with while; BASIC uses a label + GOTO.", "c": {"src": "int n = 0;\nwhile (n < 4) {\n    n++;\n}\nprint(n);", "words": ["50010000", "40000000", "41000000", "50010000", "40000004", "a1050004", "40100000", "81000000", "90000003", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #4", "BRANCH GE R1, R0, +4", "ADD R0, R1, #0", "INC R1", "JUMP 3", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [4], "status": -1}, "basic": {"src": "DIM N = 0\nTOP:\nINC N\nIF N < 4 THEN\n    GOTO TOP\nENDIF\nPRINT N", "words": ["50010000", "40000000", "41000000", "81000000", "50010000", "40000004", "a1050003", "90000003", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "INC R1", "SUB R0, R0, R0", "ADD R0, R0, #4", "BRANCH GE R1, R0, +3", "JUMP 3", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [4], "status": -1}}, {"title": "Post-test loop (DO / LOOP)", "desc": "A loop whose body always runs at least once (condition checked at the bottom). C expresses it with while(1)+break; BASIC has the proper DO ... LOOP WHILE/UNTIL form.", "c": {"src": "int i = 0;\nint s = 0;\nwhile (1) {\n    i++;\n    s += i;\n    if (i >= 5) { break; }\n}\nprint(s);", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "50010000", "40000001", "a0060009", "40100000", "81000000", "42210001", "50010000", "40000005", "a1020002", "90000011", "90000006", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +9", "ADD R0, R1, #0", "INC R1", "ADD R2, R2, R1", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LT R1, R0, +2", "JUMP 17", "JUMP 6", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [15], "status": -1}, "basic": {"src": "DIM I = 0\nDIM S = 0\nDO\n    INC I\n    S += I\nLOOP UNTIL I >= 5\nPRINT S", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "81000000", "42210001", "50010000", "40000005", "a102fffc", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "INC R1", "ADD R2, R2, R1", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LT R1, R0, -4", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [15], "status": -1}}, {"title": "Early exit &amp; skip (break / skip)", "desc": "BREAK leaves the nearest loop or SWITCH; SKIP jumps to the next iteration (skipping a SWITCH to reach the enclosing loop). C uses break/continue. Here: sum 1..10 but skip multiples of 3 and stop once the sum passes 20.", "c": {"src": "int s = 0;\nfor (i = 1; i <= 10; i++) {\n    if (i % 3 == 0) { continue; }\n    s += i;\n    if (s > 20) { break; }\n}\nprint(s);", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "a2030012", "50010000", "40000003", "73210000", "64310000", "50210004", "53310003", "43300000", "a0310002", "90000017", "41110002", "50010000", "40000014", "a1040002", "9000001a", "40200000", "82000000", "90000006", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R2, R0, +18", "SUB R0, R0, R0", "ADD R0, R0, #3", "DIV R3, R2, R0", "MUL R4, R3, R0", "SUB R0, R2, R4", "SUB R3, R3, R3", "ADD R3, R3, #0", "BRANCH NE R0, R3, +2", "JUMP 23", "ADD R1, R1, R2", "SUB R0, R0, R0", "ADD R0, R0, #20", "BRANCH LE R1, R0, +2", "JUMP 26", "ADD R0, R2, #0", "INC R2", "JUMP 6", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [27], "status": -1}, "basic": {"src": "DIM S = 0\nFOR I = 1 TO 10\n    IF I MOD 3 = 0 THEN\n        SKIP\n    ENDIF\n    S += I\n    IF S > 20 THEN\n        BREAK\n    ENDIF\nNEXT\nPRINT S", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "43000000", "a2330013", "50010000", "40000003", "74210000", "65410000", "50210005", "54410004", "44400000", "a0410003", "9000001a", "90000014", "41110002", "50010000", "40000014", "a1040003", "9000001c", "9000001a", "82000000", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R3, R0, #0", "BRANCH GT R2, R3, +19", "SUB R0, R0, R0", "ADD R0, R0, #3", "DIV R4, R2, R0", "MUL R5, R4, R0", "SUB R0, R2, R5", "SUB R4, R4, R4", "ADD R4, R4, #0", "BRANCH NE R0, R4, +3", "JUMP 26", "JUMP 20", "ADD R1, R1, R2", "SUB R0, R0, R0", "ADD R0, R0, #20", "BRANCH LE R1, R0, +3", "JUMP 28", "JUMP 26", "INC R2", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [27], "status": -1}}, {"title": "HTTP response (Net.*)", "desc": "Set an HTTP status/type and emit a value. Namespaces are case-insensitive too.", "c": {"src": "Net.Status(200);\nNet.Type(\"application/json\");\nprint(42);", "words": ["000080c8", "0000a002", "50010000", "4000002a", "2000fffe", "3000fffe", "c0000000"], "disasm": ["NET.STATUS 200", "NET.TYPE #0xa002", "SUB R0, R0, R0", "ADD R0, R0, #42", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [42], "status": 200}, "basic": {"src": "NET.STATUS(200)\nNET.TYPE(\"application/json\")\nPRINT 42", "words": ["000080c8", "0000a002", "50010000", "4000002a", "2000fffe", "3000fffe", "c0000000"], "disasm": ["NET.STATUS 200", "NET.TYPE #0xa002", "SUB R0, R0, R0", "ADD R0, R0, #42", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [42], "status": 200}}, {"title": "Cards: CRUD &amp; query (Storage.*)", "desc": "Program-level card store. Field names and queries are UTF-8 byte-spans built in arena memory (Memory.Set + Span.Make); cards are serialized with the PicoBinarySerializer into a PicoStore. UsePack selects a pack, AddCard/EditCard select the current card, then SetField/GetField/QueryCard operate on it. This creates 3 cards, reads (7) and updates (50) one, queries qty&gt;40 (3 ids), then deletes one and re-queries (2).", "c": {"src": "Memory.Set(200,113); Memory.Set(201,116); Memory.Set(202,121);\nint qty = Span.Make(200, 3);\nMemory.Set(210,113); Memory.Set(211,116); Memory.Set(212,121); Memory.Set(213,32);\nMemory.Set(214,62); Memory.Set(215,32); Memory.Set(216,52); Memory.Set(217,48);\nint qry = Span.Make(210, 8);\nStorage.UsePack(1);\nint a = Storage.AddCard(); Storage.SetField(qty, 42);\nint b = Storage.AddCard(); Storage.SetField(qty, 7);\nint c = Storage.AddCard(); Storage.SetField(qty, 99);\nStorage.EditCard(b); print(Storage.GetField(qty));\nStorage.SetField(qty, 50); print(Storage.GetField(qty));\nint n = Storage.QueryCard(qry); print(n);\nprint(Storage.QueryResult(0)); print(Storage.QueryResult(1)); print(Storage.QueryResult(2));\nStorage.DeleteCard(1); print(Storage.QueryCard(qry));", "words": ["50010000", "400000c8", "57710007", "47700071", "00077036", "50010000", "400000c9", "57710007", "47700074", "00077036", "50010000", "400000ca", "57710007", "47700079", "00077036", "50010000", "400000c8", "57710007", "47700003", "08077040", "41800000", "50010000", "400000d2", "57710007", "47700071", "00077036", "50010000", "400000d3", "57710007", "47700074", "00077036", "50010000", "400000d4", "57710007", "47700079", "00077036", "50010000", "400000d5", "57710007", "47700020", "00077036", "50010000", "400000d6", "57710007", "4770003e", "00077036", "50010000", "400000d7", "57710007", "47700020", "00077036", "50010000", "400000d8", "57710007", "47700034", "00077036", "50010000", "400000d9", "57710007", "47700030", "00077036", "50010000", "400000d2", "57710007", "47700008", "08077040", "42800000", "50010000", "40000001", "00007068", "00007062", "43000000", "50010000", "4000002a", "0010706b", "00007062", "44000000", "50010000", "40000007", "0010706b", "00007062", "45000000", "50010000", "40000063", "0010706b", "00407069", "0010706a", "2000fffe", "3000fffe", "50010000", "40000032", "0010706b", "0010706a", "2000fffe", "3000fffe", "00207067", "46000000", "2060fffe", "3060fffe", "50010000", "40000000", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "0700706e", "2070fffe", "3070fffe", "50010000", "40000002", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "00007064", "00207067", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #201", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #202", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #3", "HOSTCALL #0x40", "ADD R1, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #211", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #212", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #213", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #214", "SUB R7, R7, R7", "ADD R7, R7, #62", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #215", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #216", "SUB R7, R7, R7", "ADD R7, R7, #52", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #217", "SUB R7, R7, R7", "ADD R7, R7, #48", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #8", "HOSTCALL #0x40", "ADD R2, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x68", "HOSTCALL #0x62", "ADD R3, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #42", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R4, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R5, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #99", "HOSTCALL #0x6b", "HOSTCALL #0x69", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #50", "HOSTCALL #0x6b", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "HOSTCALL #0x67", "ADD R6, R0, #0", "SAVE R6, [0xfffe]", "PIPE R6, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #0", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #2", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x64", "HOSTCALL #0x67", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [7, 50, 3, 1, 2, 3, 2], "status": -1}, "basic": {"src": "Memory.Set(200, 113)\nMemory.Set(201, 116)\nMemory.Set(202, 121)\nDIM QTY = Span.Make(200, 3)\nMemory.Set(210, 113)\nMemory.Set(211, 116)\nMemory.Set(212, 121)\nMemory.Set(213, 32)\nMemory.Set(214, 62)\nMemory.Set(215, 32)\nMemory.Set(216, 52)\nMemory.Set(217, 48)\nDIM QRY = Span.Make(210, 8)\nStorage.UsePack(1)\nDIM A = Storage.AddCard()\nStorage.SetField(QTY, 42)\nDIM B = Storage.AddCard()\nStorage.SetField(QTY, 7)\nDIM C = Storage.AddCard()\nStorage.SetField(QTY, 99)\nStorage.EditCard(B)\nPRINT Storage.GetField(QTY)\nStorage.SetField(QTY, 50)\nPRINT Storage.GetField(QTY)\nDIM N = Storage.QueryCard(QRY)\nPRINT N\nPRINT Storage.QueryResult(0)\nPRINT Storage.QueryResult(1)\nPRINT Storage.QueryResult(2)\nStorage.DeleteCard(1)\nPRINT Storage.QueryCard(QRY)", "words": ["50010000", "400000c8", "57710007", "47700071", "00077036", "50010000", "400000c9", "57710007", "47700074", "00077036", "50010000", "400000ca", "57710007", "47700079", "00077036", "50010000", "400000c8", "57710007", "47700003", "08077040", "41800000", "50010000", "400000d2", "57710007", "47700071", "00077036", "50010000", "400000d3", "57710007", "47700074", "00077036", "50010000", "400000d4", "57710007", "47700079", "00077036", "50010000", "400000d5", "57710007", "47700020", "00077036", "50010000", "400000d6", "57710007", "4770003e", "00077036", "50010000", "400000d7", "57710007", "47700020", "00077036", "50010000", "400000d8", "57710007", "47700034", "00077036", "50010000", "400000d9", "57710007", "47700030", "00077036", "50010000", "400000d2", "57710007", "47700008", "08077040", "42800000", "50010000", "40000001", "00007068", "00007062", "43000000", "50010000", "4000002a", "0010706b", "00007062", "44000000", "50010000", "40000007", "0010706b", "00007062", "45000000", "50010000", "40000063", "0010706b", "00407069", "0010706a", "2000fffe", "3000fffe", "50010000", "40000032", "0010706b", "0010706a", "2000fffe", "3000fffe", "00207067", "46000000", "2060fffe", "3060fffe", "50010000", "40000000", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "0700706e", "2070fffe", "3070fffe", "50010000", "40000002", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "00007064", "00207067", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #201", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #202", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #3", "HOSTCALL #0x40", "ADD R1, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #211", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #212", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #213", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #214", "SUB R7, R7, R7", "ADD R7, R7, #62", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #215", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #216", "SUB R7, R7, R7", "ADD R7, R7, #52", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #217", "SUB R7, R7, R7", "ADD R7, R7, #48", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #8", "HOSTCALL #0x40", "ADD R2, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x68", "HOSTCALL #0x62", "ADD R3, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #42", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R4, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R5, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #99", "HOSTCALL #0x6b", "HOSTCALL #0x69", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #50", "HOSTCALL #0x6b", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "HOSTCALL #0x67", "ADD R6, R0, #0", "SAVE R6, [0xfffe]", "PIPE R6, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #0", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #2", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x64", "HOSTCALL #0x67", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [7, 50, 3, 1, 2, 3, 2], "status": -1}}];
+
+// ---- gallery (side-by-side guide) -----------------------------------------
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function buildGallery(){
+  const cols = [document.createElement('div'), document.createElement('div')];
+  cols[0].className = 'col'; cols[1].className = 'col';
+  cols[0].innerHTML = '<h2 class="section">Constructs &mdash; left half</h2>';
+  cols[1].innerHTML = '<h2 class="section">Constructs &mdash; right half</h2>';
+  DATA.forEach((d, i) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML =
+      '<h3>'+(i+1)+'. '+esc(d.title)+'</h3>'+
+      '<div class="desc">'+esc(d.desc)+'</div>'+
+      '<div class="pair">'+
+        '<div class="pane cstyle"><div class="lbl">C-STYLE { }</div><pre>'+esc(d.c.src)+'</pre></div>'+
+        '<div class="pane bstyle"><div class="lbl">BASIC BLOCK</div><pre>'+esc(d.basic.src)+'</pre></div>'+
+      '</div>'+
+      '<div class="runbar">'+
+        '<button onclick="runCard('+i+')">Run both &#9654;</button>'+
+        '<span class="out" id="cardout'+i+'">output &rarr; &hellip;</span>'+
+        '<button class="ghost" style="margin-left:auto" onclick="debugIn('+i+',\'c\')">Debug C</button>'+
+        '<button class="ghost" onclick="debugIn('+i+',\'basic\')">Debug BASIC</button>'+
+      '</div>';
+    cols[i % 2].appendChild(card);
+  });
+  const g = document.getElementById('gallery');
+  g.appendChild(cols[0]); g.appendChild(cols[1]);
+}
+
+function runWords(hexWords){
+  const vm = new PicoVM();
+  vm.run(hexWords.map(h => parseInt(h, 16) >>> 0));
+  return vm;
+}
+function runCard(i){
+  const d = DATA[i];
+  const cv = runWords(d.c.words), bv = runWords(d.basic.words);
+  const co = cv.outputInts(), bo = bv.outputInts();
+  const same = JSON.stringify(co) === JSON.stringify(bo);
+  document.getElementById('cardout'+i).innerHTML =
+    'C &rarr; ['+co.join(', ')+']  &nbsp; BASIC &rarr; ['+bo.join(', ')+']  '+
+    (same ? '&#10003; identical' : '&#9888; differ');
+}
+
+// ---- debugger -------------------------------------------------------------
+let DBG = { words: [], disasm: [], vm: null };
+
+function buildProgList(){
+  const sel = document.getElementById('prog');
+  DATA.forEach((d, i) => {
+    ['c','basic'].forEach(style => {
+      const o = document.createElement('option');
+      o.value = i+':'+style;
+      o.textContent = (i+1)+'. '+d.title+'  ['+(style==='c'?'C-style':'BASIC')+']';
+      sel.appendChild(o);
+    });
+  });
+  sel.onchange = loadSelected;
+}
+function loadSelected(){
+  const [i, style] = document.getElementById('prog').value.split(':');
+  const d = DATA[+i][style];
+  DBG.words = d.words.map(h => parseInt(h, 16) >>> 0);
+  DBG.disasm = d.disasm.slice();
+  dbgReset();
+}
+function debugIn(i, style){
+  document.getElementById('lang').value = style;
+  document.getElementById('src').value = DATA[i][style].src;
+  compileSrc(false);
+  window.scrollTo({ top:0, behavior:'smooth' });
+}
+function loadHex(){
+  const toks = document.getElementById('hex').value.trim().split(/\s+/).filter(Boolean);
+  DBG.words = toks.map(h => parseInt(h, 16) >>> 0);
+  DBG.disasm = DBG.words.map(jsDisasm);
+  dbgReset();
+}
+
+// ---- in-browser compile (picoc.js) ----------------------------------------
+function compileSrc(run){
+  const lang = document.getElementById('lang').value;
+  const src = document.getElementById('src').value;
+  const err = document.getElementById('cerr');
+  try {
+    const r = PicoCompile.compile(src, lang);
+    DBG.words = r.words.map(w => w >>> 0);
+    DBG.disasm = DBG.words.map(jsDisasm);
+    err.textContent = 'compiled ' + DBG.words.length + ' words';
+    err.style.color = '#7ee787';
+    dbgReset();
+    if (run) dbgRun();
+  } catch (e) {
+    err.textContent = String(e.message || e);
+    err.style.color = '#ff7b72';
+  }
+}
+
+function dbgReset(){
+  DBG.vm = new PicoVM();
+  DBG.vm.load(DBG.words);
+  render();
+}
+function dbgStep(){
+  if (!DBG.vm) return;
+  DBG.vm.step();
+  render();
+}
+function dbgRun(){
+  if (!DBG.vm) dbgReset();
+  let guard = 0;
+  while (DBG.vm.step() && guard++ < 200000) {}
+  render();
+}
+function render(){
+  const vm = DBG.vm; if (!vm) return;
+  const L = document.getElementById('listing');
+  L.innerHTML = DBG.disasm.map((t, idx) =>
+    '<div class="row'+(idx===vm.pc?' pc':'')+'">'+
+    String(idx).padStart(3,' ')+'  '+esc(t)+'</div>').join('');
+  const pcrow = L.querySelector('.row.pc'); if (pcrow) pcrow.scrollIntoView({block:'nearest'});
+  const R = document.getElementById('regs');
+  R.innerHTML = Array.from(vm.regs).map((v,idx)=>
+    '<div class="r">R'+idx+' <b>'+v+'</b></div>').join('');
+  document.getElementById('state').textContent =
+    'pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;
+  document.getElementById('out').textContent =
+    'output: [' + vm.outputInts().join(', ') + ']';
+}
+
+// minimal JS disassembler for pasted bytecode
+function jsDisasm(w){
+  const names=["NOOP","LOAD","SAVE","PIPE","ADD","SUB","MUL","DIV","INC","JUMP","BRANCH","CALL","RETURN","WAIT","RAISE","DSP"];
+  const br=["EQ","NE","LT","GT","LE","GE","Z","NZ","EOF","ERR"];
+  const op=(w>>>28)&0xF, rd=(w>>>24)&0xF, rs1=(w>>>20)&0xF, rs2=(w>>>16)&0xF, imm=w&0xFFFF;
+  if(op===0&&(imm&0xFF00)===0x7000) return "HOSTCALL #0x"+(imm&0xFF).toString(16);
+  if(op===0&&(imm&0xF000)===0x8000) return "NET.STATUS "+(imm&0xFFF);
+  if(op===0&&imm===0xC000) return "NET.CLOSE";
+  if(op>=4&&op<=7) return names[op]+" R"+rd+", R"+rs1+(rs2===1?(", R"+(imm&0xF)):(", #"+imm));
+  if(op===8) return "INC R"+rd;
+  if(op===9) return "JUMP "+imm;
+  if(op===10){ let off=imm&0x8000?imm-0x10000:imm; return "BRANCH "+(br[rs2]||rs2)+" R"+rd+", R"+rs1+", "+(off>=0?"+":"")+off; }
+  if(op===11) return "CALL "+imm;
+  if(op>=1&&op<=3) return names[op]+" R"+(op===1?rd:rs1)+", [0x"+imm.toString(16)+"]";
+  if(op===12) return "RETURN";
+  return names[op]||("?"+op);
+}
+
+buildGallery();
+buildProgList();
+loadSelected();
+// prefill the editor with a BASIC example and compile it live
+document.getElementById('lang').value = 'basic';
+document.getElementById('src').value = DATA[3].basic.src;
+compileSrc(false);
+</script>
+</body>
+</html>

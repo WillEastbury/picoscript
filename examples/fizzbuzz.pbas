@@ -1,0 +1,18 @@
+' fizzbuzz.pbas -- BASIC-like: classic FizzBuzz via PRINT
+' codes: 0=number, -1=Fizz, -2=Buzz, -3=FizzBuzz
+FOR N = 1 TO 15
+    LET M3 = N - N / 3 * 3
+    LET M5 = N - N / 5 * 5
+    IF M3 EQ 0 THEN
+        IF M5 EQ 0 THEN
+            PRINT 0 - 3
+        ELSE
+            PRINT 0 - 1
+        ENDIF
+    ELSEIF M5 EQ 0 THEN
+        PRINT 0 - 2
+    ELSE
+        PRINT N
+    ENDIF
+NEXT
+RETURN

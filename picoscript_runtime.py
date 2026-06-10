@@ -191,6 +191,51 @@ class HostStorageApi:
         raise NotImplementedError
 
 
+class PicoStoreHostStorageApi(HostStorageApi):
+    """Concrete reference backend wiring the Storage.* contract to PicoStore.
+
+    Cards are serialized with the PicoBinarySerializer and held in a swappable
+    PicoStore backend (in-memory by default). ``pack_ctx`` maps to a pack name;
+    records and queries are passed at the value level (this structural runtime
+    has no memory image to decode raw Descriptor bytes from -- that path lives in
+    picoscript_vm.PicoVM). Returns the same shapes as the JS/Python store.
+    """
+
+    def __init__(self, store=None):
+        from picostore import PicoStore  # local import: optional dependency
+        self.store = store if store is not None else PicoStore()
+        self._schemas: dict[int, object] = {}
+
+    @staticmethod
+    def _pack(pack_ctx: int) -> str:
+        return str(pack_ctx)
+
+    def get_schema_for_pack(self, pack_ctx: int):
+        return self._schemas.get(pack_ctx)
+
+    def set_schema_for_pack(self, pack_ctx: int, schema_desc):
+        self._schemas[pack_ctx] = schema_desc
+        return True
+
+    def add_card(self, pack_ctx: int, card_desc):
+        return self.store.create(self._pack(pack_ctx), card_desc)
+
+    def update_card(self, pack_ctx: int, card_id: int, card_desc):
+        return self.store.update(self._pack(pack_ctx), card_id, card_desc)
+
+    def delete_card(self, pack_ctx: int, card_id: int):
+        return self.store.delete(self._pack(pack_ctx), card_id)
+
+    def patch_card(self, pack_ctx: int, card_id: int, patch_desc):
+        return self.store.patch(self._pack(pack_ctx), card_id, patch_desc)
+
+    def read_card(self, pack_ctx: int, card_id: int):
+        return self.store.read(self._pack(pack_ctx), card_id)
+
+    def query_card(self, pack_ctx: int, query_desc):
+        return self.store.query(self._pack(pack_ctx), query_desc)
+
+
 class ProfilingSlot:
     """Profiling bracket: start timestamp, label, state."""
 

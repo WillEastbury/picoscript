@@ -1,0 +1,10 @@
+// sum.pc -- C-syntax: sum 1..N and serve as JSON
+int n = 10;
+int sum = 0;
+for (i = 1; i <= n; i = i + 1) {
+    sum = sum + i;
+}
+Net.Status(200);
+Net.Type("application/json");
+Storage.Save(0, 0, 1, sum);
+return sum;

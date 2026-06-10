@@ -45,6 +45,42 @@ Source files are views over bytecode. The editor may let one user write C#-style
 
 The checked-in compiler currently accepts the C#-style namespace/method syntax as the primary input syntax.
 
+## High-Level Source Frontends
+
+Beyond the register-level v1 syntax above, two **high-level imperative frontends**
+compile through a shared intermediate language (PicoIL) to the same frozen
+bytecode — and also to C and JavaScript. They add named variables (auto-allocated
+to `R0`–`R15`) and integer expressions, so authors write ordinary code instead of
+hand-managing registers. Both are **case-insensitive for keywords and variable
+names**; `Namespace.Method` resolves case-insensitively to the canonical host name.
+
+| Frontend | File | Extension | Style |
+|----------|------|-----------|-------|
+| C-syntax | `picoscript_cfront.py` | `.pc` | curly-brace, C-like |
+| BASIC-like | `picoscript_basic.py` | `.pbas` | block-structured |
+
+**C-syntax constructs:** `int`/`var` declarations, assignment and compound
+assignment (`+= -= *= /= %=`), arithmetic `+ - * / %`, comparisons, logical
+`&& || !`, the ternary `?:`, pre/post `++`/`--`, `if/else`, `while`, `for`,
+`break`, `continue`, `return`, `void` subroutines and calls, `print(expr)`, and
+`Namespace.Method(...)` (Net/Storage/host) calls. Line comments `//`, block `/* */`.
+
+**BASIC-like constructs:** `DIM`/`LET` declaration and `x = expr` assignment (plus
+compound `+= -= *= /=`), `INC`/`DEC`, arithmetic `+ - * / MOD`, comparisons by
+symbol (`= <> < > <= >=`) or word (`EQ NE LT GT LE GE`) where `=` means equality
+inside a test, logical `AND OR NOT`, the `IIF(cond, a, b)` ternary,
+`IF/THEN/ELSEIF/ELSE/ENDIF`, `WHILE/ENDWHILE`, `DO/LOOP` (with a `WHILE`/`UNTIL`
+guard at the `DO` for pre-test or at the `LOOP` for post-test), `FOR/TO/STEP/NEXT`,
+`FOREACH/IN/ENDFOREACH`, `SWITCH/CASE/DEFAULT/ENDSWITCH`, `GOTO` + `name:` labels,
+`GOSUB`/`SUB`/`ENDSUB`, `RETURN`, `BREAK` (exit nearest loop or `SWITCH`), `SKIP`
+(continue nearest loop), `PRINT expr`. Line comments `'` or `//`.
+
+The build driver `picoscript_build.py` runs or emits any stage:
+`run`, `emit --as il|bytecode|c|js`, and `native` (zig cc). The compiler is also
+ported to JavaScript (`vm/picoc.js`) so both frontends compile **in the browser**,
+byte-for-byte identical to Python — see the live playground `docs/playground.html`
+and the pipeline overview `docs/COMPILER_ARCHITECTURE.md`.
+
 ## Primary Source Syntax
 
 The current primary syntax is:
@@ -137,7 +173,7 @@ The editor can derive completions from the language namespace table:
 | Trigger | Suggestions |
 |---------|-------------|
 | start of statement | `Storage`, `Thread`, `Math`, `Flow`, `Dsp`, `Net`, `Kernel`, `Queue`, `Random`, `Memory`, `Span`, `Descriptor`, `Lease` |
-| `Storage.` | `Load`, `Save`, `Pipe`, `GetSchemaForPack`, `SetSchemaForPack`, `AddCard`, `UpdateCard`, `DeleteCard`, `PatchCard`, `ReadCard`, `QueryCard` |
+| `Storage.` | `Load`, `Save`, `Pipe`, `GetSchemaForPack`, `SetSchemaForPack`, `AddCard`, `UpdateCard`, `DeleteCard`, `PatchCard`, `ReadCard`, `QueryCard`, `UsePack`, `EditCard`, `GetField`, `SetField`, `SetFieldStr`, `GetFieldStr`, `QueryResult` |
 | `Thread.` | `Skip`, `Wait`, `Raise`, `YieldCounted` |
 | `Math.` | `Add`, `Sub`, `Mul`, `Div`, `Inc` |
 | `Flow.` | `Jump`, `Branch`, `Call`, `Return` |
@@ -146,8 +182,8 @@ The editor can derive completions from the language namespace table:
 | `Kernel.` | `WaitIRQ`, `WaitSWIRQ`, `FireSWIRQ`, `ProfileStart`, `ProfileEnd`, `TracePoint` |
 | `Queue.` | `Dequeue`, `Enqueue`, `Depth`, `DequeueBatch`, `EnqueueBatch` |
 | `Random.` | `U32` |
-| `Memory.` | `ArenaInit`, `ArenaAlloc`, `ArenaReset`, `ArenaStats` |
-| `Span.` | `Make`, `Slice` |
+| `Memory.` | `ArenaInit`, `ArenaAlloc`, `ArenaReset`, `ArenaStats`, `Set`, `Get` |
+| `Span.` | `Make`, `Slice`, `Materialize`, `Len`, `Get` |
 | `Descriptor.` | `Make`, `SetFlags`, `GetPtr`, `GetLen`, `GetFlags`, `CopyBatch` |
 | `Lease.` | `Acquire`, `Release`, `Validate`, `CachedValidate`, `GetSpan`, `GetTypeHint` |
 
@@ -209,8 +245,13 @@ To support queue-driven runtimes across non-identical hosts, PicoScript exposes 
 - `Memory.ArenaAlloc(Rarena, Rbytes, RptrOut);`
 - `Memory.ArenaReset(Rarena);`
 - `Memory.ArenaStats(Rarena, Rout);`
+- `Memory.Set(Rspan, Ridx, Rval);` — write one byte into a span's backing arena.
+- `Memory.Get(Rspan, Ridx, Rout);` — read one byte from a span.
 - `Span.Make(Rptr, Rlen, RspanOut);`
-- `Span.Slice(Rspan, Roff, Rout);`
+- `Span.Slice(Rspan, Roff, Rout);` — zero-copy view (shares backing bytes).
+- `Span.Materialize(Rspan, Rout);` — memcpy to a fresh contiguous region (independent copy).
+- `Span.Len(Rspan, Rout);` — element count of a span.
+- `Span.Get(Rspan, Ridx, Rout);` — read element `idx` of a span.
 - `Descriptor.Make(Rptr, Rlen, RdescOut);`
 - `Descriptor.SetFlags(Rdesc, Rflags);`
 - `Descriptor.GetPtr(Rdesc, Rout);`
@@ -232,6 +273,19 @@ To support queue-driven runtimes across non-identical hosts, PicoScript exposes 
 - `Storage.ReadCard(RpackCtx, RcardId, Rout);`
 - `Storage.QueryCard(RpackCtx, Rquery, RoutCursor);`
 
+Program-level card CRUD/query executable in the reference and JS VMs (PicoStore-backed; a `cur pack` + `cur card` context keeps every op within the 2-in/1-out host ABI). Field names and queries are UTF-8 byte-spans built in arena memory (`Memory.Set` + `Span.Make`):
+
+- `Storage.UsePack(RpackId, Rout);` — select the active pack.
+- `Storage.AddCard(RoutId);` — create an empty card, select it, return its id.
+- `Storage.EditCard(RcardId, Rout);` — select an existing card (0 if missing).
+- `Storage.SetField(RnameSpan, Rval, Rok);` — write an integer field on the current card.
+- `Storage.SetFieldStr(RnameSpan, RvalSpan, Rok);` — write a string field.
+- `Storage.GetField(RnameSpan, Rout);` — read an integer field (0 if missing).
+- `Storage.GetFieldStr(RnameSpan, RoutSpan);` — read a string field into a new span.
+- `Storage.DeleteCard(RcardId, Rok);` — delete a card from the current pack.
+- `Storage.QueryCard(RquerySpan, Rcount);` — run the query language, return match count.
+- `Storage.QueryResult(Ridx, RoutId);` — read the i-th matching card id.
+
 These are language-stable and host-fillable. They preserve bytecode compatibility while allowing runtime-specific implementation behind the contract.
 
 Access model rule: all runtime data access should be lease-mediated (`Lease.*`) using a type hint plus span/pointer `(offset,length)`.
@@ -252,7 +306,16 @@ The current implementation is a compact direct parser in `picoscript_lang.py`. A
 
 Language/editor files:
 
-- `picoscript_lang.py` - primary compiler, decompilers, examples
+- `picoscript_lang.py` - v1 compiler, decompilers, examples
+- `picoscript_cfront.py` - C-syntax frontend (.pc) → PicoIL
+- `picoscript_basic.py` - BASIC-like frontend (.pbas) → PicoIL
+- `picoscript_il.py` - PicoIL: optimizer, register allocator, `lower_to_bytecode`/`lower_to_c`/`lower_to_js`
+- `picoscript_vm.py` - Python reference VM (runtime)
+- `picoscript_build.py` - unified driver (run / emit il|bytecode|c|js / native)
+- `vm/picovm.c`, `vm/picovm.js` - portable C and JS VMs (bare metal / browser)
+- `vm/picoc.js` - in-browser compiler (byte-identical to Python)
+- `docs/playground.html` - side-by-side language guide + live compile/run/step debugger
+- `docs/COMPILER_ARCHITECTURE.md` - frontend/IL/backend pipeline
 - `docs/picoscript-language-editor.md` - language/editor contract
 
 Hardware contract files consumed by language tooling:

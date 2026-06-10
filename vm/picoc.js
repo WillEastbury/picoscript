@@ -1,0 +1,916 @@
+// picoc.js -- PicoScript compiler in JavaScript (browser + Node).
+//
+// Faithful port of picoscript_il.py + picoscript_cfront.py + picoscript_basic.py.
+// Lets the browser compile C-syntax and BASIC-like source to the *identical*
+// bytecode the Python toolchain produces, so you can compile AND debug in-browser.
+//
+//   PicoCompile.compile(src, "c" | "basic") -> { words:[uint32...], il:[...] }
+//
+// Verified against the Python compiler (byte-for-byte) by tests/test_jscompiler.js.
+(function (root, factory) {
+  var hooks = (typeof module !== "undefined" && module.exports)
+    ? require("./pico_hooks.js") : root.PV_HOOKS;
+  var P = factory(hooks);
+  if (typeof module !== "undefined" && module.exports) module.exports = P;
+  else root.PicoCompile = P;
+})(typeof globalThis !== "undefined" ? globalThis : this, function (PV_HOOKS) {
+  "use strict";
+
+  // ── ISA constants ────────────────────────────────────────────────────────
+  var OP = { NOOP:0, LOAD:1, SAVE:2, PIPE:3, ADD:4, SUB:5, MUL:6, DIV:7,
+             INC:8, JUMP:9, BRANCH:10, CALL:11, RETURN:12, WAIT:13, RAISE:14, DSP:15 };
+  var ADDR_REG = 1;
+  var COND = { EQ:0, NE:1, LT:2, GT:3, LE:4, GE:5, Z:6, NZ:7, EOF:8, ERR:9 };
+  var COND_NEGATE = { EQ:"NE", NE:"EQ", LT:"GE", GE:"LT", GT:"LE", LE:"GT" };
+  var ARITH = { add:OP.ADD, sub:OP.SUB, mul:OP.MUL, div:OP.DIV };
+  var H = PV_HOOKS;
+
+  // host-hook name<->code tables from the generated map
+  var HOOK_BY_NAME = {}, HOOK_CANON = {}, CT_BY_NAME = {};
+  Object.keys(H.BY_CODE).forEach(function (code) {
+    var name = H.BY_CODE[code];            // "Ns.Method"
+    HOOK_BY_NAME[name] = parseInt(code, 10);
+    var dot = name.indexOf(".");
+    var ns = name.slice(0, dot), m = name.slice(dot + 1);
+    HOOK_CANON[(ns + "." + m).toLowerCase()] = [ns, m];
+  });
+  Object.keys(H.CONTENT_TYPES).forEach(function (v) {
+    CT_BY_NAME[H.CONTENT_TYPES[v]] = parseInt(v, 10);
+  });
+  function canonHost(ns, m) {
+    return HOOK_CANON[(ns + "." + m).toLowerCase()] || [ns, m];
+  }
+
+  function enc(op, rd, rs1, rs2, imm) {
+    rd = rd || 0; rs1 = rs1 || 0; rs2 = rs2 || 0; imm = imm || 0;
+    return (((op << 28) | (rd << 24) | (rs1 << 20) | (rs2 << 16) | (imm & 0xFFFF)) >>> 0);
+  }
+  function encodeCardAddr(tenant, pack, card) {
+    return ((tenant << 11) | (pack << 5) | card) & 0xFFFF;
+  }
+
+  // ── operand + instruction model ─────────────────────────────────────────
+  var _vid = 0;
+  function VReg(name, pinned) { this.id = _vid++; this.name = name || ("v" + this.id); this.pinned = !!pinned; }
+  function Imm(v) { this.value = v; }
+  function isImm(x) { return x instanceof Imm; }
+  function isVReg(x) { return x instanceof VReg; }
+
+  // Inst is a plain object: { op, dst, a, b, cond, label, ns, method, args, imm, text }
+  function Inst(op, f) { f = f || {}; f.op = op; if (!f.args) f.args = []; return f; }
+
+  function ILBuilder() { this.insts = []; this._ln = 0; }
+  ILBuilder.prototype = {
+    vreg: function (n) { return new VReg(n); },
+    newLabel: function (h) { this._ln++; return (h || "L") + this._ln; },
+    const_: function (d, v) { this.insts.push(Inst("const", { dst: d, imm: v })); },
+    mov: function (d, s) { this.insts.push(Inst("mov", { dst: d, a: s })); },
+    arith: function (op, d, a, b) { this.insts.push(Inst(op, { dst: d, a: a, b: b })); },
+    inc: function (d) { this.insts.push(Inst("inc", { dst: d })); },
+    cmpbr: function (c, a, b, l) { this.insts.push(Inst("cmpbr", { cond: c, a: a, b: b, label: l })); },
+    jmp: function (l) { this.insts.push(Inst("jmp", { label: l })); },
+    label: function (n) { this.insts.push(Inst("label", { label: n })); },
+    call: function (l) { this.insts.push(Inst("call", { label: l })); },
+    ret: function () { this.insts.push(Inst("ret", {})); },
+    host: function (ns, m, args, d) { this.insts.push(Inst("host", { ns: ns, method: m, args: args || [], dst: d || null })); },
+    load: function (d, a) { this.insts.push(Inst("load", { dst: d, imm: a })); },
+    save: function (s, a) { this.insts.push(Inst("save", { a: s, imm: a })); },
+    pipe: function (s, a) { this.insts.push(Inst("pipe", { a: s, imm: a })); },
+    net: function (k, v) { this.insts.push(Inst("net", { method: k, imm: (typeof v === "number" ? v : 0), text: (typeof v === "string" ? v : "") })); }
+  };
+
+  function operandVRegs(ins) {
+    var out = [];
+    [ins.dst, ins.a, ins.b].forEach(function (x) { if (isVReg(x)) out.push(x); });
+    (ins.args || []).forEach(function (x) { if (isVReg(x)) out.push(x); });
+    return out;
+  }
+
+  // ── optimizer ────────────────────────────────────────────────────────────
+  function optimize(insts) {
+    var out = [];
+    insts.forEach(function (ins) {
+      if (ARITH[ins.op] !== undefined && isImm(ins.a) && isImm(ins.b)) {
+        var av = ins.a.value, bv = ins.b.value, r;
+        if (ins.op === "add") r = av + bv;
+        else if (ins.op === "sub") r = av - bv;
+        else if (ins.op === "mul") r = av * bv;
+        else r = bv !== 0 ? Math.trunc(av / bv) : 0;
+        out.push(Inst("const", { dst: ins.dst, imm: r })); return;
+      }
+      if (ins.op === "add" && isVReg(ins.a) && ins.dst === ins.a && isImm(ins.b) && ins.b.value === 1) {
+        out.push(Inst("inc", { dst: ins.dst })); return;
+      }
+      if (ins.op === "mov" && isVReg(ins.a) && ins.dst === ins.a) return;
+      out.push(ins);
+    });
+    return out;
+  }
+
+  // ── register allocation (loop-aware linear scan) ──────────────────────────
+  function allocate(insts) {
+    var first = {}, last = {}, order = [], vregs = {};
+    insts.forEach(function (ins, i) {
+      operandVRegs(ins).forEach(function (v) {
+        if (!(v.id in first)) { first[v.id] = i; order.push(v.id); vregs[v.id] = v; }
+        last[v.id] = i;
+      });
+    });
+    var labelPos = {};
+    insts.forEach(function (ins, i) { if (ins.op === "label") labelPos[ins.label] = i; });
+    insts.forEach(function (ins, i) {
+      if ((ins.op === "jmp" || ins.op === "cmpbr") && (ins.label in labelPos)) {
+        var t = labelPos[ins.label];
+        if (t <= i) {
+          Object.keys(first).forEach(function (vid) {
+            if (first[vid] < t && t <= last[vid] && last[vid] < i) last[vid] = i;
+          });
+        }
+      }
+    });
+    var n = Math.max(1, insts.length);
+    var callIdx = [];
+    insts.forEach(function (ins, i) { if (ins.op === "call") callIdx.push(i); });
+    Object.keys(vregs).forEach(function (vid) {
+      var spansCall = callIdx.some(function (ci) { return first[vid] <= ci && ci <= last[vid]; });
+      if (vregs[vid].pinned || spansCall) { first[vid] = 0; last[vid] = n; }
+    });
+
+    var usable = 16;
+    var free = []; for (var k = 0; k < usable; k++) free.push(k);
+    var active = [];           // [endIndex, vid]
+    var mapping = {};
+    function expire(at) {
+      var keep = [];
+      active.forEach(function (e) {
+        if (e[0] < at) free.push(mapping[e[1]]);
+        else keep.push(e);
+      });
+      keep.sort(function (a, b) { return a[0] - b[0]; });
+      active = keep;
+    }
+    var ord = order.slice().sort(function (a, b) { return first[a] - first[b]; });
+    ord.forEach(function (vid) {
+      expire(first[vid]);
+      if (free.length) {
+        free.sort(function (a, b) { return a - b; });
+        var reg = free.shift();
+        mapping[vid] = reg;
+        active.push([last[vid], vid]);
+        active.sort(function (a, b) { return a[0] - b[0]; });
+      } else {
+        throw new Error("register pressure exceeds 16 live values; simplify the program");
+      }
+    });
+    return mapping;
+  }
+
+  function phys(mapping, v) {
+    var r = mapping[v.id];
+    if (r === undefined) throw new Error("vreg " + v.name + " unallocated");
+    return r;
+  }
+
+  // ── bytecode lowering (CONST/MOV-imm expand to 2 words) ───────────────────
+  function emitWord(ins, mapping, labels, pc) {
+    var op = ins.op;
+    if (op === "mov") {
+      var rd = phys(mapping, ins.dst);
+      var rs1 = phys(mapping, ins.a);  // a is VReg here (imm handled by caller)
+      return enc(OP.ADD, rd, rs1, 0, 0);
+    }
+    if (ARITH[op] !== undefined) {
+      var d = phys(mapping, ins.dst), s1 = phys(mapping, ins.a);
+      if (isImm(ins.b)) return enc(ARITH[op], d, s1, 0, ins.b.value & 0xFFFF);
+      return enc(ARITH[op], d, s1, ADDR_REG, phys(mapping, ins.b));
+    }
+    if (op === "inc") return enc(OP.INC, phys(mapping, ins.dst));
+    if (op === "cmpbr") {
+      var ra = phys(mapping, ins.a), rb = phys(mapping, ins.b);
+      var off = (labels[ins.label] - pc) & 0xFFFF;
+      return enc(OP.BRANCH, ra, rb, COND[ins.cond], off);
+    }
+    if (op === "jmp") return enc(OP.JUMP, 0, 0, 0, labels[ins.label]);
+    if (op === "call") return enc(OP.CALL, 0, 0, 0, labels[ins.label]);
+    if (op === "ret") return enc(OP.RETURN);
+    if (op === "load") return enc(OP.LOAD, phys(mapping, ins.dst), 0, 0, ins.imm);
+    if (op === "save") return enc(OP.SAVE, 0, phys(mapping, ins.a), 0, ins.imm);
+    if (op === "pipe") return enc(OP.PIPE, 0, phys(mapping, ins.a), 0, ins.imm);
+    if (op === "net") {
+      var k = ins.method;
+      if (k === "status") return enc(OP.NOOP, 0, 0, 0, (H.NET_STATUS_BASE | (ins.imm & 0x0FFF)));
+      if (k === "type") return enc(OP.NOOP, 0, 0, 0, (CT_BY_NAME[ins.text] || 0xA000));
+      if (k === "header") return enc(OP.NOOP, 0, 0, 0, H.NET_HEADER_BASE);
+      if (k === "body") return enc(OP.NOOP, 0, 0, 0, H.NET_BODY_MARKER);
+      if (k === "close") return enc(OP.NOOP, 0, 0, 0, H.NET_CLOSE_MARKER);
+      throw new Error("unknown net kind " + k);
+    }
+    if (op === "host") {
+      var hook = HOOK_BY_NAME[ins.ns + "." + ins.method];
+      if (hook === undefined) throw new Error("unknown host hook " + ins.ns + "." + ins.method);
+      var imm = (H.HOST_HOOK_BASE | hook);
+      var hrd = isVReg(ins.dst) ? phys(mapping, ins.dst) : 0;
+      var hrs1 = (ins.args[0] && isVReg(ins.args[0])) ? phys(mapping, ins.args[0]) : 0;
+      var hrs2 = (ins.args[1] && isVReg(ins.args[1])) ? phys(mapping, ins.args[1]) : 0;
+      return enc(OP.NOOP, hrd, hrs1, hrs2, imm);
+    }
+    throw new Error("cannot lower IL op " + op);
+  }
+
+  function lowerToBytecode(insts, opt) {
+    if (opt !== false) insts = optimize(insts);
+    var mapping = allocate(insts);
+    function width(ins) {
+      if (ins.op === "label") return 0;
+      if (ins.op === "const") return 2;
+      if (ins.op === "mov" && isImm(ins.a)) return 2;
+      return 1;
+    }
+    var labels = {}, pc = 0;
+    insts.forEach(function (ins) {
+      if (ins.op === "label") labels[ins.label] = pc; else pc += width(ins);
+    });
+    var words = []; pc = 0;
+    insts.forEach(function (ins) {
+      if (ins.op === "label") return;
+      if (ins.op === "const" || (ins.op === "mov" && isImm(ins.a))) {
+        var rd = phys(mapping, ins.dst);
+        var value = (ins.op === "const") ? ins.imm : ins.a.value;
+        words.push(enc(OP.SUB, rd, rd, ADDR_REG, rd));   // rd = rd - rd = 0
+        words.push(enc(OP.ADD, rd, rd, 0, value & 0xFFFF));
+        pc += 2; return;
+      }
+      words.push(emitWord(ins, mapping, labels, pc));
+      pc += 1;
+    });
+    return words;
+  }
+
+  // ========================================================================
+  // C-SYNTAX FRONTEND (port of picoscript_cfront.py)
+  // ========================================================================
+  var C_KW = { int:1, var:1, void:1, if:1, else:1, while:1, for:1, return:1, break:1, continue:1 };
+  var C_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "&&":1, "||":1, "++":1, "--":1, "+=":1, "-=":1, "*=":1, "/=":1, "%=":1 };
+  var C_ONE = "+-*/%()<>=;,{}.!?:";
+  var C_PREC = { "||":1, "&&":2, "==":3, "!=":3, "<":4, ">":4, "<=":4, ">=":4, "+":5, "-":5, "*":6, "/":6, "%":6 };
+  var C_COMPOUND = { "+=":"+", "-=":"-", "*=":"*", "/=":"/", "%=":"%" };
+  var CMP = { "<":"LT", ">":"GT", "<=":"LE", ">=":"GE", "==":"EQ", "!=":"NE" };
+  var COP = { "+":"add", "-":"sub", "*":"mul", "/":"div" };
+
+  function numval(s) { return /^0[xX]/.test(s) ? parseInt(s, 16) : parseInt(s, 10); }
+  function isAlpha(c) { return /[A-Za-z_]/.test(c); }
+  function isAlnum(c) { return /[A-Za-z0-9_]/.test(c); }
+  function isDigit(c) { return c >= "0" && c <= "9"; }
+
+  function ctokenize(src) {
+    var toks = [], i = 0, n = src.length;
+    function push(k, v) { toks.push({ kind: k, value: v }); }
+    while (i < n) {
+      var c = src[i];
+      if (c === " " || c === "\t" || c === "\r" || c === "\n") { i++; continue; }
+      if (c === "/" && src[i + 1] === "/") { while (i < n && src[i] !== "\n") i++; continue; }
+      if (c === "/" && src[i + 1] === "*") { i += 2; while (i + 1 < n && !(src[i] === "*" && src[i + 1] === "/")) i++; i += 2; continue; }
+      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { if (src[j] === "\\" && j + 1 < n) { b += src[j + 1]; j += 2; continue; } b += src[j]; j++; } push("str", b); i = j + 1; continue; }
+      if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2)); i = j2; continue; }
+      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; var w = src.slice(i, j3); var low = w.toLowerCase(); if (C_KW[low]) push("kw", low); else push("id", w); i = j3; continue; }
+      var two = src.slice(i, i + 2);
+      if (C_TWO[two]) { push("op", two); i += 2; continue; }
+      if (C_ONE.indexOf(c) >= 0) { push("op", c); i++; continue; }
+      throw new Error("C: unexpected char " + JSON.stringify(c));
+    }
+    push("eof", "");
+    return toks;
+  }
+
+  function CParser(toks) { this.toks = toks; this.i = 0; }
+  CParser.prototype = {
+    peek: function () { return this.toks[this.i]; },
+    next: function () { return this.toks[this.i++]; },
+    accept: function (v) { var t = this.peek(); if (t.value === v && (t.kind === "op" || t.kind === "kw")) { this.i++; return true; } return false; },
+    expect: function (v) { var t = this.peek(); if (t.value !== v) throw new Error("C: expected " + v + " got " + t.value); return this.next(); },
+    parseProgram: function () { var s = []; while (this.peek().kind !== "eof") s.push(this.parseToplevel()); return s; },
+    parseToplevel: function () {
+      var t = this.peek();
+      if (t.kind === "kw" && t.value === "void") { this.next(); var name = this.next().value; this.expect("("); this.expect(")"); return { t: "Func", name: name, body: this.parseBlock() }; }
+      return this.parseStmt();
+    },
+    parseBlock: function () { this.expect("{"); var s = []; while (!this.accept("}")) { if (this.peek().kind === "eof") throw new Error("C: unterminated block"); s.push(this.parseStmt()); } return s; },
+    parseStmt: function () {
+      var t = this.peek();
+      if (t.kind === "kw") {
+        if (t.value === "int" || t.value === "var") return this.parseDecl();
+        if (t.value === "if") return this.parseIf();
+        if (t.value === "while") return this.parseWhile();
+        if (t.value === "for") return this.parseFor();
+        if (t.value === "return") { this.next(); if (this.accept(";")) return { t: "Return", value: null }; var v = this.parseExpr(); this.expect(";"); return { t: "Return", value: v }; }
+        if (t.value === "break") { this.next(); this.expect(";"); return { t: "Break" }; }
+        if (t.value === "continue") { this.next(); this.expect(";"); return { t: "Continue" }; }
+      }
+      if (t.value === "{") { return { t: "If", cond: { t: "Num", value: 1 }, then: this.parseBlock(), els: null }; }
+      if (t.kind === "id" && this.toks[this.i + 1].value === "=") {
+        var name = this.next().value; this.expect("="); var val = this.parseExpr(); this.expect(";"); return { t: "Assign", name: name, value: val };
+      }
+      if (t.kind === "id" && C_COMPOUND[this.toks[this.i + 1].value]) {
+        var cn = this.next().value; var cop = C_COMPOUND[this.next().value]; var cv = this.parseExpr(); this.expect(";");
+        return { t: "Assign", name: cn, value: { t: "Bin", op: cop, lhs: { t: "Var", name: cn }, rhs: cv } };
+      }
+      var e = this.parseExpr(); this.expect(";"); return { t: "ExprStmt", expr: e };
+    },
+    parseDecl: function () { this.next(); var name = this.next().value; var init = null; if (this.accept("=")) init = this.parseExpr(); this.expect(";"); return { t: "Decl", name: name, init: init }; },
+    parseDeclNoSemi: function () { this.next(); var name = this.next().value; var init = null; if (this.accept("=")) init = this.parseExpr(); this.expect(";"); return { t: "Decl", name: name, init: init }; },
+    parseIf: function () {
+      this.next(); this.expect("("); var cond = this.parseExpr(); this.expect(")"); var then = this.parseBlock(); var els = null;
+      if (this.accept("else")) { els = (this.peek().value === "{") ? this.parseBlock() : [this.parseIf()]; }
+      return { t: "If", cond: cond, then: then, els: els };
+    },
+    parseWhile: function () { this.next(); this.expect("("); var cond = this.parseExpr(); this.expect(")"); return { t: "While", cond: cond, body: this.parseBlock() }; },
+    parseFor: function () {
+      this.next(); this.expect("("); var init = null;
+      if (!this.accept(";")) {
+        if (this.peek().value === "int" || this.peek().value === "var") init = this.parseDeclNoSemi();
+        else { var nm = this.next().value; this.expect("="); init = { t: "Assign", name: nm, value: this.parseExpr() }; this.expect(";"); }
+      }
+      var cond = null; if (!this.accept(";")) { cond = this.parseExpr(); this.expect(";"); }
+      var step = null;
+      if (this.peek().value !== ")") {
+        if (this.peek().kind === "id" && this.toks[this.i + 1].value === "=") { var nm2 = this.next().value; this.expect("="); step = { t: "Assign", name: nm2, value: this.parseExpr() }; }
+        else if (this.peek().kind === "id" && C_COMPOUND[this.toks[this.i + 1].value]) { var nm3 = this.next().value; var sop = C_COMPOUND[this.next().value]; step = { t: "Assign", name: nm3, value: { t: "Bin", op: sop, lhs: { t: "Var", name: nm3 }, rhs: this.parseExpr() } }; }
+        else step = { t: "ExprStmt", expr: this.parseExpr() };
+      }
+      this.expect(")"); return { t: "For", init: init, cond: cond, step: step, body: this.parseBlock() };
+    },
+    parseExpr: function (minp) { return this.parseTernary(); },
+    parseTernary: function () {
+      var cond = this.parseBinary(0);
+      if (this.peek().kind === "op" && this.peek().value === "?") {
+        this.next(); var then = this.parseExpr(); this.expect(":"); var els = this.parseTernary();
+        return { t: "Ternary", cond: cond, then: then, els: els };
+      }
+      return cond;
+    },
+    parseBinary: function (minp) {
+      minp = minp || 0; var left = this.parseUnary();
+      while (true) { var t = this.peek(); if (t.kind !== "op" || C_PREC[t.value] === undefined || C_PREC[t.value] < minp) break; var op = this.next().value; var right = this.parseBinary(C_PREC[op] + 1); left = { t: "Bin", op: op, lhs: left, rhs: right }; }
+      return left;
+    },
+    parseUnary: function () {
+      var t = this.peek();
+      if (t.kind === "op" && (t.value === "++" || t.value === "--")) { var po = this.next().value; return { t: "IncDec", op: po, target: this.parseUnary(), prefix: true }; }
+      if ((t.value === "-" || t.value === "!") && t.kind === "op") { var op = this.next().value; return { t: "Unary", op: op, operand: this.parseUnary() }; }
+      return this.parseAtom();
+    },
+    parseAtom: function () {
+      var node = this.parsePrimary();
+      while (this.peek().kind === "op" && (this.peek().value === "++" || this.peek().value === "--")) { var o = this.next().value; node = { t: "IncDec", op: o, target: node, prefix: false }; }
+      return node;
+    },
+    parsePrimary: function () {
+      var t = this.next();
+      if (t.kind === "num") return { t: "Num", value: numval(t.value) };
+      if (t.kind === "str") return { t: "Str", value: t.value };
+      if (t.value === "(") { var e = this.parseExpr(); this.expect(")"); return e; }
+      if (t.kind === "id") {
+        if (this.peek().value === ".") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; }
+        if (this.peek().value === "(") return { t: "Call", ns: null, method: t.value, args: this.parseArgs() };
+        return { t: "Var", name: t.value };
+      }
+      throw new Error("C: unexpected token " + t.value);
+    },
+    parseArgs: function () { this.expect("("); var a = []; if (!this.accept(")")) { a.push(this.parseExpr()); while (this.accept(",")) a.push(this.parseExpr()); this.expect(")"); } return a; }
+  };
+
+  function CLowerer() { this.b = new ILBuilder(); this.vars = {}; this.funcs = []; this.loop = []; }
+  CLowerer.prototype = {
+    varOf: function (name) { var k = name.toLowerCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
+    lowerProgram: function (prog) {
+      var self = this, body = [];
+      prog.forEach(function (s) { if (s.t === "Func") self.funcs.push(s); else body.push(s); });
+      body.forEach(function (s) { self.stmt(s); });
+      this.b.ret();
+      this.funcs.forEach(function (f) { self.b.label("fn_" + f.name.toLowerCase()); f.body.forEach(function (s) { self.stmt(s); }); self.b.ret(); });
+      return this.b.insts;
+    },
+    stmt: function (s) {
+      var self = this;
+      if (s.t === "Decl") { var v = this.varOf(s.name); if (s.init != null) this.assignTo(v, s.init); else this.b.const_(v, 0); }
+      else if (s.t === "Assign") this.assignTo(this.varOf(s.name), s.value);
+      else if (s.t === "If") this.lowerIf(s);
+      else if (s.t === "While") this.lowerWhile(s);
+      else if (s.t === "For") this.lowerFor(s);
+      else if (s.t === "Return") { if (s.value != null) { var rv = this.eval(s.value); this.b.mov(this.varOf("__ret__"), rv); } this.b.ret(); }
+      else if (s.t === "ExprStmt") { if (s.expr != null) this.eval(s.expr, false); }
+      else if (s.t === "Break") { if (!this.loop.length) throw new Error("break outside loop"); this.b.jmp(this.loop[this.loop.length - 1][1]); }
+      else if (s.t === "Continue") { if (!this.loop.length) throw new Error("continue outside loop"); this.b.jmp(this.loop[this.loop.length - 1][0]); }
+      else throw new Error("C: cannot lower " + s.t);
+    },
+    assignTo: function (dst, e) {
+      if (e.t === "Bin" && COP[e.op]) {
+        var a = this.eval(e.lhs);
+        if (e.rhs.t === "Num" && e.rhs.value >= -32768 && e.rhs.value <= 65535) { this.b.arith(COP[e.op], dst, a, new Imm(e.rhs.value)); return; }
+        var bb = this.eval(e.rhs); this.b.arith(COP[e.op], dst, a, bb); return;
+      }
+      this.b.mov(dst, this.eval(e));
+    },
+    lowerIf: function (s) {
+      var elseL = this.b.newLabel("else"), endL = this.b.newLabel("endif");
+      this.branchFalse(s.cond, elseL);
+      var self = this; s.then.forEach(function (st) { self.stmt(st); });
+      if (s.els) { this.b.jmp(endL); this.b.label(elseL); s.els.forEach(function (st) { self.stmt(st); }); this.b.label(endL); }
+      else this.b.label(elseL);
+    },
+    lowerWhile: function (s) {
+      var top = this.b.newLabel("while"), end = this.b.newLabel("endwhile");
+      this.b.label(top); this.branchFalse(s.cond, end);
+      this.loop.push([top, end]); var self = this; s.body.forEach(function (st) { self.stmt(st); }); this.loop.pop();
+      this.b.jmp(top); this.b.label(end);
+    },
+    lowerFor: function (s) {
+      if (s.init) this.stmt(s.init);
+      var top = this.b.newLabel("for"), cont = this.b.newLabel("forcont"), end = this.b.newLabel("endfor");
+      this.b.label(top); if (s.cond) this.branchFalse(s.cond, end);
+      this.loop.push([cont, end]); var self = this; s.body.forEach(function (st) { self.stmt(st); }); this.loop.pop();
+      this.b.label(cont); if (s.step) this.stmt(s.step); this.b.jmp(top); this.b.label(end);
+    },
+    branchFalse: function (cond, falseL) {
+      if (cond.t === "Bin" && CMP[cond.op]) { var a = this.eval(cond.lhs), b = this.eval(cond.rhs); this.b.cmpbr(COND_NEGATE[CMP[cond.op]], a, b, falseL); return; }
+      var v = this.eval(cond); this.b.cmpbr("Z", v, v, falseL);
+    },
+    eval: function (e, want) {
+      if (want === undefined) want = true;
+      if (e.t === "Num") { var v = this.b.vreg(); this.b.const_(v, e.value); return v; }
+      if (e.t === "Var") return this.varOf(e.name);
+      if (e.t === "Raw") return e.v;
+      if (e.t === "Bin") {
+        if (CMP[e.op]) return this.evalBool(e);
+        if (e.op === "&&" || e.op === "||") return this.evalLogical(e);
+        if (e.op === "%") return this.evalMod(e.lhs, e.rhs);
+        var a = this.eval(e.lhs), dst = this.b.vreg();
+        if (e.rhs.t === "Num" && e.rhs.value >= -32768 && e.rhs.value <= 65535) this.b.arith(COP[e.op], dst, a, new Imm(e.rhs.value));
+        else { var b = this.eval(e.rhs); this.b.arith(COP[e.op], dst, a, b); }
+        return dst;
+      }
+      if (e.t === "IncDec") return this.evalIncDec(e);
+      if (e.t === "Ternary") return this.evalTernary(e);
+      if (e.t === "Unary") {
+        if (e.op === "-") { var z = this.b.vreg(); this.b.const_(z, 0); var inner = this.eval(e.operand); var d = this.b.vreg(); this.b.arith("sub", d, z, inner); return d; }
+        if (e.op === "!") { var iv = this.eval(e.operand); return this.evalBool({ t: "Bin", op: "==", lhs: { t: "Raw", v: iv }, rhs: { t: "Num", value: 0 } }); }
+      }
+      if (e.t === "Call") return this.lowerCall(e, want);
+      throw new Error("C: cannot evaluate " + e.t);
+    },
+    evalBool: function (e) {
+      var a = this.eval(e.lhs), b = this.eval(e.rhs), dst = this.b.vreg();
+      var tl = this.b.newLabel("bt"), el = this.b.newLabel("be");
+      this.b.cmpbr(CMP[e.op], a, b, tl); this.b.const_(dst, 0); this.b.jmp(el);
+      this.b.label(tl); this.b.const_(dst, 1); this.b.label(el); return dst;
+    },
+    evalMod: function (lhs, rhs) {
+      var a = this.eval(lhs), b = this.eval(rhs);
+      var q = this.b.vreg(); this.b.arith("div", q, a, b);
+      var m = this.b.vreg(); this.b.arith("mul", m, q, b);
+      var dst = this.b.vreg(); this.b.arith("sub", dst, a, m);
+      return dst;
+    },
+    evalLogical: function (e) {
+      var dst = this.b.vreg(); var a = this.eval(e.lhs); var endL = this.b.newLabel("lend");
+      if (e.op === "&&") {
+        var falseL = this.b.newLabel("land0");
+        this.b.cmpbr("Z", a, a, falseL);
+        var b = this.eval(e.rhs); this.b.cmpbr("Z", b, b, falseL);
+        this.b.const_(dst, 1); this.b.jmp(endL);
+        this.b.label(falseL); this.b.const_(dst, 0);
+      } else {
+        var trueL = this.b.newLabel("lor1");
+        this.b.cmpbr("NZ", a, a, trueL);
+        var b2 = this.eval(e.rhs); this.b.cmpbr("NZ", b2, b2, trueL);
+        this.b.const_(dst, 0); this.b.jmp(endL);
+        this.b.label(trueL); this.b.const_(dst, 1);
+      }
+      this.b.label(endL); return dst;
+    },
+    evalIncDec: function (e) {
+      if (e.target.t !== "Var") throw new Error("++/-- requires a variable");
+      var v = this.varOf(e.target.name);
+      if (e.prefix) { if (e.op === "++") this.b.inc(v); else this.b.arith("sub", v, v, new Imm(1)); return v; }
+      var old = this.b.vreg(); this.b.mov(old, v);
+      if (e.op === "++") this.b.inc(v); else this.b.arith("sub", v, v, new Imm(1));
+      return old;
+    },
+    evalTernary: function (e) {
+      var dst = this.b.vreg(); var elseL = this.b.newLabel("telse"), endL = this.b.newLabel("tend");
+      this.branchFalse(e.cond, elseL);
+      var tv = this.eval(e.then); this.b.mov(dst, tv); this.b.jmp(endL);
+      this.b.label(elseL); var ev = this.eval(e.els); this.b.mov(dst, ev);
+      this.b.label(endL); return dst;
+    },
+    lowerCall: function (c, want) {
+      var ns = c.ns, m = c.method;
+      if (ns == null) {
+        if (m.toLowerCase() === "print") { var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
+        this.b.call("fn_" + m.toLowerCase()); return null;
+      }
+      if (ns.toUpperCase() === "NET") {
+        var M = m.toUpperCase();
+        if (M === "STATUS") this.b.net("status", intlit(c.args[0]));
+        else if (M === "TYPE") this.b.net("type", strlit(c.args[0]));
+        else if (M === "BODY") this.b.net("body");
+        else if (M === "CLOSE") this.b.net("close");
+        else if (M === "HEADER") this.b.net("header");
+        else throw new Error("unknown Net." + m);
+        return null;
+      }
+      if (ns.toUpperCase() === "STORAGE" && ["LOAD", "SAVE", "PIPE"].indexOf(m.toUpperCase()) >= 0) {
+        var addr = encodeCardAddr(intlit(c.args[0]), intlit(c.args[1]), intlit(c.args[2]));
+        var reg = this.eval(c.args[3]); var MM = m.toUpperCase();
+        if (MM === "LOAD") this.b.load(reg, addr); else if (MM === "SAVE") this.b.save(reg, addr); else this.b.pipe(reg, addr);
+        return reg;
+      }
+      var cn = canonHost(ns, m); var self = this;
+      var argregs = c.args.slice(0, 2).map(function (a) { return self.eval(a); });
+      var dst = want ? this.b.vreg() : null;
+      this.b.host(cn[0], cn[1], argregs, dst); return dst;
+    }
+  };
+  function intlit(node) { if (node.t === "Num") return node.value; throw new Error("expected integer literal"); }
+  function strlit(node) { if (node.t === "Str") return node.value; throw new Error("expected string literal"); }
+  function compileC(src) { return new CLowerer().lowerProgram(new CParser(ctokenize(src)).parseProgram()); }
+
+  // ========================================================================
+  // BASIC-LIKE FRONTEND (port of picoscript_basic.py)
+  // ========================================================================
+  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD"].forEach(function (k) { B_KW[k] = 1; });
+  var B_CMPW = { EQ:"EQ", NE:"NE", LT:"LT", GT:"GT", LE:"LE", GE:"GE" };
+  var B_CMPS = { "==":"EQ", "!=":"NE", "<>":"NE", "=":"EQ", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
+  var B_COMPARATORS = {}; for (var _k in B_CMPW) B_COMPARATORS[_k] = B_CMPW[_k]; for (var _k2 in B_CMPS) B_COMPARATORS[_k2] = B_CMPS[_k2];
+  var B_ASSIGN = { "+=":"+", "-=":"-", "*=":"*", "/=":"/" };
+  var B_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "<>":1, "+=":1, "-=":1, "*=":1, "/=":1 };
+  var B_ONE = "+-*/()<>=,.:";
+  var B_PREC = { OR:1, AND:2, "+":5, "-":5, "*":6, "/":6, MOD:6 };
+  for (var _c in B_COMPARATORS) B_PREC[_c] = 3;
+  var B_ARITH = { "+":"add", "-":"sub", "*":"mul", "/":"div" };
+  var B_PRINT_CARD = 0xFFFE;
+
+  function btokenize(src) {
+    var toks = [], i = 0, n = src.length;
+    function push(k, v) { toks.push({ kind: k, value: v }); }
+    while (i < n) {
+      var c = src[i];
+      if (c === "\n") { push("nl", "\\n"); i++; continue; }
+      if (c === " " || c === "\t" || c === "\r") { i++; continue; }
+      if (c === "'" || (c === "/" && src[i + 1] === "/")) { while (i < n && src[i] !== "\n") i++; continue; }
+      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { b += src[j]; j++; } push("str", b); i = j + 1; continue; }
+      if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2)); i = j2; continue; }
+      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; var w = src.slice(i, j3); var up = w.toUpperCase(); if (B_KW[up]) push("kw", up); else push("id", w); i = j3; continue; }
+      var two = src.slice(i, i + 2);
+      if (B_TWO[two]) { push("op", two); i += 2; continue; }
+      if (B_ONE.indexOf(c) >= 0) { push("op", c); i++; continue; }
+      throw new Error("BASIC: unexpected char " + JSON.stringify(c));
+    }
+    push("nl", "\\n"); push("eof", "");
+    return toks;
+  }
+
+  function BParser(toks) { this.toks = toks; this.i = 0; }
+  BParser.prototype = {
+    peek: function () { return this.toks[this.i]; },
+    peek2: function () { return this.toks[this.i + 1]; },
+    next: function () { return this.toks[this.i++]; },
+    skipNl: function () { while (this.peek().kind === "nl") this.i++; },
+    atKw: function () { var t = this.peek(); if (t.kind !== "kw") return false; for (var k = 0; k < arguments.length; k++) if (t.value === arguments[k]) return true; return false; },
+    eatKw: function (name) { var t = this.next(); if (!(t.kind === "kw" && t.value === name)) throw new Error("BASIC: expected " + name + " got " + t.value); },
+    eatOp: function (v) { var t = this.next(); if (!(t.kind === "op" && t.value === v)) throw new Error("BASIC: expected " + v + " got " + t.value); },
+    endLine: function () { var t = this.peek(); if (t.kind === "nl" || t.kind === "eof") { this.skipNl(); return; } throw new Error("BASIC: expected EOL got " + t.value); },
+    parseProgram: function () { var s = []; this.skipNl(); while (this.peek().kind !== "eof") { s.push(this.parseStmt()); this.skipNl(); } return s; },
+    parseBlock: function () {
+      var terms = Array.prototype.slice.call(arguments); var s = []; this.skipNl();
+      while (!this.atKwArr(terms)) { if (this.peek().kind === "eof") throw new Error("BASIC: unexpected EOF expecting " + terms); s.push(this.parseStmt()); this.skipNl(); }
+      return s;
+    },
+    atKwArr: function (arr) { var t = this.peek(); return t.kind === "kw" && arr.indexOf(t.value) >= 0; },
+    parseStmt: function () {
+      var t = this.peek();
+      if (t.kind === "id" && this.peek2().kind === "op" && this.peek2().value === ":") { var name = this.next().value; this.next(); this.endLine(); return { t: "Label", name: name }; }
+      if (t.kind === "kw") {
+        var kw = t.value;
+        if (kw === "LET") return this.parseLet(true);
+        if (kw === "DIM") return this.parseDim();
+        if (kw === "INC") { this.next(); var ni = this.next().value; this.endLine(); return { t: "IncDec", name: ni, delta: 1 }; }
+        if (kw === "DEC") { this.next(); var nd = this.next().value; this.endLine(); return { t: "IncDec", name: nd, delta: -1 }; }
+        if (kw === "IF") return this.parseIf();
+        if (kw === "WHILE") return this.parseWhile();
+        if (kw === "DO") return this.parseDo();
+        if (kw === "FOR") return this.parseFor();
+        if (kw === "FOREACH") return this.parseForeach();
+        if (kw === "SWITCH") return this.parseSwitch();
+        if (kw === "GOTO") { this.next(); var nm = this.next().value; this.endLine(); return { t: "Goto", label: nm }; }
+        if (kw === "GOSUB") { this.next(); var nm2 = this.next().value; this.endLine(); return { t: "Gosub", name: nm2 }; }
+        if (kw === "SUB") return this.parseSub();
+        if (kw === "RETURN") { this.next(); this.endLine(); return { t: "Return" }; }
+        if (kw === "BREAK") { this.next(); this.endLine(); return { t: "Break" }; }
+        if (kw === "SKIP") { this.next(); this.endLine(); return { t: "Skip" }; }
+        if (kw === "PRINT") { this.next(); var v = this.parseExpr(); this.endLine(); return { t: "Print", value: v }; }
+        throw new Error("BASIC: unexpected keyword " + kw);
+      }
+      if (t.kind === "id") {
+        var nx = this.peek2();
+        if (nx.kind === "op" && nx.value === "=") return this.parseLet(false);
+        if (nx.kind === "op" && B_ASSIGN[nx.value]) {
+          var an = this.next().value; var aop = B_ASSIGN[this.next().value];
+          var arhs = this.parseExpr(); this.endLine();
+          return { t: "Let", name: an, value: { t: "Bin", op: aop, lhs: { t: "Var", name: an }, rhs: arhs } };
+        }
+        if (nx.kind === "op" && nx.value === ".") { var call = this.parseCallFromId(); this.endLine(); return { t: "CallStmt", call: call }; }
+      }
+      throw new Error("BASIC: cannot parse statement at " + t.value);
+    },
+    parseDim: function () {
+      this.eatKw("DIM"); var name = this.next().value; var init = null;
+      if (this.peek().kind === "op" && this.peek().value === "=") { this.next(); init = this.parseExpr(); }
+      this.endLine(); return { t: "Dim", name: name, init: init };
+    },
+    parseLet: function (eat) { if (eat) this.eatKw("LET"); var name = this.next().value; this.eatOp("="); var v = this.parseExpr(); this.endLine(); return { t: "Let", name: name, value: v }; },
+    parseIf: function () {
+      this.eatKw("IF"); var cond = this.parseCondition(); this.eatKw("THEN"); this.endLine();
+      var body = this.parseBlock("ELSEIF", "ELSE", "ENDIF"); var arms = [[cond, body]]; var els = null;
+      while (this.atKw("ELSEIF")) { this.eatKw("ELSEIF"); var c2 = this.parseCondition(); this.eatKw("THEN"); this.endLine(); arms.push([c2, this.parseBlock("ELSEIF", "ELSE", "ENDIF")]); }
+      if (this.atKw("ELSE")) { this.eatKw("ELSE"); this.endLine(); els = this.parseBlock("ENDIF"); }
+      this.eatKw("ENDIF"); this.endLine(); return { t: "If", arms: arms, els: els };
+    },
+    parseWhile: function () { this.eatKw("WHILE"); var cond = this.parseCondition(); this.endLine(); var body = this.parseBlock("ENDWHILE"); this.eatKw("ENDWHILE"); this.endLine(); return { t: "While", cond: cond, body: body }; },
+    parseDo: function () {
+      this.eatKw("DO");
+      var topCond = null, topUntil = false;
+      if (this.atKw("WHILE")) { this.eatKw("WHILE"); topCond = this.parseCondition(); }
+      else if (this.atKw("UNTIL")) { this.eatKw("UNTIL"); topCond = this.parseCondition(); topUntil = true; }
+      this.endLine();
+      var body = this.parseBlock("LOOP");
+      this.eatKw("LOOP");
+      var botCond = null, botUntil = false;
+      if (this.atKw("WHILE")) { this.eatKw("WHILE"); botCond = this.parseCondition(); }
+      else if (this.atKw("UNTIL")) { this.eatKw("UNTIL"); botCond = this.parseCondition(); botUntil = true; }
+      this.endLine();
+      if ((topCond === null) === (botCond === null)) throw new Error("DO/LOOP needs a WHILE or UNTIL condition at exactly one of DO or LOOP");
+      return { t: "DoLoop", topCond: topCond, topUntil: topUntil, botCond: botCond, botUntil: botUntil, body: body };
+    },
+    parseFor: function () {
+      this.eatKw("FOR"); var v = this.next().value; this.eatOp("="); var start = this.parseExpr(); this.eatKw("TO"); var end = this.parseExpr();
+      var step = null; if (this.atKw("STEP")) { this.eatKw("STEP"); step = this.parseExpr(); }
+      this.endLine(); var body = this.parseBlock("NEXT"); this.eatKw("NEXT"); this.endLine(); return { t: "ForTo", v: v, start: start, end: end, step: step, body: body };
+    },
+    parseForeach: function () { this.eatKw("FOREACH"); var v = this.next().value; this.eatKw("IN"); var count = this.parseExpr(); this.endLine(); var body = this.parseBlock("ENDFOREACH"); this.eatKw("ENDFOREACH"); this.endLine(); return { t: "ForEach", v: v, count: count, body: body }; },
+    parseSwitch: function () {
+      this.eatKw("SWITCH"); var expr = this.parseExpr(); this.endLine(); this.skipNl(); var cases = [], def = null;
+      while (!this.atKw("ENDSWITCH")) {
+        if (this.atKw("CASE")) { this.eatKw("CASE"); var val = this.parseExpr(); this.endLine(); cases.push([val, this.parseBlock("CASE", "DEFAULT", "ENDSWITCH")]); }
+        else if (this.atKw("DEFAULT")) { this.eatKw("DEFAULT"); this.endLine(); def = this.parseBlock("ENDSWITCH"); }
+        else throw new Error("BASIC: expected CASE/DEFAULT/ENDSWITCH");
+      }
+      this.eatKw("ENDSWITCH"); this.endLine(); return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    parseSub: function () { this.eatKw("SUB"); var name = this.next().value; this.endLine(); var body = this.parseBlock("ENDSUB"); this.eatKw("ENDSUB"); this.endLine(); return { t: "Sub", name: name, body: body }; },
+    parseCallFromId: function () { var ns = this.next().value; this.eatOp("."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
+    parseArgs: function () { this.eatOp("("); var a = []; if (!(this.peek().kind === "op" && this.peek().value === ")")) { a.push(this.parseExpr()); while (this.peek().kind === "op" && this.peek().value === ",") { this.next(); a.push(this.parseExpr()); } } this.eatOp(")"); return a; },
+    parseCondition: function () { return this.parseExpr(); },
+    parseExpr: function (minp) {
+      minp = minp || 0; var left = this.parseUnary();
+      while (true) {
+        var t = this.peek(); var ov = null;
+        if (t.kind === "op" && B_PREC[t.value] !== undefined) ov = t.value;
+        else if (t.kind === "kw" && B_PREC[t.value] !== undefined) ov = t.value;
+        if (ov === null || B_PREC[ov] < minp) break;
+        this.next();
+        var right = this.parseExpr(B_PREC[ov] + 1);
+        if (B_COMPARATORS[ov]) left = { t: "Cmp", cond: B_COMPARATORS[ov], lhs: left, rhs: right };
+        else left = { t: "Bin", op: ov, lhs: left, rhs: right };
+      }
+      return left;
+    },
+    parseUnary: function () { var t = this.peek(); if (t.kind === "op" && t.value === "-") { this.next(); return { t: "Bin", op: "-", lhs: { t: "Num", value: 0 }, rhs: this.parseUnary() }; } if (t.kind === "kw" && t.value === "NOT") { this.next(); return { t: "Cmp", cond: "EQ", lhs: this.parseUnary(), rhs: { t: "Num", value: 0 } }; } return this.parseAtom(); },
+    parseAtom: function () {
+      var t = this.next();
+      if (t.kind === "num") return { t: "Num", value: numval(t.value) };
+      if (t.kind === "str") return { t: "Str", value: t.value };
+      if (t.kind === "kw" && t.value === "IIF") {
+        this.eatOp("("); var c = this.parseExpr(); this.eatOp(",");
+        var th = this.parseExpr(); this.eatOp(","); var el = this.parseExpr(); this.eatOp(")");
+        return { t: "Ternary", cond: c, then: th, els: el };
+      }
+      if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.eatOp(")"); return e; }
+      if (t.kind === "id") { if (this.peek().kind === "op" && this.peek().value === ".") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; } return { t: "Var", name: t.value }; }
+      throw new Error("BASIC: unexpected token " + t.value);
+    }
+  };
+
+  function BLowerer() { this.b = new ILBuilder(); this.vars = {}; this.subs = []; this.scopes = []; }
+  BLowerer.prototype = {
+    varOf: function (name) { var k = name.toUpperCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
+    lowerProgram: function (prog) {
+      var self = this, body = [];
+      prog.forEach(function (s) { if (s.t === "Sub") self.subs.push(s); else body.push(s); });
+      body.forEach(function (s) { self.stmt(s); });
+      this.b.ret();
+      this.subs.forEach(function (sub) { self.b.label("sub_" + sub.name.toUpperCase()); sub.body.forEach(function (s) { self.stmt(s); }); self.b.ret(); });
+      return this.b.insts;
+    },
+    stmt: function (s) {
+      var self = this;
+      if (s.t === "Let") this.assignTo(this.varOf(s.name), s.value);
+      else if (s.t === "Dim") { var dv = this.varOf(s.name); if (s.init === null) this.b.const_(dv, 0); else this.assignTo(dv, s.init); }
+      else if (s.t === "IncDec") { var iv = this.varOf(s.name); if (s.delta === 1) this.b.inc(iv); else this.b.arith("sub", iv, iv, new Imm(1)); }
+      else if (s.t === "Label") this.b.label("lbl_" + s.name.toUpperCase());
+      else if (s.t === "Goto") this.b.jmp("lbl_" + s.label.toUpperCase());
+      else if (s.t === "Gosub") this.b.call("sub_" + s.name.toUpperCase());
+      else if (s.t === "Return") this.b.ret();
+      else if (s.t === "Break") this.lowerBreak();
+      else if (s.t === "Skip") this.lowerSkip();
+      else if (s.t === "If") this.lowerIf(s);
+      else if (s.t === "While") this.lowerWhile(s);
+      else if (s.t === "DoLoop") this.lowerDo(s);
+      else if (s.t === "ForTo") this.lowerFor(s);
+      else if (s.t === "ForEach") this.lowerForeach(s);
+      else if (s.t === "Switch") this.lowerSwitch(s);
+      else if (s.t === "Print") { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); }
+      else if (s.t === "CallStmt") this.lowerCall(s.call, false);
+      else throw new Error("BASIC: cannot lower " + s.t);
+    },
+    assignTo: function (dst, e) {
+      if (e.t === "Bin" && B_ARITH[e.op]) {
+        var a = this.eval(e.lhs);
+        if (e.rhs.t === "Num" && e.rhs.value >= -32768 && e.rhs.value <= 65535) { this.b.arith(B_ARITH[e.op], dst, a, new Imm(e.rhs.value)); return; }
+        var bb = this.eval(e.rhs); this.b.arith(B_ARITH[e.op], dst, a, bb); return;
+      }
+      this.b.mov(dst, this.eval(e));
+    },
+    branchFalse: function (cond, falseL) {
+      if (cond.t === "Cmp") { var a = this.eval(cond.lhs), b = this.eval(cond.rhs); this.b.cmpbr(COND_NEGATE[cond.cond], a, b, falseL); return; }
+      var v = this.eval(cond); this.b.cmpbr("Z", v, v, falseL);
+    },
+    branchTrue: function (cond, trueL) {
+      if (cond.t === "Cmp") { var a = this.eval(cond.lhs), b = this.eval(cond.rhs); this.b.cmpbr(cond.cond, a, b, trueL); return; }
+      var v = this.eval(cond); this.b.cmpbr("NZ", v, v, trueL);
+    },
+    lowerBreak: function () {
+      if (!this.scopes.length) throw new Error("BREAK outside a loop or SWITCH");
+      this.b.jmp(this.scopes[this.scopes.length - 1][1]);
+    },
+    lowerSkip: function () {
+      for (var i = this.scopes.length - 1; i >= 0; i--) {
+        if (this.scopes[i][0] !== null) { this.b.jmp(this.scopes[i][0]); return; }
+      }
+      throw new Error("SKIP outside a loop");
+    },
+    lowerIf: function (s) {
+      var end = this.b.newLabel("endif"), self = this;
+      s.arms.forEach(function (arm) { var nxt = self.b.newLabel("arm"); self.branchFalse(arm[0], nxt); arm[1].forEach(function (st) { self.stmt(st); }); self.b.jmp(end); self.b.label(nxt); });
+      if (s.els) s.els.forEach(function (st) { self.stmt(st); });
+      this.b.label(end);
+    },
+    lowerWhile: function (s) { var top = this.b.newLabel("while"), end = this.b.newLabel("endwhile"), self = this; this.b.label(top); this.branchFalse(s.cond, end); this.scopes.push([top, end]); s.body.forEach(function (st) { self.stmt(st); }); this.scopes.pop(); this.b.jmp(top); this.b.label(end); },
+    lowerDo: function (s) {
+      var top = this.b.newLabel("do"), cont = this.b.newLabel("docont"), end = this.b.newLabel("enddo"), self = this;
+      this.b.label(top);
+      if (s.topCond !== null) {
+        if (s.topUntil) this.branchTrue(s.topCond, end); else this.branchFalse(s.topCond, end);
+      }
+      this.scopes.push([cont, end]);
+      s.body.forEach(function (st) { self.stmt(st); });
+      this.scopes.pop();
+      this.b.label(cont);
+      if (s.botCond !== null) {
+        if (s.botUntil) this.branchFalse(s.botCond, top); else this.branchTrue(s.botCond, top);
+      } else {
+        this.b.jmp(top);
+      }
+      this.b.label(end);
+    },
+    lowerFor: function (s) {
+      var v = this.varOf(s.v); this.assignTo(v, s.start);
+      var endv = this.b.vreg("__for_end__"); this.b.mov(endv, this.eval(s.end));
+      var top = this.b.newLabel("for"), cont = this.b.newLabel("forcont"), end = this.b.newLabel("endfor"), self = this;
+      this.b.label(top); this.b.cmpbr("GT", v, endv, end);
+      this.scopes.push([cont, end]);
+      s.body.forEach(function (st) { self.stmt(st); });
+      this.scopes.pop();
+      this.b.label(cont);
+      if (s.step != null && s.step.t === "Num") this.b.arith("add", v, v, new Imm(s.step.value));
+      else if (s.step != null) this.b.arith("add", v, v, this.eval(s.step));
+      else this.b.inc(v);
+      this.b.jmp(top); this.b.label(end);
+    },
+    lowerForeach: function (s) {
+      var v = this.varOf(s.v); var cnt = this.b.vreg("__fe_count__"); this.b.mov(cnt, this.eval(s.count)); this.b.const_(v, 0);
+      var top = this.b.newLabel("foreach"), cont = this.b.newLabel("fecont"), end = this.b.newLabel("endforeach"), self = this;
+      this.b.label(top); this.b.cmpbr("GE", v, cnt, end);
+      this.scopes.push([cont, end]);
+      s.body.forEach(function (st) { self.stmt(st); });
+      this.scopes.pop();
+      this.b.label(cont);
+      this.b.inc(v); this.b.jmp(top); this.b.label(end);
+    },
+    lowerSwitch: function (s) {
+      var sel = this.eval(s.expr); var end = this.b.newLabel("endswitch"), self = this;
+      var caseLabels = s.cases.map(function () { return self.b.newLabel("case"); });
+      var defL = this.b.newLabel("default");
+      s.cases.forEach(function (cse, idx) { var cv = self.eval(cse[0]); self.b.cmpbr("EQ", sel, cv, caseLabels[idx]); });
+      this.b.jmp(defL);
+      this.scopes.push([null, end]);
+      s.cases.forEach(function (cse, idx) { self.b.label(caseLabels[idx]); cse[1].forEach(function (st) { self.stmt(st); }); self.b.jmp(end); });
+      this.b.label(defL); if (s.def) s.def.forEach(function (st) { self.stmt(st); });
+      this.scopes.pop();
+      this.b.label(end);
+    },
+    eval: function (e) {
+      if (e.t === "Num") { var v = this.b.vreg(); this.b.const_(v, e.value); return v; }
+      if (e.t === "Var") return this.varOf(e.name);
+      if (e.t === "Bin") {
+        if (e.op === "AND" || e.op === "OR") return this.evalLogical(e);
+        if (e.op === "MOD") return this.evalMod(e.lhs, e.rhs);
+        var a = this.eval(e.lhs), dst = this.b.vreg();
+        if (e.rhs.t === "Num" && e.rhs.value >= -32768 && e.rhs.value <= 65535) this.b.arith(B_ARITH[e.op], dst, a, new Imm(e.rhs.value));
+        else { var b = this.eval(e.rhs); this.b.arith(B_ARITH[e.op], dst, a, b); }
+        return dst;
+      }
+      if (e.t === "Cmp") return this.evalBool(e);
+      if (e.t === "Ternary") return this.evalTernary(e);
+      if (e.t === "Call") { var r = this.lowerCall(e, true); if (r == null) throw new Error(e.ns + "." + e.method + " has no value"); return r; }
+      throw new Error("BASIC: cannot evaluate " + e.t);
+    },
+    evalBool: function (e) {
+      var a = this.eval(e.lhs), b = this.eval(e.rhs), dst = this.b.vreg();
+      var tl = this.b.newLabel("bt"), el = this.b.newLabel("be");
+      this.b.cmpbr(e.cond, a, b, tl); this.b.const_(dst, 0); this.b.jmp(el);
+      this.b.label(tl); this.b.const_(dst, 1); this.b.label(el); return dst;
+    },
+    evalMod: function (lhs, rhs) {
+      var a = this.eval(lhs), b = this.eval(rhs);
+      var q = this.b.vreg(); this.b.arith("div", q, a, b);
+      var m = this.b.vreg(); this.b.arith("mul", m, q, b);
+      var dst = this.b.vreg(); this.b.arith("sub", dst, a, m);
+      return dst;
+    },
+    evalLogical: function (e) {
+      var dst = this.b.vreg(); var a = this.eval(e.lhs); var endL = this.b.newLabel("lend");
+      if (e.op === "AND") {
+        var falseL = this.b.newLabel("land0");
+        this.b.cmpbr("Z", a, a, falseL);
+        var b = this.eval(e.rhs); this.b.cmpbr("Z", b, b, falseL);
+        this.b.const_(dst, 1); this.b.jmp(endL);
+        this.b.label(falseL); this.b.const_(dst, 0);
+      } else {
+        var trueL = this.b.newLabel("lor1");
+        this.b.cmpbr("NZ", a, a, trueL);
+        var b2 = this.eval(e.rhs); this.b.cmpbr("NZ", b2, b2, trueL);
+        this.b.const_(dst, 0); this.b.jmp(endL);
+        this.b.label(trueL); this.b.const_(dst, 1);
+      }
+      this.b.label(endL); return dst;
+    },
+    evalTernary: function (e) {
+      var dst = this.b.vreg(); var elseL = this.b.newLabel("telse"), endL = this.b.newLabel("tend");
+      this.branchFalse(e.cond, elseL);
+      var tv = this.eval(e.then); this.b.mov(dst, tv); this.b.jmp(endL);
+      this.b.label(elseL); var ev = this.eval(e.els); this.b.mov(dst, ev);
+      this.b.label(endL); return dst;
+    },
+    lowerCall: function (c, want) {
+      var ns = c.ns, m = c.method;
+      if (ns != null && ns.toUpperCase() === "NET") {
+        var M = m.toUpperCase();
+        if (M === "STATUS") this.b.net("status", intlit(c.args[0]));
+        else if (M === "TYPE") this.b.net("type", strlit(c.args[0]));
+        else if (M === "BODY") this.b.net("body");
+        else if (M === "CLOSE") this.b.net("close");
+        else if (M === "HEADER") this.b.net("header");
+        else throw new Error("unknown Net." + m);
+        return null;
+      }
+      if (ns != null && ns.toUpperCase() === "STORAGE" && ["LOAD", "SAVE", "PIPE"].indexOf(m.toUpperCase()) >= 0) {
+        var addr = encodeCardAddr(intlit(c.args[0]), intlit(c.args[1]), intlit(c.args[2]));
+        var reg = this.eval(c.args[3]); var MM = m.toUpperCase();
+        if (MM === "LOAD") this.b.load(reg, addr); else if (MM === "SAVE") this.b.save(reg, addr); else this.b.pipe(reg, addr);
+        return reg;
+      }
+      var self = this; var argregs = c.args.slice(0, 2).map(function (a) { return self.eval(a); });
+      var dst = want ? this.b.vreg() : null;
+      var cn = canonHost(ns, m); this.b.host(cn[0], cn[1], argregs, dst); return dst;
+    }
+  };
+  function compileBasic(src) { return new BLowerer().lowerProgram(new BParser(btokenize(src)).parseProgram()); }
+
+
+  return {
+    compile: function (src, lang) {
+      var il = (lang === "basic") ? compileBasic(src) : compileC(src);
+      return { words: lowerToBytecode(il, true), il: il };
+    },
+    compileC: function (src) { return { words: lowerToBytecode(compileC(src), true), il: compileC(src) }; },
+    compileBasic: function (src) { return { words: lowerToBytecode(compileBasic(src), true), il: compileBasic(src) }; },
+    _lowerToBytecode: lowerToBytecode,
+    _VReg: VReg, _Imm: Imm, _ILBuilder: ILBuilder, _canonHost: canonHost, _encodeCardAddr: encodeCardAddr,
+    _COND: COND, _COND_NEGATE: COND_NEGATE
+  };
+
+  // ========================================================================
+  // FRONTENDS (defined after return via hoisted function declarations)
+  // ========================================================================
+});
