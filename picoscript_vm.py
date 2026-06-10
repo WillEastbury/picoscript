@@ -204,6 +204,10 @@ class HostApi:
         if ns == "String":
             if self._stringlib(vm, method, rd, rs1, rs2):
                 return
+        # Number.* integer/format library.
+        if ns == "Number":
+            if self._numberlib(vm, method, rd, rs1, rs2):
+                return
         # Io: write raw bytes (UTF-8 strings) to the output buffer.
         if ns == "Io" and method == "Write":
             h = vm.regs[rs1]
@@ -281,6 +285,33 @@ class HostApi:
         if method == "Replace":
             repl = getattr(vm, "_str_repl", b"")
             R[rd] = self._new_span_bytes(vm, a.replace(self._span_raw(vm, R[rs2]), repl)); return True
+        return False
+
+    def _numberlib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
+        R = vm.regs
+        if method == "Parse":
+            try:
+                v = int((self._span_raw(vm, R[rs1]).decode("ascii", "replace").strip()) or "0")
+            except ValueError:
+                v = 0
+            R[rd] = v & MASK32; return True
+        a, b = _sx32(R[rs1]), _sx32(R[rs2])
+        if method == "Abs":
+            R[rd] = abs(a) & MASK32; return True
+        if method == "Min":
+            R[rd] = (a if a < b else b) & MASK32; return True
+        if method == "Max":
+            R[rd] = (a if a > b else b) & MASK32; return True
+        if method in ("Floor", "Ceiling", "Round"):   # integer values: identity
+            R[rd] = a & MASK32; return True
+        if method == "ToString":
+            R[rd] = self._new_span_bytes(vm, str(a).encode()); return True
+        if method == "ToHex":
+            R[rd] = self._new_span_bytes(vm, format(a & MASK32, "x").encode()); return True
+        if method == "ToOctal":
+            R[rd] = self._new_span_bytes(vm, format(a & MASK32, "o").encode()); return True
+        if method == "ToBinary":
+            R[rd] = self._new_span_bytes(vm, format(a & MASK32, "b").encode()); return True
         return False
 
     # -- PIOS Req.*/Resp.* simulated host backend ----------------------------

@@ -263,6 +263,10 @@
     if (name.indexOf("String.") === 0) {
       if (this._stringlib(name.slice(7), rd, rs1, rs2)) return;
     }
+    // ---- Number.* integer/format library -----------------------------------
+    if (name.indexOf("Number.") === 0) {
+      if (this._numberlib(name.slice(7), rd, rs1, rs2)) return;
+    }
     // ---- Io: write raw bytes (UTF-8 strings) to the output buffer ----------
     if (name === "Io.Write") {
       var sw = this.spans[this.regs[rs1]];
@@ -339,6 +343,27 @@
       }
       this.regs[rd] = this._newSpanBytes(out); return true;
     }
+    return false;
+  };
+
+  function _strBytes(s) { var o = []; for (var i = 0; i < s.length; i++) o.push(s.charCodeAt(i) & 255); return o; }
+
+  PicoVM.prototype._numberlib = function (method, rd, rs1, rs2) {
+    if (method === "Parse") {
+      var bb = this._spanBytes(this.regs[rs1]);
+      var str = String.fromCharCode.apply(null, bb).trim();
+      this.regs[rd] = (/^[+-]?\d+$/.test(str) ? parseInt(str, 10) : 0) | 0;
+      return true;
+    }
+    var a = this.regs[rs1] | 0, b = this.regs[rs2] | 0;
+    if (method === "Abs") { this.regs[rd] = (a < 0 ? -a : a) | 0; return true; }
+    if (method === "Min") { this.regs[rd] = (a < b ? a : b) | 0; return true; }
+    if (method === "Max") { this.regs[rd] = (a > b ? a : b) | 0; return true; }
+    if (method === "Floor" || method === "Ceiling" || method === "Round") { this.regs[rd] = a | 0; return true; }
+    if (method === "ToString") { this.regs[rd] = this._newSpanBytes(_strBytes(String(a))); return true; }
+    if (method === "ToHex") { this.regs[rd] = this._newSpanBytes(_strBytes((a >>> 0).toString(16))); return true; }
+    if (method === "ToOctal") { this.regs[rd] = this._newSpanBytes(_strBytes((a >>> 0).toString(8))); return true; }
+    if (method === "ToBinary") { this.regs[rd] = this._newSpanBytes(_strBytes((a >>> 0).toString(2))); return true; }
     return false;
   };
 
