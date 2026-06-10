@@ -17,7 +17,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from picoscript_cfront import compile_c  # noqa: E402
-from picoscript_il import lower_to_bytecode_safe, lower_to_c  # noqa: E402
+from picoscript_il import lower_to_bytecode_safe, lower_to_c, lower_to_js  # noqa: E402
 from picoscript_vm import PicoVM  # noqa: E402
 
 VM_DIR = os.path.join(ROOT, "vm")
@@ -69,7 +69,7 @@ def build_native_exe():
     il = compile_c(open(PC, encoding="utf-8").read())
     with open(cfile, "w", encoding="utf-8") as f:
         f.write(lower_to_c(il, func_name="pico_entry", emit_main=False))
-    cmd = ZIG + ["-std=c99", "-O2", f"-I{VM_DIR}", cfile,
+    cmd = ZIG + ["-std=c99", "-O3", f"-I{VM_DIR}", cfile,
                  os.path.join(VM_DIR, "pico_arena_run.c"), os.path.join(VM_DIR, "picovm.c"), "-o", exe]
     r = subprocess.run(cmd, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -94,6 +94,23 @@ def asm_emits(target_args, needle):
     return text.count(needle)
 
 
+def _run_js(js_src):
+    os.makedirs(BUILD, exist_ok=True)
+    mod = os.path.join(BUILD, "dot8_mod.js")
+    runner = os.path.join(BUILD, "dot8_run.js")
+    with open(mod, "w", encoding="utf-8") as f:
+        f.write(js_src)
+    with open(runner, "w", encoding="utf-8") as f:
+        f.write("const p=require('./dot8_mod.js'); const rt=p.run(); "
+                "console.log('OUT '+rt.output.join(' '));")
+    out = subprocess.run(["node", runner], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    for line in out.stdout.splitlines():
+        if line.startswith("OUT"):
+            return [int(x) for x in line.split()[1:]]
+    return []
+
+
 def main():
     import random
     rng = random.Random(99)
@@ -116,7 +133,25 @@ def main():
     assert sdot > 0, "expected NEON SDOT in AArch64 build"
     assert smlad > 0, "expected SMLAD in Cortex-M33+dsp build"
 
-    print(f"PASS Dot8: {total} shapes bit-exact (Python VM == native C); "
+    # toJS native lowering: a self-seeding Memory/Dot8/Io program must match the
+    # Python VM (Memory.Set/Get, Dot8.Len/Of and Io.WriteByte all run natively in
+    # the emitted JS, not via the rt.host stub).
+    prog = (
+        "Memory.Set(1000, 1); Memory.Set(1001, 255); Memory.Set(1002, 1);\n"   # w = [1,-1,1]
+        "Memory.Set(2000, 10); Memory.Set(2001, 20); Memory.Set(2002, 30);\n"  # a = [10,20,30]
+        "Dot8.Len(3, 0);\n"
+        "int d = Dot8.Of(1000, 2000);\n"                                       # 1*10-1*20+1*30 = 20
+        "Io.WriteByte(Bits.And(Bits.Shr(d,24),255)); Io.WriteByte(Bits.And(Bits.Shr(d,16),255));\n"
+        "Io.WriteByte(Bits.And(Bits.Shr(d,8),255)); Io.WriteByte(Bits.And(d,255));\n"
+    )
+    il = compile_c(prog)
+    pyvm = PicoVM()
+    pyvm.run(lower_to_bytecode_safe(il))
+    py_out = list(b"".join(pyvm.output))
+    js_out = _run_js(lower_to_js(il, module_name="dot8_js"))
+    assert py_out == js_out == [0, 0, 0, 20], f"toJS Dot8 parity: py={py_out} js={js_out}"
+
+    print(f"PASS Dot8: {total} shapes bit-exact (Python VM == native C == toJS); "
           f"AArch64 emits SDOT x{sdot}, Cortex-M33 emits SMLAD x{smlad}")
 
 

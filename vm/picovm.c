@@ -190,6 +190,18 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         ctx->regs[rd] = pv_dot8(ctx, (uint32_t)ctx->regs[rs1], (uint32_t)ctx->regs[rs2]);
         return;
     }
+    if (hook == PV_HOOK_MEMORY_GET) {
+        ctx->regs[rd] = pv_mem_get(ctx, (uint32_t)ctx->regs[rs1]);
+        return;
+    }
+    if (hook == PV_HOOK_MEMORY_SET) {
+        pv_mem_set(ctx, (uint32_t)ctx->regs[rs1], ctx->regs[rs2]);
+        return;
+    }
+    if (hook == PV_HOOK_IO_WRITEBYTE) {
+        pv_io_write(ctx, ctx->regs[rs1]);
+        return;
+    }
     /* unknown host-fillable primitive: ignore (host supplies on real target) */
 }
 

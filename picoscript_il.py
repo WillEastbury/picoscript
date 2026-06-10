@@ -853,6 +853,12 @@ def lower_to_js(insts: List[Inst], module_name: str = "pico", opt: bool = True) 
     out.append("      netType: function (t) { this.httpType = t; }, netBody: function () {}, netHeader: function () {},")
     out.append("      netClose: function () { this.closed = true; },")
     out.append("      host: function (ns, m, a, b) { return 0; },")
+    out.append("      mem: new Uint8Array(520 * 1024), dotLen: 0,")
+    out.append("      memGet: function (a) { return this.mem[(a >>> 0) % this.mem.length]; },")
+    out.append("      memSet: function (a, v) { this.mem[(a >>> 0) % this.mem.length] = v & 255; },")
+    out.append("      ioWrite: function (b) { this.output.push(b & 255); },")
+    out.append("      dotLenSet: function (n) { this.dotLen = n >>> 0; },")
+    out.append("      dot8: function (w, a) { var n=this.dotLen|0, sz=this.mem.length, s=0, i=0; for(;i<n;i++){var x=this.mem[(w+i)%sz]; if(x>127)x-=256; var y=this.mem[(a+i)%sz]; if(y>127)y-=256; s=(s+x*y)|0;} return s; },")
     out.append("      dsp: function (s, a, b) { return s===4?(a<0?0:a):(s===3?Math.imul(a,b):(s===9?(a+b|0):0)); },")
     out.append("      outputInts: function () { var o=[]; for (var i=0;i+3<this.output.length;i+=4){o.push(((this.output[i]<<24)|(this.output[i+1]<<16)|(this.output[i+2]<<8)|this.output[i+3])|0);} return o; }")
     out.append("    };")
@@ -986,6 +992,16 @@ def _emit_js_inst(ins: Inst, jop, jname, label_block, label_to_func) -> Tuple[st
                 expr = None
             if expr is not None:
                 return f"{jname(ins.dst)} = {expr};", False
+        if ins.ns == "Memory" and ins.method == "Get" and isinstance(ins.dst, VReg):
+            return f"{jname(ins.dst)} = rt.memGet({a});", False
+        if ins.ns == "Memory" and ins.method == "Set":
+            return f"rt.memSet({a}, {b});", False
+        if ins.ns == "Io" and ins.method == "WriteByte":
+            return f"rt.ioWrite({a});", False
+        if ins.ns == "Dot8" and ins.method == "Len":
+            return f"rt.dotLenSet({a});", False
+        if ins.ns == "Dot8" and ins.method == "Of" and isinstance(ins.dst, VReg):
+            return f"{jname(ins.dst)} = rt.dot8({a}, {b});", False
         return f'{dst}rt.host("{ins.ns}", "{ins.method}", {a}, {b});', False
     if op == "load":
         return f"{jname(ins.dst)} = rt.load({ins.imm});", False

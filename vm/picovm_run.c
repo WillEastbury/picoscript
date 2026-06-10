@@ -27,8 +27,11 @@ int main(void)
         prog[i] = (uint32_t)w;
     }
 
+    static uint8_t arena[520 * 1024];   /* data arena for Memory.* / Io (Pico 2 SRAM size) */
     pv_ctx ctx;
     pv_init(&ctx);
+    ctx.mem = arena;
+    ctx.mem_size = (long)sizeof(arena);
     long steps = pv_vm_run(&ctx, prog, n);
 
     printf("STEPS %ld\n", steps);

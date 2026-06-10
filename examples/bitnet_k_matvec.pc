@@ -25,6 +25,7 @@ while (r < rows) {
     g = 0;
     while (g < ngroups) {
         v = Memory.Get(rb + g);
+        if (v != 0) {
         idx = abase + g * 5;
         e = v % 3; v = v / 3;
         a = Memory.Get(idx + 4); a = a > 127 ? a - 256 : a;
@@ -41,6 +42,7 @@ while (r < rows) {
         e = v % 3;
         a = Memory.Get(idx + 0); a = a > 127 ? a - 256 : a;
         acc = acc + (e == 1 ? a : (e == 2 ? 0 - a : 0));
+        }
         g = g + 1;
     }
     ob = obase + r * 4;
