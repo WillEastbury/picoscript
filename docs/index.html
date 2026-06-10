@@ -270,7 +270,7 @@
         </div>
         <div class="ref-section" id="ref-samples"><h2 style="color:var(--accent);margin-bottom:10px">Application Samples</h2><div id="samplesContent"></div></div>
         <div class="ref-section" id="ref-internals"><h2 style="color:var(--accent);margin-bottom:10px">Deep Technical Internals <span class="badge">implementer</span></h2><p style="color:var(--muted);font-size:12px;margin-bottom:10px">For contributors. Not required for app authors.</p><div class="docpanel active" style="display:block" id="doc-internals-inline"></div></div>
-        <div class="ref-section" id="ref-rawdocs"><h2 style="color:var(--accent);margin-bottom:10px">Source Documentation</h2><div class="docnav"><button class="docnav-btn active" onclick="showDoc('readme')" data-doc="readme">README</button><button class="docnav-btn" onclick="showDoc('spec')" data-doc="spec">Language Spec</button><button class="docnav-btn" onclick="showDoc('arch')" data-doc="arch">Compiler Architecture</button><button class="docnav-btn" onclick="showDoc('editor')" data-doc="editor">Editor Contract</button><button class="docnav-btn" onclick="showDoc('agent')" data-doc="agent">Agent Prompt</button><button class="docnav-btn" onclick="showDoc('selfhost')" data-doc="selfhost">Self-Hosting</button><button class="docnav-btn" onclick="showDoc('iobinding')" data-doc="iobinding">PIOS I/O Binding</button><button class="docnav-btn" onclick="showDoc('iointegration')" data-doc="iointegration">PIOS Integration</button><button class="docnav-btn" onclick="showDoc('systems')" data-doc="systems">Systems Language</button><button class="docnav-btn" onclick="showDoc('strings')" data-doc="strings">Strings & Templates</button><button class="docnav-btn" onclick="showDoc('internals')" data-doc="internals">Internals</button></div><div class="docpanel active" id="doc-readme"><h1 id="picoscript">PicoScript</h1>
+        <div class="ref-section" id="ref-rawdocs"><h2 style="color:var(--accent);margin-bottom:10px">Source Documentation</h2><div class="docnav"><button class="docnav-btn active" onclick="showDoc('readme')" data-doc="readme">README</button><button class="docnav-btn" onclick="showDoc('spec')" data-doc="spec">Language Spec</button><button class="docnav-btn" onclick="showDoc('arch')" data-doc="arch">Compiler Architecture</button><button class="docnav-btn" onclick="showDoc('editor')" data-doc="editor">Editor Contract</button><button class="docnav-btn" onclick="showDoc('agent')" data-doc="agent">Agent Prompt</button><button class="docnav-btn" onclick="showDoc('selfhost')" data-doc="selfhost">Self-Hosting</button><button class="docnav-btn" onclick="showDoc('iobinding')" data-doc="iobinding">PIOS I/O Binding</button><button class="docnav-btn" onclick="showDoc('iointegration')" data-doc="iointegration">PIOS Integration</button><button class="docnav-btn" onclick="showDoc('systems')" data-doc="systems">Systems Language</button><button class="docnav-btn" onclick="showDoc('strings')" data-doc="strings">Strings & Templates</button><button class="docnav-btn" onclick="showDoc('nsstatus')" data-doc="nsstatus">Namespace Status</button><button class="docnav-btn" onclick="showDoc('internals')" data-doc="internals">Internals</button></div><div class="docpanel active" id="doc-readme"><h1 id="picoscript">PicoScript</h1>
 <p>Deterministic userland scripting language for embedded queue-driven processing in the Pico stack.</p>
 <blockquote>
 <p><strong>▶ Live playground &amp; reference:</strong> open <strong><a href="docs/index.html"><code>docs/index.html</code></a></strong> (or the
@@ -431,6 +431,10 @@ browser, and send HTTP/TCP requests to a program over a localStorage-backed Pico
 <tr>
 <td><code>docs/STRING_TEMPLATES.md</code></td>
 <td>arena <strong><code>String.*</code></strong> / <strong><code>Number.*</code></strong> primitives + the <strong><code>Template.*</code></strong> engine (AOT-compiled-at-save <code>{{hole}}</code> templates stored as walfs cards)</td>
+</tr>
+<tr>
+<td><code>docs/NAMESPACE_STATUS.md</code></td>
+<td>what's implemented vs the <strong>hard reasons</strong> the rest aren't self-contained VM primitives (external state / entropy / 64-bit-in-JS / scope)</td>
 </tr>
 <tr>
 <td><code>docs/picoscript-hardware.md</code></td>
@@ -3709,6 +3713,67 @@ out  = Template.Render(plan, model_span) // at RENDER time -&gt; fast, no parse
   template — picowal's schema-driven SSR, but data-driven).</li>
 <li>Native <code>toC</code> lowering of the span/string model (the cross-cutting "native"
   follow-on; see <code>SYSTEMS_LANGUAGE.md</code>).</li>
+</ul></div><div class="docpanel" id="doc-nsstatus"><h1 id="namespace-status-whats-implemented-and-the-hard-reasons-for-the-rest">Namespace status — what's implemented, and the hard reasons for the rest</h1>
+<p>This session moved most "planned" namespaces to implemented. For the remainder,
+each entry below gives the <strong>actual reason</strong> it isn't a self-contained VM
+primitive — not an excuse. The recurring theme: the PicoScript VM is
+<strong>deterministic</strong> and has <strong>no host environment</strong>, so anything that depends on
+external state (clock, OS, entropy, network, keystore) cannot be a pure,
+parity-testable primitive — it must be <strong>injected by the host/PIOS kernel</strong>
+(the VM already does this for <code>Req.*</code>). Everything else is scope/effort, and
+where that was my only objection I implemented a representative op to prove it.</p>
+<h2 id="implemented-this-session">Implemented this session</h2>
+<p><code>Bits.*</code>, <code>Dot8.*</code> (NEON SDOT / SMLAD), native <code>Memory.*</code>/<code>Io</code>, <code>String.*</code>,
+<code>Number.*</code>, <code>Maths.Power/Sqrt</code>, <code>Template.*</code> (holes/sections/<code>{{#each}}</code>),
+<code>Compress.PicoCompress/PicoDecompress</code> (RLE), <code>Crypto.Sha256</code>, <code>Html.Encode/Decode</code>.
+(Already present: <code>Io</code>, <code>Json</code>, <code>Xml</code>, <code>Queue</code>, <code>Random</code>, <code>Req</code>, <code>Resp</code>, <code>Span</code>,
+<code>Storage</code>, <code>Utf8Reader</code>, <code>Utf8Writer</code>.)</p>
+<blockquote>
+<p><strong>Correction:</strong> I previously claimed codes &gt;0xFF "can't be dispatched (8-bit
+aliasing)". <strong>That was wrong.</strong> The lowerer emits <code>EXT_HOST_HOOK_BASE (0x6000)
+| (code &amp; 0xFFF)</code> for codes &gt;0xFF and the VM decodes <code>imm16 &amp; 0xFFF</code>, so
+<code>Compress</code>/<code>Crypto</code>/<code>Html</code>/<code>Http</code>/<code>X509</code>/<code>Auth</code> (0x100–0x149) dispatch fine —
+proven by <code>Crypto.Sha256("abc")</code> matching the known digest.</p>
+</blockquote>
+<h2 id="hard-reasons-genuinely-cannot-be-a-self-contained-deterministic-primitive">Hard reasons — genuinely cannot be a self-contained deterministic primitive</h2>
+<p><strong>External nondeterministic state (host-injected by design).</strong> The VM has no
+clock, no OS, no entropy. These return values that are <em>not functions of their
+inputs</em>, so they can't be computed in-VM or parity-tested to a fixed value — the
+host/PIOS kernel must supply them (as it does for the request context):
+- <code>DateTime.Now</code> / <code>UtcNow</code> (and "now" timestamps) — wall clock.
+- <code>Environment.*</code> (OS version, CPU count, memory, hostname, timezone, pids,
+  elapsed time) — host/OS facts.
+- <code>Maths.Random</code> / <code>RandomRange</code>, <code>Crypto.RandomBytes</code> — entropy. (<code>Random.U32</code>
+  is deliberately seeded from clock + a startup offset, i.e. non-deterministic.)
+- <code>Context.*</code> (user, remote addr, client cert, headers…) and <code>Locale</code> state —
+  the live request/connection and host locale.</p>
+<p><strong>64-bit-word algorithms in JS.</strong> <code>Crypto.Sha512</code> / <code>Blake2b</code> / <code>Blake3</code> operate
+on 64-bit words. JavaScript has no native 64-bit integer (Numbers are float64;
+bitwise ops are 32-bit), so a <em>browser-safe pure-JS</em> impl needs BigInt or hi/lo
+emulation — feasible but slower and a real divergence risk. <code>Sha256</code> (32-bit) is
+implemented; the 64-bit ones are deferred for this reason.</p>
+<h2 id="scopeeffort-not-impossible-explicitly-deferred-with-the-doable-proof-shipped">Scope/effort (not impossible — explicitly deferred, with the doable proof shipped)</h2>
+<ul>
+<li><strong>Float transcendentals</strong> — <code>Maths.Sin/Cos/Tan/Log/Log10/Exp/Lerp</code>. PicoScript
+  is integer-only, so these need a chosen fixed-point format (e.g. Q16.16) +
+  polynomial/CORDIC. A design choice + work, not a blocker. (<code>Power</code>/<code>Sqrt</code>,
+  which are integer-exact, are implemented.)</li>
+<li><strong>3-argument ops</strong> — <code>Maths.Clamp(x,lo,hi)</code>, <code>Lerp(a,b,t)</code>. The host-hook ABI
+  is 2-in/1-out, so a 3-arg op needs the stateful 2-call pattern (like
+  <code>String.SetReplace</code> / <code>Dot8.Len</code>) or an <code>imm16</code>-carried constant. Doable.</li>
+<li><strong>Standard codecs</strong> — <code>Compress.Brotli/Gzip/Deflate</code>. Require full spec-exact
+  LZ77+Huffman bitstream codecs, bit-identical across Python and JS. The custom
+  <code>PicoCompress</code> (RLE) is implemented and covers the embedded case.</li>
+<li><strong>HTML DOM + HTTP parsing</strong> — <code>Html.CreateNode/SetAttribute/QuerySelector/
+  ParseTree/Serialize</code> need a mutable tree model + parser; <code>Http.ParseQuery/
+  ParseForm/ParseJson/EncodeJson</code> are pure string parsing and could be added
+  next; <code>Http.ReadHeader/ReadBody</code> read the host connection (host-injected).
+  <code>Html.Encode/Decode</code> (pure) are implemented.</li>
+<li><strong>Asymmetric / symmetric crypto</strong> — <code>Crypto.Sign/Verify/Encrypt/Decrypt/
+  GenerateKeyPair/DeriveKey</code>, <code>X509.*</code>, <code>Auth.*</code>. Large security-sensitive
+  primitives (RSA/EC/AES) + key management; signing/keygen also need entropy
+  (external), and X509/Auth need a host trust store / identity provider /
+  network. Hashing (<code>Sha256</code>) is the pure, doable slice and is implemented.</li>
 </ul></div><div class="docpanel" id="doc-internals"><h1 id="picoscript-deep-internals">PicoScript deep internals</h1>
 <blockquote>
 <p><strong>Deep technical internals.</strong> This page is for implementers and contributors who

@@ -66,6 +66,7 @@ DOC_FILES = [
     ("iointegration", "PIOS Integration", os.path.join(ROOT, "docs", "PIOS_IO_INTEGRATION.md")),
     ("systems", "Systems Language", os.path.join(ROOT, "docs", "SYSTEMS_LANGUAGE.md")),
     ("strings", "Strings & Templates", os.path.join(ROOT, "docs", "STRING_TEMPLATES.md")),
+    ("nsstatus", "Namespace Status", os.path.join(ROOT, "docs", "NAMESPACE_STATUS.md")),
     ("internals", "Internals", os.path.join(ROOT, "docs", "INTERNALS.md")),
 ]
 

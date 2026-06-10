@@ -63,6 +63,7 @@ PicoScript runs inside picoweb as deterministic, bounded userland logic for:
 | `docs/PIOS_IO_INTEGRATION.md` `include/pios_io_binding.h` | kernel-side **integration work-order** + standalone C ABI header (vendor into the PIOS kernel; phased plan with I1–I8 acceptance) |
 | `docs/SYSTEMS_LANGUAGE.md` | feasibility + staged plan: **PicoScript as a systems language** — can it compile the PIOS kernel on itself? (toC bridge, primitive inventory, the 64-bit decision, the irreducible asm nucleus) |
 | `docs/STRING_TEMPLATES.md` | arena **`String.*`** / **`Number.*`** primitives + the **`Template.*`** engine (AOT-compiled-at-save `{{hole}}` templates stored as walfs cards) |
+| `docs/NAMESPACE_STATUS.md` | what's implemented vs the **hard reasons** the rest aren't self-contained VM primitives (external state / entropy / 64-bit-in-JS / scope) |
 | `docs/picoscript-hardware.md` | Hardware bytecode contract |
 
 ## Toolchain: four frontends, one IL, three backends
