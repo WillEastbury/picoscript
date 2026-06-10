@@ -50,6 +50,12 @@ surface. That's why this is more than "hello world with interrupts."
   `ctx->mem` arena (default 520 KB = Pico 2 SRAM); PicoScript-compiled code
   touches a real byte-addressable arena at native speed (no `pv_host` round-trip).
   All three VMs (Python / JS / C, interpreter + compiled) are at parity.
+- **`Span.*` + `String.*` + `Number.*` + `Io.Write` native in the C VM** — the
+  C runtime now carries a span table + bump arena (`pv_ctx.span_ptr/span_len/
+  arena_top`), so arena strings, slicing, the 11 `String.*` ops and the `Number.*`
+  format/parse ops run byte-for-byte identically on Python / JS / C (see
+  `tests/test_native_string.py`). `Template.*`/`Http.*`/`Compress.*`/`Crypto.*`/
+  `Html.*` build on this same model and are the remaining native port.
 - `Span.*` (zero-copy views), arena allocation, `Descriptor.*` / `Lease.*`,
   the host-hook ABI (extensible at will).
 - The **`toC` backend** with `-O3` + `--profile {host,pi5,pico2}` to turn on the

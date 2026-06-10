@@ -3513,6 +3513,12 @@ surface. That's why this is more than "hello world with interrupts."</p>
   <code>ctx-&gt;mem</code> arena (default 520 KB = Pico 2 SRAM); PicoScript-compiled code
   touches a real byte-addressable arena at native speed (no <code>pv_host</code> round-trip).
   All three VMs (Python / JS / C, interpreter + compiled) are at parity.
+- <strong><code>Span.*</code> + <code>String.*</code> + <code>Number.*</code> + <code>Io.Write</code> native in the C VM</strong> — the
+  C runtime now carries a span table + bump arena (<code>pv_ctx.span_ptr/span_len/
+  arena_top</code>), so arena strings, slicing, the 11 <code>String.*</code> ops and the <code>Number.*</code>
+  format/parse ops run byte-for-byte identically on Python / JS / C (see
+  <code>tests/test_native_string.py</code>). <code>Template.*</code>/<code>Http.*</code>/<code>Compress.*</code>/<code>Crypto.*</code>/
+  <code>Html.*</code> build on this same model and are the remaining native port.
 - <code>Span.*</code> (zero-copy views), arena allocation, <code>Descriptor.*</code> / <code>Lease.*</code>,
   the host-hook ABI (extensible at will).
 - The <strong><code>toC</code> backend</strong> with <code>-O3</code> + <code>--profile {host,pi5,pico2}</code> to turn on the
@@ -3624,10 +3630,14 @@ the "holes rendering" picowal/picoweb did by hand, now first-class in PicoScript
 All are host hooks (no compiler/frontend change, byte-identical bytecode), and
 all run byte-for-byte identically on the Python and JS VMs.</p>
 <blockquote>
-<p>Status: interpreter-level (Python + JS), like the <code>Span</code>/<code>Utf8Writer</code>/<code>Json</code>/
-<code>Xml</code> family. A string is a <strong>span</strong> into the arena; results bump-allocate as
-new spans. Native <code>toC</code> support is the cross-cutting follow-on (it needs the
-span/string model ported to the C runtime, which currently has no span table).</p>
+<p>Status: a string is a <strong>span</strong> into the arena; results bump-allocate as new
+spans. <code>String.*</code> and <code>Number.*</code> (plus the <code>Span.*</code> model and <code>Io.Write</code>) run
+byte-for-byte identically on <strong>all three runtimes</strong> — the Python VM, the JS VM,
+and the portable C VM (<code>vm/picovm.c</code>), which now carries a span table + bump
+arena (<code>pv_ctx.span_ptr/span_len/arena_top</code>). <code>Template.*</code>/<code>Http.*</code>/<code>Compress.*</code>/
+<code>Crypto.*</code>/<code>Html.*</code> remain interpreter-level (Python + JS); porting those
+larger parsers to native <code>toC</code> is the remaining follow-on (they build on the
+same span model that is now in C).</p>
 </blockquote>
 <h2 id="string-0x800x8c"><code>String.*</code> (0x80–0x8C)</h2>
 <table>
@@ -3711,8 +3721,10 @@ out  = Template.Render(plan, model_span) // at RENDER time -&gt; fast, no parse
 <li>Partials (<code>{{&gt;name}}</code> including another compiled template).</li>
 <li>Sourcing the model directly from a walfs card's fields (render a card via a
   template — picowal's schema-driven SSR, but data-driven).</li>
-<li>Native <code>toC</code> lowering of the span/string model (the cross-cutting "native"
-  follow-on; see <code>SYSTEMS_LANGUAGE.md</code>).</li>
+<li>Native <code>toC</code> lowering of <code>Template.*</code>/<code>Http.*</code>/<code>Compress.*</code>/<code>Crypto.*</code>/<code>Html.*</code>.
+  The span/string foundation (<code>Span.*</code>, <code>String.*</code>, <code>Number.*</code>, <code>Io.Write</code>) is
+  <strong>already native in <code>vm/picovm.c</code></strong>; these larger parsers build on it and are
+  the remaining port (see <code>SYSTEMS_LANGUAGE.md</code>).</li>
 </ul></div><div class="docpanel" id="doc-nsstatus"><h1 id="namespace-status-whats-implemented-and-the-hard-reasons-for-the-rest">Namespace status — what's implemented, and the hard reasons for the rest</h1>
 <p>This session moved most "planned" namespaces to implemented. For the remainder,
 each entry below gives the <strong>actual reason</strong> it isn't a self-contained VM

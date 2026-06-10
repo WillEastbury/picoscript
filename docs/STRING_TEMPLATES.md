@@ -5,10 +5,14 @@ the "holes rendering" picowal/picoweb did by hand, now first-class in PicoScript
 All are host hooks (no compiler/frontend change, byte-identical bytecode), and
 all run byte-for-byte identically on the Python and JS VMs.
 
-> Status: interpreter-level (Python + JS), like the `Span`/`Utf8Writer`/`Json`/
-> `Xml` family. A string is a **span** into the arena; results bump-allocate as
-> new spans. Native `toC` support is the cross-cutting follow-on (it needs the
-> span/string model ported to the C runtime, which currently has no span table).
+> Status: a string is a **span** into the arena; results bump-allocate as new
+> spans. `String.*` and `Number.*` (plus the `Span.*` model and `Io.Write`) run
+> byte-for-byte identically on **all three runtimes** — the Python VM, the JS VM,
+> and the portable C VM (`vm/picovm.c`), which now carries a span table + bump
+> arena (`pv_ctx.span_ptr/span_len/arena_top`). `Template.*`/`Http.*`/`Compress.*`/
+> `Crypto.*`/`Html.*` remain interpreter-level (Python + JS); porting those
+> larger parsers to native `toC` is the remaining follow-on (they build on the
+> same span model that is now in C).
 
 ## `String.*` (0x80–0x8C)
 
@@ -58,5 +62,7 @@ Example: `Render(Compile(b"{{#each row}}<td>{{.}}</td>{{/each}}"), b"row.0=A\nro
 - Partials (`{{>name}}` including another compiled template).
 - Sourcing the model directly from a walfs card's fields (render a card via a
   template — picowal's schema-driven SSR, but data-driven).
-- Native `toC` lowering of the span/string model (the cross-cutting "native"
-  follow-on; see `SYSTEMS_LANGUAGE.md`).
+- Native `toC` lowering of `Template.*`/`Http.*`/`Compress.*`/`Crypto.*`/`Html.*`.
+  The span/string foundation (`Span.*`, `String.*`, `Number.*`, `Io.Write`) is
+  **already native in `vm/picovm.c`**; these larger parsers build on it and are
+  the remaining port (see `SYSTEMS_LANGUAGE.md`).
