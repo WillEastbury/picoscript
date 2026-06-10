@@ -60,6 +60,7 @@ DOC_FILES = [
     ("spec", "Language Spec", os.path.join(ROOT, "LANGUAGE_SPEC.md")),
     ("arch", "Compiler Architecture", os.path.join(ROOT, "docs", "COMPILER_ARCHITECTURE.md")),
     ("editor", "Editor Contract", os.path.join(ROOT, "docs", "picoscript-language-editor.md")),
+    ("agent", "Agent Prompt", os.path.join(ROOT, "docs", "AGENT_PROMPT.md")),
 ]
 
 

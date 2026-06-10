@@ -219,13 +219,14 @@
 
 <!-- ===================== DOCS ===================== -->
 <div class="view" id="view-docs">
-  <div class="docnav"><button class="docnav-btn active" onclick="showDoc('readme')" data-doc="readme">README</button><button class="docnav-btn" onclick="showDoc('spec')" data-doc="spec">Language Spec</button><button class="docnav-btn" onclick="showDoc('arch')" data-doc="arch">Compiler Architecture</button><button class="docnav-btn" onclick="showDoc('editor')" data-doc="editor">Editor Contract</button></div>
+  <div class="docnav"><button class="docnav-btn active" onclick="showDoc('readme')" data-doc="readme">README</button><button class="docnav-btn" onclick="showDoc('spec')" data-doc="spec">Language Spec</button><button class="docnav-btn" onclick="showDoc('arch')" data-doc="arch">Compiler Architecture</button><button class="docnav-btn" onclick="showDoc('editor')" data-doc="editor">Editor Contract</button><button class="docnav-btn" onclick="showDoc('agent')" data-doc="agent">Agent Prompt</button></div>
   <div class="docpanel active" id="doc-readme"><h1 id="picoscript">PicoScript</h1>
 <p>Deterministic userland scripting language for embedded queue-driven processing in the Pico stack.</p>
 <blockquote>
 <p><strong>▶ Live playground &amp; reference:</strong> open <strong><a href="docs/index.html"><code>docs/index.html</code></a></strong> (or the
 GitHub Pages site at <strong>https://willeastbury.github.io/picoscript/</strong>) to browse every
-language construct (C-style and BASIC side by side), compile/run/step programs in the
+language construct (C-style, BASIC, Python-style and natural-English, all four
+side by side), compile/run/step programs in the
 browser, and send HTTP/TCP requests to a program over a localStorage-backed PicoWAL store.</p>
 </blockquote>
 <h2 id="current-state">Current state</h2>
@@ -295,7 +296,7 @@ browser, and send HTTP/TCP requests to a program over a localStorage-backed Pico
 </tr>
 <tr>
 <td><code>vm/picoc.js</code></td>
-<td><strong>In-browser compiler</strong>: C-syntax &amp; BASIC → bytecode (byte-identical to Python)</td>
+<td><strong>In-browser compiler</strong>: all four frontends → bytecode (byte-identical to Python)</td>
 </tr>
 <tr>
 <td><code>vm/pico_hooks.h</code> <code>vm/pico_hooks.js</code></td>
@@ -311,7 +312,7 @@ browser, and send HTTP/TCP requests to a program over a localStorage-backed Pico
 </tr>
 <tr>
 <td><code>docs/playground.html</code></td>
-<td><strong>Playground + language guide</strong>: compile/run/step both styles live in-browser</td>
+<td><strong>Playground + language guide</strong>: compile/run/step all four styles live in-browser</td>
 </tr>
 <tr>
 <td><code>gen_playground.py</code></td>
@@ -344,6 +345,10 @@ browser, and send HTTP/TCP requests to a program over a localStorage-backed Pico
 <tr>
 <td><code>docs/picoscript-language-editor.md</code></td>
 <td>Language syntax, editor contract, completions</td>
+</tr>
+<tr>
+<td><code>docs/AGENT_PROMPT.md</code></td>
+<td><strong>Ready-to-use prompt</strong> for an LLM/agent to generate valid PicoScript (grammar, rules, host calls, worked 4-style examples)</td>
 </tr>
 <tr>
 <td><code>docs/picoscript-hardware.md</code></td>
@@ -394,7 +399,8 @@ python picoscript_build.py native examples/sum.pc --target aarch64-freestanding-
 identical bytecode</strong> — pick whichever surface reads best to you.</p>
 <h3 id="compile-debug-in-the-browser">Compile &amp; debug in the browser</h3>
 <p><code>docs/playground.html</code> is a self-contained page (no server) showing <strong>every
-construct in both styles side by side</strong>. The whole compiler is ported to JS
+construct in all four styles side by side</strong> (C-syntax, BASIC, Python-style and
+natural-English). The whole compiler is ported to JS
 (<code>vm/picoc.js</code>), so you can <strong>type C-syntax, BASIC, Python-style or natural-English
 source and compile it live</strong> in the browser, then run and single-step it on the
 inlined JS VM with full register/output/PC inspection. The GitHub Pages site
@@ -635,6 +641,133 @@ the usual symbols. Line comments <code>#</code>.</p>
 <p>The same compiler is ported to JavaScript (<code>vm/picoc.js</code>) so <strong>all four frontends</strong>
 compile <strong>in the browser</strong>, byte-for-byte identical to the Python compiler; see
 <code>docs/playground.html</code> and <code>docs/COMPILER_ARCHITECTURE.md</code>.</p>
+<p><strong>Construct parity at a glance</strong> — every construct exists in every frontend, spelled
+idiomatically for its surface; equivalent programs lower to identical bytecode:</p>
+<table>
+<thead>
+<tr>
+<th>Construct</th>
+<th>C-syntax</th>
+<th>BASIC</th>
+<th>Python-style</th>
+<th>Natural-English</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>declare / assign</td>
+<td><code>int x = e;</code></td>
+<td><code>DIM X = e</code> / <code>X = e</code></td>
+<td><code>x = e</code></td>
+<td><code>Set x to e.</code></td>
+</tr>
+<tr>
+<td>print</td>
+<td><code>print(x);</code></td>
+<td><code>PRINT X</code></td>
+<td><code>print(x)</code></td>
+<td><code>Print x.</code></td>
+</tr>
+<tr>
+<td>if / else</td>
+<td><code>if (c) {…} else {…}</code></td>
+<td><code>IF c THEN … ELSE … ENDIF</code></td>
+<td><code>if c:</code> / <code>elif</code> / <code>else:</code></td>
+<td><code>If c:</code> / <code>Otherwise if c:</code> / <code>Otherwise:</code></td>
+</tr>
+<tr>
+<td>while</td>
+<td><code>while (c) {…}</code></td>
+<td><code>WHILE c … ENDWHILE</code></td>
+<td><code>while c:</code></td>
+<td><code>While c:</code> / <code>As long as c:</code></td>
+</tr>
+<tr>
+<td>do-loop (post-test)</td>
+<td><code>do {…} while (c);</code></td>
+<td><code>DO … LOOP UNTIL c</code></td>
+<td><code>do:</code> … <code>until c</code></td>
+<td><code>Repeat:</code> … <code>Until c.</code></td>
+</tr>
+<tr>
+<td>counted for</td>
+<td><code>for (i=a; i&lt;=b; i++) {…}</code></td>
+<td><code>FOR I = a TO b … NEXT</code></td>
+<td><code>for i in range(a, b+1):</code></td>
+<td><code>For each i from a to b:</code></td>
+</tr>
+<tr>
+<td>index for (0..n-1)</td>
+<td><code>for (i=0; i&lt;n; i++) {…}</code></td>
+<td><code>FOREACH I IN n … ENDFOREACH</code></td>
+<td><code>for i in range(n):</code></td>
+<td><code>Repeat n times with i:</code></td>
+</tr>
+<tr>
+<td>switch</td>
+<td><code>switch (x) { case N: … break; default: … }</code></td>
+<td><code>SWITCH x CASE N … DEFAULT … ENDSWITCH</code></td>
+<td><code>match x:</code> / <code>case N:</code> / <code>case _:</code></td>
+<td><code>Choose x:</code> / <code>When N:</code> / <code>Otherwise:</code></td>
+</tr>
+<tr>
+<td>goto / label</td>
+<td><code>L: … goto L;</code></td>
+<td><code>L: … GOTO L</code></td>
+<td><code>label L</code> … <code>goto L</code></td>
+<td><code>Label L.</code> … <code>Go to L.</code></td>
+</tr>
+<tr>
+<td>subroutine</td>
+<td><code>void f(){…}</code> / <code>f();</code></td>
+<td><code>SUB f … ENDSUB</code> / <code>GOSUB f</code></td>
+<td><code>def f():</code> / <code>f()</code></td>
+<td><code>Define f:</code> / <code>Do f.</code></td>
+</tr>
+<tr>
+<td>break / continue</td>
+<td><code>break;</code> / <code>continue;</code></td>
+<td><code>BREAK</code> / <code>SKIP</code></td>
+<td><code>break</code> / <code>continue</code></td>
+<td><code>Stop.</code> / <code>Skip.</code></td>
+</tr>
+<tr>
+<td>ternary</td>
+<td><code>c ? a : b</code></td>
+<td><code>IIF(c, a, b)</code></td>
+<td><code>a if c else b</code></td>
+<td><code>a if c otherwise b</code></td>
+</tr>
+<tr>
+<td>inc / dec</td>
+<td><code>x++;</code> / <code>x--;</code></td>
+<td><code>INC X</code> / <code>DEC X</code></td>
+<td><code>x += 1</code> / <code>x -= 1</code></td>
+<td><code>Increase x by 1.</code> / <code>Decrease x by 1.</code></td>
+</tr>
+<tr>
+<td>modulo</td>
+<td><code>x % 7</code></td>
+<td><code>X MOD 7</code></td>
+<td><code>x % 7</code></td>
+<td><code>x modulo 7</code></td>
+</tr>
+<tr>
+<td>logical</td>
+<td><code>a &amp;&amp; b \|\| !c</code></td>
+<td><code>A AND B OR NOT C</code></td>
+<td><code>a and b or not c</code></td>
+<td><code>a and b or not c</code></td>
+</tr>
+<tr>
+<td>host call</td>
+<td><code>Net.Status(200);</code></td>
+<td><code>NET.STATUS(200)</code></td>
+<td><code>Net.Status(200)</code></td>
+<td><code>Net.Status(200).</code></td>
+</tr>
+</tbody>
+</table>
 <h3 id="interoperability">Interoperability</h3>
 <ul>
 <li>v1 and v2 compile to identical bytecode for equivalent logic</li>
@@ -936,8 +1069,9 @@ harness (<code>tests/test_pipeline.py</code>) asserts cross-target parity: the P
 VMs produce identical register files, output bytes and HTTP status from the same
 bytecode; emitted C/JS run and match; and the in-browser compiler's bytecode is
 byte-for-byte identical to the Python compiler.</p>
-<p>Compilation note: v1 (namespace/method), v2 (block-structured), and the high-level
-C-syntax and BASIC frontends all produce bytecode for the same frozen 16-opcode
+<p>Compilation note: v1 (namespace/method), v2 (block-structured), and the four
+high-level frontends (C-syntax, BASIC, Python-style, natural-English) all produce
+bytecode for the same frozen 16-opcode
 ISA. The high-level frontends lower through PicoIL (optimizer + loop-aware
 register allocator); the in-browser compiler (<code>vm/picoc.js</code>) mirrors the Python
 compiler exactly. Editors can round-trip register-level views (load bytecode,
@@ -948,13 +1082,13 @@ display in a v1/v2 view, re-save; output matches input).</p>
 <li><strong>L1 (Queue host):</strong> inbound queue drain + outbound queue emit integration.</li>
 <li><strong>L2 (Kernel-coupled):</strong> IRQ/SW_IRQ wake-fire lifecycle integrated with FIFO ownership transfer.</li>
 <li><strong>L3 (Profiling &amp; amortization):</strong> optional performance hooks (batching, profiling, fast-path validation).</li>
-<li><strong>L4 (v2 syntax):</strong> case-insensitive, block-structured source syntax + library namespaces (String, Number, Maths, DateTime, Locale). Includes the high-level C-syntax and BASIC frontends (named variables, expressions, structured control flow: <code>IF</code>, <code>WHILE</code>, <code>DO/LOOP</code>, <code>FOR</code>, <code>FOREACH</code>, <code>SWITCH</code>, <code>BREAK</code>/<code>SKIP</code>, <code>GOTO</code>/<code>GOSUB</code>) lowering through PicoIL.</li>
+<li><strong>L4 (v2 syntax):</strong> case-insensitive, block-structured source syntax + library namespaces (String, Number, Maths, DateTime, Locale). Includes the four high-level frontends — C-syntax, BASIC, Python-style and natural-English (named variables, expressions, structured control flow: <code>IF</code>, <code>WHILE</code>, <code>DO/LOOP</code>, <code>FOR</code>, <code>FOREACH</code>, <code>SWITCH</code>, <code>BREAK</code>/<code>SKIP</code>, <code>GOTO</code>/<code>GOSUB</code>) — lowering through PicoIL.</li>
 <li><strong>L5 (Context &amp; environment):</strong> lazy/on-demand context decoding (Environment.<em>, Context.</em> with cheap/expensive split + scratch bucket).</li>
 <li><strong>L6 (Cryptography):</strong> userland hashing (hardware-accelerated) + kernel-wrapped keyed operations (HMAC, Sign, Verify, Encrypt, Decrypt) with audit logging and handle-based key access.</li>
 </ul>
 <h2 id="12-open-items-for-v03">12. Open items for v0.3</h2>
 <ul>
-<li>~~v2 parser completion~~ (done: high-level C-syntax + BASIC frontends via PicoIL); round-trip decompiler (bytecode → v2 syntax) still open</li>
+<li>~~v2 parser completion~~ (done: four high-level frontends — C-syntax, BASIC, Python-style, natural-English — via PicoIL); round-trip decompiler (bytecode → v2 syntax) still open</li>
 <li>fixed descriptor binary schema (header fields, endian, size limits)</li>
 <li>host hook namespace hardening and ABI freeze with crypto + context + library hooks</li>
 <li>formal memory model for shared RAM windows</li>
@@ -968,13 +1102,19 @@ display in a v1/v2 view, re-save; output matches input).</p>
 <p>Multi-frontend, multi-target lowering pipeline (implements LANGUAGE_SPEC.md §10).</p>
 <pre><code>  Frontends                Shared IL (PicoIL)            Backends / Lowering
   ─────────                ──────────────────            ───────────────────
-  C-syntax   ──┐                                    ┌──&gt; lower_to_bytecode ──&gt; .pbc ──&gt; PicoVM (Python ref)
-  (.pc)        │                                    ├──&gt; lower_to_bytecode ──&gt; .pbc ──&gt; picovm.c (bare metal)
-               ├──&gt; AST ──&gt; lower ──&gt; PicoIL ───────┼──&gt; lower_to_bytecode ──&gt; .pbc ──&gt; picovm.js (browser/Node)
-  BASIC-like ──┘            (typed three-address     ├──&gt; lower_to_c  (toC)  ──&gt; .c  ──&gt; host cc ──&gt; Thumb/AArch64
-  (.pbas)                    + vreg alloc)            └──&gt; lower_to_js (toJS) ──&gt; .js ──&gt; browser / Node
+  C-syntax     ──┐                                  ┌──&gt; lower_to_bytecode ──&gt; .pbc ──&gt; PicoVM (Python ref)
+  (.pc)          │                                  ├──&gt; lower_to_bytecode ──&gt; .pbc ──&gt; picovm.c (bare metal)
+  BASIC-like   ──┤                                  ├──&gt; lower_to_bytecode ──&gt; .pbc ──&gt; picovm.js (browser/Node)
+  (.pbas)        ├──&gt; AST ──&gt; lower ──&gt; PicoIL ──────┤
+  Python-style ──┤          (typed three-address     ├──&gt; lower_to_c  (toC)  ──&gt; .c  ──&gt; host cc ──&gt; Thumb/AArch64
+  (.ppy)         │           + vreg alloc)           └──&gt; lower_to_js (toJS) ──&gt; .js ──&gt; browser / Node
+  Natural-Eng. ──┘
+  (.eng)
 </code></pre>
-<p>Both frontends are case-insensitive for keywords and variable names; namespace and
+<p>The Python-style and natural-English frontends <strong>reuse the BASIC AST and lowerer
+verbatim</strong> (only their tokenizer/parser differ), so equivalent programs in any of the
+four surfaces lower to byte-for-byte identical bytecode. All four frontends are
+case-insensitive for keywords and variable names; namespace and
 method names resolve case-insensitively to the canonical host ABI spelling.</p>
 <h2 id="components">Components</h2>
 <table>
@@ -1002,8 +1142,16 @@ method names resolve case-insensitively to the canonical host ABI spelling.</p>
 <td>BASIC-like frontend: block-structured parser + AST → PicoIL</td>
 </tr>
 <tr>
+<td><code>picoscript_python.py</code></td>
+<td>Python-style frontend: indentation tokenizer + parser → reuses BASIC AST/lowerer</td>
+</tr>
+<tr>
+<td><code>picoscript_english.py</code></td>
+<td>Natural-English frontend: controlled-NL parser → reuses BASIC AST/lowerer</td>
+</tr>
+<tr>
 <td><code>picoscript_build.py</code></td>
-<td>Unified driver: <code>.pc</code>/<code>.pbas</code> → IL → {run | bytecode | C | JS | native}</td>
+<td>Unified driver: <code>.pc</code>/<code>.pbas</code>/<code>.ppy</code>/<code>.eng</code> → IL → {run | bytecode | C | JS | native}</td>
 </tr>
 <tr>
 <td><code>vm/picovm.h</code> <code>vm/picovm.c</code></td>
@@ -1015,11 +1163,11 @@ method names resolve case-insensitively to the canonical host ABI spelling.</p>
 </tr>
 <tr>
 <td><code>vm/picoc.js</code></td>
-<td>In-browser compiler: faithful JS port of the IL + both frontends (byte-identical to Python)</td>
+<td>In-browser compiler: faithful JS port of the IL + all four frontends (byte-identical to Python)</td>
 </tr>
 <tr>
 <td><code>docs/playground.html</code></td>
-<td>Side-by-side language guide + live in-browser compile/run/step (inlines <code>picoc.js</code> + <code>picovm.js</code>)</td>
+<td>Four-style language guide + live in-browser compile/run/step (inlines <code>picoc.js</code> + <code>picovm.js</code>)</td>
 </tr>
 </tbody>
 </table>
@@ -1072,11 +1220,11 @@ in-browser compiler's bytecode is byte-for-byte identical to Python's.</p></div>
 | Hex | <code>.hex</code> | <code>1040002A</code> | Output view only |</p>
 <p>The register-level compiler must preserve bytecode across C/BASIC views: C-style source can be decompiled to BASIC and recompiled to the same bytecode, and BASIC can be decompiled to C-style and recompiled to the same bytecode.</p>
 <h2 id="high-level-source-frontends">High-Level Source Frontends</h2>
-<p>Beyond the register-level v1 syntax above, two <strong>high-level imperative frontends</strong>
+<p>Beyond the register-level v1 syntax above, four <strong>high-level imperative frontends</strong>
 compile through a shared intermediate language (PicoIL) to the same frozen
 bytecode — and also to C and JavaScript. They add named variables (auto-allocated
 to <code>R0</code>–<code>R15</code>) and integer expressions, so authors write ordinary code instead of
-hand-managing registers. Both are <strong>case-insensitive for keywords and variable
+hand-managing registers. All four are <strong>case-insensitive for keywords and variable
 names</strong>; <code>Namespace.Method</code> resolves case-insensitively to the canonical host name.</p>
 <table>
 <thead>
@@ -1695,6 +1843,348 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
 <li><code>picoscript.py</code></li>
 <li><code>picoscript_opcodes.py</code></li>
 <li><code>picowal_hx_cu/picoscript_decode.v</code></li>
+</ul></div><div class="docpanel" id="doc-agent"><h1 id="picoscript-generation-prompt-for-llms-coding-agents">PicoScript Generation Prompt (for LLMs / coding agents)</h1>
+<p>This file is a <strong>ready-to-use system prompt</strong> for an agent or model that must
+<em>generate</em> valid PicoScript. Paste the block below (everything between the
+<code>────</code> rules) as the system / instruction prompt; append the user's task. The
+notes after it explain the design and how to keep the prompt in sync with the
+compiler.</p>
+<p>Everything here is grounded in the actual compiler (<code>picoscript_*.py</code>,
+<code>vm/picoc.js</code>) and runtime (<code>picoscript_vm.py</code>, <code>vm/picovm.js</code>). Only constructs
+and host calls that compile <strong>and run</strong> on the reference VM are documented as
+usable.</p>
+<hr />
+<p>────────────────────────────────────────────────────────────────────────────
+You write <strong>PicoScript</strong>: a tiny, deterministic, integer-only imperative
+language that compiles to a frozen 16-opcode bytecode and runs identically on a
+Python VM, a bare-metal C VM, and a JavaScript VM.</p>
+<h2 id="surface-styles">Surface styles</h2>
+<p>PicoScript has four interchangeable surface styles. <strong>A program is written in
+exactly one style.</strong> Pick the style the user asks for; default to <strong>C-syntax</strong>
+if unspecified. All four lower to identical bytecode, so the choice is purely
+about readability.</p>
+<table>
+<thead>
+<tr>
+<th>Style</th>
+<th>Looks like</th>
+<th>Block syntax</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>c</code></td>
+<td>C / curly braces</td>
+<td><code>{ … }</code>, <code>;</code> statements</td>
+</tr>
+<tr>
+<td><code>basic</code></td>
+<td>BASIC, uppercase keywords</td>
+<td><code>IF…ENDIF</code>, line statements</td>
+</tr>
+<tr>
+<td><code>python</code></td>
+<td>Python, significant indentation</td>
+<td><code>:</code> + indent</td>
+</tr>
+<tr>
+<td><code>english</code></td>
+<td>Plain imperative English sentences</td>
+<td><code>:</code> + indent, <code>.</code> ends lines</td>
+</tr>
+</tbody>
+</table>
+<p>Keywords, variable names and <code>Namespace.Method</code> names are <strong>case-insensitive</strong>.</p>
+<h2 id="hard-rules-violating-these-produces-code-that-will-not-compile-or-run">Hard rules (violating these produces code that will not compile or run)</h2>
+<ol>
+<li><strong>Integers only.</strong> Every value is a signed 32-bit int. There are no floats,
+   no first-class strings, no objects, no arrays-as-values. (Text is handled as
+   byte <em>spans</em>; see "Text &amp; output".)</li>
+<li><strong>One global scope.</strong> All variables are global. Subroutines take <strong>no
+   parameters</strong> and share the global variables (use them like shared registers).</li>
+<li><strong>≤ 16 live variables</strong> at once (they map to registers <code>R0</code>–<code>R15</code>; the
+   allocator spills, but keep programs small).</li>
+<li><strong>No string variables.</strong> A string literal is only valid as a direct argument
+   to <code>print(...)</code> or a host call that expects a span (e.g. <code>Net.Type</code>,
+   <code>Json.Key</code>). You cannot assign a string to a variable.</li>
+<li><strong>Deterministic.</strong> No wall-clock, no ambient I/O. The only randomness is
+   <code>Random.U32</code> (explicit). The only output is <code>print</code> / <code>Io.*</code> / <code>Net.*</code>.</li>
+<li><strong>Host calls take at most 2 value arguments and return at most 1 value</strong>
+   (<code>rd = Ns.Method(a, b)</code>). Never pass 3+ args to a namespace method.</li>
+</ol>
+<h2 id="constructs-every-construct-exists-in-every-style">Constructs (every construct exists in every style)</h2>
+<table>
+<thead>
+<tr>
+<th>Construct</th>
+<th>c</th>
+<th>basic</th>
+<th>python</th>
+<th>english</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>declare / assign</td>
+<td><code>int x = e;</code></td>
+<td><code>DIM X = e</code> / <code>X = e</code></td>
+<td><code>x = e</code></td>
+<td><code>Set x to e.</code></td>
+</tr>
+<tr>
+<td>print number</td>
+<td><code>print(x);</code></td>
+<td><code>PRINT X</code></td>
+<td><code>print(x)</code></td>
+<td><code>Print x.</code></td>
+</tr>
+<tr>
+<td>print string</td>
+<td><code>print("hi");</code></td>
+<td><code>PRINT "hi"</code></td>
+<td><code>print("hi")</code></td>
+<td><code>Print "hi".</code></td>
+</tr>
+<tr>
+<td>if / else</td>
+<td><code>if (c) {…} else {…}</code></td>
+<td><code>IF c THEN … ELSE … ENDIF</code></td>
+<td><code>if c:</code> / <code>elif</code> / <code>else:</code></td>
+<td><code>If c:</code> / <code>Otherwise if c:</code> / <code>Otherwise:</code></td>
+</tr>
+<tr>
+<td>while</td>
+<td><code>while (c) {…}</code></td>
+<td><code>WHILE c … ENDWHILE</code></td>
+<td><code>while c:</code></td>
+<td><code>While c:</code> / <code>As long as c:</code></td>
+</tr>
+<tr>
+<td>do (post-test)</td>
+<td><code>do {…} while (c);</code></td>
+<td><code>DO … LOOP UNTIL c</code></td>
+<td><code>do:</code> … <code>until c</code></td>
+<td><code>Repeat:</code> … <code>Until c.</code></td>
+</tr>
+<tr>
+<td>for (counted)</td>
+<td><code>for (i=a;i&lt;=b;i++) {…}</code></td>
+<td><code>FOR I=a TO b … NEXT</code></td>
+<td><code>for i in range(a,b+1):</code></td>
+<td><code>For each i from a to b:</code></td>
+</tr>
+<tr>
+<td>for (0..n-1)</td>
+<td><code>for (i=0;i&lt;n;i++) {…}</code></td>
+<td><code>FOREACH I IN n … ENDFOREACH</code></td>
+<td><code>for i in range(n):</code></td>
+<td><code>Repeat n times with i:</code></td>
+</tr>
+<tr>
+<td>switch</td>
+<td><code>switch(x){case N: … break; default: …}</code></td>
+<td><code>SWITCH x CASE N … DEFAULT … ENDSWITCH</code></td>
+<td><code>match x:</code>/<code>case N:</code>/<code>case _:</code></td>
+<td><code>Choose x:</code>/<code>When N:</code>/<code>Otherwise:</code></td>
+</tr>
+<tr>
+<td>goto / label</td>
+<td><code>L: … goto L;</code></td>
+<td><code>L: … GOTO L</code></td>
+<td><code>label L</code> … <code>goto L</code></td>
+<td><code>Label L.</code> … <code>Go to L.</code></td>
+</tr>
+<tr>
+<td>subroutine</td>
+<td><code>void f(){…}</code> / <code>f();</code></td>
+<td><code>SUB f … ENDSUB</code> / <code>GOSUB f</code></td>
+<td><code>def f():</code> / <code>f()</code></td>
+<td><code>Define f:</code> / <code>Do f.</code></td>
+</tr>
+<tr>
+<td>break / continue</td>
+<td><code>break;</code> / <code>continue;</code></td>
+<td><code>BREAK</code> / <code>SKIP</code></td>
+<td><code>break</code> / <code>continue</code></td>
+<td><code>Stop.</code> / <code>Skip.</code></td>
+</tr>
+<tr>
+<td>return</td>
+<td><code>return;</code></td>
+<td><code>RETURN</code></td>
+<td><code>return</code></td>
+<td><code>Return.</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="expressions-operators">Expressions &amp; operators</h2>
+<table>
+<thead>
+<tr>
+<th>Op</th>
+<th>c</th>
+<th>basic</th>
+<th>python</th>
+<th>english</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>arithmetic</td>
+<td><code>+ - * /</code></td>
+<td><code>+ - * /</code></td>
+<td><code>+ - * /</code></td>
+<td><code>plus minus times divided by</code></td>
+</tr>
+<tr>
+<td>modulo</td>
+<td><code>%</code></td>
+<td><code>MOD</code></td>
+<td><code>%</code></td>
+<td><code>modulo</code></td>
+</tr>
+<tr>
+<td>compare</td>
+<td><code>== != &lt; &gt; &lt;= &gt;=</code></td>
+<td><code>= &lt;&gt; &lt; &gt; &lt;= &gt;=</code> or <code>EQ NE LT GT LE GE</code></td>
+<td><code>== != &lt; &gt; &lt;= &gt;=</code></td>
+<td><code>is</code>, <code>is not</code>, <code>is greater than</code>, <code>is less than</code>, <code>is at least</code>, <code>is at most</code>, <code>exceeds</code></td>
+</tr>
+<tr>
+<td>logical</td>
+<td><code>&amp;&amp; \|\| !</code></td>
+<td><code>AND OR NOT</code></td>
+<td><code>and or not</code></td>
+<td><code>and or not</code></td>
+</tr>
+<tr>
+<td>ternary</td>
+<td><code>c ? a : b</code></td>
+<td><code>IIF(c,a,b)</code></td>
+<td><code>a if c else b</code></td>
+<td><code>a if c otherwise b</code></td>
+</tr>
+<tr>
+<td>increment</td>
+<td><code>x++</code> / <code>x--</code></td>
+<td><code>INC X</code>/<code>DEC X</code></td>
+<td><code>x += 1</code>/<code>x -= 1</code></td>
+<td><code>Increase x by 1.</code>/<code>Decrease x by 1.</code></td>
+</tr>
+<tr>
+<td>compound</td>
+<td><code>+= -= *= /= %=</code></td>
+<td><code>+= -= *= /=</code></td>
+<td><code>+= -= *= /= %=</code></td>
+<td><code>Increase/Decrease/Multiply/Divide x by …</code></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>In <code>english</code>, <code>times</code> is also the <code>*</code> operator, so <code>Repeat n times:</code> needs <code>n</code>
+to be a simple value or a parenthesised expression — e.g. <code>Repeat (a+b) times:</code>.</p>
+</blockquote>
+<h2 id="text-output">Text &amp; output</h2>
+<p>Text exists only as <strong>UTF-8 byte spans</strong> in arena memory. To produce text:</p>
+<ul>
+<li><code>print("literal")</code> — emit a string literal (works in every style). Internally
+  it stages the bytes into scratch arena and calls <code>Io.Write</code>.</li>
+<li><code>print(number)</code> — emit a value's 4 big-endian bytes.</li>
+<li>Build bytes by hand: <code>Memory.Set(addr, byteval)</code> then
+  <code>span = Span.Make(startAddr, length)</code>, then <code>Io.Write(span)</code>.</li>
+<li>Streaming JSON / XML: open a writer with <code>Utf8Writer.New(...)</code>, then call
+  <code>Json.*</code> / <code>Xml.*</code> (auto-commas and escaping are handled by the runtime), and
+  finish with <code>Io.Write(Utf8Writer.ToSpan(w))</code>.</li>
+</ul>
+<h2 id="host-namespaces-that-actually-run-on-the-vm">Host namespaces that actually run on the VM</h2>
+<p>Only these are implemented end-to-end; do <strong>not</strong> invent others.</p>
+<ul>
+<li><code>Net.Status(code)</code>, <code>Net.Type("mime")</code>, <code>Net.Body(span)</code> — HTTP response.</li>
+<li><code>print(...)</code>, <code>Io.Write(span)</code>, <code>Io.WriteByte(reg)</code> — output buffer.</li>
+<li><code>Memory.Set(addr,val)</code>, <code>Memory.Get(addr)</code> — byte memory.</li>
+<li><code>Span.Make(addr,len)</code>, <code>Span.Slice(span,off)</code>, <code>Span.Materialize(span)</code>,
+  <code>Span.Len(span)</code>, <code>Span.Get(span,idx)</code> — spans (Slice = zero-copy view,
+  Materialize = copy).</li>
+<li><code>Storage.UsePack(n)</code>, <code>Storage.AddCard()</code>, <code>Storage.EditCard(id)</code>,
+  <code>Storage.SetField(span,val)</code>, <code>Storage.GetField(span)</code>,
+  <code>Storage.DeleteCard(id)</code>, <code>Storage.QueryCard(querySpan)</code>,
+  <code>Storage.QueryResult(i)</code> — program-level card store.</li>
+<li><code>Utf8Writer.*</code>, <code>Utf8Reader.*</code>, <code>Json.*</code>, <code>Xml.*</code> — text/binary builders.</li>
+<li><code>Random.U32(seedReg)</code>, <code>Queue.Enqueue/Dequeue/Depth(...)</code>.</li>
+</ul>
+<h2 id="output-format">Output format</h2>
+<ul>
+<li>Emit <strong>only</strong> the PicoScript program — no prose, no markdown fences, unless
+  the user asks for an explanation.</li>
+<li>Use exactly one surface style for the whole program.</li>
+<li>Keep programs minimal and deterministic; prefer the constructs above.
+────────────────────────────────────────────────────────────────────────────</li>
+</ul>
+<h2 id="worked-example-the-same-program-in-all-four-styles">Worked example — the same program in all four styles</h2>
+<p>Sum 1..10, skipping multiples of 3, then print the total (→ <code>37</code>).</p>
+<p><strong>c</strong></p>
+<pre><code class="language-c">int s = 0;
+for (i = 1; i &lt;= 10; i++) {
+    if (i % 3 == 0) { continue; }
+    s += i;
+}
+print(s);
+</code></pre>
+<p><strong>basic</strong></p>
+<pre><code class="language-basic">DIM S = 0
+FOR I = 1 TO 10
+    IF I MOD 3 = 0 THEN
+        SKIP
+    ENDIF
+    S += I
+NEXT
+PRINT S
+</code></pre>
+<p><strong>python</strong></p>
+<pre><code class="language-python">s = 0
+for i in range(1, 11):
+    if i % 3 == 0:
+        continue
+    s += i
+print(s)
+</code></pre>
+<p><strong>english</strong></p>
+<pre><code class="language-text">Set s to 0.
+For each i from 1 to 10:
+    If i modulo 3 is 0:
+        Skip.
+    Increase s by i.
+Print s.
+</code></pre>
+<h2 id="validating-generated-code">Validating generated code</h2>
+<p>Anything the model emits can be checked deterministically with the toolchain:</p>
+<pre><code class="language-bash"># compile + run a generated program (style = c | basic | python | english).
+# --print shows the numeric PRINT output; --lang forces the frontend.
+python picoscript_build.py run path/to/program.&lt;ext&gt; --lang &lt;style&gt; --print
+
+# the same compiler in the browser / Node — picoc_compile.js emits one hex word
+# per line, picovm_run.js executes them and prints REGS / OUT:
+node vm/picoc_compile.js &lt;style&gt; &lt; program.txt | node vm/picovm_run.js
+</code></pre>
+<p>If a program compiles and runs, it is valid PicoScript. For synthetic-data
+generation, generate the <strong>same</strong> algorithm in two or more styles and assert the
+VM outputs are identical — that is exactly how <code>tests/test_pipeline.py</code> proves
+cross-style parity, and it is a strong correctness signal for fine-tuning data.</p>
+<h2 id="keeping-this-prompt-in-sync-with-the-compiler">Keeping this prompt in sync with the compiler</h2>
+<ul>
+<li><strong>Constructs / operators:</strong> mirror the parity tables in
+  <code>LANGUAGE_SPEC.md</code> and <code>docs/picoscript-language-editor.md</code>. Those tables and
+  this prompt are generated/checked against the live gallery in
+  <code>gen_playground.py</code> (<code>CONSTRUCTS</code>), which compiles and runs every snippet in
+  all four styles on every build.</li>
+<li><strong>Host namespaces:</strong> the source of truth is <code>HOST_HOOK_CODES</code> in
+  <code>picoscript_lang.py</code>, but only list a namespace here once it is actually
+  dispatched by <code>HostApi.call</code> in <code>picoscript_vm.py</code> (and mirrored in
+  <code>vm/picovm.js</code>). Hooks present in the table but unimplemented in the VM (e.g.
+  <code>String.*</code>, <code>Number.*</code>, <code>Maths.*</code> at time of writing) must <strong>not</strong> be offered
+  to the generator.</li>
+<li><strong>8-bit hook codes:</strong> new host hooks must use a code ≤ <code>0xFF</code> (the runtime
+  dispatches on <code>imm16 &amp; 0xFF</code>); codes ≥ <code>0x100</code> are unreachable.</li>
 </ul></div>
 </div>
 

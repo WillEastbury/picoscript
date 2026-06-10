@@ -47,11 +47,11 @@ The register-level compiler must preserve bytecode across C/BASIC views: C-style
 
 ## High-Level Source Frontends
 
-Beyond the register-level v1 syntax above, two **high-level imperative frontends**
+Beyond the register-level v1 syntax above, four **high-level imperative frontends**
 compile through a shared intermediate language (PicoIL) to the same frozen
 bytecode — and also to C and JavaScript. They add named variables (auto-allocated
 to `R0`–`R15`) and integer expressions, so authors write ordinary code instead of
-hand-managing registers. Both are **case-insensitive for keywords and variable
+hand-managing registers. All four are **case-insensitive for keywords and variable
 names**; `Namespace.Method` resolves case-insensitively to the canonical host name.
 
 | Frontend | File | Extension | Style |

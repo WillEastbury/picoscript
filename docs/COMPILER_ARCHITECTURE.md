@@ -5,14 +5,20 @@ Multi-frontend, multi-target lowering pipeline (implements LANGUAGE_SPEC.md §10
 ```
   Frontends                Shared IL (PicoIL)            Backends / Lowering
   ─────────                ──────────────────            ───────────────────
-  C-syntax   ──┐                                    ┌──> lower_to_bytecode ──> .pbc ──> PicoVM (Python ref)
-  (.pc)        │                                    ├──> lower_to_bytecode ──> .pbc ──> picovm.c (bare metal)
-               ├──> AST ──> lower ──> PicoIL ───────┼──> lower_to_bytecode ──> .pbc ──> picovm.js (browser/Node)
-  BASIC-like ──┘            (typed three-address     ├──> lower_to_c  (toC)  ──> .c  ──> host cc ──> Thumb/AArch64
-  (.pbas)                    + vreg alloc)            └──> lower_to_js (toJS) ──> .js ──> browser / Node
+  C-syntax     ──┐                                  ┌──> lower_to_bytecode ──> .pbc ──> PicoVM (Python ref)
+  (.pc)          │                                  ├──> lower_to_bytecode ──> .pbc ──> picovm.c (bare metal)
+  BASIC-like   ──┤                                  ├──> lower_to_bytecode ──> .pbc ──> picovm.js (browser/Node)
+  (.pbas)        ├──> AST ──> lower ──> PicoIL ──────┤
+  Python-style ──┤          (typed three-address     ├──> lower_to_c  (toC)  ──> .c  ──> host cc ──> Thumb/AArch64
+  (.ppy)         │           + vreg alloc)           └──> lower_to_js (toJS) ──> .js ──> browser / Node
+  Natural-Eng. ──┘
+  (.eng)
 ```
 
-Both frontends are case-insensitive for keywords and variable names; namespace and
+The Python-style and natural-English frontends **reuse the BASIC AST and lowerer
+verbatim** (only their tokenizer/parser differ), so equivalent programs in any of the
+four surfaces lower to byte-for-byte identical bytecode. All four frontends are
+case-insensitive for keywords and variable names; namespace and
 method names resolve case-insensitively to the canonical host ABI spelling.
 
 ## Components
@@ -23,11 +29,13 @@ method names resolve case-insensitively to the canonical host ABI spelling.
 | `picoscript_vm.py`     | Python reference VM: executes the 16-op bytecode ISA + host-hook dispatch (the runtime) |
 | `picoscript_cfront.py` | C-syntax frontend: lexer + Pratt parser + AST → PicoIL |
 | `picoscript_basic.py`  | BASIC-like frontend: block-structured parser + AST → PicoIL |
-| `picoscript_build.py`  | Unified driver: `.pc`/`.pbas` → IL → {run \| bytecode \| C \| JS \| native} |
+| `picoscript_python.py` | Python-style frontend: indentation tokenizer + parser → reuses BASIC AST/lowerer |
+| `picoscript_english.py`| Natural-English frontend: controlled-NL parser → reuses BASIC AST/lowerer |
+| `picoscript_build.py`  | Unified driver: `.pc`/`.pbas`/`.ppy`/`.eng` → IL → {run \| bytecode \| C \| JS \| native} |
 | `vm/picovm.h` `vm/picovm.c` | Portable C VM for embedding on RP2354B / PIOS (freestanding-clean) |
 | `vm/picovm.js`         | JavaScript VM for browser/Node with a step-debugging API |
-| `vm/picoc.js`          | In-browser compiler: faithful JS port of the IL + both frontends (byte-identical to Python) |
-| `docs/playground.html` | Side-by-side language guide + live in-browser compile/run/step (inlines `picoc.js` + `picovm.js`) |
+| `vm/picoc.js`          | In-browser compiler: faithful JS port of the IL + all four frontends (byte-identical to Python) |
+| `docs/playground.html` | Four-style language guide + live in-browser compile/run/step (inlines `picoc.js` + `picovm.js`) |
 
 ## Lowering = performance lever
 

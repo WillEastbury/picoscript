@@ -211,6 +211,28 @@ The same compiler is ported to JavaScript (`vm/picoc.js`) so **all four frontend
 compile **in the browser**, byte-for-byte identical to the Python compiler; see
 `docs/playground.html` and `docs/COMPILER_ARCHITECTURE.md`.
 
+**Construct parity at a glance** — every construct exists in every frontend, spelled
+idiomatically for its surface; equivalent programs lower to identical bytecode:
+
+| Construct | C-syntax | BASIC | Python-style | Natural-English |
+|-----------|----------|-------|--------------|-----------------|
+| declare / assign | `int x = e;` | `DIM X = e` / `X = e` | `x = e` | `Set x to e.` |
+| print | `print(x);` | `PRINT X` | `print(x)` | `Print x.` |
+| if / else | `if (c) {…} else {…}` | `IF c THEN … ELSE … ENDIF` | `if c:` / `elif` / `else:` | `If c:` / `Otherwise if c:` / `Otherwise:` |
+| while | `while (c) {…}` | `WHILE c … ENDWHILE` | `while c:` | `While c:` / `As long as c:` |
+| do-loop (post-test) | `do {…} while (c);` | `DO … LOOP UNTIL c` | `do:` … `until c` | `Repeat:` … `Until c.` |
+| counted for | `for (i=a; i<=b; i++) {…}` | `FOR I = a TO b … NEXT` | `for i in range(a, b+1):` | `For each i from a to b:` |
+| index for (0..n-1) | `for (i=0; i<n; i++) {…}` | `FOREACH I IN n … ENDFOREACH` | `for i in range(n):` | `Repeat n times with i:` |
+| switch | `switch (x) { case N: … break; default: … }` | `SWITCH x CASE N … DEFAULT … ENDSWITCH` | `match x:` / `case N:` / `case _:` | `Choose x:` / `When N:` / `Otherwise:` |
+| goto / label | `L: … goto L;` | `L: … GOTO L` | `label L` … `goto L` | `Label L.` … `Go to L.` |
+| subroutine | `void f(){…}` / `f();` | `SUB f … ENDSUB` / `GOSUB f` | `def f():` / `f()` | `Define f:` / `Do f.` |
+| break / continue | `break;` / `continue;` | `BREAK` / `SKIP` | `break` / `continue` | `Stop.` / `Skip.` |
+| ternary | `c ? a : b` | `IIF(c, a, b)` | `a if c else b` | `a if c otherwise b` |
+| inc / dec | `x++;` / `x--;` | `INC X` / `DEC X` | `x += 1` / `x -= 1` | `Increase x by 1.` / `Decrease x by 1.` |
+| modulo | `x % 7` | `X MOD 7` | `x % 7` | `x modulo 7` |
+| logical | `a && b \|\| !c` | `A AND B OR NOT C` | `a and b or not c` | `a and b or not c` |
+| host call | `Net.Status(200);` | `NET.STATUS(200)` | `Net.Status(200)` | `Net.Status(200).` |
+
 
 ### Interoperability
 
@@ -538,8 +560,9 @@ VMs produce identical register files, output bytes and HTTP status from the same
 bytecode; emitted C/JS run and match; and the in-browser compiler's bytecode is
 byte-for-byte identical to the Python compiler.
 
-Compilation note: v1 (namespace/method), v2 (block-structured), and the high-level
-C-syntax and BASIC frontends all produce bytecode for the same frozen 16-opcode
+Compilation note: v1 (namespace/method), v2 (block-structured), and the four
+high-level frontends (C-syntax, BASIC, Python-style, natural-English) all produce
+bytecode for the same frozen 16-opcode
 ISA. The high-level frontends lower through PicoIL (optimizer + loop-aware
 register allocator); the in-browser compiler (`vm/picoc.js`) mirrors the Python
 compiler exactly. Editors can round-trip register-level views (load bytecode,
@@ -551,13 +574,13 @@ display in a v1/v2 view, re-save; output matches input).
 - **L1 (Queue host):** inbound queue drain + outbound queue emit integration.
 - **L2 (Kernel-coupled):** IRQ/SW_IRQ wake-fire lifecycle integrated with FIFO ownership transfer.
 - **L3 (Profiling & amortization):** optional performance hooks (batching, profiling, fast-path validation).
-- **L4 (v2 syntax):** case-insensitive, block-structured source syntax + library namespaces (String, Number, Maths, DateTime, Locale). Includes the high-level C-syntax and BASIC frontends (named variables, expressions, structured control flow: `IF`, `WHILE`, `DO/LOOP`, `FOR`, `FOREACH`, `SWITCH`, `BREAK`/`SKIP`, `GOTO`/`GOSUB`) lowering through PicoIL.
+- **L4 (v2 syntax):** case-insensitive, block-structured source syntax + library namespaces (String, Number, Maths, DateTime, Locale). Includes the four high-level frontends — C-syntax, BASIC, Python-style and natural-English (named variables, expressions, structured control flow: `IF`, `WHILE`, `DO/LOOP`, `FOR`, `FOREACH`, `SWITCH`, `BREAK`/`SKIP`, `GOTO`/`GOSUB`) — lowering through PicoIL.
 - **L5 (Context & environment):** lazy/on-demand context decoding (Environment.*, Context.* with cheap/expensive split + scratch bucket).
 - **L6 (Cryptography):** userland hashing (hardware-accelerated) + kernel-wrapped keyed operations (HMAC, Sign, Verify, Encrypt, Decrypt) with audit logging and handle-based key access.
 
 ## 12. Open items for v0.3
 
-- ~~v2 parser completion~~ (done: high-level C-syntax + BASIC frontends via PicoIL); round-trip decompiler (bytecode → v2 syntax) still open
+- ~~v2 parser completion~~ (done: four high-level frontends — C-syntax, BASIC, Python-style, natural-English — via PicoIL); round-trip decompiler (bytecode → v2 syntax) still open
 - fixed descriptor binary schema (header fields, endian, size limits)
 - host hook namespace hardening and ABI freeze with crypto + context + library hooks
 - formal memory model for shared RAM windows

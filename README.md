@@ -4,7 +4,8 @@ Deterministic userland scripting language for embedded queue-driven processing i
 
 > **▶ Live playground &amp; reference:** open **[`docs/index.html`](docs/index.html)** (or the
 > GitHub Pages site at **https://willeastbury.github.io/picoscript/**) to browse every
-> language construct (C-style and BASIC side by side), compile/run/step programs in the
+> language construct (C-style, BASIC, Python-style and natural-English, all four
+> side by side), compile/run/step programs in the
 > browser, and send HTTP/TCP requests to a program over a localStorage-backed PicoWAL store.
 
 ## Current state
@@ -37,11 +38,11 @@ PicoScript runs inside picoweb as deterministic, bounded userland logic for:
 | `picoscript_build.py` | unified driver: source → `run` / `emit il\|bytecode\|c\|js` / `native` |
 | `vm/picovm.h` `vm/picovm.c` | portable **C VM** for bare metal (RP2354B/PIOS); freestanding-clean |
 | `vm/picovm.js` | **JS VM** for browser/Node debugging (step API; 32-bit parity) |
-| `vm/picoc.js` | **In-browser compiler**: C-syntax & BASIC → bytecode (byte-identical to Python) |
+| `vm/picoc.js` | **In-browser compiler**: all four frontends → bytecode (byte-identical to Python) |
 | `vm/pico_hooks.h` `vm/pico_hooks.js` | auto-generated host-hook codes (kept in sync with `picoscript_lang.py`) |
 | `picoserializer.py` `vm/picoserializer.js` | **PicoBinarySerializer** for cards (magic `PSC1`, self-describing, deterministic field order); byte-identical Python/JS pair |
 | `picostore.py` `vm/picostore.js` | **PicoStore**: pack CRUD (create/read/update/patch/delete/all) + **card query language** (`field OP value [AND\|OR ...]`); result-identical Python/JS pair |
-| `docs/playground.html` | **Playground + language guide**: compile/run/step both styles live in-browser |
+| `docs/playground.html` | **Playground + language guide**: compile/run/step all four styles live in-browser |
 | `gen_playground.py` | builds `docs/playground.html` from compiled, verified examples |
 | `gen_site.py` | builds the consolidated GitHub Pages site `docs/index.html` (guide, playground, HTTP/TCP simulator, **Cards/Query/Spans** data engine, reference docs) |
 | `picoscript_runtime.py` | reference runtime structures (arena, lease manager, profiling, queue batching) |
@@ -50,6 +51,7 @@ PicoScript runs inside picoweb as deterministic, bounded userland logic for:
 | `LANGUAGE_SPEC.md` | Formal runtime and access model spec |
 | `docs/COMPILER_ARCHITECTURE.md` | Frontend/IL/backend lowering pipeline |
 | `docs/picoscript-language-editor.md` | Language syntax, editor contract, completions |
+| `docs/AGENT_PROMPT.md` | **Ready-to-use prompt** for an LLM/agent to generate valid PicoScript (grammar, rules, host calls, worked 4-style examples) |
 | `docs/picoscript-hardware.md` | Hardware bytecode contract |
 
 ## Toolchain: four frontends, one IL, three backends
@@ -106,7 +108,8 @@ identical bytecode** — pick whichever surface reads best to you.
 ### Compile &amp; debug in the browser
 
 `docs/playground.html` is a self-contained page (no server) showing **every
-construct in both styles side by side**. The whole compiler is ported to JS
+construct in all four styles side by side** (C-syntax, BASIC, Python-style and
+natural-English). The whole compiler is ported to JS
 (`vm/picoc.js`), so you can **type C-syntax, BASIC, Python-style or natural-English
 source and compile it live** in the browser, then run and single-step it on the
 inlined JS VM with full register/output/PC inspection. The GitHub Pages site
