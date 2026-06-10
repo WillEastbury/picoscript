@@ -733,6 +733,28 @@ def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool) -> str:
         dst = f"{name_of(ins.dst)} = " if isinstance(ins.dst, VReg) else ""
         a = opnd(ins.args[0]) if len(ins.args) >= 1 else "0"
         b = opnd(ins.args[1]) if len(ins.args) >= 2 else "0"
+        if ins.ns == "Bits" and isinstance(ins.dst, VReg):
+            da = f"(uint32_t)({a})"
+            db = f"(uint32_t)({b})"
+            sh = f"({db} & 31)"
+            if ins.method == "And":
+                expr = f"(int64_t)(int32_t)(({da} & {db}) & 0xFFFFFFFFu)"
+            elif ins.method == "Or":
+                expr = f"(int64_t)(int32_t)(({da} | {db}) & 0xFFFFFFFFu)"
+            elif ins.method == "Xor":
+                expr = f"(int64_t)(int32_t)(({da} ^ {db}) & 0xFFFFFFFFu)"
+            elif ins.method == "Not":
+                expr = f"(int64_t)(int32_t)((~{da}) & 0xFFFFFFFFu)"
+            elif ins.method == "Shl":
+                expr = f"(int64_t)(int32_t)(({da} << {sh}) & 0xFFFFFFFFu)"
+            elif ins.method == "Shr":
+                expr = f"(int64_t)(int32_t)({da} >> {sh})"
+            elif ins.method == "Sar":
+                expr = f"(int64_t)((int32_t){da} >> {sh})"
+            else:
+                expr = None
+            if expr is not None:
+                return f"    {name_of(ins.dst)} = {expr};"
         return f"    {dst}pv_host(ctx, \"{ins.ns}\", \"{ins.method}\", {a}, {b});"
     if op == "load":
         return f"    {name_of(ins.dst)} = pv_load(ctx, {ins.imm});"
@@ -935,6 +957,25 @@ def _emit_js_inst(ins: Inst, jop, jname, label_block, label_to_func) -> Tuple[st
         dst = f"{jname(ins.dst)} = " if isinstance(ins.dst, VReg) else ""
         a = jop(ins.args[0]) if len(ins.args) >= 1 else "0"
         b = jop(ins.args[1]) if len(ins.args) >= 2 else "0"
+        if ins.ns == "Bits" and isinstance(ins.dst, VReg):
+            if ins.method == "And":
+                expr = f"(({a} & {b}) | 0)"
+            elif ins.method == "Or":
+                expr = f"(({a} | {b}) | 0)"
+            elif ins.method == "Xor":
+                expr = f"(({a} ^ {b}) | 0)"
+            elif ins.method == "Not":
+                expr = f"((~{a}) | 0)"
+            elif ins.method == "Shl":
+                expr = f"(({a} << ({b} & 31)) | 0)"
+            elif ins.method == "Shr":
+                expr = f"(({a} >>> ({b} & 31)) | 0)"
+            elif ins.method == "Sar":
+                expr = f"(({a} >> ({b} & 31)) | 0)"
+            else:
+                expr = None
+            if expr is not None:
+                return f"{jname(ins.dst)} = {expr};", False
         return f'{dst}rt.host("{ins.ns}", "{ins.method}", {a}, {b});', False
     if op == "load":
         return f"{jname(ins.dst)} = rt.load({ins.imm});", False

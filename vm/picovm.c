@@ -87,7 +87,7 @@ int pv_cond(pv_ctx *ctx, int mode) { (void)ctx; (void)mode; return 0; }
 
 void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
 {
-    (void)rs2; (void)imm16;
+    (void)imm16;
     if (hook == PV_HOOK_RANDOM_U32) {
         uint64_t x = ctx->rng_state;
         x ^= (x << 13) & MASK32;
@@ -115,6 +115,34 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
     }
     if (hook == PV_HOOK_QUEUE_DEPTH) {
         ctx->regs[rd] = ctx->qdepth[rs1 & 7];
+        return;
+    }
+    if (hook == PV_HOOK_BITS_AND) {
+        ctx->regs[rd] = (int32_t)((uint32_t)ctx->regs[rs1] & (uint32_t)ctx->regs[rs2]);
+        return;
+    }
+    if (hook == PV_HOOK_BITS_OR) {
+        ctx->regs[rd] = (int32_t)((uint32_t)ctx->regs[rs1] | (uint32_t)ctx->regs[rs2]);
+        return;
+    }
+    if (hook == PV_HOOK_BITS_XOR) {
+        ctx->regs[rd] = (int32_t)((uint32_t)ctx->regs[rs1] ^ (uint32_t)ctx->regs[rs2]);
+        return;
+    }
+    if (hook == PV_HOOK_BITS_SHL) {
+        ctx->regs[rd] = (int32_t)(((uint32_t)ctx->regs[rs1] << ((uint32_t)ctx->regs[rs2] & 31)) & MASK32);
+        return;
+    }
+    if (hook == PV_HOOK_BITS_SHR) {
+        ctx->regs[rd] = (int32_t)((uint32_t)ctx->regs[rs1] >> ((uint32_t)ctx->regs[rs2] & 31));
+        return;
+    }
+    if (hook == PV_HOOK_BITS_SAR) {
+        ctx->regs[rd] = (int32_t)((int32_t)ctx->regs[rs1] >> ((uint32_t)ctx->regs[rs2] & 31));
+        return;
+    }
+    if (hook == PV_HOOK_BITS_NOT) {
+        ctx->regs[rd] = (int32_t)(~(uint32_t)ctx->regs[rs1]);
         return;
     }
     /* unknown host-fillable primitive: ignore (host supplies on real target) */

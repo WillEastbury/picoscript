@@ -113,6 +113,31 @@ class HostApi:
         if ns == "Queue" and method == "Depth":
             vm.regs[rd] = len(self.queues.get(rs1, []))
             return
+        if ns == "Bits":
+            a = vm.regs[rs1] & MASK32
+            b = vm.regs[rs2] & MASK32
+            sh = b & 31
+            if method == "And":
+                vm.regs[rd] = (a & b) & MASK32
+                return
+            if method == "Or":
+                vm.regs[rd] = (a | b) & MASK32
+                return
+            if method == "Xor":
+                vm.regs[rd] = (a ^ b) & MASK32
+                return
+            if method == "Shl":
+                vm.regs[rd] = (a << sh) & MASK32
+                return
+            if method == "Shr":
+                vm.regs[rd] = (a >> sh) & MASK32
+                return
+            if method == "Sar":
+                vm.regs[rd] = (_sx32(a) >> sh) & MASK32
+                return
+            if method == "Not":
+                vm.regs[rd] = (~a) & MASK32
+                return
         # Memory + span / slice / materialize.
         if ns == "Memory" and method == "Set":
             vm.mem[vm.regs[rs1] & 0xFFFF] = vm.regs[rs2] & 0xFF

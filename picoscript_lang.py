@@ -216,6 +216,15 @@ NAMESPACE_MAP = {
     "Random": {
         "U32": OP_NOOP,      # Host RNG hook surface
     },
+    "Bits": {
+        "And": OP_NOOP,
+        "Or":  OP_NOOP,
+        "Xor": OP_NOOP,
+        "Shl": OP_NOOP,
+        "Shr": OP_NOOP,
+        "Sar": OP_NOOP,
+        "Not": OP_NOOP,
+    },
     "Memory": {
         "ArenaInit":  OP_NOOP,
         "ArenaAlloc": OP_NOOP,
@@ -450,7 +459,7 @@ HOST_HOOK_CODES = {
     ("Queue", "Depth"):         0x12,
     ("Queue", "DequeueBatch"):  0x13,
     ("Queue", "EnqueueBatch"):  0x14,
-    # EL0-facing response descriptor graph hooks (0x15-0x1F, 0x38-0x3B)
+    # EL0-facing response descriptor graph hooks (0x15-0x1F, 0x38-0x39)
     ("Resp", "Status"):         0x15,
     ("Resp", "Header"):         0x16,
     ("Resp", "Write"):          0x17,
@@ -475,6 +484,14 @@ HOST_HOOK_CODES = {
     ("Memory", "Get"):          0x37,
     ("Resp", "Abort"):          0x38,
     ("Resp", "EarlyHints"):     0x39,
+    # Bits hooks (0x3A-0x3F, 0x4F)
+    ("Bits", "And"):            0x3A,
+    ("Bits", "Or"):             0x3B,
+    ("Bits", "Xor"):            0x3C,
+    ("Bits", "Shl"):            0x3D,
+    ("Bits", "Shr"):            0x3E,
+    ("Bits", "Sar"):            0x3F,
+    ("Bits", "Not"):            0x4F,
     # Span hooks (0x40-0x44)
     ("Span", "Make"):           0x40,
     ("Span", "Slice"):          0x41,

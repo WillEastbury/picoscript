@@ -227,6 +227,18 @@
       this.regs[rd] = (this.queues[rs1] || []).length;
       return;
     }
+    if (name.indexOf("Bits.") === 0) {
+      var ba = this.regs[rs1] | 0;
+      var bb = this.regs[rs2] | 0;
+      var bs = bb & 31;
+      if (name === "Bits.And") { this.regs[rd] = (ba & bb) | 0; return; }
+      if (name === "Bits.Or")  { this.regs[rd] = (ba | bb) | 0; return; }
+      if (name === "Bits.Xor") { this.regs[rd] = (ba ^ bb) | 0; return; }
+      if (name === "Bits.Shl") { this.regs[rd] = (ba << bs) | 0; return; }
+      if (name === "Bits.Shr") { this.regs[rd] = (ba >>> bs) | 0; return; }
+      if (name === "Bits.Sar") { this.regs[rd] = (ba >> bs) | 0; return; }
+      if (name === "Bits.Not") { this.regs[rd] = (~ba) | 0; return; }
+    }
     // ---- program-level card store: Storage.* over a PicoStore --------------
     if (name.indexOf("Storage.") === 0) {
       if (this._storage(name.slice(8), rd, rs1, rs2)) return;

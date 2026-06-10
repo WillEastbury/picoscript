@@ -65,6 +65,12 @@
 #define PV_HOOK_MEMORY_GET                       0x37
 #define PV_HOOK_RESP_ABORT                       0x38
 #define PV_HOOK_RESP_EARLYHINTS                  0x39
+#define PV_HOOK_BITS_AND                         0x3A
+#define PV_HOOK_BITS_OR                          0x3B
+#define PV_HOOK_BITS_XOR                         0x3C
+#define PV_HOOK_BITS_SHL                         0x3D
+#define PV_HOOK_BITS_SHR                         0x3E
+#define PV_HOOK_BITS_SAR                         0x3F
 #define PV_HOOK_SPAN_MAKE                        0x40
 #define PV_HOOK_SPAN_SLICE                       0x41
 #define PV_HOOK_SPAN_MATERIALIZE                 0x42
@@ -80,6 +86,7 @@
 #define PV_HOOK_JSON_BOOL                        0x4C
 #define PV_HOOK_JSON_NULL                        0x4D
 #define PV_HOOK_JSON_RAW                         0x4E
+#define PV_HOOK_BITS_NOT                         0x4F
 #define PV_HOOK_DESCRIPTOR_MAKE                  0x50
 #define PV_HOOK_DESCRIPTOR_SETFLAGS              0x51
 #define PV_HOOK_DESCRIPTOR_GETPTR                0x52
