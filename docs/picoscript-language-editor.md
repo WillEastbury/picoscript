@@ -34,16 +34,16 @@ Source files are views over bytecode. The editor may let one user write C#-style
 
 ## Current Syntax Views
 
-`picoscript_lang.py` currently supports these decompiler views:
+`picoscript_lang.py` currently accepts register-level C-style namespace calls and BASIC-style input, and supports these decompiler views:
 
 | Mode | Extension | Example |
-|------|-----------|---------|
-| C# style | `.pico` | `Storage.Load(0, 1, 42, R0);` |
-| BASIC style | `.bas` | `10 STORAGE LOAD, 0, 1, 42, R0` |
-| Python style | `.py` | `storage.load(0, 1, 42, r0)` |
-| Hex | `.hex` | `1040002A` |
+|------|-----------|---------|--------|
+| C style | `.pico` | `Storage.Load(0, 1, 42, R0);` | Input + output |
+| BASIC style | `.bas` | `10 STORAGE LOAD, 0, 1, 42, R0` | Input + output |
+| Python style | `.py` | `storage.load(0, 1, 42, r0)` | Output view only |
+| Hex | `.hex` | `1040002A` | Output view only |
 
-The checked-in compiler currently accepts the C#-style namespace/method syntax as the primary input syntax.
+The register-level compiler must preserve bytecode across C/BASIC views: C-style source can be decompiled to BASIC and recompiled to the same bytecode, and BASIC can be decompiled to C-style and recompiled to the same bytecode.
 
 ## High-Level Source Frontends
 
@@ -81,9 +81,9 @@ ported to JavaScript (`vm/picoc.js`) so both frontends compile **in the browser*
 byte-for-byte identical to Python — see the live playground `docs/playground.html`
 and the pipeline overview `docs/COMPILER_ARCHITECTURE.md`.
 
-## Primary Source Syntax
+## Register-Level C-style Source Syntax
 
-The current primary syntax is:
+The register-level C-style syntax is:
 
 ```csharp
 Namespace.Method(arg0, arg1, ...);
@@ -110,6 +110,21 @@ Flow.Branch(LT, R0, R1, :loop);
 ```
 
 Comments currently use `//`.
+
+## Register-Level BASIC-style Source Syntax
+
+BASIC-style input uses optional ascending line numbers, uppercase command groups, and comma-separated operands:
+
+```basic
+10 NET STATUS, 200
+20 NET TYPE, TEXT/HTML
+30 NET BODY
+40 STORAGE LOAD, 0, 1, 42, R0
+50 FLOW BRANCH, NZ, R0, R0, 40
+60 FLOW RETURN
+```
+
+Numeric flow targets are BASIC line numbers. The compiler maps line numbers to instruction indices before emitting bytecode.
 
 ## Namespaces
 
@@ -143,10 +158,13 @@ The editor should treat PicoScript as a structured bytecode view:
 4. Store only bytecode in cards.
 5. Decompile bytecode back into the selected display syntax.
 
-Round-trip invariant:
+Round-trip invariants:
 
 ```text
-source -> bytecode -> selected source view -> bytecode
+C-style source -> bytecode -> BASIC source view -> bytecode
+BASIC source -> bytecode -> C-style source view -> bytecode
+C-style source -> bytecode -> C-style source view -> bytecode
+BASIC source -> bytecode -> BASIC source view -> bytecode
 ```
 
 The final bytecode should match unless the user edits semantics.
@@ -162,6 +180,8 @@ Diagnostics should be source-level and explain the hardware constraint when rele
 | Bad register | `Expected register R0-R15.` |
 | Card address out of range | `Card address fields must fit tenant=0-31, pack=0-63, card=0-31.` |
 | Unknown label | `Unknown label ':name'. Define it with ':name' on its own line.` |
+| Unknown BASIC line | `Unknown BASIC line N.` |
+| Non-ascending BASIC line numbers | `BASIC line numbers must be unique and ascending.` |
 | Immediate out of range | `Immediate must fit imm16.` |
 
 Avoid hardware-centric errors like "bad Rs2" in the editor unless the user is in hex/assembly mode.

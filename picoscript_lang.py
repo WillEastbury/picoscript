@@ -652,6 +652,17 @@ CONDITION_MAP = {
     "EOF": COND_EOF, "ERR": COND_ERR,
 }
 
+DSP_BASIC_NAMES = {
+    DSP_MATMUL: "MATMUL", DSP_SOFTMAX: "SOFTMAX", DSP_DOT: "DOT",
+    DSP_SCALE: "SCALE", DSP_RELU: "RELU", DSP_NORM: "NORM",
+    DSP_TOPK: "TOPK", DSP_GELU: "GELU", DSP_TRANSPOSE: "TRANSPOSE",
+    DSP_VADD: "VADD", DSP_EMBED: "EMBED", DSP_QUANT: "QUANT",
+    DSP_DEQUANT: "DEQUANT", DSP_MASK: "MASK", DSP_CONCAT: "CONCAT",
+    DSP_SPLIT: "SPLIT",
+}
+DSP_BASIC_TO_SUBOP = {name: subop for subop, name in DSP_BASIC_NAMES.items()}
+BASIC_CONTENT_TYPES = {name.upper(): imm for name, imm in CONTENT_TYPES.items()}
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Card address encoding
@@ -718,6 +729,42 @@ def encode_instruction(opcode, rd=0, rs1=0, rs2=0, imm16=0):
     return (opcode << 28) | (rd << 24) | (rs1 << 20) | (rs2 << 16) | (imm16 & 0xFFFF)
 
 
+def _split_basic_line_number(line):
+    parts = line.split(None, 1)
+    if parts and parts[0].isdigit():
+        return int(parts[0]), parts[1].strip() if len(parts) > 1 else ""
+    return None, line
+
+
+def _normalize_basic_name(name):
+    return name.replace("_", "").upper()
+
+
+def _canonical_namespace(name):
+    wanted = name.upper()
+    for namespace in NAMESPACE_MAP:
+        if namespace.upper() == wanted:
+            return namespace
+    return None
+
+
+def _canonical_method(namespace, method):
+    wanted = _normalize_basic_name(method)
+    for candidate in NAMESPACE_MAP.get(namespace, {}):
+        if _normalize_basic_name(candidate) == wanted:
+            return candidate
+    return None
+
+
+def _basic_namespaces():
+    return {namespace.upper() for namespace in NAMESPACE_MAP} | {"REM"}
+
+
+def _looks_basic_statement(line):
+    first = line.split(None, 1)[0].upper() if line.split(None, 1) else ""
+    return first in _basic_namespaces()
+
+
 class Compiler:
     """Single-pass compiler: PicoScript source → bytecode.
 
@@ -730,26 +777,45 @@ class Compiler:
         self.instructions = []
         self.labels = {}
         self.source_lines = []
+        self.basic_line_to_pc = {}
+        self.instruction_count = 0
 
     def compile(self, source):
         """Compile source text to list of 32-bit instruction words."""
+        self.instructions = []
+        self.labels = {}
+        self.source_lines = []
+        self.basic_line_to_pc = {}
+        self.instruction_count = 0
         lines = source.strip().split("\n")
+
         # Pass 1: collect labels, strip comments/blanks
         clean_lines = []
         pc = 0
+        last_basic_line = None
         for line in lines:
             line = line.strip()
             if not line or line.startswith("//"):
                 continue
             if line.startswith(":"):
                 label = line[1:].rstrip(";").strip()
+                if not label:
+                    raise SyntaxError(f"Empty label at instruction {pc}")
+                if label in self.labels:
+                    raise SyntaxError(f"Duplicate label ':{label}' at instruction {pc}")
                 self.labels[label] = pc
                 continue
+            basic_line, line = _split_basic_line_number(line)
+            if basic_line is not None:
+                if last_basic_line is not None and basic_line <= last_basic_line:
+                    raise SyntaxError("BASIC line numbers must be unique and ascending")
+                last_basic_line = basic_line
+                self.basic_line_to_pc[basic_line] = pc
             clean_lines.append(line)
             pc += 1
+        self.instruction_count = pc
 
         # Pass 2: compile each statement
-        self.instructions = []
         for i, line in enumerate(clean_lines):
             self.source_lines.append(line)
             word = self._compile_statement(line, i)
@@ -762,12 +828,27 @@ class Compiler:
         # Strip trailing semicolon
         line = line.rstrip(";").strip()
 
+        if _looks_basic_statement(line):
+            return self._compile_basic_statement(line, pc)
+
         # Parse Namespace.Method(args)
-        dot_pos = line.index(".")
-        paren_pos = line.index("(")
+        try:
+            dot_pos = line.index(".")
+            paren_pos = line.index("(")
+            close_pos = line.rindex(")")
+        except ValueError as exc:
+            raise SyntaxError(
+                "Expected C-style Namespace.Method(...) or BASIC-style input "
+                f"at instruction {pc}: {line}"
+            ) from exc
+        if dot_pos > paren_pos:
+            raise SyntaxError(
+                "Expected C-style Namespace.Method(...) or BASIC-style input "
+                f"at instruction {pc}: {line}"
+            )
         namespace = line[:dot_pos]
         method = line[dot_pos+1:paren_pos]
-        args_str = line[paren_pos+1:line.rindex(")")]
+        args_str = line[paren_pos+1:close_pos]
         args = [a.strip() for a in args_str.split(",") if a.strip()] if args_str.strip() else []
 
         # Look up opcode
@@ -843,22 +924,41 @@ class Compiler:
             return encode_instruction(OP_RETURN)
         if method == "Jump":
             label = args[0].lstrip(":")
-            target_pc = self.labels.get(label, 0)
+            target_pc = self._resolve_label(label, pc)
             return encode_instruction(OP_JUMP, imm16=target_pc)
         if method == "Call":
             label = args[0].lstrip(":")
-            target_pc = self.labels.get(label, 0)
+            target_pc = self._resolve_label(label, pc)
             return encode_instruction(OP_CALL, imm16=target_pc)
         if method == "Branch":
             cond = CONDITION_MAP[args[0]]
             rd = parse_register(args[1])
             rs1 = parse_register(args[2])
             label = args[3].lstrip(":")
-            target_pc = self.labels.get(label, 0)
+            target_pc = self._resolve_label(label, pc)
             offset = target_pc - pc
             imm16 = offset & 0xFFFF
             return encode_instruction(OP_BRANCH, rd=rd, rs1=rs1, rs2=cond, imm16=imm16)
         raise SyntaxError(f"Unknown Flow method: {method}")
+
+    def _resolve_label(self, label, pc):
+        if label.isdigit():
+            target_pc = int(label, 10)
+            if 0 <= target_pc < self.instruction_count:
+                return target_pc
+            raise SyntaxError(f"Instruction target ':{label}' out of range at instruction {pc}")
+        if label not in self.labels:
+            raise SyntaxError(f"Unknown label ':{label}' at instruction {pc}")
+        return self.labels[label]
+
+    def _resolve_basic_line(self, target_line, pc):
+        try:
+            line_number = int(target_line, 0)
+        except ValueError as exc:
+            raise SyntaxError(f"Expected BASIC line number at instruction {pc}: {target_line}") from exc
+        if line_number not in self.basic_line_to_pc:
+            raise SyntaxError(f"Unknown BASIC line {line_number} at instruction {pc}")
+        return self.basic_line_to_pc[line_number]
 
     def _compile_net(self, method, args, pc):
         """Net.Status(200) / Net.Type("text/html") / Net.Body() / Net.Close()"""
@@ -867,11 +967,16 @@ class Compiler:
             return encode_instruction(OP_NOOP, imm16=NET_STATUS_BASE | code)
         elif method == "Type":
             ct = args[0].strip('"').strip("'")
-            imm = CONTENT_TYPES.get(ct, 0xA000)
+            try:
+                imm = int(ct, 0)
+            except ValueError:
+                imm = CONTENT_TYPES.get(ct)
+            if imm is None:
+                raise SyntaxError(f"Unknown content type '{ct}'")
             return encode_instruction(OP_NOOP, imm16=imm)
         elif method == "Header":
-            # Custom header: encode as index
-            return encode_instruction(OP_NOOP, imm16=NET_HEADER_BASE)
+            imm = int(args[0], 0) if args else NET_HEADER_BASE
+            return encode_instruction(OP_NOOP, imm16=imm)
         elif method == "Body":
             return encode_instruction(OP_NOOP, imm16=NET_BODY_MARKER)
         elif method == "Close":
@@ -890,6 +995,127 @@ class Compiler:
             elif third[0] == "imm":
                 imm16 = third[1]
         return encode_instruction(OP_DSP, rd=rd, rs1=rs1, rs2=sub_op, imm16=imm16)
+
+    def _compile_basic_statement(self, line, pc):
+        """Compile BASIC-style statements such as '10 FLOW BRANCH, NZ, R0, R0, 10'."""
+        head, sep, rest = line.partition(",")
+        parts = head.strip().upper().split()
+        if not parts:
+            raise SyntaxError(f"Empty BASIC statement at instruction {pc}")
+        namespace_token = parts[0]
+        method_token = parts[1] if len(parts) > 1 else ""
+        args = [a.strip() for a in rest.split(",") if a.strip()] if sep else []
+
+        if namespace_token == "REM":
+            return encode_instruction(OP_NOOP)
+        if namespace_token == "NET":
+            return self._compile_basic_net(method_token, args, pc)
+        if namespace_token == "THREAD":
+            return self._compile_basic_thread(method_token, args, pc)
+        if namespace_token == "STORAGE":
+            if method_token in ("LOAD", "SAVE", "PIPE"):
+                return self._compile_basic_storage(method_token, args, pc)
+            return self._compile_basic_host_hook(namespace_token, method_token, args, pc)
+        if namespace_token == "MATH":
+            return self._compile_basic_math(method_token, args, pc)
+        if namespace_token == "FLOW":
+            return self._compile_basic_flow(method_token, args, pc)
+        if namespace_token == "DSP":
+            return self._compile_basic_dsp(method_token, args, pc)
+        return self._compile_basic_host_hook(namespace_token, method_token, args, pc)
+
+    def _compile_basic_net(self, method, args, pc):
+        if method == "STATUS":
+            return encode_instruction(OP_NOOP, imm16=NET_STATUS_BASE | int(args[0], 0))
+        if method == "TYPE":
+            token = args[0].strip('"').strip("'").upper()
+            if token.startswith("TYPE/"):
+                imm = NET_TYPE_BASE | int(token.split("/", 1)[1], 0)
+            elif token in BASIC_CONTENT_TYPES:
+                imm = BASIC_CONTENT_TYPES[token]
+            else:
+                raise SyntaxError(f"Unknown BASIC content type '{args[0]}' at instruction {pc}")
+            return encode_instruction(OP_NOOP, imm16=imm)
+        if method == "HEADER":
+            imm = int(args[0], 0) if args else NET_HEADER_BASE
+            return encode_instruction(OP_NOOP, imm16=imm)
+        if method == "BODY":
+            return encode_instruction(OP_NOOP, imm16=NET_BODY_MARKER)
+        if method == "CLOSE":
+            return encode_instruction(OP_NOOP, imm16=NET_CLOSE_MARKER)
+        raise SyntaxError(f"Unknown BASIC NET method '{method}' at instruction {pc}")
+
+    def _compile_basic_thread(self, method, args, pc):
+        if method == "SKIP":
+            return encode_instruction(OP_NOOP)
+        if method == "WAIT":
+            return encode_instruction(OP_WAIT)
+        if method == "RAISE":
+            return encode_instruction(OP_RAISE, imm16=int(args[0], 0))
+        raise SyntaxError(f"Unknown BASIC THREAD method '{method}' at instruction {pc}")
+
+    def _compile_basic_storage(self, method, args, pc):
+        opcode = {"LOAD": OP_LOAD, "SAVE": OP_SAVE, "PIPE": OP_PIPE}.get(method)
+        if opcode is None:
+            raise SyntaxError(f"Unknown BASIC STORAGE method '{method}' at instruction {pc}")
+        if len(args) != 4:
+            raise SyntaxError(f"BASIC STORAGE {method} requires tenant, pack, card, register")
+        tenant, pack, card = (int(args[i], 0) for i in range(3))
+        rd = parse_register(args[3])
+        return encode_instruction(opcode, rd=rd, imm16=encode_card_addr(tenant, pack, card))
+
+    def _compile_basic_math(self, method, args, pc):
+        opcode = {"ADD": OP_ADD, "SUB": OP_SUB, "MUL": OP_MUL, "DIV": OP_DIV}.get(method)
+        if method == "INC":
+            return encode_instruction(OP_INC, rd=parse_register(args[0]))
+        if opcode is None:
+            raise SyntaxError(f"Unknown BASIC MATH method '{method}' at instruction {pc}")
+        rd = parse_register(args[0])
+        rs1 = parse_register(args[1])
+        third = parse_arg(args[2])
+        if third[0] == "reg":
+            return encode_instruction(opcode, rd=rd, rs1=rs1, rs2=ADDR_REGISTER, imm16=third[1])
+        if third[0] == "imm":
+            return encode_instruction(opcode, rd=rd, rs1=rs1, imm16=third[1])
+        raise SyntaxError(f"BASIC MATH {method}: third arg must be immediate or register")
+
+    def _compile_basic_flow(self, method, args, pc):
+        if method == "RETURN":
+            return encode_instruction(OP_RETURN)
+        if method == "JUMP":
+            return encode_instruction(OP_JUMP, imm16=self._resolve_basic_line(args[0], pc))
+        if method == "CALL":
+            return encode_instruction(OP_CALL, imm16=self._resolve_basic_line(args[0], pc))
+        if method == "BRANCH":
+            cond = CONDITION_MAP[args[0].upper()]
+            rd = parse_register(args[1])
+            rs1 = parse_register(args[2])
+            target_pc = self._resolve_basic_line(args[3], pc)
+            return encode_instruction(OP_BRANCH, rd=rd, rs1=rs1, rs2=cond, imm16=(target_pc - pc) & 0xFFFF)
+        raise SyntaxError(f"Unknown BASIC FLOW method '{method}' at instruction {pc}")
+
+    def _compile_basic_dsp(self, method, args, pc):
+        if method not in DSP_BASIC_TO_SUBOP:
+            raise SyntaxError(f"Unknown BASIC DSP method '{method}' at instruction {pc}")
+        rd = parse_register(args[0]) if args else 0
+        rs1 = parse_register(args[1]) if len(args) > 1 else 0
+        imm16 = 0
+        if len(args) > 2:
+            third = parse_arg(args[2])
+            if third[0] in ("imm", "reg"):
+                imm16 = third[1]
+            else:
+                raise SyntaxError(f"BASIC DSP {method}: third arg must be immediate or register")
+        return encode_instruction(OP_DSP, rd=rd, rs1=rs1, rs2=DSP_BASIC_TO_SUBOP[method], imm16=imm16)
+
+    def _compile_basic_host_hook(self, namespace_token, method_token, args, pc):
+        namespace = _canonical_namespace(namespace_token)
+        if namespace is None:
+            raise SyntaxError(f"Unknown BASIC namespace '{namespace_token}' at instruction {pc}")
+        method = _canonical_method(namespace, method_token)
+        if method is None:
+            raise SyntaxError(f"Unknown BASIC {namespace} method '{method_token}' at instruction {pc}")
+        return self._compile_host_hook(namespace, method, args, pc)
 
     def _compile_host_hook(self, namespace, method, args, pc):
         """Compile host-fillable primitives via reserved NOOP hook encodings.
@@ -1191,8 +1417,11 @@ def disassemble(words):
             if imm16 & 0xF000 == 0x8000:
                 lines.append(f"    Net.Status({imm16 & 0x1FF});")
             elif imm16 & 0xF000 == 0xA000:
-                ct_name = next((k for k, v in CONTENT_TYPES.items() if v == imm16), "?")
-                lines.append(f'    Net.Type("{ct_name}");')
+                ct_name = next((k for k, v in CONTENT_TYPES.items() if v == imm16), None)
+                if ct_name is None:
+                    lines.append(f"    Net.Type({imm16:#06x});")
+                else:
+                    lines.append(f'    Net.Type("{ct_name}");')
             elif imm16 == NET_BODY_MARKER:
                 lines.append("    Net.Body();")
             elif imm16 == NET_CLOSE_MARKER:
@@ -1276,16 +1505,7 @@ def decompile_basic(words):
         40 STORAGE PIPE, 0, 1, 0, R0
         50 FLOW RETURN
     """
-    # BASIC-style DSP names
-    DSP_BASIC = {
-        DSP_MATMUL: "MATMUL", DSP_SOFTMAX: "SOFTMAX", DSP_DOT: "DOT",
-        DSP_SCALE: "SCALE", DSP_RELU: "RELU", DSP_NORM: "NORM",
-        DSP_TOPK: "TOPK", DSP_GELU: "GELU", DSP_TRANSPOSE: "TRANSPOSE",
-        DSP_VADD: "VADD", DSP_EMBED: "EMBED", DSP_QUANT: "QUANT",
-        DSP_DEQUANT: "DEQUANT", DSP_MASK: "MASK", DSP_CONCAT: "CONCAT",
-        DSP_SPLIT: "SPLIT",
-    }
-    CT_BASIC = {v: k.upper().replace("/", "/") for k, v in CONTENT_TYPES.items()}
+    CT_BASIC = {v: k.upper() for k, v in CONTENT_TYPES.items()}
 
     lines = []
     for i, word in enumerate(words):
@@ -1392,7 +1612,7 @@ def decompile_basic(words):
         elif opcode == OP_RETURN:
             lines.append(f"{lineno} FLOW RETURN")
         elif opcode == OP_DSP:
-            method = DSP_BASIC.get(rs2, f"OP{rs2}")
+            method = DSP_BASIC_NAMES.get(rs2, f"OP{rs2}")
             if imm16:
                 lines.append(f"{lineno} DSP {method}, R{rd}, R{rs1}, {imm16}")
             else:
