@@ -57,6 +57,7 @@ PicoScript runs inside picoweb as deterministic, bounded userland logic for:
 | `docs/SELF_HOSTING.md` | Feasibility exploration: compiling PicoScript in PicoScript (staged bootstrap) + `examples/selfhost_emit.pc` PoC |
 | `docs/PIOS_IO_BINDING.md` | EL0↔kernel descriptor + FIFO ABI: `pooldesc` leases, typed/phased response graph, binding kinds, response lifecycle (seal/write/end), HTTP edge cases |
 | `docs/PIOS_IO_INTEGRATION.md` `include/pios_io_binding.h` | kernel-side **integration work-order** + standalone C ABI header (vendor into the PIOS kernel; phased plan with I1–I8 acceptance) |
+| `docs/SYSTEMS_LANGUAGE.md` | feasibility + staged plan: **PicoScript as a systems language** — can it compile the PIOS kernel on itself? (toC bridge, primitive inventory, the 64-bit decision, the irreducible asm nucleus) |
 | `docs/picoscript-hardware.md` | Hardware bytecode contract |
 
 ## Toolchain: four frontends, one IL, three backends
