@@ -1,0 +1,48 @@
+// Self-hosting proof-of-concept: a PicoScript program that GENERATES a runnable
+// PicoScript bytecode program. It emits the five 32-bit words for `print(K)` as
+// big-endian bytes on the output buffer. Feed that output back into any PicoVM
+// and it prints K -- i.e. PicoScript compiled PicoScript.
+//
+// A bytecode word is (op<<28)|(rd<<24)|(rs1<<20)|(rs2<<16)|imm16. We never build
+// the 32-bit value (it can be negative in signed 32-bit, e.g. RETURN=0xC0000000);
+// instead we emit the four bytes straight from the instruction fields, so no
+// value ever exceeds 255 and there is no overflow:
+//   byte0 = op*16 + rd     byte1 = rs1*16 + rs2
+//   byte2 = imm / 256      byte3 = imm % 256
+//
+// Target program (what we generate):  const R0=K ; save R0->0xFFFE ; pipe ; ret
+//   SUB R0,R0,R0  (zero R0; rs2=1 selects register operand R0)
+//   ADD R0,R0,#K  (R0 = 0 + K)
+//   SAVE R0,[0xFFFE]   PIPE R0,[0xFFFE]   RETURN
+
+int K = 1234;             // the constant the generated program will print
+
+// instr 1: SUB R0,R0,R0  -> op=5 rd=0 rs1=0 rs2=1 imm=0
+Io.WriteByte(5 * 16 + 0);
+Io.WriteByte(0 * 16 + 1);
+Io.WriteByte(0);
+Io.WriteByte(0);
+
+// instr 2: ADD R0,R0,#K  -> op=4 rd=0 rs1=0 rs2=0 imm=K
+Io.WriteByte(4 * 16 + 0);
+Io.WriteByte(0 * 16 + 0);
+Io.WriteByte(K / 256);
+Io.WriteByte(K % 256);
+
+// instr 3: SAVE R0,[0xFFFE] -> op=2 imm=0xFFFE (65534)
+Io.WriteByte(2 * 16 + 0);
+Io.WriteByte(0);
+Io.WriteByte(255);
+Io.WriteByte(254);
+
+// instr 4: PIPE R0,[0xFFFE] -> op=3 imm=0xFFFE
+Io.WriteByte(3 * 16 + 0);
+Io.WriteByte(0);
+Io.WriteByte(255);
+Io.WriteByte(254);
+
+// instr 5: RETURN -> op=12
+Io.WriteByte(12 * 16 + 0);
+Io.WriteByte(0);
+Io.WriteByte(0);
+Io.WriteByte(0);

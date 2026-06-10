@@ -919,6 +919,31 @@ def main():
     check_jscompile("jsc: english goto", "english", EN_GOTO, lower_to_bytecode_safe(compile_english(EN_GOTO)))
     check_jscompile("jsc: english ternary", "english", EN_TERNARY, lower_to_bytecode_safe(compile_english(EN_TERNARY)))
 
+    def check_selfhost(name, path, want):
+        """examples/selfhost_emit.pc: a PicoScript program that EMITS a runnable
+        PicoScript binary. Run it, reassemble the emitted bytes into words, run
+        those, and confirm the generated program prints `want` and is byte-for-byte
+        what the native compiler makes for print(want). Cross-checked on the JS VM."""
+        nonlocal passed, failed
+        src = open(os.path.join(ROOT, path), encoding="utf-8").read()
+        emit_words = lower_to_bytecode_safe(compile_c(src))
+        py, jv = py_state(emit_words), run_js_vm(emit_words)
+        emitted = [int(h, 16) for h in py["out"]]
+        gen = [int.from_bytes(bytes(emitted[i:i + 4]), "big") for i in range(0, len(emitted), 4)]
+        gen_out = py_state(gen)["out"]
+        got = int.from_bytes(bytes(int(h, 16) for h in gen_out), "big") if gen_out else None
+        ref = lower_to_bytecode_safe(compile_c(f"print({want});"))
+        ok = (py["out"] == jv["out"] and gen == ref and got == want)
+        detail = "" if ok else f"\n    emitted={py['out']} gen={[f'{w:08x}' for w in gen]} got={got} cross={py['out']==jv['out']}"
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name:22s} PicoScript emits runnable bytecode  print={got}{detail}")
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+
+    print("Self-hosting PoC: PicoScript emits a runnable PicoScript binary [Python VM == JS VM == native compiler]:")
+    check_selfhost("selfhost: emit print", "examples/selfhost_emit.pc", 1234)
+
     print(f"\n{passed} passed, {failed} failed (parity + semantics)")
     sys.exit(1 if failed else 0)
 

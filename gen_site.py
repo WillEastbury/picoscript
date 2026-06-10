@@ -61,6 +61,7 @@ DOC_FILES = [
     ("arch", "Compiler Architecture", os.path.join(ROOT, "docs", "COMPILER_ARCHITECTURE.md")),
     ("editor", "Editor Contract", os.path.join(ROOT, "docs", "picoscript-language-editor.md")),
     ("agent", "Agent Prompt", os.path.join(ROOT, "docs", "AGENT_PROMPT.md")),
+    ("selfhost", "Self-Hosting", os.path.join(ROOT, "docs", "SELF_HOSTING.md")),
 ]
 
 
