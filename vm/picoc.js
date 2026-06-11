@@ -276,7 +276,116 @@
     throw new Error("cannot lower IL op " + op);
   }
 
-  function lowerToBytecode(insts, opt, outVars) {
+  // INV-7 compile-time iso-lease: byte-identical to picoscript_il.verify_response_ownership.
+  // Forward must-dataflow (AND-merge) over the IL CFG; a Resp.* op illegal on every
+  // path to it is a compile error. State is a 4-bit mask SEALED=1/ENDED=2/BODY=4/
+  // STREAM_CLOSED=8 (all monotonic); AND-merge is order-independent, the check loop
+  // walks reachable points in ascending index order, so the first violation reported
+  // matches the Python gate exactly.
+  var RESP_GRAPH_METHODS = {
+    Status: 1, Header: 1, Write: 1, Trailer: 1, Seal: 1, Respond: 1, End: 1, Abort: 1,
+    Flush: 1, Continue: 1, EndStream: 1, Upgrade: 1, EarlyHints: 1
+  };
+  function verifyResponseOwnership(insts) {
+    var n = insts.length, i, j, sc;
+    var hasResp = false;
+    for (i = 0; i < n; i++) { if (insts[i].op === "host" && insts[i].ns === "Resp") { hasResp = true; break; } }
+    if (!hasResp) return;
+
+    var labelAt = {};
+    for (i = 0; i < n; i++) { if (insts[i].op === "label") labelAt[insts[i].label] = i; }
+
+    function succs(i) {
+      var ins = insts[i], op = ins.op, out = [], k, tg;
+      if (op === "jmp") { return (ins.label in labelAt) ? [labelAt[ins.label]] : []; }
+      if (op === "ret") { return []; }
+      if (op === "cmpbr") {
+        if (i + 1 < n) out.push(i + 1);
+        if (ins.label in labelAt) out.push(labelAt[ins.label]);
+        return out;
+      }
+      if (op === "jmptab") {
+        tg = ins.targets || [];
+        for (k = 0; k < tg.length; k++) { if (tg[k] in labelAt) out.push(labelAt[tg[k]]); }
+        if (ins.label in labelAt) out.push(labelAt[ins.label]);
+        return out;
+      }
+      if (op === "call") {
+        if (i + 1 < n) out.push(i + 1);
+        if (ins.label in labelAt) out.push(labelAt[ins.label]);
+        return out;
+      }
+      return (i + 1 < n) ? [i + 1] : [];
+    }
+
+    var reachable = {}, stack = (n ? [0] : []), idx;
+    while (stack.length) {
+      idx = stack.pop();
+      if (idx < 0 || idx >= n || reachable[idx]) continue;
+      reachable[idx] = true;
+      sc = succs(idx);
+      for (j = 0; j < sc.length; j++) stack.push(sc[j]);
+    }
+
+    var preds = {};
+    for (i in reachable) preds[i] = [];
+    for (i in reachable) {
+      sc = succs(+i);
+      for (j = 0; j < sc.length; j++) { if (reachable[sc[j]]) preds[sc[j]].push(+i); }
+    }
+
+    var SEALED = 1, ENDED = 2, BODY = 4, STREAM_CLOSED = 8, TOP = 15, BOT = 0;
+    function transfer(mask, ins) {
+      if (ins.op === "host" && ins.ns === "Resp") {
+        var m = ins.method;
+        if (m === "Seal") mask |= SEALED;
+        else if (m === "Respond") mask |= (SEALED | ENDED);
+        else if (m === "End" || m === "Abort") mask |= ENDED;
+        else if (m === "Write") mask |= BODY;
+        else if (m === "EndStream") mask |= STREAM_CLOSED;
+      }
+      return mask;
+    }
+
+    var order = Object.keys(reachable).map(Number).sort(function (a, b) { return a - b; });
+    var IN = {}, OUT = {}, p, inv, outv, key;
+    for (i = 0; i < order.length; i++) { IN[order[i]] = TOP; OUT[order[i]] = TOP; }
+    var changed = true;
+    while (changed) {
+      changed = false;
+      for (i = 0; i < order.length; i++) {
+        key = order[i];
+        if (key === 0 || preds[key].length === 0) {
+          inv = BOT;
+        } else {
+          inv = TOP;
+          for (p = 0; p < preds[key].length; p++) inv &= OUT[preds[key][p]];
+        }
+        if (inv !== IN[key]) { IN[key] = inv; changed = true; }
+        outv = transfer(IN[key], insts[key]);
+        if (outv !== OUT[key]) { OUT[key] = outv; changed = true; }
+      }
+    }
+
+    for (i = 0; i < order.length; i++) {
+      var ins = insts[order[i]];
+      if (ins.op !== "host" || ins.ns !== "Resp") continue;
+      var mask = IN[order[i]], m = ins.method;
+      if ((mask & ENDED) && RESP_GRAPH_METHODS[m])
+        throw new Error("INV-7: Resp." + m + " after the response was finalized (use-after-end)");
+      if ((m === "Status" || m === "Header") && (mask & SEALED))
+        throw new Error("INV-7: Resp." + m + " after Seal (use-after-seal; preamble/headers are committed)");
+      if (m === "Seal" && (mask & SEALED))
+        throw new Error("INV-7: Resp.Seal after Seal (use-after-seal; double seal)");
+      if (m === "Header" && (mask & BODY))
+        throw new Error("INV-7: Resp.Header after a body write (header phase is over)");
+      if (m === "Write" && (mask & STREAM_CLOSED))
+        throw new Error("INV-7: Resp.Write after EndStream (stream phase closed)");
+    }
+  }
+
+  function lowerToBytecode(insts, opt, outVars, checkOwnership) {
+    if (checkOwnership !== false) verifyResponseOwnership(insts);
     if (opt !== false) insts = optimize(insts);
     var alloc = allocateOrSpill(insts);   // auto-spills on >16 live values (INV-13)
     insts = alloc.insts;

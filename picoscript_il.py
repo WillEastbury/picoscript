@@ -346,6 +346,158 @@ class RegisterPressureError(Exception):
     pass
 
 
+class ResponseOwnershipError(Exception):
+    """INV-7 compile-time iso-lease: a Resp.* op uses the response after it was
+    consumed (sealed / ended) or out of phase order.  Raised by the AOT compiler
+    so use-after-seal is a *compile error* (zero runtime cost), matching
+    docs/PIOS_IO_BINDING.md [D6]. The runtime Resp.* sim is the parity backstop."""
+    pass
+
+
+# The Resp.* methods that mutate / advance the response descriptor graph. Any of
+# these reaching a finalized (ended) response is a use-after-end; the more specific
+# seal/phase rules below are layered on top. Kept as a frozenset so membership is
+# cheap and the Python/JS gates iterate identical sets.
+_RESP_GRAPH_METHODS = frozenset({
+    "Status", "Header", "Write", "Trailer", "Seal", "Respond", "End", "Abort",
+    "Flush", "Continue", "EndStream", "Upgrade", "EarlyHints",
+})
+
+
+def verify_response_ownership(insts: List[Inst]) -> None:
+    """Compile-time iso-lease check (INV-7).  A forward must-dataflow over the IL
+    control-flow graph tracks, *on every path to each point*, whether the response
+    is sealed / ended / has a started body / has a closed stream.  A Resp.* op that
+    is illegal under those definite facts is a compile error (ResponseOwnershipError).
+
+    "Must" (AND-merge) analysis is deliberately conservative: it flags a violation
+    only when it holds on *all* paths, so a branch that seals on one arm but not
+    another is never falsely rejected.  Subtler may-violations (e.g. EndStream with
+    no prior Seal on some path) are left to the runtime sim backstop.
+
+    This is byte-identical to the JS gate (vm/picoc.js verifyResponseOwnership):
+    same CFG edges, same AND-merge, same sorted fixpoint, same check order, so the
+    first violation reported is the same program point on both runtimes."""
+    n = len(insts)
+    # Early-out: nothing to check unless the program touches the response binding.
+    if not any(ins.op == "host" and ins.ns == "Resp" for ins in insts):
+        return
+
+    label_at: Dict[str, int] = {}
+    for i, ins in enumerate(insts):
+        if ins.op == "label":
+            label_at[ins.label] = i
+
+    def succs(i: int) -> List[int]:
+        ins = insts[i]
+        op = ins.op
+        if op == "jmp":
+            return [label_at[ins.label]] if ins.label in label_at else []
+        if op == "ret":
+            return []
+        if op == "cmpbr":
+            out = [i + 1] if i + 1 < n else []
+            if ins.label in label_at:
+                out.append(label_at[ins.label])
+            return out
+        if op == "jmptab":
+            out = [label_at[t] for t in ins.targets if t in label_at]
+            if ins.label in label_at:
+                out.append(label_at[ins.label])
+            return out
+        if op == "call":
+            # Conservative/intraprocedural: analyse the callee body (reachable via
+            # its label) and continue after the call; the callee's effect on the
+            # response is not propagated back (a use-after-seal inside the callee is
+            # still caught; the runtime sim backstops cross-call cases).
+            out = [i + 1] if i + 1 < n else []
+            if ins.label in label_at:
+                out.append(label_at[ins.label])
+            return out
+        return [i + 1] if i + 1 < n else []
+
+    # Reachable set from entry (index 0); unreachable code is never flagged.
+    reachable: set = set()
+    stack = [0] if n else []
+    while stack:
+        i = stack.pop()
+        if i < 0 or i >= n or i in reachable:
+            continue
+        reachable.add(i)
+        for s in succs(i):
+            stack.append(s)
+
+    preds: Dict[int, List[int]] = {i: [] for i in reachable}
+    for i in reachable:
+        for s in succs(i):
+            if s in reachable:
+                preds[s].append(i)
+
+    # Per-point state is a 4-bit mask (identical representation to the JS gate):
+    #   SEALED=1, ENDED=2, BODY=4, STREAM_CLOSED=8.  All bits are monotonic within a
+    # response, so AND-merge converges from TOP (15) to the greatest fixpoint.
+    SEALED, ENDED, BODY, STREAM_CLOSED = 1, 2, 4, 8
+    TOP, BOT = 15, 0
+
+    def transfer(mask: int, ins: Inst) -> int:
+        if ins.op == "host" and ins.ns == "Resp":
+            m = ins.method
+            if m == "Seal":
+                mask |= SEALED
+            elif m == "Respond":
+                mask |= SEALED | ENDED
+            elif m == "End" or m == "Abort":
+                mask |= ENDED
+            elif m == "Write":
+                mask |= BODY
+            elif m == "EndStream":
+                mask |= STREAM_CLOSED
+        return mask
+
+    order = sorted(reachable)
+    IN = {i: TOP for i in reachable}
+    OUT = {i: TOP for i in reachable}
+    changed = True
+    while changed:
+        changed = False
+        for i in order:
+            if i == 0 or not preds[i]:
+                inv = BOT
+            else:
+                inv = TOP
+                for p in preds[i]:
+                    inv &= OUT[p]
+            if inv != IN[i]:
+                IN[i] = inv
+                changed = True
+            outv = transfer(IN[i], insts[i])
+            if outv != OUT[i]:
+                OUT[i] = outv
+                changed = True
+
+    for i in order:
+        ins = insts[i]
+        if ins.op != "host" or ins.ns != "Resp":
+            continue
+        mask = IN[i]
+        m = ins.method
+        if (mask & ENDED) and m in _RESP_GRAPH_METHODS:
+            raise ResponseOwnershipError(
+                f"INV-7: Resp.{m} after the response was finalized (use-after-end)")
+        if m in ("Status", "Header") and (mask & SEALED):
+            raise ResponseOwnershipError(
+                f"INV-7: Resp.{m} after Seal (use-after-seal; preamble/headers are committed)")
+        if m == "Seal" and (mask & SEALED):
+            raise ResponseOwnershipError(
+                "INV-7: Resp.Seal after Seal (use-after-seal; double seal)")
+        if m == "Header" and (mask & BODY):
+            raise ResponseOwnershipError(
+                "INV-7: Resp.Header after a body write (header phase is over)")
+        if m == "Write" and (mask & STREAM_CLOSED):
+            raise ResponseOwnershipError(
+                "INV-7: Resp.Write after EndStream (stream phase closed)")
+
+
 def _operand_vregs(ins: Inst):
     for x in (ins.dst, ins.a, ins.b, *ins.args):
         if isinstance(x, VReg):
@@ -659,10 +811,17 @@ class _ConstExpansion(Exception):
         self.value = value
 
 
-def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True) -> List[int]:
+def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True,
+                           check_ownership: bool = True) -> List[int]:
     """Like lower_to_bytecode but expands CONST/MOV-imm into 2 words
     (SUB rd,rd,rd ; ADD rd,rd,#imm) so a register can be set to any constant
-    without a LOADI opcode.  This recomputes label PCs accounting for expansion."""
+    without a LOADI opcode.  This recomputes label PCs accounting for expansion.
+
+    Runs the INV-7 compile-time iso-lease check (verify_response_ownership) first
+    unless check_ownership is False; pass False only to lower a deliberately
+    invalid response program for the runtime-sim backstop tests."""
+    if check_ownership:
+        verify_response_ownership(insts)
     if opt:
         insts = optimize(insts)
     insts, mapping = _allocate_or_spill(insts)

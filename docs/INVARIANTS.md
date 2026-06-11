@@ -24,7 +24,7 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 4 | Every hook has a declared contract | enforced (table) |
 | 5 | No hidden allocation in hot hooks (declare arena use or forbid) | enforced (no-alloc mode) |
 | 6 | Arena scope is explicit; scope exit rewinds or transfers | enforced (handler scope) |
-| 7 | Seal consumes ownership (use-after-seal = compile error or trap) | partial (sim models spec; compile-time iso-lease pending) |
+| 7 | Seal consumes ownership (use-after-seal = compile error or trap) | enforced (compile-time iso-lease + runtime sim; EL1 owner-flag external) |
 | 8 | Spans are fat and bounded (ptr+len); no null-terminated authority | enforced |
 | 9 | Literals are immutable (const segment + write-trap) | enforced |
 | 10 | Bytecode verification before execution | enforced (static pre-pass) |
@@ -100,30 +100,37 @@ scoping for nested regions. A one-shot non-handler invocation needs no scope (th
 exits and frees everything). The remaining refinement is automatic scoping around
 arbitrary (non-request) entry points, which currently relies on the caller.
 
-### 7. Seal consumes ownership — *partial (sim models the binding spec; authoritative form is compile-time + kernel)*
-**Authoritative enforcement is two non-VM mechanisms** (`docs/PIOS_IO_BINDING.md` I2/I3, D6):
-(1) **compile-time** — `seal` *consumes* the `iso` (move-only) response arena, so ownership
-flips thread→kernel and **use-after-seal is a compile error** in the AOT compiler (zero
-runtime cost); (2) a **runtime owner flag** (`pooldesc.owner = kernel`), authoritative in the
-**PIOS kernel (EL1)**, backstops dynamically-assembled descriptors. The PicoScript-side
-`Resp.*` is a **fixture** that simulates the binding's observable semantics for parity tests
-(mirrored in Python `picoscript_vm.py` and JS `vm/picovm.js`; the C VM does not host it).
+### 7. Seal consumes ownership — *enforced (compile-time iso-lease + runtime sim backstop; EL1 owner-flag external)*
+**Authoritative enforcement is layered** (`docs/PIOS_IO_BINDING.md` I2/I3, D6):
+(1) **compile-time** — `seal`/`respond`/`end` *consume* the `iso` (move-only) response arena, so
+**use-after-seal is a compile error** in the AOT compiler (zero runtime cost); (2) a **runtime
+owner flag** (`pooldesc.owner = kernel`), authoritative in the **PIOS kernel (EL1)**, backstops
+dynamically-assembled descriptors.
 
-The fixture now faithfully models the spec's phased descriptor graph (`tests/test_io_hooks.py`):
-- **I3 — `seal` freezes the preamble + headers only.** After `Resp.Seal`, `Resp.Status`/`Resp.Header`
-  trap ("I3 violation"). Per `PIOS_IO_BINDING.md` §4 ("seal ≠ complete") and edge-case 7, **body
-  `Write` after seal is correct in stream mode** ("stream mode appends new body descriptors, it
-  never mutates sealed ones") — so seal must *not* block body writes. A re-`Seal` via the explicit
-  verb is a use-after-seal ("I3 violation"); `Respond`'s internal seal stays idempotent.
-- **I6 — phase order.** A `Resp.Header` after the body phase has started (a `Resp.Write`) traps
-  ("I6 violation"); `Resp.Status` may still be set last (it is the single PREAMBLE slot).
-  `Resp.EndStream` closes the stream phase, so a later `Resp.Write` traps; `Resp.EndStream`
-  outside stream mode (no prior `Seal`) traps. A `unary`/`stream` mode flag records the lifecycle
-  (`stream` set by an explicit `Seal`; `unary` by a terminal verb) per the spec's binding kinds.
-- **I2** — exactly one open graph; anything after `End`/`Respond`/`Abort` traps ("I2 violation").
+**(1) is now built — `verify_response_ownership`** (`picoscript_il.py`, mirrored byte-for-byte in
+`vm/picoc.js` `verifyResponseOwnership`), run as a compile gate inside `lower_to_bytecode_safe` /
+`lowerToBytecode` (default on; early-out when a program has no `Resp.*` op). It is a forward
+**must-dataflow** over the IL control-flow graph: per-point state is a 4-bit mask
+(SEALED/ENDED/BODY/STREAM_CLOSED, all monotonic) merged with **AND** over predecessors, so a
+violation is flagged only when it holds on *every* path to that op. Branchy code that seals (or
+starts the body) on only one arm is therefore never falsely rejected. Compile errors raised:
+`Resp.Status`/`Header` after `Seal`; any graph op after `End`/`Respond`/`Abort` (use-after-end);
+double explicit `Seal`; `Header` after a body `Write`; `Write` after `EndStream`. (EndStream-
+without-seal is a may-violation left to the runtime sim.) Because AND-merge is commutative and the
+check walks reachable points in ascending index order, the Python and JS gates return **byte-
+identical accept/reject decisions and the identical first violation** — proven in
+`tests/test_iso_lease.py` (the INV-24 gatekeeper), across the C and Python dialects.
 
-**Not yet built (the actual guarantee):** the compile-time `iso`-lease in the frontend (a larger
-feature spanning all four frontends + parity tests) and the EL1 kernel owner-flag backstop.
+**Runtime sim backstop (fixture)** — the PicoScript-side `Resp.*` (mirrored in `picoscript_vm.py`
+and `vm/picovm.js`; the C VM does not host it) faithfully models the spec's phased descriptor
+graph and traps the same conditions at runtime for gate-bypassed / dynamically-assembled graphs
+(`tests/test_io_hooks.py`): I3 (`seal` freezes preamble+headers only — body `Write` after seal is
+correct in *stream* mode per §4 "seal ≠ complete"; re-`Seal` traps), I6 phase order (`Header` after
+body; `EndStream` closes the stream phase; `EndStream` outside stream mode), and I2 (one open graph;
+anything after a terminal verb traps). A `unary`/`stream` mode flag records the lifecycle.
+
+**External (not VM/compiler):** the EL1 kernel owner-flag backstop for descriptors assembled
+outside the static check's view.
 
 ### 8. Spans are fat and bounded — *enforced*
 Every buffer is `ptr+len` (`pv_span_p`/`pv_span_n` in C; `{ptr,len}` in JS/Python).

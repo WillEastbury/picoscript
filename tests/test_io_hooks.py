@@ -74,9 +74,12 @@ def js_compile(src, lang):
 
 
 def py_violation(src, lang="c"):
-    """Run on the Python VM; return the RuntimeError message ('' if it didn't fault)."""
+    """Run an INVALID response program on the Python VM (runtime-sim backstop) and
+    return the RuntimeError message ('' if it didn't fault). Bypasses the INV-7
+    compile gate (check_ownership=False) so the program reaches the runtime sim --
+    the compile-time gate is exercised separately in tests/test_iso_lease.py."""
     compile_fn = compile_c if lang == "c" else compile_python
-    words = lower_to_bytecode_safe(compile_fn(src))
+    words = lower_to_bytecode_safe(compile_fn(src), check_ownership=False)
     try:
         run_py(words)
     except RuntimeError as exc:
@@ -85,9 +88,10 @@ def py_violation(src, lang="c"):
 
 
 def js_violation(src, lang="c"):
-    """Run on the JS VM; return the thrown error message ('' if it didn't fault)."""
+    """Run an INVALID response program on the JS VM (runtime-sim backstop) and return
+    the thrown error message ('' if it didn't fault). Bypasses the INV-7 compile gate."""
     compile_fn = compile_c if lang == "c" else compile_python
-    words = lower_to_bytecode_safe(compile_fn(src))
+    words = lower_to_bytecode_safe(compile_fn(src), check_ownership=False)
     script = r"""
 const fs = require("fs");
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
@@ -188,7 +192,10 @@ Resp.Status(200);
 Resp.Seal();
 Resp.Header("late", "no");
 '''
-    words = lower_to_bytecode_safe(compile_c(src))
+    # Runtime-sim backstop: bypass the INV-7 compile gate so the invalid program
+    # reaches the VM and the runtime I3 trap is exercised (the compile gate that
+    # rejects this same program at compile time is covered in test_iso_lease.py).
+    words = lower_to_bytecode_safe(compile_c(src), check_ownership=False)
     try:
         run_py(words)
     except RuntimeError as exc:
