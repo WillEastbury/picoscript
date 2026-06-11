@@ -506,7 +506,12 @@ class Lowerer:
         self.vars: Dict[str, VReg] = {}
         self.funcs: List[Func] = []
         self.loop_stack: List[Tuple[str, str]] = []   # (continue_label, break_label)
-        self._strlit_n = 0          # alternating scratch region per string literal
+        # String-literal constant pool: each distinct literal is interned to its own
+        # stable address (deduped), growing DOWN from the bump-arena base 0x8000 so
+        # literal spans never overlap each other or the bump arena. Replaces the old
+        # 2-alternating-slot scheme that clobbered a 3rd live literal.
+        self._strpool: Dict[bytes, int] = {}
+        self._strpool_top = 0x8000
 
     def lower_program(self, prog: List[object]) -> List:
         body = [s for s in prog if not isinstance(s, Func)]
@@ -882,11 +887,16 @@ class Lowerer:
         return dst
 
     def emit_str_span(self, text: str):
-        """Stage a string literal's UTF-8 bytes in a scratch arena region and
-        return a span over them (two alternating slots; mirrors picoscript_basic)."""
+        """Materialize a string literal as a span over its interned constant-pool
+        bytes. Identical literals share one stable address (dedup); distinct ones
+        never overlap, so any number can be live at once. Bytes are (re)written at
+        the literal's fixed address before the span is made, so it is correct even
+        when the first textual occurrence is inside a skipped branch or a loop."""
         data = text.encode("utf-8")
-        base = 0x7E00 + (self._strlit_n & 1) * 0x100
-        self._strlit_n += 1
+        if data not in self._strpool:
+            self._strpool_top -= len(data)
+            self._strpool[data] = self._strpool_top
+        base = self._strpool[data]
         areg = self.b.vreg(); vreg = self.b.vreg()
         for i, byte in enumerate(data):
             self.b.const(areg, base + i)

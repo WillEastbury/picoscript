@@ -586,7 +586,11 @@ class Lowerer:
         # Stack of (continue_label_or_None, break_label) for BREAK/SKIP.
         # Loops push a continue label; SWITCH pushes None (breakable, not skippable).
         self.scopes: List[tuple] = []
-        self._strlit_n = 0          # alternating scratch region per string literal
+        # String-literal constant pool (see picoscript_cfront): each distinct literal
+        # interned to its own stable address growing down from 0x8000, so any number
+        # can be live at once (replaces the old 2-alternating-slot scheme).
+        self._strpool: Dict[bytes, int] = {}
+        self._strpool_top = 0x8000
 
     def var(self, name: str) -> VReg:
         key = name.upper()
@@ -858,12 +862,15 @@ class Lowerer:
         self.b.pipe(v, PRINT_CARD)
 
     def emit_str_span(self, text: str) -> VReg:
-        """Stage a string literal's UTF-8 bytes in a scratch arena region and
-        return a span over them. Literals alternate between two scratch slots so
-        up to two can be live as arguments to one host call."""
+        """Materialize a string literal as a span over its interned constant-pool
+        bytes: identical literals share one stable address (dedup), distinct ones
+        never overlap, so any number can be live at once (bytes are rewritten at the
+        literal's fixed address before each span, correct under branches/loops)."""
         data = text.encode("utf-8")
-        base = 0x7E00 + (self._strlit_n & 1) * 0x100
-        self._strlit_n += 1
+        if data not in self._strpool:
+            self._strpool_top -= len(data)
+            self._strpool[data] = self._strpool_top
+        base = self._strpool[data]
         areg = self.b.vreg(); vreg = self.b.vreg()
         for i, byte in enumerate(data):
             self.b.const(areg, base + i)

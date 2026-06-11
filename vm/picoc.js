@@ -445,8 +445,13 @@
   // span over them (two alternating slots). Mirrors picoscript_*.emit_str_span.
   function emitStrSpan(self, text) {
     var data = Array.prototype.slice.call(new TextEncoder().encode(text));
-    var base = 0x7E00 + (self._strlitN & 1) * 0x100;
-    self._strlitN++;
+    // String-literal constant pool (mirrors picoscript_cfront.emit_str_span): each
+    // distinct literal interned to its own stable address growing down from 0x8000,
+    // deduped by content, so any number can be live at once.
+    if (!self._strpool) { self._strpool = {}; self._strpoolTop = 0x8000; }
+    var key = data.join(",");
+    var base = self._strpool[key];
+    if (base === undefined) { self._strpoolTop -= data.length; base = self._strpoolTop; self._strpool[key] = base; }
     var b = self.b, areg = b.vreg(), vreg = b.vreg();
     for (var i = 0; i < data.length; i++) {
       b.const_(areg, base + i);
