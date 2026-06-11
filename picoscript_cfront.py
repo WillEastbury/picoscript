@@ -262,6 +262,18 @@ class Parser:
         return stmts
 
     def parse_stmt(self) -> object:
+        # INV-25: stamp every statement node with the source offset of its first
+        # token, so the lowerer can attribute emitted bytecode back to source.
+        start = self.peek().pos
+        node = self._parse_stmt()
+        if node is not None:
+            try:
+                node.pos = start
+            except (AttributeError, TypeError):
+                pass
+        return node
+
+    def _parse_stmt(self) -> object:
         t = self.peek()
         if t.kind == "kw":
             if t.value in ("int", "var"):
@@ -558,6 +570,9 @@ class Lowerer:
 
     # -- statements ------------------------------------------------------
     def stmt(self, s):
+        p = getattr(s, "pos", -1)
+        if p is not None and p >= 0:
+            self.b.cur_pos = p           # INV-25: attribute emitted IL to this statement
         if isinstance(s, Decl):
             v = self.var(s.name)
             if s.init is not None:

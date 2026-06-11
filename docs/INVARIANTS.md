@@ -42,7 +42,7 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 22 | Generated artefacts are disposable (never edited as source) | convention |
 | 23 | ABI version is embedded and checked (refuse mismatch) | enforced (module container) |
 | 24 | Parity runner is the gatekeeper (every hook/opcode/lowering has parity tests) | enforced (gate) |
-| 25 | Debug trace is structured (span, IL op, pc, hook id, capsule, binding) | partial (code+pc+detail) |
+| 25 | Debug trace is structured (span, IL op, pc, hook id, capsule, binding) | enforced (source-span+IL-op; capsule/binding = PIOS) |
 
 \* INV-2 (lowering parity): the known signed-division divergence is fixed (truncate
 toward zero everywhere). The remaining nuance is that on a *fault* (step budget,
@@ -283,12 +283,29 @@ namespaces (`DateTime`/`Context`/`Auth`/`X509`/`Environment`/`Locale`/`Kernel`/`
 justification. The gate caught a real gap on first run (`Queue` was untested) which was
 closed with a 5-path `queue_depth` test rather than allowlisted.
 
-### 25. Debug trace is structured — *partial (code + pc + detail)*
-Faults now carry a structured record, not a bare code/string: the C runtime has
-`ctx->fault` + `ctx->fault_pc` + `ctx->fault_detail` (harness prints `FAULT <code> <pc>
-<detail>`); Python raises `PicoFault(code, pc, detail, message)` (a `RuntimeError`
-subclass, so existing handlers still catch it); JS throws an `Error` with `.fault/.pc/
-.detail`. The `detail` is the offending opcode / out-of-range target / hook id.
-`tests/test_vm_safety.py` asserts the bad-jump fault reports `code=3, pc=0, detail=9999`
-on all three. Still deferred (need a compiler pc→source debug-info map and PIOS runtime
-context): source span, IL-op name, capsule id, and binding id.
+### 25. Debug trace is structured — *enforced (source-span + IL-op; capsule/binding = PIOS)*
+Faults carry machine coordinates `code` + `pc` + `detail` on all three VMs (C
+`ctx->fault/fault_pc/fault_detail`, harness prints `FAULT <code> <pc> <detail>`; Python
+`PicoFault(code, pc, detail, message)`, a `RuntimeError` subclass; JS `Error` with
+`.fault/.pc/.detail`). The compiler emits a **side-band debug table**
+`pc -> (src_off, op, ns, method)` (`lower_to_bytecode_safe(..., debug=)` /
+`lower_to_bytecode_with_debug`; JS `picoc.js` `compileWithDebug`) that leaves the word
+stream **byte-identical** — it is a separate symbol artifact, like a stripped binary plus a
+symbol file. `symbolize(code, pc, detail, debug, source)` (Python `picoscript_il`, JS
+`picoc.js`) resolves a fault into `{code, fault, pc, detail, op, target, off, line, col,
+source_line}`. The debug table **and** the symbolize() record are byte-identical between
+the Python and JS toolchains, and a fault from the Python VM **or** the portable C VM at a
+given pc symbolicates to the same record — proven in `tests/test_debuginfo.py`.
+
+Source offsets are stamped onto each IL inst via `ILBuilder.cur_pos` (the tokenizers carry
+token offsets; the parser stamps each statement; the lowerer sets `cur_pos` at statement
+dispatch). The **C frontend** is wired with full byte offsets (line + column);
+BASIC/Python/English currently symbolicate **IL-op + hook id + pc** (their statement-line
+stamping is the next increment). The embedded **C runtime stays lean** — it emits only
+`pc`, with no on-device debug table (a deliberate performance-invariant choice);
+symbolication happens off-device (developer tooling now; the PIOS kernel in production).
+
+The remaining two fields — **capsule id** and **binding id** — are PIOS / EL1 runtime
+context that neither the compiler nor the standalone VM can produce; the exact work handed
+to the kernel build (ship the debug table in the INV-23 module container, reuse
+`symbolize()`, add the two context fields) is specified in `docs/INV25_PIOS_TRACE.md`.

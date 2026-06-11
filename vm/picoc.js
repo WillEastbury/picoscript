@@ -62,25 +62,26 @@
   // Inst is a plain object: { op, dst, a, b, cond, label, ns, method, args, imm, text }
   function Inst(op, f) { f = f || {}; f.op = op; if (!f.args) f.args = []; return f; }
 
-  function ILBuilder() { this.insts = []; this._ln = 0; }
+  function ILBuilder() { this.insts = []; this._ln = 0; this.curPos = -1; }
   ILBuilder.prototype = {
     vreg: function (n) { return new VReg(n); },
     newLabel: function (h) { this._ln++; return (h || "L") + this._ln; },
-    const_: function (d, v) { this.insts.push(Inst("const", { dst: d, imm: v })); },
-    mov: function (d, s) { this.insts.push(Inst("mov", { dst: d, a: s })); },
-    arith: function (op, d, a, b) { this.insts.push(Inst(op, { dst: d, a: a, b: b })); },
-    inc: function (d) { this.insts.push(Inst("inc", { dst: d })); },
-    cmpbr: function (c, a, b, l) { this.insts.push(Inst("cmpbr", { cond: c, a: a, b: b, label: l })); },
-    jmp: function (l) { this.insts.push(Inst("jmp", { label: l })); },
-    jmptab: function (sel, targets, def) { this.insts.push(Inst("jmptab", { a: sel, targets: targets, label: def })); },
-    label: function (n) { this.insts.push(Inst("label", { label: n })); },
-    call: function (l) { this.insts.push(Inst("call", { label: l })); },
-    ret: function () { this.insts.push(Inst("ret", {})); },
-    host: function (ns, m, args, d) { this.insts.push(Inst("host", { ns: ns, method: m, args: args || [], dst: d || null })); },
-    load: function (d, a) { this.insts.push(Inst("load", { dst: d, imm: a })); },
-    save: function (s, a) { this.insts.push(Inst("save", { a: s, imm: a })); },
-    pipe: function (s, a) { this.insts.push(Inst("pipe", { a: s, imm: a })); },
-    net: function (k, v) { this.insts.push(Inst("net", { method: k, imm: (typeof v === "number" ? v : 0), text: (typeof v === "string" ? v : "") })); }
+    _push: function (ins) { ins.pos = this.curPos; this.insts.push(ins); return ins; },   // INV-25: stamp source offset
+    const_: function (d, v) { this._push(Inst("const", { dst: d, imm: v })); },
+    mov: function (d, s) { this._push(Inst("mov", { dst: d, a: s })); },
+    arith: function (op, d, a, b) { this._push(Inst(op, { dst: d, a: a, b: b })); },
+    inc: function (d) { this._push(Inst("inc", { dst: d })); },
+    cmpbr: function (c, a, b, l) { this._push(Inst("cmpbr", { cond: c, a: a, b: b, label: l })); },
+    jmp: function (l) { this._push(Inst("jmp", { label: l })); },
+    jmptab: function (sel, targets, def) { this._push(Inst("jmptab", { a: sel, targets: targets, label: def })); },
+    label: function (n) { this._push(Inst("label", { label: n })); },
+    call: function (l) { this._push(Inst("call", { label: l })); },
+    ret: function () { this._push(Inst("ret", {})); },
+    host: function (ns, m, args, d) { this._push(Inst("host", { ns: ns, method: m, args: args || [], dst: d || null })); },
+    load: function (d, a) { this._push(Inst("load", { dst: d, imm: a })); },
+    save: function (s, a) { this._push(Inst("save", { a: s, imm: a })); },
+    pipe: function (s, a) { this._push(Inst("pipe", { a: s, imm: a })); },
+    net: function (k, v) { this._push(Inst("net", { method: k, imm: (typeof v === "number" ? v : 0), text: (typeof v === "string" ? v : "") })); }
   };
 
   function operandVRegs(ins) {
@@ -100,10 +101,10 @@
         else if (ins.op === "sub") r = av - bv;
         else if (ins.op === "mul") r = av * bv;
         else r = bv !== 0 ? ((av / bv) | 0) : 0;   // trunc toward zero + 2's-comp wrap (matches VM/C)
-        out.push(Inst("const", { dst: ins.dst, imm: r })); return;
+        out.push(Inst("const", { dst: ins.dst, imm: r, pos: ins.pos })); return;
       }
       if (ins.op === "add" && isVReg(ins.a) && ins.dst === ins.a && isImm(ins.b) && ins.b.value === 1) {
-        out.push(Inst("inc", { dst: ins.dst })); return;
+        out.push(Inst("inc", { dst: ins.dst, pos: ins.pos })); return;
       }
       if (ins.op === "mov" && isVReg(ins.a) && ins.dst === ins.a) return;
       out.push(ins);
@@ -384,7 +385,7 @@
     }
   }
 
-  function lowerToBytecode(insts, opt, outVars, checkOwnership) {
+  function lowerToBytecode(insts, opt, outVars, checkOwnership, debug) {
     if (checkOwnership !== false) verifyResponseOwnership(insts);
     if (opt !== false) insts = optimize(insts);
     var alloc = allocateOrSpill(insts);   // auto-spills on >16 live values (INV-13)
@@ -427,6 +428,18 @@
       words.push(emitWord(ins, mapping, labels, pc));
       pc += 1;
     });
+    // INV-25: build pc -> [off, op, ns, method] from the SAME final insts/width the
+    // words were emitted from (side-band; the word stream above is byte-identical).
+    if (debug) {
+      pc = 0;
+      insts.forEach(function (ins) {
+        var w = width(ins);
+        if (w === 0) return;
+        var rec = [ins.pos, ins.op, ins.ns != null ? ins.ns : null, ins.method != null ? ins.method : null];
+        for (var p = pc; p < pc + w; p++) debug[p] = rec;
+        pc += w;
+      });
+    }
     return words;
   }
 
@@ -448,21 +461,21 @@
 
   function ctokenize(src) {
     var toks = [], i = 0, n = src.length;
-    function push(k, v) { toks.push({ kind: k, value: v }); }
+    function push(k, v, p) { toks.push({ kind: k, value: v, pos: p }); }   // INV-25: pos = token start offset
     while (i < n) {
-      var c = src[i];
+      var c = src[i], start = i;
       if (c === " " || c === "\t" || c === "\r" || c === "\n") { i++; continue; }
       if (c === "/" && src[i + 1] === "/") { while (i < n && src[i] !== "\n") i++; continue; }
       if (c === "/" && src[i + 1] === "*") { i += 2; while (i + 1 < n && !(src[i] === "*" && src[i + 1] === "/")) i++; i += 2; continue; }
-      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { if (src[j] === "\\" && j + 1 < n) { b += src[j + 1]; j += 2; continue; } b += src[j]; j++; } push("str", b); i = j + 1; continue; }
-      if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2)); i = j2; continue; }
-      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; var w = src.slice(i, j3); var low = w.toLowerCase(); if (C_KW[low]) push("kw", low); else push("id", w); i = j3; continue; }
+      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { if (src[j] === "\\" && j + 1 < n) { b += src[j + 1]; j += 2; continue; } b += src[j]; j++; } push("str", b, start); i = j + 1; continue; }
+      if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2), start); i = j2; continue; }
+      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; var w = src.slice(i, j3); var low = w.toLowerCase(); if (C_KW[low]) push("kw", low, start); else push("id", w, start); i = j3; continue; }
       var two = src.slice(i, i + 2);
-      if (C_TWO[two]) { push("op", two); i += 2; continue; }
-      if (C_ONE.indexOf(c) >= 0) { push("op", c); i++; continue; }
+      if (C_TWO[two]) { push("op", two, start); i += 2; continue; }
+      if (C_ONE.indexOf(c) >= 0) { push("op", c, start); i++; continue; }
       throw new Error("C: unexpected char " + JSON.stringify(c));
     }
-    push("eof", "");
+    push("eof", "", n);
     return toks;
   }
 
@@ -480,6 +493,13 @@
     },
     parseBlock: function () { this.expect("{"); var s = []; while (!this.accept("}")) { if (this.peek().kind === "eof") throw new Error("C: unterminated block"); s.push(this.parseStmt()); } return s; },
     parseStmt: function () {
+      // INV-25: stamp every statement node with its first token's source offset.
+      var start = this.peek().pos;
+      var node = this._parseStmt();
+      if (node != null) node.pos = start;
+      return node;
+    },
+    _parseStmt: function () {
       var t = this.peek();
       if (t.kind === "kw") {
         if (t.value === "int" || t.value === "var") return this.parseDecl();
@@ -653,6 +673,7 @@
     },
     stmt: function (s) {
       var self = this;
+      if (typeof s.pos === "number" && s.pos >= 0) this.b.curPos = s.pos;   // INV-25
       if (s.t === "Decl") { var v = this.varOf(s.name); if (s.init != null) this.assignTo(v, s.init); else this.b.const_(v, 0); }
       else if (s.t === "Assign") this.assignTo(this.varOf(s.name), s.value);
       else if (s.t === "If") this.lowerIf(s);
@@ -1644,6 +1665,37 @@
   };
   function compileEnglish(src) { return new BLowerer().lowerProgram(new EnParser(entokenize(src)).parseProgram()); }
 
+  // ── INV-25: structured debug trace -- symbolication (mirrors picoscript_il) ──
+  var FAULT_NAMES = {
+    0: "none", 1: "step_budget", 2: "bad_opcode", 3: "bad_jump", 4: "call_overflow",
+    5: "ret_underflow", 6: "bad_hook", 7: "template", 8: "capability", 9: "alloc", 10: "const_write"
+  };
+  function offsetToLineCol(source, off) {
+    if (source == null || off == null || off < 0 || off > source.length) return [0, 0];
+    var line = 1, lastNl = -1;
+    for (var k = 0; k < off; k++) { if (source[k] === "\n") { line++; lastNl = k; } }
+    return [line, off - lastNl];
+  }
+  function sourceLineText(source, off) {
+    if (source == null || off == null || off < 0 || off > source.length) return "";
+    var start = source.lastIndexOf("\n", off - 1) + 1;
+    var end = source.indexOf("\n", off);
+    if (end < 0) end = source.length;
+    return source.slice(start, end);
+  }
+  function symbolize(code, pc, detail, debug, source) {
+    source = source || "";
+    var rec = (debug && Object.prototype.hasOwnProperty.call(debug, pc)) ? debug[pc] : null;
+    var off = rec ? rec[0] : -1, op = rec ? rec[1] : "", ns = rec ? rec[2] : null, method = rec ? rec[3] : null;
+    var lc = offsetToLineCol(source, off);
+    var target = ns ? (ns + "." + method) : (op || "?");
+    return {
+      code: code, fault: (FAULT_NAMES[code] !== undefined ? FAULT_NAMES[code] : String(code)),
+      pc: pc, detail: detail, op: op || "?", target: target,
+      off: off, line: lc[0], col: lc[1], source_line: sourceLineText(source, off)
+    };
+  }
+
   function compileIL(src, lang) {
     return (lang === "basic") ? compileBasic(src)
          : (lang === "python") ? compilePython(src)
@@ -1665,6 +1717,15 @@
     compileBasic: function (src) { return { words: lowerToBytecode(compileBasic(src), true), il: compileBasic(src) }; },
     compilePython: function (src) { return { words: lowerToBytecode(compilePython(src), true), il: compilePython(src) }; },
     compileEnglish: function (src) { return { words: lowerToBytecode(compileEnglish(src), true), il: compileEnglish(src) }; },
+    compileWithDebug: function (src, lang) {
+      var dbg = {};
+      var words = lowerToBytecode(compileIL(src, lang), true, null, true, dbg);
+      return { words: words, debug: dbg };
+    },
+    symbolize: symbolize,
+    offsetToLineCol: offsetToLineCol,
+    sourceLineText: sourceLineText,
+    FAULT_NAMES: FAULT_NAMES,
     _lowerToBytecode: lowerToBytecode,
     _VReg: VReg, _Imm: Imm, _ILBuilder: ILBuilder, _canonHost: canonHost, _encodeCardAddr: encodeCardAddr,
     _COND: COND, _COND_NEGATE: COND_NEGATE

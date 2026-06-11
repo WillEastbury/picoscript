@@ -135,6 +135,7 @@ class Inst:
     imm: int = 0
     text: str = ""        # carried comment / string literal (e.g. Net.Type)
     targets: Tuple[str, ...] = ()   # ordered case labels for a jump table (jmptab)
+    pos: int = -1         # INV-25: source byte offset this inst lowered from (-1 = unknown)
 
     def __repr__(self):
         if self.op == "label":
@@ -208,6 +209,13 @@ class ILBuilder:
     def __init__(self):
         self.insts: List[Inst] = []
         self._label_n = 0
+        self.cur_pos = -1   # INV-25: source offset stamped onto every emitted Inst
+
+    def _emit(self, ins: Inst) -> Inst:
+        """Stamp the builder's current source offset (INV-25) and append."""
+        ins.pos = self.cur_pos
+        self.insts.append(ins)
+        return ins
 
     # -- operand helpers -------------------------------------------------
     def vreg(self, name: str = "") -> VReg:
@@ -219,64 +227,64 @@ class ILBuilder:
 
     # -- emit ------------------------------------------------------------
     def const(self, dst: VReg, value: int):
-        self.insts.append(Inst("const", dst=dst, imm=value))
+        self._emit(Inst("const", dst=dst, imm=value))
 
     def mov(self, dst: VReg, src: Operand):
-        self.insts.append(Inst("mov", dst=dst, a=src))
+        self._emit(Inst("mov", dst=dst, a=src))
 
     def arith(self, op: str, dst: VReg, a: Operand, b: Operand):
         assert op in ARITH, op
-        self.insts.append(Inst(op, dst=dst, a=a, b=b))
+        self._emit(Inst(op, dst=dst, a=a, b=b))
 
     def inc(self, dst: VReg):
-        self.insts.append(Inst("inc", dst=dst))
+        self._emit(Inst("inc", dst=dst))
 
     def cmpbr(self, cond: str, a: Operand, b: Operand, label: str):
-        self.insts.append(Inst("cmpbr", cond=cond, a=a, b=b, label=label))
+        self._emit(Inst("cmpbr", cond=cond, a=a, b=b, label=label))
 
     def jmp(self, label: str):
-        self.insts.append(Inst("jmp", label=label))
+        self._emit(Inst("jmp", label=label))
 
     def jmptab(self, selector: VReg, targets: Tuple[str, ...], default_label: str):
         """Indexed jump table: PC dispatches on `selector` (assumed in [0, len(targets)))
         to targets[selector].  `default_label` is the out-of-range target used by the
         C/JS backends' switch default; callers must emit a bounds guard for bytecode."""
-        self.insts.append(Inst("jmptab", a=selector, targets=tuple(targets), label=default_label))
+        self._emit(Inst("jmptab", a=selector, targets=tuple(targets), label=default_label))
 
     def label(self, name: str):
-        self.insts.append(Inst("label", label=name))
+        self._emit(Inst("label", label=name))
 
     def call(self, label: str):
-        self.insts.append(Inst("call", label=label))
+        self._emit(Inst("call", label=label))
 
     def ret(self):
-        self.insts.append(Inst("ret"))
+        self._emit(Inst("ret"))
 
     def host(self, ns: str, method: str, args: Tuple[Operand, ...] = (),
              dst: Optional[VReg] = None):
-        self.insts.append(Inst("host", ns=ns, method=method, args=tuple(args), dst=dst))
+        self._emit(Inst("host", ns=ns, method=method, args=tuple(args), dst=dst))
 
     def load(self, dst: VReg, addr16: int):
-        self.insts.append(Inst("load", dst=dst, imm=addr16))
+        self._emit(Inst("load", dst=dst, imm=addr16))
 
     def save(self, src: VReg, addr16: int):
-        self.insts.append(Inst("save", a=src, imm=addr16))
+        self._emit(Inst("save", a=src, imm=addr16))
 
     def pipe(self, src: VReg, addr16: int):
-        self.insts.append(Inst("pipe", a=src, imm=addr16))
+        self._emit(Inst("pipe", a=src, imm=addr16))
 
     def net(self, kind: str, value: Union[int, str] = 0):
-        self.insts.append(Inst("net", method=kind, imm=value if isinstance(value, int) else 0,
-                               text=value if isinstance(value, str) else ""))
+        self._emit(Inst("net", method=kind, imm=value if isinstance(value, int) else 0,
+                        text=value if isinstance(value, str) else ""))
 
     def dsp(self, subop: int, dst: VReg, a: Optional[VReg] = None, b: Optional[Operand] = None):
-        self.insts.append(Inst("dsp", dst=dst, a=a, b=b, imm=subop))
+        self._emit(Inst("dsp", dst=dst, a=a, b=b, imm=subop))
 
     def wait(self, mask: Optional[VReg] = None):
-        self.insts.append(Inst("wait", a=mask))
+        self._emit(Inst("wait", a=mask))
 
     def raise_irq(self, channel: int):
-        self.insts.append(Inst("raise", imm=channel))
+        self._emit(Inst("raise", imm=channel))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -324,12 +332,12 @@ def optimize(insts: List[Inst]) -> List[Inst]:
                 r = av * bv
             else:
                 r = trunc_div32(av, bv)
-            out.append(Inst("const", dst=ins.dst, imm=r))
+            out.append(Inst("const", dst=ins.dst, imm=r, pos=ins.pos))
             continue
         # x = x + 1  ->  inc x
         if ins.op == "add" and isinstance(ins.a, VReg) and ins.dst == ins.a \
                 and _is_imm(ins.b) and ins.b.value == 1:
-            out.append(Inst("inc", dst=ins.dst))
+            out.append(Inst("inc", dst=ins.dst, pos=ins.pos))
             continue
         # mov x, x  -> drop
         if ins.op == "mov" and isinstance(ins.a, VReg) and ins.dst == ins.a:
@@ -812,14 +820,20 @@ class _ConstExpansion(Exception):
 
 
 def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True,
-                           check_ownership: bool = True) -> List[int]:
+                           check_ownership: bool = True,
+                           debug: "Optional[dict]" = None) -> List[int]:
     """Like lower_to_bytecode but expands CONST/MOV-imm into 2 words
     (SUB rd,rd,rd ; ADD rd,rd,#imm) so a register can be set to any constant
     without a LOADI opcode.  This recomputes label PCs accounting for expansion.
 
     Runs the INV-7 compile-time iso-lease check (verify_response_ownership) first
     unless check_ownership is False; pass False only to lower a deliberately
-    invalid response program for the runtime-sim backstop tests."""
+    invalid response program for the runtime-sim backstop tests.
+
+    INV-25: when `debug` is a dict, it is filled with a side-band debug table
+    mapping each emitted bytecode pc -> (src_off, op, ns, method) for every word the
+    instruction produced.  The word stream is byte-identical regardless of `debug`;
+    the table is a separate symbolication artifact (see symbolize())."""
     if check_ownership:
         verify_response_ownership(insts)
     if opt:
@@ -875,7 +889,89 @@ def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True,
             pc += 2
             continue
         pc += 1
+
+    # INV-25: build the pc -> (src_off, op, ns, method) debug table from the SAME
+    # final inst list and width() the words were emitted from, so each pc maps to the
+    # instruction that produced it. Side-band only; the word stream above is unchanged.
+    if debug is not None:
+        pc = 0
+        for ins in insts:
+            w = width(ins)
+            if w == 0:
+                continue
+            rec = (ins.pos, ins.op, ins.ns, ins.method)
+            for p in range(pc, pc + w):
+                debug[p] = rec
+            pc += w
     return words
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# INV-25: structured debug trace -- symbolication of a fault against the debug table
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Fault code -> stable name (mirrors PV_FAULT_* in vm/picovm.h and the JS FAULT enum).
+FAULT_NAMES = {
+    0: "none", 1: "step_budget", 2: "bad_opcode", 3: "bad_jump", 4: "call_overflow",
+    5: "ret_underflow", 6: "bad_hook", 7: "template", 8: "capability", 9: "alloc",
+    10: "const_write",
+}
+
+
+def lower_to_bytecode_with_debug(insts: List[Inst], opt: bool = True,
+                                 check_ownership: bool = True):
+    """Convenience: return (words, debug) where debug maps pc -> (off, op, ns, method)."""
+    debug: Dict[int, tuple] = {}
+    words = lower_to_bytecode_safe(insts, opt=opt, check_ownership=check_ownership, debug=debug)
+    return words, debug
+
+
+def offset_to_line_col(source: str, off: int):
+    """1-based (line, col) for a source byte offset; (0, 0) if unknown."""
+    if source is None or off is None or off < 0 or off > len(source):
+        return (0, 0)
+    line = source.count("\n", 0, off) + 1
+    col = off - (source.rfind("\n", 0, off) + 1) + 1
+    return (line, col)
+
+
+def source_line_text(source: str, off: int) -> str:
+    """The full source line containing `off`, trimmed of trailing newline; '' if unknown."""
+    if source is None or off is None or off < 0 or off > len(source):
+        return ""
+    start = source.rfind("\n", 0, off) + 1
+    end = source.find("\n", off)
+    if end < 0:
+        end = len(source)
+    return source[start:end]
+
+
+def symbolize(code, pc, detail, debug=None, source: str = "") -> dict:
+    """INV-25 structured debug trace: resolve a fault's machine coordinates
+    (code, pc, detail) against the compiler debug table + source into a stable
+    record {code, fault, pc, detail, op, target, off, line, col, source_line}.
+
+    Byte-identical to vm/picoc.js `symbolize` (same fields, same values), so a fault
+    from any runtime symbolicates the same way. `capsule`/`binding` ids are added by
+    the PIOS kernel at EL1 (see docs/INV25_PIOS_TRACE.md) and are absent here."""
+    rec = None
+    if debug is not None and pc in debug:
+        rec = debug[pc]
+    off, op, ns, method = (rec if rec is not None else (-1, "", None, None))
+    line, col = offset_to_line_col(source, off)
+    target = (ns + "." + method) if ns else (op or "?")
+    return {
+        "code": code,
+        "fault": FAULT_NAMES.get(code, str(code)),
+        "pc": pc,
+        "detail": detail,
+        "op": op or "?",
+        "target": target,
+        "off": off,
+        "line": line,
+        "col": col,
+        "source_line": source_line_text(source, off),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
