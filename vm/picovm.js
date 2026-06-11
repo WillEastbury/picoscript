@@ -1094,5 +1094,43 @@
     return new TextDecoder("utf-8").decode(new Uint8Array(this.output));
   };
 
+  // ── module container: embedded + checked ABI version (INV-23) ─────────────
+  // Mirrors pico_module.py byte-for-byte: [MAGIC, ABI, HOOK_TABLE_VERSION, count, ...words].
+  // load refuses a module whose magic/ABI/hook-table version != this runtime.
+  var MODULE_MAGIC = 0x50534331;       // "PSC1"
+  var MODULE_ABI_VERSION = 1;
+  function _fnv1a32(str) {              // FNV-1a/32 over UTF-8 bytes (hook names are ASCII)
+    var h = 0x811C9DC5;
+    for (var i = 0; i < str.length; i++) h = Math.imul(h ^ (str.charCodeAt(i) & 0xFF), 0x01000193) >>> 0;
+    return h >>> 0;
+  }
+  function hookTableVersion() {
+    var bc = PV_HOOKS.BY_CODE || {};
+    var codes = Object.keys(bc).map(function (k) { return parseInt(k, 10); }).sort(function (a, b) { return a - b; });
+    var lines = codes.map(function (c) { return c + ":" + bc[c]; });
+    return _fnv1a32(lines.join("\n"));
+  }
+  function packModule(words) {
+    var out = [MODULE_MAGIC >>> 0, MODULE_ABI_VERSION >>> 0, hookTableVersion(), words.length >>> 0];
+    for (var i = 0; i < words.length; i++) out.push(words[i] >>> 0);
+    return out;
+  }
+  function loadModule(container) {
+    if (!container || container.length < 4) throw new Error("ModuleAbiError: truncated module header");
+    var magic = container[0] >>> 0, abi = container[1] >>> 0, htv = container[2] >>> 0, count = container[3] >>> 0;
+    if (magic !== (MODULE_MAGIC >>> 0)) throw new Error("ModuleAbiError: bad module magic 0x" + magic.toString(16));
+    if (abi !== MODULE_ABI_VERSION) throw new Error("ModuleAbiError: ABI version mismatch module=" + abi + " runtime=" + MODULE_ABI_VERSION);
+    var expect = hookTableVersion();
+    if (htv !== expect) throw new Error("ModuleAbiError: host hook table version mismatch module=0x" + htv.toString(16) + " runtime=0x" + expect.toString(16));
+    var words = container.slice(4);
+    if (words.length !== count) throw new Error("ModuleAbiError: word count mismatch header=" + count + " actual=" + words.length);
+    return words.map(function (w) { return w >>> 0; });
+  }
+  PicoVM.packModule = packModule;
+  PicoVM.loadModule = loadModule;
+  PicoVM.hookTableVersion = hookTableVersion;
+  PicoVM.MODULE_MAGIC = MODULE_MAGIC;
+  PicoVM.MODULE_ABI_VERSION = MODULE_ABI_VERSION;
+
   return PicoVM;
 });

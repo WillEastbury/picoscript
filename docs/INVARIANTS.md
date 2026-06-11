@@ -40,7 +40,7 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 20 | JSON/HTTP parsers are budgeted (depth/token/length/bytes) | partial |
 | 21 | Source card is truth (artefacts carry source hash + compiler version + profile) | enforced |
 | 22 | Generated artefacts are disposable (never edited as source) | convention |
-| 23 | ABI version is embedded and checked (refuse mismatch) | target |
+| 23 | ABI version is embedded and checked (refuse mismatch) | enforced (module container) |
 | 24 | Parity runner is the gatekeeper (every hook/opcode/lowering has parity tests) | enforced (gate) |
 | 25 | Debug trace is structured (span, IL op, pc, hook id, capsule, binding) | partial (code+pc+detail) |
 
@@ -222,10 +222,19 @@ yields a different hash. An artefact can now be traced to its source IL.
 hand". Honoured by convention; no automated check that the generated file matches its
 source.
 
-### 23. ABI version is embedded — *target*
-No version/magic in the bytecode container, host-hook table, or descriptor ABI, and no
-load-time refusal of a mismatch (`picoscript_vm.py:1187-1226`). Target: an embedded
-ABI version, checked at load.
+### 23. ABI version is embedded — *enforced (module container)*
+A persisted/shipped program is wrapped in a versioned container
+`[MAGIC, ABI_VERSION, HOOK_TABLE_VERSION, count, …words]` (`pico_module.py`
+`pack_module`/`load_module`, mirrored in `vm/picovm.js` `packModule`/`loadModule`).
+`load` **refuses** (raises `ModuleAbiError`) any magic / ABI-version / hook-table-version
+/ length mismatch. The hook-table version is a content hash (FNV-1a/32 of the canonical
+`code:Ns.Method` lines) that bumps automatically when a hook is added/removed/renumbered,
+and is computed **identically** by Python and JS (`tests/test_abi_version.py` asserts they
+agree — `0xE7771083` today — and that a Python-packed module loads in JS).
+*Design choice (Option C):* the **raw in-memory** word array that the VMs and parity tests
+execute stays headerless — the container is applied only when bytecode is saved/loaded/
+distributed — so the byte-identical hot path is untouched (zero parity/test disruption). A
+C `pv_load_module` port follows the same wire format (documented follow-up).
 
 ### 24. Parity runner is the gatekeeper — *enforced (automated gate)*
 `tests/test_parity_gate.py` parses the full hook registry (`vm/pico_hooks.js`) and fails
