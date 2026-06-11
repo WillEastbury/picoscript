@@ -76,6 +76,33 @@ KEYWORDS = {
     "EQ", "NE", "LT", "GT", "LE", "GE", "MOD",
 }
 CMP_WORDS = {"EQ": "EQ", "NE": "NE", "LT": "LT", "GT": "GT", "LE": "LE", "GE": "GE"}
+
+# Idiomatic aliases for the BASIC and (shared-lowerer) Python frontends -> canonical
+# (ns, method). Pure frontend sugar: same IL/output on all paths. Keys are lowercase
+# and cover both idioms (BASIC LEN/POKE/UCASE$ and Python len/poke/upper); a
+# user-defined SUB of the same name takes precedence. Radix formatters follow each
+# language's convention via BP_RADIX (Python hex/oct/bin -> 0x/0o/0b; BASIC HEX$ -> bare UPPERCASE).
+BP_ALIASES = {
+    "poke": ("Memory", "Set"), "peek": ("Memory", "Get"),
+    "len": ("String", "Length"), "mid$": ("String", "Substring"),
+    "ucase$": ("String", "ToUpper"), "lcase$": ("String", "ToLower"),
+    "instr": ("String", "IndexOf"), "val": ("Number", "Parse"),
+    "str$": ("Number", "ToString"), "abs": ("Number", "Abs"),
+    "sqr": ("Maths", "Sqrt"), "oct$": ("Number", "ToOctal"), "bin$": ("Number", "ToBinary"),
+    "span": ("Span", "Make"), "sha256": ("Crypto", "Sha256"),
+    "min": ("Number", "Min"), "max": ("Number", "Max"),
+    "str": ("Number", "ToString"), "int": ("Number", "Parse"),
+    "pow": ("Maths", "Power"), "upper": ("String", "ToUpper"),
+    "lower": ("String", "ToLower"), "find": ("String", "IndexOf"),
+    "substr": ("String", "Substring"),
+}
+# Radix formatters needing composition: (canonical Number method, prefix or None, uppercase?)
+BP_RADIX = {
+    "hex": ("ToHex", "0x", False),     # Python hex(255) -> "0xff"
+    "oct": ("ToOctal", "0o", False),   # Python oct(255) -> "0o377"
+    "bin": ("ToBinary", "0b", False),  # Python bin(255) -> "0b11111111"
+    "hex$": ("ToHex", None, True),     # BASIC HEX$(255) -> "FF" (bare uppercase)
+}
 # Symbol comparators. `=` means equality inside an expression/test; assignment `=`
 # at statement level is consumed by the statement parser before this is consulted.
 CMP_SYMS = {"==": "EQ", "!=": "NE", "<>": "NE", "=": "EQ",
@@ -129,6 +156,8 @@ def tokenize(src: str) -> List[Tok]:
         if c.isalpha() or c == "_":
             j = i
             while j < n and (src[j].isalnum() or src[j] == "_"):
+                j += 1
+            if j < n and src[j] == "$":      # BASIC string-function suffix: HEX$, UCASE$, MID$, ...
                 j += 1
             word = src[i:j]
             up = word.upper()
@@ -331,9 +360,14 @@ class Parser:
             if kw == "PRINT":
                 self.next(); v = self.parse_expr(); self.end_line(); return Print(v)
             raise SyntaxError(f"line {t.line}: unexpected keyword {kw}")
-        # assignment: id = expr / id += expr   OR bare call: Ns.Method(...)
+        # assignment: id = expr / id += expr   OR bare call: Ns.Method(...) / NAME(...)
         if t.kind == "id":
             nxt = self.peek2()
+            if t.value.upper() == "POKE" and not (nxt.kind == "op" and nxt.value == "("):
+                self.next()                              # classic no-parens form: POKE addr, value
+                a = self.parse_expr(); self.eat_op(",")
+                b = self.parse_expr(); self.end_line()
+                return CallStmt(Call(None, "poke", [a, b]))
             if nxt.kind == "op" and nxt.value == "=":
                 return self.parse_let(eat_let=False)
             if nxt.kind == "op" and nxt.value in ASSIGN_OPS:
@@ -345,6 +379,11 @@ class Parser:
                 call = self.parse_call_from_id()
                 self.end_line()
                 return CallStmt(call)
+            if nxt.kind == "op" and nxt.value == "(":
+                name = self.next().value                 # bare-name call statement: NAME(args)
+                args = self.parse_args()
+                self.end_line()
+                return CallStmt(Call(None, name, args))
         raise SyntaxError(f"line {t.line}: cannot parse statement at {t.value!r}")
 
     def parse_let(self, eat_let: bool) -> Let:
@@ -569,6 +608,9 @@ class Parser:
                 method = self.next().value
                 args = self.parse_args()
                 return Call(t.value, method, args)
+            if self.peek().kind == "op" and self.peek().value == "(":
+                args = self.parse_args()                 # bare-name call: LEN(x), HEX$(n), PEEK(a)
+                return Call(None, t.value, args)
             return Var(t.value)
         raise SyntaxError(f"line {t.line}: unexpected token {t.value!r}")
 
@@ -603,6 +645,7 @@ class Lowerer:
     def lower_program(self, prog: List[object]) -> List:
         body = [s for s in prog if not isinstance(s, Sub)]
         self.subs = [s for s in prog if isinstance(s, Sub)]
+        self._sub_names = {s.name.lower() for s in self.subs}
         for s in body:
             self.stmt(s)
         self.b.ret()
@@ -965,6 +1008,22 @@ class Lowerer:
 
     def lower_call(self, c: Call, want_value: bool) -> Optional[VReg]:
         ns, method = c.ns, c.method
+        if ns is None:
+            key = method.lower()
+            subs = getattr(self, "_sub_names", set())
+            if key in BP_RADIX and key not in subs:
+                cm, prefix, upper = BP_RADIX[key]
+                val = self.eval(c.args[0])
+                d = self.b.vreg(); self.b.host("Number", cm, (val,), d)
+                if upper:
+                    out = self.b.vreg(); self.b.host("String", "ToUpper", (d,), out); return out
+                if prefix:
+                    pre = self.emit_str_span(prefix)
+                    out = self.b.vreg(); self.b.host("String", "Concat", (pre, d), out); return out
+                return d
+            if key in BP_ALIASES and key not in subs:
+                a_ns, a_m = BP_ALIASES[key]
+                return self.lower_call(Call(a_ns, a_m, c.args), want_value)
         if ns is not None and ns.upper() == "NET":
             m = method.upper()
             if m == "STATUS":

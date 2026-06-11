@@ -713,7 +713,7 @@
       if (c === "'" || (c === "/" && src[i + 1] === "/")) { while (i < n && src[i] !== "\n") i++; continue; }
       if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { b += src[j]; j++; } push("str", b); i = j + 1; continue; }
       if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2)); i = j2; continue; }
-      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; var w = src.slice(i, j3); var up = w.toUpperCase(); if (B_KW[up]) push("kw", up); else push("id", w); i = j3; continue; }
+      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; if (src[j3] === "$") j3++; var w = src.slice(i, j3); var up = w.toUpperCase(); if (B_KW[up]) push("kw", up); else push("id", w); i = j3; continue; }
       var two = src.slice(i, i + 2);
       if (B_TWO[two]) { push("op", two); i += 2; continue; }
       if (B_ONE.indexOf(c) >= 0) { push("op", c); i++; continue; }
@@ -767,6 +767,12 @@
       }
       if (t.kind === "id") {
         var nx = this.peek2();
+        if (t.value.toUpperCase() === "POKE" && !(nx.kind === "op" && nx.value === "(")) {
+          this.next();                                  // classic no-parens form: POKE addr, value
+          var pa = this.parseExpr(); this.eatOp(",");
+          var pb = this.parseExpr(); this.endLine();
+          return { t: "CallStmt", call: { t: "Call", ns: null, method: "poke", args: [pa, pb] } };
+        }
         if (nx.kind === "op" && nx.value === "=") return this.parseLet(false);
         if (nx.kind === "op" && B_ASSIGN[nx.value]) {
           var an = this.next().value; var aop = B_ASSIGN[this.next().value];
@@ -774,6 +780,7 @@
           return { t: "Let", name: an, value: { t: "Bin", op: aop, lhs: { t: "Var", name: an }, rhs: arhs } };
         }
         if (nx.kind === "op" && nx.value === ".") { var call = this.parseCallFromId(); this.endLine(); return { t: "CallStmt", call: call }; }
+        if (nx.kind === "op" && nx.value === "(") { var cn = this.next().value; var cargs = this.parseArgs(); this.endLine(); return { t: "CallStmt", call: { t: "Call", ns: null, method: cn, args: cargs } }; }
       }
       throw new Error("BASIC: cannot parse statement at " + t.value);
     },
@@ -859,9 +866,32 @@
         return { t: "Ternary", cond: c, then: th, els: el };
       }
       if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.eatOp(")"); return e; }
-      if (t.kind === "id") { if (this.peek().kind === "op" && this.peek().value === ".") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; } return { t: "Var", name: t.value }; }
+      if (t.kind === "id") { if (this.peek().kind === "op" && this.peek().value === ".") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; } if (this.peek().kind === "op" && this.peek().value === "(") { return { t: "Call", ns: null, method: t.value, args: this.parseArgs() }; } return { t: "Var", name: t.value }; }
       throw new Error("BASIC: unexpected token " + t.value);
     }
+  };
+
+  // Idiomatic aliases for the BASIC + (shared-lowerer) Python/English frontends ->
+  // canonical (ns, method). Mirrors picoscript_basic.BP_ALIASES/BP_RADIX so Python-
+  // and JS-compiled bytecode stay identical. Keys lowercase; a user SUB of the same
+  // name takes precedence. Radix formatters follow each language's convention.
+  var BP_ALIASES = {
+    poke: ["Memory", "Set"], peek: ["Memory", "Get"],
+    len: ["String", "Length"], "mid$": ["String", "Substring"],
+    "ucase$": ["String", "ToUpper"], "lcase$": ["String", "ToLower"],
+    instr: ["String", "IndexOf"], val: ["Number", "Parse"],
+    "str$": ["Number", "ToString"], abs: ["Number", "Abs"],
+    sqr: ["Maths", "Sqrt"], "oct$": ["Number", "ToOctal"], "bin$": ["Number", "ToBinary"],
+    span: ["Span", "Make"], sha256: ["Crypto", "Sha256"],
+    min: ["Number", "Min"], max: ["Number", "Max"],
+    str: ["Number", "ToString"], int: ["Number", "Parse"],
+    pow: ["Maths", "Power"], upper: ["String", "ToUpper"],
+    lower: ["String", "ToLower"], find: ["String", "IndexOf"],
+    substr: ["String", "Substring"]
+  };
+  var BP_RADIX = {
+    hex: ["ToHex", "0x", false], oct: ["ToOctal", "0o", false],
+    bin: ["ToBinary", "0b", false], "hex$": ["ToHex", null, true]
   };
 
   function BLowerer() { this.b = new ILBuilder(); this.vars = {}; this.subs = []; this.scopes = []; this._strlitN = 0; }
@@ -1059,6 +1089,22 @@
     },
     lowerCall: function (c, want) {
       var ns = c.ns, m = c.method;
+      if (ns == null) {
+        var key = m.toLowerCase();
+        var isSub = this.subs.some(function (s) { return s.name.toLowerCase() === key; });
+        if (BP_RADIX[key] && !isSub) {
+          var r = BP_RADIX[key], cm = r[0], prefix = r[1], upper = r[2];
+          var val = this.eval(c.args[0]);
+          var d = this.b.vreg(); this.b.host("Number", cm, [val], d);
+          if (upper) { var outU = this.b.vreg(); this.b.host("String", "ToUpper", [d], outU); return outU; }
+          if (prefix) { var pre = emitStrSpan(this, prefix); var outP = this.b.vreg(); this.b.host("String", "Concat", [pre, d], outP); return outP; }
+          return d;
+        }
+        if (BP_ALIASES[key] && !isSub) {
+          var al = BP_ALIASES[key];
+          return this.lowerCall({ t: "Call", ns: al[0], method: al[1], args: c.args }, want);
+        }
+      }
       if (ns != null && ns.toUpperCase() === "NET") {
         var M = m.toUpperCase();
         if (M === "STATUS") this.b.net("status", intlit(c.args[0]));
@@ -1172,7 +1218,7 @@
         if (nx.kind === "op" && nx.value === "=") { var nm = this.next().value; this.next(); var vv = this.parseExpr(); this.expect("newline"); return { t: "Let", name: nm, value: vv }; }
         if (nx.kind === "op" && PY_AUG[nx.value]) { var an = this.next().value; var op = PY_AUG[this.next().value]; var rhs = this.parseExpr(); this.expect("newline"); return { t: "Let", name: an, value: { t: "Bin", op: op, lhs: { t: "Var", name: an }, rhs: rhs } }; }
         if (nx.kind === "op" && nx.value === ".") { var call = this.parseCallFromId(); this.expect("newline"); return { t: "CallStmt", call: call }; }
-        if (nx.kind === "op" && nx.value === "(") { var gn = this.next().value; this.expect("op", "("); this.expect("op", ")"); this.expect("newline"); return { t: "Gosub", name: gn }; }
+        if (nx.kind === "op" && nx.value === "(") { var gn = this.next().value; var gargs = this.parseArgs(); this.expect("newline"); if (gargs.length === 0) return { t: "Gosub", name: gn }; return { t: "CallStmt", call: { t: "Call", ns: null, method: gn, args: gargs } }; }
       }
       throw new Error("Python: cannot parse statement at " + t.value);
     },
@@ -1253,7 +1299,7 @@
       if (t.kind === "str") return { t: "Str", value: t.value };
       if (t.kind === "kw" && (t.value.toLowerCase() === "true" || t.value.toLowerCase() === "false")) return { t: "Num", value: t.value.toLowerCase() === "true" ? 1 : 0 };
       if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.expect("op", ")"); return e; }
-      if (t.kind === "id") { if (this.at("op", ".")) { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; } return { t: "Var", name: t.value }; }
+      if (t.kind === "id") { if (this.at("op", ".")) { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; } if (this.at("op", "(")) { return { t: "Call", ns: null, method: t.value, args: this.parseArgs() }; } return { t: "Var", name: t.value }; }
       throw new Error("Python: unexpected token " + t.value);
     }
   };

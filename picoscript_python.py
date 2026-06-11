@@ -276,14 +276,15 @@ class Parser:
                 call = self.parse_call_from_id()
                 self.expect("newline")
                 return CallStmt(call)
-            # bare subroutine call:  name()
+            # bare call:  name() -> subroutine (Gosub);  name(args...) -> host/alias call
             if nxt.kind == "op" and nxt.value == "(":
                 name = self.next().value
-                self.expect("op", "(")
-                self.expect("op", ")")
+                args = self.parse_args()
                 self.expect("newline")
-                from picoscript_basic import Gosub
-                return Gosub(name)
+                if not args:
+                    from picoscript_basic import Gosub
+                    return Gosub(name)
+                return CallStmt(Call(None, name, args))
         raise SyntaxError(f"line {t.line}: cannot parse statement at {t.value!r}")
 
     def parse_if(self) -> If:
@@ -468,6 +469,9 @@ class Parser:
                 method = self.next().value
                 args = self.parse_args()
                 return Call(t.value, method, args)
+            if self.at("op", "("):
+                args = self.parse_args()                 # bare-name call: len(x), hex(n), abs(n)
+                return Call(None, t.value, args)
             return Var(t.value)
         raise SyntaxError(f"line {t.line}: unexpected token {t.value!r}")
 
