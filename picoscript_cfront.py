@@ -40,6 +40,26 @@ KEYWORDS = {"int", "var", "void", "if", "else", "while", "for", "return",
             "break", "continue", "switch", "case", "default", "do", "goto",
             "dispatch"}
 
+# C-frontend aliases: libc-style spellings -> canonical (ns, method). Pure frontend
+# sugar -- resolves to the same host call, so bytecode/output is identical on all five
+# paths. C's radix convention is bare lowercase, so atoi/itoa/Number.ToHex need no
+# prefix. A user-defined function of the same name takes precedence over an alias.
+C_ALIASES = {
+    "strlen":  ("String", "Length"),
+    "strcat":  ("String", "Concat"),
+    "strstr":  ("String", "IndexOf"),
+    "toupper": ("String", "ToUpper"),
+    "tolower": ("String", "ToLower"),
+    "substr":  ("String", "Substring"),
+    "atoi":    ("Number", "Parse"),
+    "itoa":    ("Number", "ToString"),
+    "tohex":   ("Number", "ToHex"),
+    "abs":     ("Number", "Abs"),
+    "sqrt":    ("Maths", "Sqrt"),
+    "pow":     ("Maths", "Power"),
+    "sha256":  ("Crypto", "Sha256"),
+}
+
 _TWO = {"==", "!=", "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/=", "%="}
 _ONE = set("+-*/%()<>=;,{}.!?:")
 
@@ -516,6 +536,7 @@ class Lowerer:
     def lower_program(self, prog: List[object]) -> List:
         body = [s for s in prog if not isinstance(s, Func)]
         self.funcs = [s for s in prog if isinstance(s, Func)]
+        self._func_names = {f.name.lower() for f in self.funcs}
         for s in body:
             self.stmt(s)
         self.b.ret()
@@ -848,6 +869,10 @@ class Lowerer:
                 self.b.save(v, 0xFFFE)
                 self.b.pipe(v, 0xFFFE)
                 return None
+            key = method.lower()
+            if key in C_ALIASES and key not in getattr(self, "_func_names", set()):
+                a_ns, a_m = C_ALIASES[key]
+                return self.lower_call(Call(a_ns, a_m, c.args), want_value)
             self.b.call(f"fn_{method.lower()}")
             return None
         # Net.*  (namespace + method case-insensitive)

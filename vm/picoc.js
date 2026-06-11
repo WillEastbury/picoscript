@@ -441,6 +441,15 @@
     parseArgs: function () { this.expect("("); var a = []; if (!this.accept(")")) { a.push(this.parseExpr()); while (this.accept(",")) a.push(this.parseExpr()); this.expect(")"); } return a; }
   };
 
+  // C-frontend aliases: libc spellings -> canonical (ns, method). Mirrors
+  // picoscript_cfront.C_ALIASES so Python- and JS-compiled bytecode stay identical.
+  var C_ALIASES = {
+    strlen: ["String", "Length"], strcat: ["String", "Concat"], strstr: ["String", "IndexOf"],
+    toupper: ["String", "ToUpper"], tolower: ["String", "ToLower"], substr: ["String", "Substring"],
+    atoi: ["Number", "Parse"], itoa: ["Number", "ToString"], tohex: ["Number", "ToHex"],
+    abs: ["Number", "Abs"], sqrt: ["Maths", "Sqrt"], pow: ["Maths", "Power"], sha256: ["Crypto", "Sha256"]
+  };
+
   // Stage a string literal's UTF-8 bytes in a scratch arena region and return a
   // span over them (two alternating slots). Mirrors picoscript_*.emit_str_span.
   function emitStrSpan(self, text) {
@@ -647,6 +656,10 @@
       var ns = c.ns, m = c.method;
       if (ns == null) {
         if (m.toLowerCase() === "print") { if (c.args[0].t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, c.args[0].value)], null); return null; } var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
+        var ak = m.toLowerCase();
+        if (C_ALIASES[ak] && !this.funcs.some(function (f) { return f.name.toLowerCase() === ak; })) {
+          return this.lowerCall({ t: "Call", ns: C_ALIASES[ak][0], method: C_ALIASES[ak][1], args: c.args }, want);
+        }
         this.b.call("fn_" + m.toLowerCase()); return null;
       }
       if (ns.toUpperCase() === "NET") {
