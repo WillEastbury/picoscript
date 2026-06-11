@@ -32,7 +32,7 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 12 | No unbounded loops without budget (yield or fault) | enforced |
 | 13 | Register spill is compiler-owned (no RegisterPressureError on real code) | enforced |
 | 14 | Numeric overflow / division policy is explicit and identical per target | enforced |
-| 15 | Deterministic mode exists (disable clock/random/unordered iteration) | target |
+| 15 | Deterministic mode exists (disable clock/random/unordered iteration) | enforced (seed inject) |
 | 16 | Case-insensitive namespaces are canonicalised | enforced |
 | 17 | Capability check before hook dispatch | enforced (mechanism) |
 | 18 | Hook failures are typed (no magic -1/0) | partial (diagnosed) |
@@ -160,12 +160,16 @@ the >16-live programs (the gap that previously hid this).
 **Fixed:** 32-bit wrap was already consistent; signed division/modulo now truncates
 toward zero on every path (see INV-2). The policy is uniform and the divergence is gone.
 
-### 15. Deterministic mode exists — *target*
-The RNG seed is hardcoded (`picoscript_vm.py` `rng_state=0x2545…`; `vm/picovm.c`
-`pv_init`) rather than host-injected, and there is no flag to disable wall-clock /
-randomness / unordered iteration. Map/object iteration (`for..in`, dict scans in
-template `{{#each}}` existence checks) is currently order-insensitive but fragile.
-Target: an explicit deterministic mode + injectable seed.
+### 15. Deterministic mode exists — *enforced (injectable seed)*
+The RNG seed is now host-injectable: `PicoVM(seed=...)` (Python), `new PicoVM({seed})`
+(JS), and `PICOVM_SEED` env in the harnesses (C sets `ctx->rng_state`). Default seeds are
+unchanged, so a program is already reproducible on a given runtime, and a host can pin or
+vary the seed for replay/tests. `tests/test_determinism.py` proves per-runtime
+reproducibility (same seed → same Random sequence) and seed-sensitivity on Python/C/JS.
+Note: Random is host-injected (INV-3), so the 64-bit (Python/C) vs 32-bit (JS) generators
+intentionally differ *across* runtimes; map/dict iteration is used only for existence
+checks (order-insensitive). A unified cross-runtime generator + a single "deterministic
+mode" flag bundling clock+random+iteration is a possible future refinement.
 
 ### 16. Case-insensitive namespaces are canonicalised — *enforced*
 `canon_host(ns, method)` lowercases and resolves to the canonical hook

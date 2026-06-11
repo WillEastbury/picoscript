@@ -1204,7 +1204,8 @@ class PicoVM:
     """Deterministic interpreter for the 16-opcode PicoScript ISA."""
 
     def __init__(self, host: Optional[HostApi] = None, max_steps: int = 1_000_000,
-                 arena_bytes: int = ARENA_BYTES, caps: Optional[int] = None):
+                 arena_bytes: int = ARENA_BYTES, caps: Optional[int] = None,
+                 seed: Optional[int] = None):
         self.regs: List[int] = [0] * isa_num_regs()
         self.cards: Dict[int, int] = {}
         self.call_stack: List[int] = []
@@ -1219,6 +1220,8 @@ class PicoVM:
         self.host = host or HostApi()
         if caps is not None:                 # restrict granted bindings (INV-17)
             self.host.caps = caps
+        if seed is not None:                 # host-injected Random.U32 seed (INV-15)
+            self.host.rng_state = seed
         self.max_steps = max_steps
         self.steps = 0
         self.pc = 0

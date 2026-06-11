@@ -53,6 +53,7 @@
       NET_HEADER_BASE: 0x9000, CONTENT_TYPES: {}, BY_CODE: {} };
     this.maxSteps = opts.maxSteps || 1000000;
     this.caps = (opts.caps !== undefined) ? (opts.caps >>> 0) : CAP_ALL;  // granted bindings (INV-17)
+    this._seed = (opts.seed !== undefined) ? (opts.seed >>> 0) : null;     // host-injected Random.U32 seed (INV-15)
     // Optional external card store (PicoWAL). Must expose get(addr)->int and
     // set(addr,int); when present it persists across reset()/load(), modelling a
     // disk-backed card store. Default is an in-memory Map (VM parity unchanged).
@@ -68,7 +69,7 @@
     this.httpStatus = -1;
     this.httpType = null;
     this.queues = {};
-    this.rng = 0x4F6CDD1D >>> 0;
+    this.rng = (this._seed !== null) ? this._seed : (0x4F6CDD1D >>> 0);
     this.mem = new Uint8Array(520 * 1024);   // process arena = RP2350 (Pico 2) 520 KB SRAM
     this.dotLen = 0;                          // active span length for Dot8.Of
     this.arenaTop = 0x8000;             // bump pointer for Span.Materialize copies

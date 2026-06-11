@@ -37,6 +37,8 @@ int main(void)
     if (ms && *ms) ctx.max_steps = atol(ms);
     const char *cp = getenv("PICOVM_CAPS");         /* let tests restrict binding capabilities */
     if (cp && *cp) ctx.caps = (uint32_t)strtoul(cp, 0, 0);
+    const char *sd = getenv("PICOVM_SEED");         /* let tests pin Random.U32 nondeterminism */
+    if (sd && *sd) ctx.rng_state = (uint64_t)strtoull(sd, 0, 0);
     long steps = pv_vm_run(&ctx, prog, n);
 
     printf("STEPS %ld\n", steps);

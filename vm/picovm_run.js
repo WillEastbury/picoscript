@@ -11,9 +11,11 @@ process.stdin.on("end", () => {
   for (let i = 0; i < n; i++) words.push(parseInt(toks[1 + i], 16) >>> 0);
   const ms = process.env.PICOVM_MAX_STEPS;   // let tests drive the step budget
   const cps = process.env.PICOVM_CAPS;        // let tests restrict binding capabilities
+  const seed = process.env.PICOVM_SEED;        // let tests pin Random.U32 nondeterminism
   var opts = {};
   if (ms) opts.maxSteps = parseInt(ms, 10);
   if (cps) opts.caps = parseInt(cps, 0) >>> 0;
+  if (seed) opts.seed = parseInt(seed, 0) >>> 0;
   const vm = new PicoVM(opts);
   let fault = 0;
   try {
