@@ -24,7 +24,7 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 4 | Every hook has a declared contract | enforced (table) |
 | 5 | No hidden allocation in hot hooks (declare arena use or forbid) | enforced (no-alloc mode) |
 | 6 | Arena scope is explicit; scope exit rewinds or transfers | enforced (handler scope) |
-| 7 | Seal consumes ownership (use-after-seal = compile error or trap) | partial |
+| 7 | Seal consumes ownership (use-after-seal = compile error or trap) | partial (sim models spec; compile-time iso-lease pending) |
 | 8 | Spans are fat and bounded (ptr+len); no null-terminated authority | enforced |
 | 9 | Literals are immutable (const segment + write-trap) | enforced |
 | 10 | Bytecode verification before execution | enforced (static pre-pass) |
@@ -100,16 +100,30 @@ scoping for nested regions. A one-shot non-handler invocation needs no scope (th
 exits and frees everything). The remaining refinement is automatic scoping around
 arbitrary (non-request) entry points, which currently relies on the caller.
 
-### 7. Seal consumes ownership — *partial (diagnosed)*
-The Python VM traps mutation of sealed preamble/headers
-(`picoscript_vm.py`, "I3 violation"; `tests/test_io_hooks.py::test_i3_header_after_seal_rejected`).
-**Diagnosis:** full enforcement spans the EL0/EL1 boundary — per `docs/PIOS_IO_BINDING.md`
-[D6], the strongest form is an `iso` (move-only) lease consumed at `seal` so use-after-seal
-is a **compile-time** error (AOT, zero runtime cost), backstopped by a runtime ownership
-flag on the descriptors. The PicoScript-side `Resp.*` is a simulation for parity tests;
-the authoritative enforcement is the PIOS kernel's. Tractable next step on the VM side:
-extend the post-seal trap to body/trailer/control ops (not just headers). The compile-time
-iso-lease check is a larger frontend feature.
+### 7. Seal consumes ownership — *partial (sim models the binding spec; authoritative form is compile-time + kernel)*
+**Authoritative enforcement is two non-VM mechanisms** (`docs/PIOS_IO_BINDING.md` I2/I3, D6):
+(1) **compile-time** — `seal` *consumes* the `iso` (move-only) response arena, so ownership
+flips thread→kernel and **use-after-seal is a compile error** in the AOT compiler (zero
+runtime cost); (2) a **runtime owner flag** (`pooldesc.owner = kernel`), authoritative in the
+**PIOS kernel (EL1)**, backstops dynamically-assembled descriptors. The PicoScript-side
+`Resp.*` is a **fixture** that simulates the binding's observable semantics for parity tests
+(mirrored in Python `picoscript_vm.py` and JS `vm/picovm.js`; the C VM does not host it).
+
+The fixture now faithfully models the spec's phased descriptor graph (`tests/test_io_hooks.py`):
+- **I3 — `seal` freezes the preamble + headers only.** After `Resp.Seal`, `Resp.Status`/`Resp.Header`
+  trap ("I3 violation"). Per `PIOS_IO_BINDING.md` §4 ("seal ≠ complete") and edge-case 7, **body
+  `Write` after seal is correct in stream mode** ("stream mode appends new body descriptors, it
+  never mutates sealed ones") — so seal must *not* block body writes. A re-`Seal` via the explicit
+  verb is a use-after-seal ("I3 violation"); `Respond`'s internal seal stays idempotent.
+- **I6 — phase order.** A `Resp.Header` after the body phase has started (a `Resp.Write`) traps
+  ("I6 violation"); `Resp.Status` may still be set last (it is the single PREAMBLE slot).
+  `Resp.EndStream` closes the stream phase, so a later `Resp.Write` traps; `Resp.EndStream`
+  outside stream mode (no prior `Seal`) traps. A `unary`/`stream` mode flag records the lifecycle
+  (`stream` set by an explicit `Seal`; `unary` by a terminal verb) per the spec's binding kinds.
+- **I2** — exactly one open graph; anything after `End`/`Respond`/`Abort` traps ("I2 violation").
+
+**Not yet built (the actual guarantee):** the compile-time `iso`-lease in the frontend (a larger
+feature spanning all four frontends + parity tests) and the EL1 kernel owner-flag backstop.
 
 ### 8. Spans are fat and bounded — *enforced*
 Every buffer is `ptr+len` (`pv_span_p`/`pv_span_n` in C; `{ptr,len}` in JS/Python).

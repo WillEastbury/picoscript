@@ -73,6 +73,36 @@ def js_compile(src, lang):
     return [int(w, 16) for w in r.stdout.split()]
 
 
+def py_violation(src, lang="c"):
+    """Run on the Python VM; return the RuntimeError message ('' if it didn't fault)."""
+    compile_fn = compile_c if lang == "c" else compile_python
+    words = lower_to_bytecode_safe(compile_fn(src))
+    try:
+        run_py(words)
+    except RuntimeError as exc:
+        return str(exc)
+    return ""
+
+
+def js_violation(src, lang="c"):
+    """Run on the JS VM; return the thrown error message ('' if it didn't fault)."""
+    compile_fn = compile_c if lang == "c" else compile_python
+    words = lower_to_bytecode_safe(compile_fn(src))
+    script = r"""
+const fs = require("fs");
+const input = JSON.parse(fs.readFileSync(0, "utf8"));
+const PicoVM = require("./vm/picovm.js");
+const vm = new PicoVM();
+vm.load(input.words);
+vm.setRequestContext(input.ctx);
+try { vm.run(); } catch (e) { process.stdout.write(String((e && e.message) || e)); }
+"""
+    payload = json.dumps({"words": words, "ctx": CTX})
+    r = subprocess.run(["node", "-e", script], cwd=ROOT, input=payload,
+                       capture_output=True, text=True)
+    return r.stdout.strip()
+
+
 def test_c_request_response_graph():
     src = r'''
 int status = Req.Seq();
@@ -167,6 +197,47 @@ Resp.Header("late", "no");
         raise AssertionError("late header after Resp.Seal() was not rejected")
 
 
+def test_i6_phase_and_stream_rules_parity():
+    # Each rule must trap identically on the Python VM and the JS VM (mirrored sim).
+    # 1. Header after the body phase has started (a Write) -- header phase is over.
+    header_after_body = r'''
+Resp.Status(200);
+Resp.Write("chunk");
+Resp.Header("late", "no");
+'''
+    # 2. Body Write after EndStream closes the stream phase.
+    write_after_endstream = r'''
+Resp.Status(200);
+Resp.Seal();
+Resp.Write("a");
+Resp.EndStream();
+Resp.Write("b");
+'''
+    # 3. EndStream without a prior Seal -- there is no open stream phase.
+    endstream_without_seal = r'''
+Resp.Status(200);
+Resp.Write("a");
+Resp.EndStream();
+'''
+    # 4. Re-sealing via the explicit verb is a use-after-seal (I3).
+    double_seal = r'''
+Resp.Status(200);
+Resp.Seal();
+Resp.Seal();
+'''
+    cases = [
+        ("I6 violation", header_after_body, "header after body"),
+        ("I6 violation", write_after_endstream, "write after EndStream"),
+        ("I6 violation", endstream_without_seal, "EndStream before Seal"),
+        ("I3 violation", double_seal, "double Seal"),
+    ]
+    for tag, src, label in cases:
+        py = py_violation(src)
+        js = js_violation(src)
+        assert tag in py, f"{label}: Python VM must trap ({tag}); got {py!r}"
+        assert tag in js, f"{label}: JS VM must trap ({tag}); got {js!r}"
+
+
 def test_python_vm_js_vm_response_graph_parity_and_compiler_bytes():
     src = r'''
 int status = Req.Seq();
@@ -189,6 +260,7 @@ def main():
         test_python_dialect_respond_and_body_metadata,
         test_control_descriptors,
         test_i3_header_after_seal_rejected,
+        test_i6_phase_and_stream_rules_parity,
         test_python_vm_js_vm_response_graph_parity_and_compiler_bytes,
     ]
     failed = 0

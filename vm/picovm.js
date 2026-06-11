@@ -99,6 +99,9 @@
     this.responseGraph = [];
     this.responseSealed = false;
     this.responseEnded = false;
+    this.responseMode = null;            // 'unary' | 'stream' (set at Seal / terminal verb)
+    this.responseBodyStarted = false;    // first Resp.Write opens the body phase
+    this.responseStreamClosed = false;   // Resp.EndStream closes the stream/body phase
     this._handlerMark = null;   // per-request arena scope (auto rewind on each request)
   };
 
@@ -873,6 +876,9 @@
     this.responseGraph = [];
     this.responseSealed = false;
     this.responseEnded = false;
+    this.responseMode = null;
+    this.responseBodyStarted = false;
+    this.responseStreamClosed = false;
   };
   PicoVM.prototype.installRequestContext = PicoVM.prototype.setRequestContext;
   PicoVM.prototype.setArenaBase = function () { this._handlerMark = [this.arenaTop, this.spans.length]; };
@@ -894,6 +900,15 @@
     // I3: after Seal, the preamble and headers are immutable/frozen.
     if (this.responseSealed) throw new Error("I3 violation: response preamble/headers sealed");
   };
+  PicoVM.prototype._ensureHeaderPhase = function () {
+    // I6: headers belong to the preamble/header phase, which precedes the body
+    // phase. Status may still be set last, but a header may not follow a body write.
+    if (this.responseBodyStarted) throw new Error("I6 violation: header after body phase started");
+  };
+  PicoVM.prototype._ensureStreamOpen = function () {
+    // I6: body writes are illegal once the stream phase is closed (Resp.EndStream).
+    if (this.responseStreamClosed) throw new Error("I6 violation: body write after stream phase closed");
+  };
   PicoVM.prototype._desc = function (kind, subtype, payload) {
     return { kind: kind, subtype: subtype == null ? null : subtype, payload: payload == null ? null : payload };
   };
@@ -912,15 +927,21 @@
     }
     this.responseGraph.push(desc);
   };
-  PicoVM.prototype._respSeal = function () {
+  PicoVM.prototype._respSeal = function (explicit) {
     this._ensureResponseOpen();
-    if (!this.responseSealed) {
-      this.responseGraph.push(this._desc("DESC_COMMIT", "SEAL", null));
-      this.responseSealed = true;
+    if (this.responseSealed) {
+      // I3 (use-after-seal): re-sealing via the explicit verb is rejected;
+      // Respond's internal seal is idempotent.
+      if (explicit) throw new Error("I3 violation: response already sealed");
+      return;
     }
+    this.responseGraph.push(this._desc("DESC_COMMIT", "SEAL", null));
+    this.responseSealed = true;
+    if (explicit && this.responseMode === null) this.responseMode = "stream";
   };
   PicoVM.prototype._respEnd = function () {
     this._ensureResponseOpen();
+    if (this.responseMode === null) this.responseMode = "unary";
     this.responseGraph.push(this._desc("DESC_COMMIT", "END", null));
     this.responseEnded = true;
   };
@@ -940,12 +961,13 @@
     var R = this.regs;
     if (method === "Status") { this._respStatus(R[rs1]); return true; }
     if (method === "Header") {
-      this._ensureResponseOpen(); this._ensurePreambleMutable();
+      this._ensureResponseOpen(); this._ensurePreambleMutable(); this._ensureHeaderPhase();
       this.responseGraph.push(this._desc("DESC_HEADER", null, { name: this._spanPayload(R[rs1]), value: this._spanPayload(R[rs2]) }));
       return true;
     }
     if (method === "Write") {
-      this._ensureResponseOpen();
+      this._ensureResponseOpen(); this._ensureStreamOpen();
+      this.responseBodyStarted = true;
       this.responseGraph.push(this._desc("DESC_BODY", null, this._spanPayload(R[rs1])));
       return true;
     }
@@ -954,12 +976,18 @@
       this.responseGraph.push(this._desc("DESC_TRAILER", null, { name: this._spanPayload(R[rs1]), value: this._spanPayload(R[rs2]) }));
       return true;
     }
-    if (method === "Seal") { this._respSeal(); return true; }
+    if (method === "Seal") { this._respSeal(true); return true; }
     if (method === "End") { this._respEnd(); return true; }
-    if (method === "Respond") { this._respStatus(R[rs1]); this._respSeal(); this._respEnd(); return true; }
+    if (method === "Respond") { this._respStatus(R[rs1]); this._respSeal(false); this._respEnd(); return true; }
     if (method === "Flush") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "FLUSH", null)); return true; }
     if (method === "Continue") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "CONTINUE_100", null)); return true; }
-    if (method === "EndStream") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "END_STREAM", null)); return true; }
+    if (method === "EndStream") {
+      this._ensureResponseOpen(); this._ensureStreamOpen();
+      if (this.responseMode !== "stream") throw new Error("I6 violation: EndStream outside stream mode (no open stream phase)");
+      this.responseGraph.push(this._desc("DESC_CONTROL", "END_STREAM", null));
+      this.responseStreamClosed = true;
+      return true;
+    }
     if (method === "Upgrade") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_UPGRADE", null, this._spanPayload(R[rs1]))); return true; }
     if (method === "Abort") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_ABORT", null, { code: R[rs1] | 0 })); this.responseEnded = true; return true; }
     if (method === "EarlyHints") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "EARLY_HINTS_103", null)); return true; }

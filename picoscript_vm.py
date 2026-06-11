@@ -140,6 +140,9 @@ class HostApi:
         self.response_graph: List[dict] = []
         self.response_sealed = False
         self.response_ended = False
+        self.response_mode: Optional[str] = None   # 'unary' | 'stream' (set at Seal / terminal verb)
+        self.response_body_started = False          # first Resp.Write opens the body phase
+        self.response_stream_closed = False         # Resp.EndStream closes the stream/body phase
         # Automatic per-request arena scope: snapshot of (arena_top, span_count)
         # taken at the first handler invocation; each subsequent request rewinds
         # to it so a reused server VM never leaks (set_arena_base() can move it
@@ -858,6 +861,9 @@ class HostApi:
         self.response_graph = []
         self.response_sealed = False
         self.response_ended = False
+        self.response_mode = None
+        self.response_body_started = False
+        self.response_stream_closed = False
 
     set_request_context = install_request_context
 
@@ -890,6 +896,17 @@ class HostApi:
         if self.response_sealed:
             raise RuntimeError("I3 violation: response preamble/headers sealed")
 
+    def _ensure_header_phase(self):
+        # I6: headers belong to the preamble/header phase, which precedes the body
+        # phase. Status may still be set last, but a header may not follow a body write.
+        if self.response_body_started:
+            raise RuntimeError("I6 violation: header after body phase started")
+
+    def _ensure_stream_open(self):
+        # I6: body writes are illegal once the stream phase is closed (Resp.EndStream).
+        if self.response_stream_closed:
+            raise RuntimeError("I6 violation: body write after stream phase closed")
+
     def _desc(self, kind: str, subtype=None, payload=None) -> dict:
         return {"kind": kind, "subtype": subtype, "payload": payload}
 
@@ -907,14 +924,23 @@ class HostApi:
                 return
         self.response_graph.append(desc)
 
-    def _resp_seal(self):
+    def _resp_seal(self, explicit: bool = False):
         self._ensure_response_open()
-        if not self.response_sealed:
-            self.response_graph.append(self._desc("DESC_COMMIT", "SEAL", None))
-            self.response_sealed = True
+        if self.response_sealed:
+            # I3 (use-after-seal): re-sealing via the explicit verb is rejected;
+            # Respond's internal seal is idempotent.
+            if explicit:
+                raise RuntimeError("I3 violation: response already sealed")
+            return
+        self.response_graph.append(self._desc("DESC_COMMIT", "SEAL", None))
+        self.response_sealed = True
+        if explicit and self.response_mode is None:
+            self.response_mode = "stream"
 
     def _resp_end(self):
         self._ensure_response_open()
+        if self.response_mode is None:
+            self.response_mode = "unary"
         self.response_graph.append(self._desc("DESC_COMMIT", "END", None))
         self.response_ended = True
 
@@ -948,14 +974,15 @@ class HostApi:
         if method == "Status":
             self._resp_status(vm, R[rs1]); return True
         if method == "Header":
-            self._ensure_response_open(); self._ensure_preamble_mutable()
+            self._ensure_response_open(); self._ensure_preamble_mutable(); self._ensure_header_phase()
             self.response_graph.append(self._desc("DESC_HEADER", None, {
                 "name": self._span_payload(vm, R[rs1]),
                 "value": self._span_payload(vm, R[rs2]),
             }))
             return True
         if method == "Write":
-            self._ensure_response_open()
+            self._ensure_response_open(); self._ensure_stream_open()
+            self.response_body_started = True
             self.response_graph.append(self._desc("DESC_BODY", None, self._span_payload(vm, R[rs1])))
             return True
         if method == "Trailer":
@@ -966,7 +993,7 @@ class HostApi:
             }))
             return True
         if method == "Seal":
-            self._resp_seal(); return True
+            self._resp_seal(explicit=True); return True
         if method == "End":
             self._resp_end(); return True
         if method == "Respond":
@@ -978,8 +1005,12 @@ class HostApi:
             self._ensure_response_open()
             self.response_graph.append(self._desc("DESC_CONTROL", "CONTINUE_100", None)); return True
         if method == "EndStream":
-            self._ensure_response_open()
-            self.response_graph.append(self._desc("DESC_CONTROL", "END_STREAM", None)); return True
+            self._ensure_response_open(); self._ensure_stream_open()
+            if self.response_mode != "stream":
+                raise RuntimeError("I6 violation: EndStream outside stream mode (no open stream phase)")
+            self.response_graph.append(self._desc("DESC_CONTROL", "END_STREAM", None))
+            self.response_stream_closed = True
+            return True
         if method == "Upgrade":
             self._ensure_response_open()
             self.response_graph.append(self._desc("DESC_UPGRADE", None, self._span_payload(vm, R[rs1]))); return True
