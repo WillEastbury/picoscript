@@ -4,6 +4,7 @@
  * hex 32-bit instruction word.  Runs it and prints final state as lines:
  *
  *   STEPS <n>
+ *   FAULT <code> <pc> <detail>
  *   STATUS <http_status>
  *   REGS <r0> <r1> ... <r15>
  *   OUT  <hex bytes>
@@ -42,7 +43,7 @@ int main(void)
     long steps = pv_vm_run(&ctx, prog, n);
 
     printf("STEPS %ld\n", steps);
-    printf("FAULT %d\n", ctx.fault);
+    printf("FAULT %d %d %d\n", ctx.fault, ctx.fault_pc, ctx.fault_detail);
     printf("STATUS %d\n", ctx.http_status);
     printf("REGS");
     for (int i = 0; i < PV_NUM_REGS; i++) printf(" %d", ctx.regs[i]);

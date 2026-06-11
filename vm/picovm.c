@@ -22,6 +22,14 @@ static void pv_bzero(void *p, unsigned long len)
     for (unsigned long i = 0; i < len; i++) b[i] = 0;
 }
 
+static void pv_set_fault(pv_ctx *ctx, int code, int pc, int detail)
+{
+    ctx->fault = code;
+    ctx->fault_pc = pc;
+    ctx->fault_detail = detail;
+    ctx->halted = 1;
+}
+
 /* ---- card store: open addressing with linear probing ----------------- */
 
 static int pv_card_slot(pv_ctx *ctx, int addr16, int create)
@@ -680,7 +688,7 @@ static int pv_template_render(pv_ctx *ctx, uint32_t pp, int32_t pn, uint32_t mp,
             int truthy = (vlen > 0);
             int take = (op == 0x03) ? truthy : (!truthy);
             if (take) {
-                if (sp >= TPL_MAXDEPTH) { ctx->fault = PV_FAULT_TEMPLATE; ctx->halted = 1; break; }
+                if (sp >= TPL_MAXDEPTH) { pv_set_fault(ctx, PV_FAULT_TEMPLATE, ctx->cur_pc, 0); break; }
                 fr[sp].kind = 0;
                 for (int32_t t = 0; t < prefixlen; t++) fr[sp].sp[t] = prefix[t];
                 fr[sp].splen = prefixlen;
@@ -702,7 +710,7 @@ static int pv_template_render(pv_ctx *ctx, uint32_t pp, int32_t pn, uint32_t mp,
             if (cnt == 0) {
                 i = tpl_skip(ctx, pp, pn, i);
             } else {
-                if (sp >= TPL_MAXDEPTH) { ctx->fault = PV_FAULT_TEMPLATE; ctx->halted = 1; break; }
+                if (sp >= TPL_MAXDEPTH) { pv_set_fault(ctx, PV_FAULT_TEMPLATE, ctx->cur_pc, 0); break; }
                 fr[sp].kind = 1;
                 for (int32_t t = 0; t < prefixlen; t++) fr[sp].sp[t] = prefix[t];
                 fr[sp].splen = prefixlen;
@@ -934,7 +942,7 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
     (void)imm16;
     /* INV-17: bindings are not ambient -- deny the hook unless its class is granted. */
     uint32_t need = pv_hook_cap(hook);
-    if (need && !(ctx->caps & need)) { ctx->fault = PV_FAULT_CAPABILITY; ctx->halted = 1; return; }
+    if (need && !(ctx->caps & need)) { pv_set_fault(ctx, PV_FAULT_CAPABILITY, ctx->cur_pc, hook); return; }
     if (hook == PV_HOOK_RANDOM_U32) {
         uint64_t x = ctx->rng_state;
         x ^= (x << 13) & MASK32;
@@ -1501,6 +1509,7 @@ void pv_init(pv_ctx *ctx)
     ctx->w_count = 1;           /* Utf8Writer/Json/Xml: handle 0 reserved */
     ctx->r_count = 1;           /* Utf8Reader: handle 0 reserved */
     ctx->host = pv_default_host;
+    ctx->cur_pc = 0;
 }
 
 /* ---- interpreter core ------------------------------------------------ */
@@ -1546,7 +1555,9 @@ long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len)
     ctx->halted = 0;
     ctx->steps = 0;
     while (!ctx->halted && pc < len) {
-        if (ctx->steps >= ctx->max_steps) { ctx->fault = PV_FAULT_STEP_BUDGET; ctx->halted = 1; break; }
+        int cur = pc;
+        ctx->cur_pc = cur;
+        if (ctx->steps >= ctx->max_steps) { pv_set_fault(ctx, PV_FAULT_STEP_BUDGET, cur, 0); break; }
         ctx->steps++;
 
         uint32_t w = program[pc];
@@ -1555,7 +1566,6 @@ long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len)
         int rs1   = (int)((w >> 20) & 0xF);
         int rs2   = (int)((w >> 16) & 0xF);
         int imm16 = (int)(w & 0xFFFF);
-        int cur = pc;
         pc++;
 
         switch (op) {
@@ -1593,7 +1603,7 @@ long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len)
             if (rs2 == PV_ADDR_REG)          tgt = ctx->regs[rs1] & 0xFFFF;          /* PC = Rs1 */
             else if (rs2 == PV_ADDR_REG_OFF) tgt = (ctx->regs[rs1] + imm16) & 0xFFFF; /* PC = Rs1 + imm16 */
             else                             tgt = imm16;
-            if (tgt < 0 || tgt > len) { ctx->fault = PV_FAULT_BAD_JUMP; ctx->halted = 1; break; }
+            if (tgt < 0 || tgt > len) { pv_set_fault(ctx, PV_FAULT_BAD_JUMP, cur, tgt); break; }
             pc = tgt;   /* tgt == len falls off the end == clean halt */
             break;
         }
@@ -1601,14 +1611,14 @@ long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len)
             int off = (int)(int16_t)(uint16_t)imm16;
             if (pv_branch(rs2, ctx->regs[rd], ctx->regs[rs1])) {
                 int tgt = cur + off;
-                if (tgt < 0 || tgt > len) { ctx->fault = PV_FAULT_BAD_JUMP; ctx->halted = 1; break; }
+                if (tgt < 0 || tgt > len) { pv_set_fault(ctx, PV_FAULT_BAD_JUMP, cur, tgt); break; }
                 pc = tgt;
             }
             break;
         }
         case PV_OP_CALL:
-            if (imm16 < 0 || imm16 > len) { ctx->fault = PV_FAULT_BAD_JUMP; ctx->halted = 1; break; }
-            if (ctx->call_sp >= PV_MAX_CALL) { ctx->fault = PV_FAULT_CALL_OVERFLOW; ctx->halted = 1; break; }
+            if (imm16 < 0 || imm16 > len) { pv_set_fault(ctx, PV_FAULT_BAD_JUMP, cur, imm16); break; }
+            if (ctx->call_sp >= PV_MAX_CALL) { pv_set_fault(ctx, PV_FAULT_CALL_OVERFLOW, cur, 0); break; }
             ctx->call_stack[ctx->call_sp++] = pc;
             pc = imm16;
             break;
@@ -1629,8 +1639,7 @@ long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len)
             break;
         }
         default:
-            ctx->fault = PV_FAULT_BAD_OPCODE;
-            ctx->halted = 1;
+            pv_set_fault(ctx, PV_FAULT_BAD_OPCODE, cur, op);
             break;
         }
     }

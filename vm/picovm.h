@@ -101,6 +101,9 @@ struct pv_ctx {
     int       halted;
     int       waiting;
     int       fault;           /* PV_FAULT_*; 0 until a typed fault halts the VM */
+    int       fault_pc;        /* bytecode PC where fault was recorded; 0 until fault */
+    int       fault_detail;    /* fault-specific detail: opcode, jump target, hook id, or 0 */
+    int       cur_pc;          /* current bytecode PC, retained so host faults can report it */
     uint32_t  caps;            /* granted binding capabilities (PV_CAP_*); default PV_CAP_ALL */
 
     /* simple in-VM queues for the default host (Queue.*) */

@@ -42,7 +42,7 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 22 | Generated artefacts are disposable (never edited as source) | convention |
 | 23 | ABI version is embedded and checked (refuse mismatch) | target |
 | 24 | Parity runner is the gatekeeper (every hook/opcode/lowering has parity tests) | enforced (gate) |
-| 25 | Debug trace is structured (span, IL op, pc, hook id, capsule, binding) | target |
+| 25 | Debug trace is structured (span, IL op, pc, hook id, capsule, binding) | partial (code+pc+detail) |
 
 \* INV-2 (lowering parity): the known signed-division divergence is fixed (truncate
 toward zero everywhere). The remaining nuance is that on a *fault* (step budget,
@@ -236,6 +236,12 @@ namespaces (`DateTime`/`Context`/`Auth`/`X509`/`Environment`/`Locale`/`Kernel`/`
 justification. The gate caught a real gap on first run (`Queue` was untested) which was
 closed with a 5-path `queue_depth` test rather than allowlisted.
 
-### 25. Debug trace is structured — *target*
-Traps are bare `RuntimeError`/`throw` strings with no structured record of source span,
-IL op, bytecode pc, hook id, capsule id, or binding id. Target: a structured trap record.
+### 25. Debug trace is structured — *partial (code + pc + detail)*
+Faults now carry a structured record, not a bare code/string: the C runtime has
+`ctx->fault` + `ctx->fault_pc` + `ctx->fault_detail` (harness prints `FAULT <code> <pc>
+<detail>`); Python raises `PicoFault(code, pc, detail, message)` (a `RuntimeError`
+subclass, so existing handlers still catch it); JS throws an `Error` with `.fault/.pc/
+.detail`. The `detail` is the offending opcode / out-of-range target / hook id.
+`tests/test_vm_safety.py` asserts the bad-jump fault reports `code=3, pc=0, detail=9999`
+on all three. Still deferred (need a compiler pc→source debug-info map and PIOS runtime
+context): source span, IL-op name, capsule id, and binding id.

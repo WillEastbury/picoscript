@@ -39,6 +39,26 @@ _CT_BY_VALUE: Dict[int, str] = {v: k for k, v in CONTENT_TYPES.items()}
 MASK32 = 0xFFFFFFFF
 ARENA_BYTES = 520 * 1024                  # PicoVM data arena = RP2350 (Pico 2) 520 KB SRAM
 
+PV_FAULT_NONE = 0
+PV_FAULT_STEP_BUDGET = 1
+PV_FAULT_BAD_OPCODE = 2
+PV_FAULT_BAD_JUMP = 3
+PV_FAULT_CALL_OVERFLOW = 4
+PV_FAULT_RET_UNDERFLOW = 5
+PV_FAULT_BAD_HOOK = 6
+PV_FAULT_TEMPLATE = 7
+PV_FAULT_CAPABILITY = 8
+
+
+class PicoFault(RuntimeError):
+    """Structured VM trap carrying the fault code, bytecode PC, and fault detail."""
+
+    def __init__(self, code: int, pc: int = 0, detail: int = 0, message: Optional[str] = None):
+        self.code = int(code)
+        self.pc = int(pc)
+        self.detail = int(detail)
+        super().__init__(message or f"VM fault {self.code} at pc={self.pc} detail={self.detail}")
+
 
 def _sx16(v: int) -> int:
     v &= 0xFFFF
@@ -136,7 +156,9 @@ class HostApi:
         # denied unless its capability class has been granted to this capsule.
         need = hook_cap(ns, method)
         if need and not (self.caps & need):
-            raise RuntimeError(f"capability denied: {ns}.{method} requires an ungranted binding")
+            hook = HOST_HOOK_CODES.get((ns, method), 0)
+            raise PicoFault(PV_FAULT_CAPABILITY, getattr(vm, "cur_pc", 0), hook,
+                            f"capability denied: {ns}.{method} requires an ungranted binding")
         fn = self.handlers.get((ns, method))
         if fn is not None:
             return fn(vm, rd, rs1, rs2, imm16)
@@ -727,7 +749,8 @@ class HostApi:
                     truthy = len(resolve(key, prefix)) > 0
                     if (truthy if op == 0x03 else (not truthy)):
                         if len(stack) >= 32:             # INV-19: bound nesting (matches C TPL_MAXDEPTH)
-                            raise RuntimeError("template depth exceeded")
+                            raise PicoFault(PV_FAULT_TEMPLATE, getattr(vm, "cur_pc", 0), 0,
+                                            "template depth exceeded")
                         stack.append(["sec", prefix, 0, 0, b"", 0])
                     else:
                         i = skip_block(i)
@@ -740,7 +763,8 @@ class HostApi:
                         i = skip_block(i)
                     else:
                         if len(stack) >= 32:
-                            raise RuntimeError("template depth exceeded")
+                            raise PicoFault(PV_FAULT_TEMPLATE, getattr(vm, "cur_pc", 0), 0,
+                                            "template depth exceeded")
                         stack.append(["each", prefix, i, cnt, full, 0])
                         prefix = full + b".0"
                 elif op == 0x05:                         # end of section / each
@@ -1225,6 +1249,7 @@ class PicoVM:
         self.max_steps = max_steps
         self.steps = 0
         self.pc = 0
+        self.cur_pc = 0
         self.halted = False
         self.waiting = False
         self.retval = 0
@@ -1238,6 +1263,7 @@ class PicoVM:
     def load(self, words: List[int]):
         self.program = list(words)
         self.pc = 0
+        self.cur_pc = 0
         self.halted = False
         self.steps = 0
 
@@ -1249,7 +1275,8 @@ class PicoVM:
                 if self.pc >= len(self.program):
                     break
                 if self.steps >= self.max_steps:
-                    raise RuntimeError(f"step budget exceeded ({self.max_steps})")
+                    raise PicoFault(PV_FAULT_STEP_BUDGET, self.pc, 0,
+                                    f"step budget exceeded ({self.max_steps})")
                 self.steps += 1
                 self._step()
         except Halt:
@@ -1266,6 +1293,7 @@ class PicoVM:
         d = isa.decode_instruction(word)
         op, rd, rs1, rs2, imm16 = d["opcode"], d["rd"], d["rs1"], d["rs2"], d["imm16"]
         cur = self.pc
+        self.cur_pc = cur
         self.pc += 1
 
         if self.profile:
@@ -1296,17 +1324,17 @@ class PicoVM:
             else:
                 tgt = imm16
             if tgt < 0 or tgt > len(self.program):              # INV-11: range-check computed jumps
-                raise RuntimeError(f"bad jump target {tgt} at pc={cur}")
+                raise PicoFault(PV_FAULT_BAD_JUMP, cur, tgt, f"bad jump target {tgt} at pc={cur}")
             self.pc = tgt
         elif op == isa.OP_BRANCH:
             if self._cond(rs2, self.regs[rd], self.regs[rs1]):
                 tgt = cur + _sx16(imm16)
                 if tgt < 0 or tgt > len(self.program):
-                    raise RuntimeError(f"bad branch target {tgt} at pc={cur}")
+                    raise PicoFault(PV_FAULT_BAD_JUMP, cur, tgt, f"bad branch target {tgt} at pc={cur}")
                 self.pc = tgt
         elif op == isa.OP_CALL:
             if imm16 < 0 or imm16 > len(self.program):
-                raise RuntimeError(f"bad call target {imm16} at pc={cur}")
+                raise PicoFault(PV_FAULT_BAD_JUMP, cur, imm16, f"bad call target {imm16} at pc={cur}")
             self.call_stack.append(self.pc)
             self.pc = imm16
         elif op == isa.OP_RETURN:
@@ -1322,7 +1350,7 @@ class PicoVM:
         elif op == isa.OP_DSP:
             self._dsp(rd, rs1, rs2, imm16)
         else:
-            raise RuntimeError(f"bad opcode {op:#x} at pc={cur}")
+            raise PicoFault(PV_FAULT_BAD_OPCODE, cur, op, f"bad opcode {op:#x} at pc={cur}")
 
     def _arith(self, op, rd, rs1, rs2, imm16):
         a = _sx32(self.regs[rs1])

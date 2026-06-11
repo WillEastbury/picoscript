@@ -27,6 +27,15 @@
   var ADDR_REG = 0x1;
   var ADDR_REG_OFF = 0x3;
   var BR = { EQ: 0, NE: 1, LT: 2, GT: 3, LE: 4, GE: 5, Z: 6, NZ: 7, EOF: 8, ERR: 9 };
+  var FAULT = { STEP_BUDGET: 1, BAD_OPCODE: 2, BAD_JUMP: 3, TEMPLATE: 7, CAPABILITY: 8 };
+
+  function picoFault(code, pc, detail, msg) {
+    var e = new Error(msg);
+    e.fault = code;
+    e.pc = (pc == null) ? 0 : pc;
+    e.detail = (detail == null) ? 0 : detail;
+    return e;
+  }
 
   function sx16(v) { v &= 0xFFFF; return (v & 0x8000) ? v - 0x10000 : v; }
 
@@ -75,6 +84,7 @@
     this.arenaTop = 0x8000;             // bump pointer for Span.Materialize copies
     this.spans = [null];                // span table; handle = index (1-based)
     this.pc = 0;
+    this.curPc = 0;
     this.steps = 0;
     this.halted = false;
     this.waiting = false;
@@ -97,7 +107,7 @@
   PicoVM.prototype.run = function (words) {
     if (words) this.load(words);
     while (!this.halted && this.pc < this.program.length) {
-      if (this.steps >= this.maxSteps) throw new Error("step budget exceeded");
+      if (this.steps >= this.maxSteps) throw picoFault(FAULT.STEP_BUDGET, this.pc, 0, "step budget exceeded");
       this.step();
     }
     return this;
@@ -114,6 +124,7 @@
     var rs2 = (w >>> 16) & 0xF;
     var imm = w & 0xFFFF;
     var cur = this.pc;
+    this.curPc = cur;
     this.pc++;
     var r = this.regs;
 
@@ -139,19 +150,19 @@
         if (rs2 === ADDR_REG) jt = r[rs1] & 0xFFFF;
         else if (rs2 === ADDR_REG_OFF) jt = (r[rs1] + imm) & 0xFFFF;
         else jt = imm;
-        if (jt < 0 || jt > this.program.length) throw new Error("bad jump target " + jt);  // INV-11
+        if (jt < 0 || jt > this.program.length) throw picoFault(FAULT.BAD_JUMP, cur, jt, "bad jump target " + jt);  // INV-11
         this.pc = jt;
         break;
       }
       case OP.BRANCH:
         if (this._cond(rs2, r[rd], r[rs1])) {
           var bt = cur + sx16(imm);
-          if (bt < 0 || bt > this.program.length) throw new Error("bad branch target " + bt);
+          if (bt < 0 || bt > this.program.length) throw picoFault(FAULT.BAD_JUMP, cur, bt, "bad branch target " + bt);
           this.pc = bt;
         }
         break;
       case OP.CALL:
-        if (imm < 0 || imm > this.program.length) throw new Error("bad call target " + imm);
+        if (imm < 0 || imm > this.program.length) throw picoFault(FAULT.BAD_JUMP, cur, imm, "bad call target " + imm);
         this.callStack.push(this.pc); this.pc = imm;
         break;
       case OP.RETURN:
@@ -161,7 +172,7 @@
       case OP.WAIT: this.waiting = true; this.halted = true; break;
       case OP.RAISE: this.log.push("raise " + imm); break;
       case OP.DSP: this._dsp(rd, rs1, rs2, imm); break;
-      default: throw new Error("bad opcode " + op);   // INV-10: unknown opcode faults (was silent halt)
+      default: throw picoFault(FAULT.BAD_OPCODE, cur, op, "bad opcode " + op);   // INV-10: unknown opcode faults (was silent halt)
     }
     return !this.halted;
   };
@@ -206,7 +217,7 @@
     var name = (this.hooks.BY_CODE && this.hooks.BY_CODE[code]) || ("hook_" + code);
     // INV-17: bindings are not ambient -- deny the hook unless its class is granted.
     var need = hookCap(name);
-    if (need && !(this.caps & need)) throw new Error("capability denied: " + name);
+    if (need && !(this.caps & need)) throw picoFault(FAULT.CAPABILITY, this.curPc, code, "capability denied: " + name);
     if (name === "Random.U32") {
       var x = this.rng >>> 0;
       x ^= (x << 13); x >>>= 0;
@@ -760,7 +771,7 @@
           var kl2 = plan[i++], key = plan.slice(i, i + kl2); i += kl2;
           var truthy = resolve(key, prefix).length > 0;
           if (op === 0x03 ? truthy : !truthy) {
-            if (stack.length >= 32) throw new Error("template depth exceeded");  // INV-19: TPL_MAXDEPTH
+            if (stack.length >= 32) throw picoFault(FAULT.TEMPLATE, this.curPc, 0, "template depth exceeded");  // INV-19: TPL_MAXDEPTH
             stack.push(["sec", prefix, 0, 0, "", 0]);
           } else i = skipBlock(i);
         }
@@ -769,7 +780,7 @@
           var full = prefix ? (prefix + "." + lk) : lk, cnt = countList(full);
           if (cnt === 0) i = skipBlock(i);
           else {
-            if (stack.length >= 32) throw new Error("template depth exceeded");
+            if (stack.length >= 32) throw picoFault(FAULT.TEMPLATE, this.curPc, 0, "template depth exceeded");
             stack.push(["each", prefix, i, cnt, full, 0]); prefix = full + ".0";
           }
         }

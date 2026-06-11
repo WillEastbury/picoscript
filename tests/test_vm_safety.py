@@ -4,12 +4,14 @@
 
 A malformed or runaway bytecode program must FAULT the same way on every runtime,
 never silently truncate. The three bytecode VMs differ only in surface (Python/JS
-raise; the C runtime sets a typed ctx->fault the harness prints as `FAULT <code>`),
+raise; the C runtime sets a typed ctx->fault the harness prints as
+`FAULT <code> <pc> <detail>`),
 so this test asserts each VM *faults* on:
   - step-budget exhaustion (INV-12) -- previously the C VM silently `break`-ed;
   - a computed/static jump target out of range (INV-11) -- previously a raw masked PC.
 
-Fault codes (mirrored by picovm_run.js): 1 = step budget, 2 = bad opcode, 3 = bad jump.
+Fault codes (mirrored by picovm_run.js): 1 = step budget, 2 = bad opcode,
+3 = bad jump, 7 = template depth, 8 = capability denied.
 """
 
 import os
@@ -19,7 +21,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from picoscript_vm import PicoVM  # noqa: E402
+from picoscript_vm import PicoFault, PicoVM  # noqa: E402
 
 VM_DIR = os.path.join(ROOT, "vm")
 VM_EXE = os.path.join(VM_DIR, "picovm_run.exe")
@@ -32,7 +34,7 @@ def build_c_vm():
     assert r.returncode == 0, r.stderr
 
 
-def c_fault(words, max_steps=None, caps=None):
+def c_fault_fields(words, max_steps=None, caps=None):
     inp = f"{len(words)}\n" + "\n".join(f"{w:08x}" for w in words) + "\n"
     env = dict(os.environ)
     if max_steps is not None:
@@ -42,8 +44,14 @@ def c_fault(words, max_steps=None, caps=None):
     out = subprocess.run([VM_EXE], input=inp, capture_output=True, text=True, env=env).stdout
     for line in out.splitlines():
         if line.startswith("FAULT"):
-            return int(line.split()[1])
-    return 0
+            parts = line.split()
+            assert len(parts) >= 4, out
+            return int(parts[1]), int(parts[2]), int(parts[3])
+    return 0, 0, 0
+
+
+def c_fault(words, max_steps=None, caps=None):
+    return c_fault_fields(words, max_steps=max_steps, caps=caps)[0]
 
 
 def js_fault(words, max_steps=None, caps=None):
@@ -88,10 +96,19 @@ def main():
     # ── INV-11: out-of-range computed/static jump. JUMP 9999 in a 1-word program. ──
     badjump = [0x9000270F]   # JUMP imm16=0x270F (9999) >> program length (1)
     assert py_faulted(badjump), "Python VM must fault on out-of-range jump"
+    try:
+        PicoVM().run(badjump)
+    except PicoFault as exc:
+        assert exc.code == 3, "Python PicoFault code must be 3=bad jump"
+        assert exc.pc == 0, "Python PicoFault pc must identify the JUMP instruction"
+        assert exc.detail == 9999, "Python PicoFault detail must carry the bad jump target"
+    else:
+        raise AssertionError("Python VM must raise PicoFault on out-of-range jump")
+    assert c_fault_fields(badjump) == (3, 0, 9999), "C FAULT must report code=3 pc=0 detail=9999"
     assert c_fault(badjump) == 3, "C VM must fault (3=bad jump)"
     assert js_fault(badjump) == 3, "JS VM must fault (3=bad jump)"
 
-    # ── INV-19: template render nesting beyond TPL_MAXDEPTH (32) faults (4=template). ──
+    # ── INV-19: template render nesting beyond TPL_MAXDEPTH (32) faults (7=template). ──
     # Compile+render a 40-deep section nest on all three bytecode VMs from one source.
     sys.path.insert(0, ROOT)
     from picoscript_cfront import compile_c           # noqa: E402
@@ -131,7 +148,8 @@ def main():
     assert c_fault(io_hook, caps=no_random) == 0, "pure Io.WriteByte must not be gated (C)"
     assert js_fault(io_hook, caps=no_random) == 0, "pure Io.WriteByte must not be gated (JS)"
 
-    print("PASS vm safety: step-budget (INV-12), out-of-range jump (INV-11), template depth "
+    print("PASS vm safety: structured code/pc/detail faults for step-budget (INV-12), "
+          "out-of-range jump (INV-11), template depth "
           "(INV-19) and capability gating (INV-17: bindings are not ambient) fault identically "
           "on Python / C / JS -- pure hooks stay ungated")
 

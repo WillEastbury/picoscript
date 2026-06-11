@@ -18,12 +18,17 @@ process.stdin.on("end", () => {
   if (seed) opts.seed = parseInt(seed, 0) >>> 0;
   const vm = new PicoVM(opts);
   let fault = 0;
+  let faultPc = 0;
+  let faultDetail = 0;
   try {
     vm.run(words);
   } catch (e) {
     // Map the VM trap to a typed fault code, mirroring the C runtime's ctx.fault.
+    faultPc = (e && e.pc) || 0;
+    faultDetail = (e && e.detail) || 0;
     var m = String(e && e.message || e);
-    if (m.indexOf("step budget") >= 0) fault = 1;
+    if (e && e.fault !== undefined) fault = e.fault;
+    else if (m.indexOf("step budget") >= 0) fault = 1;
     else if (m.indexOf("bad opcode") >= 0) fault = 2;
     else if (m.indexOf("bad jump") >= 0 || m.indexOf("bad branch") >= 0 || m.indexOf("bad call") >= 0) fault = 3;
     else if (m.indexOf("template depth") >= 0) fault = 7;
@@ -31,7 +36,7 @@ process.stdin.on("end", () => {
     else fault = 99;
   }
   console.log("STEPS " + vm.steps);
-  console.log("FAULT " + fault);
+  console.log("FAULT " + fault + " " + faultPc + " " + faultDetail);
   console.log("STATUS " + vm.httpStatus);
   console.log("REGS " + Array.from(vm.regs).join(" "));
   console.log("OUT " + vm.output.map((b) => b.toString(16).padStart(2, "0")).join(" "));
