@@ -48,6 +48,8 @@ PV_FAULT_RET_UNDERFLOW = 5
 PV_FAULT_BAD_HOOK = 6
 PV_FAULT_TEMPLATE = 7
 PV_FAULT_CAPABILITY = 8
+PV_FAULT_ALLOC = 9
+PV_FAULT_CONST_WRITE = 10
 
 
 class PicoFault(RuntimeError):
@@ -119,6 +121,7 @@ class HostApi:
         self.caps = CAP_ALL          # granted binding capabilities (INV-17); host restricts to gate
         self.no_alloc = False        # INV-5: when True, arena allocation in a hook raises PicoFault
         self.host_status = 0         # INV-18: typed status of the last fallible hook (0=OK)
+        self.const_floor = 0x8000    # INV-9: lowest literal const-pool address; [floor,0x8000) is RO
         self.log: List[str] = []
         self.handlers: Dict[tuple, Callable] = {}
         # Card store (PicoStore) + program-level Storage.* context.
@@ -230,7 +233,17 @@ class HostApi:
                 return
         # Memory + span / slice / materialize.
         if ns == "Memory" and method == "Set":
-            vm.mem[vm.regs[rs1] % vm.arena_bytes] = vm.regs[rs2] & 0xFF
+            a = vm.regs[rs1] % vm.arena_bytes
+            if self.const_floor <= a < 0x8000:        # INV-9: literal const region is read-only
+                raise PicoFault(PV_FAULT_CONST_WRITE, getattr(vm, "cur_pc", 0), a,
+                                "write to read-only literal const region")
+            vm.mem[a] = vm.regs[rs2] & 0xFF
+            return
+        if ns == "Memory" and method == "SetConst":   # INV-9: compiler-only literal write
+            a = vm.regs[rs1] % vm.arena_bytes
+            vm.mem[a] = vm.regs[rs2] & 0xFF
+            if a < self.const_floor:
+                self.const_floor = a
             return
         if ns == "Memory" and method == "Get":
             vm.regs[rd] = vm.mem[vm.regs[rs1] % vm.arena_bytes]

@@ -111,6 +111,7 @@
       0x5C: "Lease.GetSpan",
       0x5D: "Lease.GetTypeHint",
       0x5E: "Status.Last",
+      0x5F: "Memory.SetConst",
       0x60: "Storage.GetSchemaForPack",
       0x61: "Storage.SetSchemaForPack",
       0x62: "Storage.AddCard",

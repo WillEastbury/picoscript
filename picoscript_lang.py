@@ -527,6 +527,9 @@ HOST_HOOK_CODES = {
     # Status hook (0x5E): out-of-band typed status of the last fallible hook (INV-18).
     # 0=OK, 1=NOT_FOUND, 2=PARSE_ERROR, 3=EMPTY. Pure read of VM state; does not clear.
     ("Status", "Last"):         0x5E,
+    # Const-pool write (0x5F): compiler-only literal write (INV-9). Distinct from Memory.Set
+    # so the VM can mark [const_floor, 0x8000) read-only to user Memory.Set (literal immutability).
+    ("Memory", "SetConst"):     0x5F,
     # Storage hooks (0x60-0x6E)
     ("Storage", "GetSchemaForPack"): 0x60,
     ("Storage", "SetSchemaForPack"): 0x61,

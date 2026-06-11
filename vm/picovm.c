@@ -1030,7 +1030,20 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         return;
     }
     if (hook == PV_HOOK_MEMORY_SET) {
-        pv_mem_set(ctx, (uint32_t)ctx->regs[rs1], ctx->regs[rs2]);
+        uint32_t a = (uint32_t)ctx->regs[rs1];
+        if (ctx->mem_size) a %= (uint32_t)ctx->mem_size;   /* match Python/JS wrap before the const check */
+        if (a >= ctx->const_floor && a < 0x8000u) {        /* INV-9: literal const region is read-only */
+            pv_set_fault(ctx, PV_FAULT_CONST_WRITE, ctx->cur_pc, (int)a);
+            return;
+        }
+        pv_mem_set(ctx, a, ctx->regs[rs2]);
+        return;
+    }
+    if (hook == PV_HOOK_MEMORY_SETCONST) {                  /* INV-9: compiler-only literal write */
+        uint32_t a = (uint32_t)ctx->regs[rs1];
+        if (ctx->mem_size) a %= (uint32_t)ctx->mem_size;   /* match Python/JS wrap before lowering the floor */
+        pv_mem_set(ctx, a, ctx->regs[rs2]);
+        if (a < ctx->const_floor) ctx->const_floor = a;
         return;
     }
     if (hook == PV_HOOK_IO_WRITEBYTE) {
@@ -1523,6 +1536,7 @@ void pv_init(pv_ctx *ctx)
     ctx->rng_state = 0x2545F4914F6CDD1DULL;
     ctx->max_steps = 1000000L;
     ctx->caps = PV_CAP_ALL;     /* default: every binding granted; host restricts to gate (INV-17) */
+    ctx->const_floor = 0x8000;  /* INV-9: empty const region until literals are written */
     ctx->span_count = 1;        /* handle 0 reserved as the null span */
     ctx->arena_top = 0x8000;    /* bump pointer for span results (matches PicoVM) */
     ctx->w_count = 1;           /* Utf8Writer/Json/Xml: handle 0 reserved */

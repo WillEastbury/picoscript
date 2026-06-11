@@ -926,7 +926,7 @@ class Lowerer:
         for i, byte in enumerate(data):
             self.b.const(areg, base + i)
             self.b.const(vreg, byte)
-            self.b.host("Memory", "Set", (areg, vreg), None)
+            self.b.host("Memory", "SetConst", (areg, vreg), None)
         self.b.const(areg, base)
         self.b.const(vreg, len(data))
         span = self.b.vreg()

@@ -11,7 +11,8 @@ so this test asserts each VM *faults* on:
   - a computed/static jump target out of range (INV-11) -- previously a raw masked PC.
 
 Fault codes (mirrored by picovm_run.js): 1 = step budget, 2 = bad opcode,
-3 = bad jump, 7 = template depth, 8 = capability denied.
+3 = bad jump, 7 = template depth, 8 = capability denied, 9 = alloc in no-alloc mode,
+10 = write into the literal const segment.
 """
 
 import os
@@ -213,10 +214,34 @@ def main():
     ocw = lower_to_bytecode_safe(compile_c(oc))
     assert py_faulted(ocw) and c_fault(ocw) == 7 and js_fault(ocw) == 7, "output > 256KB must fault (7) on all 3"
 
+    # ── INV-9: literals are immutable. The compiler writes string literals into a
+    # const segment via Memory.SetConst; the VM tracks the lowest literal address
+    # (const_floor, growing down from 0x8000) and faults (10) a *user* Memory.Set into
+    # [const_floor, 0x8000). User writes below the floor are unaffected, proving
+    # Memory.SetConst is the only legal writer of the const segment. ──
+    # "Hi" (2 bytes) lowers const_floor to 0x7FFE; a Memory.Set there is a const write.
+    cwrite = lower_to_bytecode_safe(compile_c('int s = "Hi"; Memory.Set(32766, 65); Io.Write(s);'))
+    assert py_faulted(cwrite), "Python VM must fault on a write into the literal const segment"
+    try:
+        PicoVM().run(cwrite)
+    except PicoFault as exc:
+        assert exc.code == 10, "Python PicoFault code must be 10=const-write"
+    else:
+        raise AssertionError("Python VM must raise PicoFault on a const-segment write")
+    assert c_fault(cwrite) == 10, "C VM must fault (10=const-write)"
+    assert js_fault(cwrite) == 10, "JS VM must fault (10=const-write)"
+    # A user write below the const floor (addr 1000) is unaffected on all three, and
+    # the literal still renders -- the const segment is read-only, not unreachable.
+    uwrite = lower_to_bytecode_safe(compile_c('int s = "Hi"; Memory.Set(1000, 65); Io.Write(s);'))
+    assert not py_faulted(uwrite), "user write below const_floor must not fault (Python)"
+    assert c_fault(uwrite) == 0, "user write below const_floor must not fault (C)"
+    assert js_fault(uwrite) == 0, "user write below const_floor must not fault (JS)"
+
     print("PASS vm safety: structured code/pc/detail faults for step-budget (INV-12), "
           "out-of-range jump (INV-11), template depth/model/output bounds (INV-19), capability "
-          "gating (INV-17: bindings are not ambient) and no-alloc hot-path mode (INV-5) fault "
-          "identically on Python / C / JS -- pure/non-allocating hooks stay ungated")
+          "gating (INV-17: bindings are not ambient), no-alloc hot-path mode (INV-5) and "
+          "literal const-segment immutability (INV-9) fault identically on Python / C / JS -- "
+          "pure/non-allocating hooks and below-floor user writes stay ungated")
 
 
 if __name__ == "__main__":

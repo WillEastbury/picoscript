@@ -522,7 +522,7 @@
     for (var i = 0; i < data.length; i++) {
       b.const_(areg, base + i);
       b.const_(vreg, data[i]);
-      b.host("Memory", "Set", [areg, vreg], null);
+      b.host("Memory", "SetConst", [areg, vreg], null);
     }
     b.const_(areg, base);
     b.const_(vreg, data.length);

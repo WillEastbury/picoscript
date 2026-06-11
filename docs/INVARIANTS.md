@@ -26,7 +26,7 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 6 | Arena scope is explicit; scope exit rewinds or transfers | enforced (handler scope) |
 | 7 | Seal consumes ownership (use-after-seal = compile error or trap) | partial |
 | 8 | Spans are fat and bounded (ptr+len); no null-terminated authority | enforced |
-| 9 | Literals are immutable (const pool unless copied) | partial |
+| 9 | Literals are immutable (const segment + write-trap) | enforced |
 | 10 | Bytecode verification before execution | enforced (static pre-pass) |
 | 11 | Computed jumps are range-checked | enforced |
 | 12 | No unbounded loops without budget (yield or fault) | enforced |
@@ -111,29 +111,23 @@ the authoritative enforcement is the PIOS kernel's. Tractable next step on the V
 extend the post-seal trap to body/trailer/control ops (not just headers). The compile-time
 iso-lease check is a larger frontend feature.
 
-### 9. Literals are immutable — *partial (diagnosed; needs const segment)*
-Literals are interned into a deduplicated pool growing down from `0x8000` (commit
-`d550b7c`). **Diagnosis:** the pool is populated by `Memory.Set` ops emitted *in the
-bytecode itself* (before each `Span.Make`), so at runtime the VM cannot distinguish a
-compiler const-write from a user `Memory.Set` into the same address range — they are the
-same op. Enforcing read-only therefore needs an **architectural change**: relocate
-literals into a separate const segment loaded at init (not via `Memory.Set` bytecode) and
-range-check user writes against it. That is a deliberate redesign, deferred; flagged so no
-one assumes literals are tamper-proof today.
-
 ### 8. Spans are fat and bounded — *enforced*
 Every buffer is `ptr+len` (`pv_span_p`/`pv_span_n` in C; `{ptr,len}` in JS/Python).
 No `strlen`/`strcpy` authority over script data.
 
-### 9. Literals are immutable — *partial (diagnosed; needs const segment)*
-Literals are interned into a deduplicated pool growing down from `0x8000` (commit
-`d550b7c`). **Diagnosis:** the pool is populated by `Memory.Set` ops emitted *in the
-bytecode itself* (before each `Span.Make`), so at runtime the VM cannot distinguish a
-compiler const-write from a user `Memory.Set` into the same address range — they are the
-same op. Enforcing read-only therefore needs an **architectural change**: relocate
-literals into a separate const segment loaded at init (not via `Memory.Set` bytecode) and
-range-check user writes against it. That is a deliberate redesign, deferred; flagged so no
-one assumes literals are tamper-proof today.
+### 9. Literals are immutable — *enforced (const segment + write-trap)*
+String literals are interned into a deduplicated pool that grows **down** from `0x8000`
+(commit `d550b7c`). The compiler now writes those bytes with a dedicated `Memory.SetConst`
+hook (`0x5F`) instead of `Memory.Set` (`emit_str_span` in `picoscript_cfront.py`,
+`picoscript_basic.py` and the JS frontend `vm/picoc.js`, so the literal bytecode stays
+byte-identical across frontends). Each VM tracks `const_floor` — the lowest literal
+address, initialised to `0x8000` and lowered only by `Memory.SetConst`. A *user*
+`Memory.Set` whose address lands in `[const_floor, 0x8000)` now faults
+`PV_FAULT_CONST_WRITE`=10 (`vm/picovm.c` `pv_default_host`, `picoscript_vm.py` HostApi,
+`vm/picovm.js` `_host`); `Memory.SetConst` is the only writer allowed there, and it also
+lowers the floor. Reads of the const segment are unrestricted. `tests/test_vm_safety.py`
+proves a user write into the literal region faults (10) identically on Python / C / JS,
+while a below-floor user write and the literal's own rendering succeed.
 
 ### 10. Bytecode verification before execution — *enforced (static pre-pass)*
 `run` now performs a static verification pass **before executing any instruction**
@@ -185,12 +179,19 @@ mode" flag bundling clock+random+iteration is a possible future refinement.
 `canon_host(ns, method)` lowercases and resolves to the canonical hook
 (`picoscript_il.py:63-66`); `Net.Status`, `NET.STATUS`, `net.status` map to one code.
 
-### 17. Capability check before hook dispatch — **violated** (the killer rule)
-No permission/grant check precedes any hook. Dispatch is a bare lookup
-(`picoscript_vm.py:99-103`; `vm/picovm.js:175-239` by name; `vm/picovm.c:908-1032`
-`if (hook == …)`). Any program that can encode a hook code can call it — bindings are
-ambient. Target: a per-capsule capability set checked before dispatch (cf. the
-`FIRE_SW_IRQ` permission model).
+### 17. Capability check before hook dispatch — *enforced (the killer rule: bindings are not ambient)*
+Every binding hook is classified into a capability class — `KERNEL`=1, `QUEUE`=2,
+`RANDOM`=4, `STORAGE`=8, `TIME`=16, `NET`=32, `CONTEXT`=64, `AUTH`=128, `ENV`=256
+(`CAP_ALL`=0x1FF) — by an identical classifier on all three runtimes (`pv_hook_cap` in
+`vm/picovm.c`, `hook_cap` in `picoscript_vm.py`, `hookCap` in `vm/picovm.js`). Before
+dispatch the VM checks the capsule's granted set against the hook's class and faults
+`PV_FAULT_CAPABILITY`=8 when the binding is not permitted — hook existence is no longer
+sufficient. Pure hooks (`Status`/`Memory`/`String`/`Number`/`Maths`/`Span`/`Io`/`Template`
+…) are class `0` and are never gated. The default grant is `CAP_ALL` (backward-compatible);
+the harness sets the mask via `PICOVM_CAPS`, and a capsule's caps are part of the VM
+context. `tests/test_vm_safety.py` proves `Random.U32` is denied (fault 8) without
+`CAP_RANDOM` identically on Python / C / JS, while pure `Io.WriteByte` stays ungated.
+Committed `38755fb`.
 
 ### 18. Hook failures are typed — *enforced (out-of-band status channel)*
 A fallible hook now records a **typed status** in an out-of-band per-VM register

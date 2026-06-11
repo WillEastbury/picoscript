@@ -51,7 +51,8 @@ enum {
     PV_FAULT_BAD_HOOK    = 6,    /* unknown host hook id */
     PV_FAULT_TEMPLATE    = 7,    /* template render nesting exceeded TPL_MAXDEPTH */
     PV_FAULT_CAPABILITY  = 8,    /* hook's binding not granted to this capsule (INV-17) */
-    PV_FAULT_ALLOC       = 9     /* arena allocation attempted in no-alloc/hot-path mode (INV-5) */
+    PV_FAULT_ALLOC       = 9,    /* arena allocation attempted in no-alloc/hot-path mode (INV-5) */
+    PV_FAULT_CONST_WRITE = 10    /* user Memory.Set into the read-only literal const region (INV-9) */
 };
 
 /* Binding capability classes (ctx->caps bitmask). "Bindings are not ambient": a hook
@@ -108,6 +109,7 @@ struct pv_ctx {
     uint32_t  caps;            /* granted binding capabilities (PV_CAP_*); default PV_CAP_ALL */
     int       no_alloc;        /* when set, arena allocation in a hook faults (INV-5 hot path) */
     int       host_status;     /* INV-18: typed status of the last fallible hook (0 = OK) */
+    uint32_t  const_floor;     /* INV-9: lowest literal const-pool address; [floor,0x8000) is RO */
 
     /* simple in-VM queues for the default host (Queue.*) */
     int32_t   queues[8][64];

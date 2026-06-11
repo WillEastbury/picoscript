@@ -27,7 +27,7 @@
   var ADDR_REG = 0x1;
   var ADDR_REG_OFF = 0x3;
   var BR = { EQ: 0, NE: 1, LT: 2, GT: 3, LE: 4, GE: 5, Z: 6, NZ: 7, EOF: 8, ERR: 9 };
-  var FAULT = { STEP_BUDGET: 1, BAD_OPCODE: 2, BAD_JUMP: 3, TEMPLATE: 7, CAPABILITY: 8 };
+  var FAULT = { STEP_BUDGET: 1, BAD_OPCODE: 2, BAD_JUMP: 3, TEMPLATE: 7, CAPABILITY: 8, ALLOC: 9, CONST_WRITE: 10 };
 
   function picoFault(code, pc, detail, msg) {
     var e = new Error(msg);
@@ -81,6 +81,7 @@
     this.queues = {};
     this.rng = (this._seed !== null) ? this._seed : (0x4F6CDD1D >>> 0);
     this.hostStatus = 0;                      // INV-18: typed status of the last fallible hook
+    this.constFloor = 0x8000;                 // INV-9: lowest literal const-pool address ([floor,0x8000) RO)
     this.mem = new Uint8Array(520 * 1024);   // process arena = RP2350 (Pico 2) 520 KB SRAM
     this.dotLen = 0;                          // active span length for Dot8.Of
     this.arenaTop = 0x8000;             // bump pointer for Span.Materialize copies
@@ -247,7 +248,17 @@
       return;
     }
     // ---- memory + span / slice / materialize -----------------------------
-    if (name === "Memory.Set") { this.mem[(this.regs[rs1] >>> 0) % (520 * 1024)] = this.regs[rs2] & 0xFF; return; }
+    if (name === "Memory.Set") {
+      var ma = (this.regs[rs1] >>> 0) % (520 * 1024);
+      if (ma >= this.constFloor && ma < 0x8000) throw picoFault(FAULT.CONST_WRITE, this.curPc, ma, "write to read-only literal const region");  // INV-9
+      this.mem[ma] = this.regs[rs2] & 0xFF; return;
+    }
+    if (name === "Memory.SetConst") {   // INV-9: compiler-only literal write
+      var mc = (this.regs[rs1] >>> 0) % (520 * 1024);
+      this.mem[mc] = this.regs[rs2] & 0xFF;
+      if (mc < this.constFloor) this.constFloor = mc;
+      return;
+    }
     if (name === "Memory.Get") { this.regs[rd] = this.mem[(this.regs[rs1] >>> 0) % (520 * 1024)]; return; }
     if (name === "Span.Make") {
       this.spans.push({ ptr: this.regs[rs1] & 0xFFFF, len: Math.max(0, this.regs[rs2] | 0) });
