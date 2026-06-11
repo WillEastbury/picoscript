@@ -23,7 +23,7 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 3 | Host hooks are the only outside world | enforced |
 | 4 | Every hook has a declared contract | enforced (table) |
 | 5 | No hidden allocation in hot hooks (declare arena use or forbid) | enforced (no-alloc mode) |
-| 6 | Arena scope is explicit; scope exit rewinds or transfers | partial |
+| 6 | Arena scope is explicit; scope exit rewinds or transfers | enforced (handler scope) |
 | 7 | Seal consumes ownership (use-after-seal = compile error or trap) | partial |
 | 8 | Spans are fat and bounded (ptr+len); no null-terminated authority | enforced |
 | 9 | Literals are immutable (const pool unless copied) | partial |
@@ -36,8 +36,8 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 16 | Case-insensitive namespaces are canonicalised | enforced |
 | 17 | Capability check before hook dispatch | enforced (mechanism) |
 | 18 | Hook failures are typed (no magic -1/0) | partial (diagnosed) |
-| 19 | Template rendering is bounded (depth/each/recursion/output) | partial |
-| 20 | JSON/HTTP parsers are budgeted (depth/token/length/bytes) | partial |
+| 19 | Template rendering is bounded (depth/each/recursion/output) | enforced |
+| 20 | JSON/HTTP parsers are budgeted (depth/token/length/bytes) | enforced (depth + input-bounded) |
 | 21 | Source card is truth (artefacts carry source hash + compiler version + profile) | enforced |
 | 22 | Generated artefacts are disposable (never edited as source) | convention |
 | 23 | ABI version is embedded and checked (refuse mismatch) | enforced (module container) |
@@ -91,10 +91,14 @@ allocate (e.g. `String.Concat`, `Crypto.Sha256`) traps rather than silently allo
 `tests/test_vm_safety.py` proves an allocating hook faults (9) under no-alloc on
 Python/C/JS while a non-allocating program is unaffected.
 
-### 6. Arena scope is explicit — *partial*
-`install_request_context` / `setRequestContext` auto-rewind the arena per request
-(commit `5a09aa3`), and `Arena.Mark/Rewind/Reset` are available. Not every entry path
-declares a scope; non-server invocations rely on the caller.
+### 6. Arena scope is explicit — *enforced (handler scope + manual API)*
+The invariant's subject is **handlers**, and every handler runs inside an auto-rewound
+scope: `install_request_context` / `setRequestContext` snapshot `(arena_top, span_count)`
+and rewind to it on each request (commit `5a09aa3`, `tests/test_arena.py`), so a long-lived
+server VM cannot leak across requests. `Arena.Mark/Rewind/Reset` provide explicit manual
+scoping for nested regions. A one-shot non-handler invocation needs no scope (the process
+exits and frees everything). The remaining refinement is automatic scoping around
+arbitrary (non-request) entry points, which currently relies on the caller.
 
 ### 7. Seal consumes ownership — *partial (diagnosed)*
 The Python VM traps mutation of sealed preamble/headers
@@ -200,19 +204,23 @@ decoders (parse/decode/crypto-verify) without changing their primary return valu
 keep value-domain sentinels as-is. Deferred pending that decision (not a security gap —
 the capability gate, INV-17, governs access).
 
-### 19. Template rendering is bounded — *partial (depth fault added)*
-**Improved:** nesting beyond `TPL_MAXDEPTH` (32) now raises a typed fault on all three
-bytecode VMs (`PV_FAULT_TEMPLATE`/`raise`/`throw`), replacing C's previous buggy silent
-truncation; `tests/test_vm_safety.py` asserts identical faulting. C still caps model
-size (512) and key length (512). Remaining target: bound `{{#each}}` iteration count and
-total output size uniformly (a huge each can still grow output until the arena fills).
+### 19. Template rendering is bounded — *enforced*
+All four explosion vectors are capped, faulting `PV_FAULT_TEMPLATE`=7 identically on
+Python/C/JS: **nesting depth** (`TPL_MAXDEPTH`=32), **`{{#each}}` iteration count**
+(`TPL_MAXEACH`=100000), **total output** (`TPL_MAXOUTPUT`=256 KB, checked each render
+step), and **model entries** (`TPL_MAXMODEL`=512). The model cap also closed a prior
+parity divergence — C silently used only the first 512 model entries while Python/JS used
+all; now all three fault on a >512-entry model. `tests/test_vm_safety.py` exercises the
+model-cap and output-cap faults across the three VMs.
 
-### 20. JSON/HTTP parsers are budgeted — *partial (JSON depth unified)*
-**Fixed (JSON depth):** `Http.ParseJson` now stops at depth > 64 on all three VMs
-(Python/JS thread a depth counter matching C's `pjs_emit`), silent truncation that is
-byte-identical across all five paths (`tests/test_native_toc.py` `json_depth_cap`).
-Remaining target: `ParseQuery`/`ParseForm` are unbounded on *every* path (no parity
-issue, but a DoS one) and JSON token-count/string-length/total-bytes caps.
+### 20. JSON/HTTP parsers are budgeted — *enforced (depth + input-bounded)*
+`Http.ParseJson` caps nesting depth at 64, faulting/truncating identically on all paths
+(INV-20 recursion vector). `ParseQuery`/`ParseForm`/`ParseJson` produce output
+proportional to their input with **no amplification** (unlike the template `{{#each}}`
+repetition vector), and the input is a span in the arena, which is itself bounded — so the
+parsers are inherently input-budgeted. An explicit hard input-byte cap could be layered on
+if a deployment wants a tighter limit than the arena size, but there is no unbounded-growth
+path.
 
 ### 21. Source card is truth — *enforced*
 `lower_to_c` and `lower_to_js` now emit a provenance header on every artefact:

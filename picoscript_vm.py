@@ -698,8 +698,13 @@ class HostApi:
         if method == "Render":
             plan = self._span_raw(vm, vm.regs[rs1])
             model = {}
+            _mcount = 0
             for line in self._span_raw(vm, vm.regs[rs2]).split(b"\n"):
                 if b"=" in line:
+                    _mcount += 1
+                    if _mcount > 512:            # INV-19: bound model entries (matches C TPL_MAXMODEL)
+                        raise PicoFault(PV_FAULT_TEMPLATE, getattr(vm, "cur_pc", 0), _mcount,
+                                        "template model exceeded")
                     key, val = line.split(b"=", 1)
                     model[key] = val
 
@@ -740,6 +745,9 @@ class HostApi:
             stack = []                 # frames: [kind, saved_prefix, body_start, count, full, idx]
             i, n = 0, len(plan)
             while i < n:
+                if len(out) > 262144:                    # INV-19: bound total rendered output (256 KB)
+                    raise PicoFault(PV_FAULT_TEMPLATE, getattr(vm, "cur_pc", 0), len(out),
+                                    "template output exceeded")
                 op = plan[i]; i += 1
                 if op == 0x01:
                     ln = (plan[i] << 8) | plan[i + 1]; i += 2
@@ -763,6 +771,9 @@ class HostApi:
                     lk = bytes(plan[i:i + kl]); i += kl
                     full = (prefix + b"." + lk) if prefix else lk
                     cnt = count_list(full)
+                    if cnt > 100000:                     # INV-19: bound {{#each}} iteration count
+                        raise PicoFault(PV_FAULT_TEMPLATE, getattr(vm, "cur_pc", 0), cnt,
+                                        "template each-count exceeded")
                     if cnt == 0:
                         i = skip_block(i)
                     else:

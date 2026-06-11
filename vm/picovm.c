@@ -478,6 +478,8 @@ static void pv_hmac_sha256(pv_ctx *ctx, uint32_t key_p, int32_t key_len,
 #define TPL_KEYMAX   512
 #define TPL_MAXMODEL 512
 #define TPL_MAXDEPTH 32
+#define TPL_MAXOUTPUT (256 * 1024)   /* INV-19: bound total rendered output */
+#define TPL_MAXEACH   100000         /* INV-19: bound {{#each}} iteration count */
 
 static int32_t tpl_find2(pv_ctx *ctx, uint32_t p, int32_t n, int32_t from, uint8_t c0, uint8_t c1)
 {
@@ -557,9 +559,10 @@ typedef struct {
     int32_t  mcount;
 } tpl_model;
 
-static void tpl_parse_model(tpl_model *M, pv_ctx *ctx, uint32_t mp, int32_t mn)
+static int tpl_parse_model(tpl_model *M, pv_ctx *ctx, uint32_t mp, int32_t mn)
 {
     M->ctx = ctx; M->mp = mp; M->mcount = 0;
+    int overflow = 0;                       /* INV-19: model larger than TPL_MAXMODEL */
     int32_t i = 0;
     while (i < mn) {
         int32_t start = i;
@@ -568,12 +571,17 @@ static void tpl_parse_model(tpl_model *M, pv_ctx *ctx, uint32_t mp, int32_t mn)
         if (i < mn) i++;
         int32_t eq = start;
         while (eq < end && pv_arena_get(ctx, mp + (uint32_t)eq) != '=') eq++;
-        if (eq < end && M->mcount < TPL_MAXMODEL) {
-            M->mk_off[M->mcount] = start;     M->mk_len[M->mcount] = eq - start;
-            M->mv_off[M->mcount] = eq + 1;    M->mv_len[M->mcount] = end - (eq + 1);
-            M->mcount++;
+        if (eq < end) {
+            if (M->mcount < TPL_MAXMODEL) {
+                M->mk_off[M->mcount] = start;     M->mk_len[M->mcount] = eq - start;
+                M->mv_off[M->mcount] = eq + 1;    M->mv_len[M->mcount] = end - (eq + 1);
+                M->mcount++;
+            } else {
+                overflow = 1;
+            }
         }
     }
+    return overflow;
 }
 /* last match wins, mirroring a Python dict built by iterating lines. */
 static int32_t tpl_find_key(tpl_model *M, const uint8_t *buf, int32_t buflen)
@@ -660,7 +668,7 @@ static int32_t tpl_skip(pv_ctx *ctx, uint32_t pp, int32_t pn, int32_t i)
 static int pv_template_render(pv_ctx *ctx, uint32_t pp, int32_t pn, uint32_t mp, int32_t mn)
 {
     tpl_model M;
-    tpl_parse_model(&M, ctx, mp, mn);
+    if (tpl_parse_model(&M, ctx, mp, mn)) { pv_set_fault(ctx, PV_FAULT_TEMPLATE, ctx->cur_pc, M.mcount); return 0; }  /* INV-19 model cap */
     struct { int kind; uint8_t sp[TPL_KEYMAX]; int32_t splen; int32_t body; int32_t count;
              uint8_t full[TPL_KEYMAX]; int32_t fulllen; int32_t idx; } fr[TPL_MAXDEPTH];
     int sp = 0;
@@ -669,6 +677,7 @@ static int pv_template_render(pv_ctx *ctx, uint32_t pp, int32_t pn, uint32_t mp,
     uint32_t k = 0;
     int32_t i = 0;
     while (i < pn) {
+        if (k > (uint32_t)TPL_MAXOUTPUT) { pv_set_fault(ctx, PV_FAULT_TEMPLATE, ctx->cur_pc, 0); break; }  /* INV-19 */
         uint8_t op = pv_arena_get(ctx, pp + (uint32_t)i); i++;
         if (op == 0x01) {
             int32_t ln = (pv_arena_get(ctx, pp + (uint32_t)i) << 8) | pv_arena_get(ctx, pp + (uint32_t)(i + 1));
@@ -708,6 +717,7 @@ static int pv_template_render(pv_ctx *ctx, uint32_t pp, int32_t pn, uint32_t mp,
             }
             for (int32_t t = 0; t < kl && fl < TPL_KEYMAX; t++) full[fl++] = pv_arena_get(ctx, pp + (uint32_t)(koff + t));
             int32_t cnt = tpl_count_list(&M, full, fl);
+            if (cnt > TPL_MAXEACH) { pv_set_fault(ctx, PV_FAULT_TEMPLATE, ctx->cur_pc, cnt); break; }  /* INV-19 */
             if (cnt == 0) {
                 i = tpl_skip(ctx, pp, pn, i);
             } else {

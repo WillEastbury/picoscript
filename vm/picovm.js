@@ -736,7 +736,14 @@
     }
     if (method === "Render") {
       var plan = this._spanBytes(this.regs[rs1]), mb = this._spanBytes(this.regs[rs2]), model = {}, cur = [];
-      var commit = function (ln) { var eq = ln.indexOf(0x3d); if (eq >= 0) model[_keystr(ln.slice(0, eq))] = ln.slice(eq + 1); };
+      var self = this, mcount = 0;
+      var commit = function (ln) {
+        var eq = ln.indexOf(0x3d);
+        if (eq >= 0) {
+          if (++mcount > 512) throw picoFault(FAULT.TEMPLATE, self.curPc, mcount, "template model exceeded");  // INV-19
+          model[_keystr(ln.slice(0, eq))] = ln.slice(eq + 1);
+        }
+      };
       for (var p = 0; p < mb.length; p++) { if (mb[p] === 0x0a) { commit(cur); cur = []; } else cur.push(mb[p]); }
       commit(cur);
       var resolve = function (keyArr, prefix) {
@@ -766,6 +773,7 @@
       };
       var out = [], prefix = "", stack = [], i = 0, n = plan.length;
       while (i < n) {
+        if (out.length > 262144) throw picoFault(FAULT.TEMPLATE, this.curPc, out.length, "template output exceeded");  // INV-19
         var op = plan[i++];
         if (op === 0x01) { var ln2 = (plan[i] << 8) | plan[i + 1]; i += 2; for (var q = 0; q < ln2; q++) out.push(plan[i + q]); i += ln2; }
         else if (op === 0x02) { var kl = plan[i++]; var v = resolve(plan.slice(i, i + kl), prefix); i += kl; for (var r = 0; r < v.length; r++) out.push(v[r]); }
@@ -780,6 +788,7 @@
         else if (op === 0x06) {
           var kl3 = plan[i++], lk = _keystr(plan.slice(i, i + kl3)); i += kl3;
           var full = prefix ? (prefix + "." + lk) : lk, cnt = countList(full);
+          if (cnt > 100000) throw picoFault(FAULT.TEMPLATE, this.curPc, cnt, "template each-count exceeded");  // INV-19
           if (cnt === 0) i = skipBlock(i);
           else {
             if (stack.length >= 32) throw picoFault(FAULT.TEMPLATE, this.curPc, 0, "template depth exceeded");

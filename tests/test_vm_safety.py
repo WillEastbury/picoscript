@@ -182,9 +182,27 @@ def main():
     assert c_fault(nob, no_alloc=True) == 0, "non-allocating program must not fault (C)"
     assert js_fault(nob, no_alloc=True) == 0, "non-allocating program must not fault (JS)"
 
+    # ── INV-19: template resource bounds beyond depth -- a >512-entry model and a
+    # >256 KB rendered output both fault (7) identically (the model cap also closes a
+    # prior C-vs-Python/JS divergence where C silently used only the first 512). ──
+    big_model = b"\n".join(b"k" + str(i).encode() + b"=1" for i in range(600))
+    mc = (setbytes(1000, b"hi") + setbytes(4000, big_model) +
+          f"int t = Span.Make(1000, 2); int pl = Template.Compile(t);"
+          f"int m = Span.Make(4000, {len(big_model)}); int o = Template.Render(pl, m); Io.Write(o);")
+    mcw = lower_to_bytecode_safe(compile_c(mc))
+    assert py_faulted(mcw) and c_fault(mcw) == 7 and js_fault(mcw) == 7, "model > 512 must fault (7) on all 3"
+
+    each_tmpl = b"{{#each xs}}" + b"X" * 700 + b"{{/each}}"
+    each_model = b"\n".join(b"xs." + str(i).encode() + b"=1" for i in range(400))   # <=512 entries
+    oc = (setbytes(1000, each_tmpl) + setbytes(5000, each_model) +
+          f"int t = Span.Make(1000, {len(each_tmpl)}); int pl = Template.Compile(t);"
+          f"int m = Span.Make(5000, {len(each_model)}); int o = Template.Render(pl, m); Io.Write(o);")
+    ocw = lower_to_bytecode_safe(compile_c(oc))
+    assert py_faulted(ocw) and c_fault(ocw) == 7 and js_fault(ocw) == 7, "output > 256KB must fault (7) on all 3"
+
     print("PASS vm safety: structured code/pc/detail faults for step-budget (INV-12), "
-          "out-of-range jump (INV-11), template depth (INV-19), capability gating "
-          "(INV-17: bindings are not ambient) and no-alloc hot-path mode (INV-5) fault "
+          "out-of-range jump (INV-11), template depth/model/output bounds (INV-19), capability "
+          "gating (INV-17: bindings are not ambient) and no-alloc hot-path mode (INV-5) fault "
           "identically on Python / C / JS -- pure/non-allocating hooks stay ungated")
 
 
