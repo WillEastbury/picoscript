@@ -23,7 +23,7 @@ bit-compatible with the existing v1 compiler and decompilers.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List, Optional, Tuple, Union, Dict
 
 import picoscript as isa
@@ -338,7 +338,7 @@ def allocate(insts: List[Inst], spill: bool = False) -> Dict[int, int]:
             last[vid] = n
 
 
-    usable = NUM_REGS - 2 if spill else NUM_REGS
+    usable = NUM_REGS - 3 if spill else NUM_REGS   # reserve 3 shuttle regs when spilling
     free = list(range(usable))
     active: List[Tuple[int, int]] = []   # (end_index, vreg_id)
     mapping: Dict[int, int] = {}
@@ -377,6 +377,70 @@ def allocate(insts: List[Inst], spill: bool = False) -> Dict[int, int]:
     return mapping_meta
 
 
+# Ops whose `dst` field is a written destination, and ops that read `dst` as input.
+_DST_WRITTEN = {"const", "mov", "add", "sub", "mul", "div", "host", "load", "inc"}
+_DST_READ_OPS = {"cmpbr", "inc"}
+SPILL_CARD_BASE = 0xF000   # reserved scratch-card region: one card per spilled vreg
+
+
+def _legalize_spills(insts: List[Inst], spilled: set) -> List[Inst]:
+    """Rewrite the IL so no instruction references a spilled vreg directly.
+
+    Each spilled vreg gets a home scratch card. Spilled source operands are loaded
+    into short-lived shuttle vregs (card -> shuttle) before the instruction; a
+    spilled destination is computed into a shuttle and stored (shuttle -> card)
+    after. The shuttles live only across a single instruction, so the rewritten IL
+    has low register pressure and allocates without spilling -- the bytecode VMs get
+    arbitrarily many "variables" at the cost of card load/store traffic (the native
+    toC/toJS backends are unaffected: they map every vreg to a real local)."""
+    if not spilled:
+        return insts
+    slot = {vid: SPILL_CARD_BASE + i for i, vid in enumerate(sorted(spilled))}
+
+    def sp(x):
+        return isinstance(x, VReg) and x.id in spilled
+
+    out: List[Inst] = []
+    for ins in insts:
+        if not any(sp(x) for x in _operand_vregs(ins)):
+            out.append(ins)
+            continue
+        new_a, new_b = ins.a, ins.b
+        new_args = list(ins.args)
+        if sp(ins.a):
+            sh = VReg(name="spill"); out.append(Inst(op="load", dst=sh, imm=slot[ins.a.id])); new_a = sh
+        if sp(ins.b):
+            sh = VReg(name="spill"); out.append(Inst(op="load", dst=sh, imm=slot[ins.b.id])); new_b = sh
+        for i, v in enumerate(ins.args):
+            if sp(v):
+                sh = VReg(name="spill"); out.append(Inst(op="load", dst=sh, imm=slot[v.id])); new_args[i] = sh
+        new_dst = ins.dst
+        store_back = None
+        if sp(ins.dst):
+            sh = VReg(name="spill")
+            if ins.op in _DST_READ_OPS:        # dst is read (cmpbr) or read+write (inc)
+                out.append(Inst(op="load", dst=sh, imm=slot[ins.dst.id]))
+            new_dst = sh
+            if ins.op in _DST_WRITTEN:          # dst is written -> store the shuttle back
+                store_back = (sh, slot[ins.dst.id])
+        out.append(replace(ins, dst=new_dst, a=new_a, b=new_b, args=tuple(new_args)))
+        if store_back is not None:
+            out.append(Inst(op="save", a=store_back[0], imm=store_back[1]))
+    return out
+
+
+def _allocate_or_spill(insts: List[Inst]) -> Tuple[List[Inst], Dict[int, int]]:
+    """Allocate registers; if the program exceeds 16 live values, automatically
+    spill the overflow to scratch cards and re-allocate. A working (slower) compile
+    always beats a RegisterPressureError on real code."""
+    try:
+        return insts, allocate(insts)
+    except RegisterPressureError:
+        meta = allocate(insts, spill=True)
+        legal = _legalize_spills(insts, set(meta["__spilled__"].keys()))
+        return legal, allocate(legal)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Backend 1: lower to bytecode words (PicoVM / picovm.c)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -397,7 +461,7 @@ def lower_to_bytecode(insts: List[Inst], opt: bool = True) -> List[int]:
     """
     if opt:
         insts = optimize(insts)
-    mapping = allocate(insts)
+    insts, mapping = _allocate_or_spill(insts)
 
     # Pass 1: assign a PC to every real (non-label) instruction; record labels.
     labels: Dict[str, int] = {}
@@ -536,7 +600,7 @@ def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True) -> List[int]:
     without a LOADI opcode.  This recomputes label PCs accounting for expansion."""
     if opt:
         insts = optimize(insts)
-    mapping = allocate(insts)
+    insts, mapping = _allocate_or_spill(insts)
 
     # Determine which non-label insts expand to 2 words.
     def width(ins: Inst) -> int:
