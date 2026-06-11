@@ -77,6 +77,12 @@ def setbytes(base, data):
     return "".join(f"Memory.Set({base + i}, {b});" for i, b in enumerate(data))
 
 
+def tpl_prog(tmpl, model):
+    return (setbytes(1000, tmpl) + setbytes(2000, model) +
+            f"int t = Span.Make(1000, {len(tmpl)}); int pl = Template.Compile(t);"
+            f"int m = Span.Make(2000, {len(model)}); int o = Template.Render(pl, m); Io.Write(o);")
+
+
 def main():
     build_c_vm()
     if os.path.exists(BUILD):
@@ -164,8 +170,18 @@ def main():
                f"int s = Span.Make(1000, {len(msg)}); int d = Crypto.Sha256(s); Io.Write(d);")
         check(shl, hashlib.sha256(msg).digest(), "sha256_multiblock")
 
+        # Template.* : holes, sections, inverted, nesting, {{#each}} object + scalar.
+        check(tpl_prog(b"Hi {{name}}!", b"name=Bob"), b"Hi Bob!", "tpl_hole")
+        check(tpl_prog(b"{{#show}}yes{{/show}}", b"show=1"), b"yes", "tpl_section")
+        check(tpl_prog(b"{{^show}}no{{/show}}", b"show="), b"no", "tpl_inverted")
+        check(tpl_prog(b"{{#a}}A{{#b}}B{{/b}}C{{/a}}", b"a=1\nb=1"), b"ABC", "tpl_nested")
+        check(tpl_prog(b"{{#each items}}<li>{{name}}</li>{{/each}}", b"items.0.name=A\nitems.1.name=B"),
+              b"<li>A</li><li>B</li>", "tpl_each_obj")
+        check(tpl_prog(b"{{#each xs}}[{{.}}]{{/each}}", b"xs.0=1\nxs.1=2\nxs.2=3"),
+              b"[1][2][3]", "tpl_each_scalar")
+
         print("PASS first-class toC: Python VM == C interpreter == toC-compiled native, byte-exact "
-              "-- Span/String/Number/Maths/Compress/Html/Http/Crypto (compiled programs skip the bytecode VM)")
+              "-- Span/String/Number/Maths/Compress/Html/Http/Crypto/Template (compiled programs skip the bytecode VM)")
     finally:
         shutil.rmtree(BUILD, ignore_errors=True)
 

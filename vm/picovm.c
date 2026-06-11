@@ -409,6 +409,289 @@ static void pv_sha256(pv_ctx *ctx, uint32_t p, int32_t len, uint8_t out[32])
     }
 }
 
+/* ---- Template.* (AOT plan + renderer; mirrors picoscript_vm._templatelib) --
+ * Plan ops: 0x01 LEN_HI LEN_LO bytes=literal, 0x02 KEYLEN key=hole, 0x03/0x04
+ * KEYLEN key=(inverted) section, 0x05=end, 0x06 KEYLEN list=each. */
+#define TPL_KEYMAX   512
+#define TPL_MAXMODEL 512
+#define TPL_MAXDEPTH 32
+
+static int32_t tpl_find2(pv_ctx *ctx, uint32_t p, int32_t n, int32_t from, uint8_t c0, uint8_t c1)
+{
+    for (int32_t i = from; i + 1 < n; i++)
+        if (pv_arena_get(ctx, p + (uint32_t)i) == c0 && pv_arena_get(ctx, p + (uint32_t)(i + 1)) == c1) return i;
+    return -1;
+}
+static void tpl_trim(pv_ctx *ctx, uint32_t p, int32_t *s, int32_t *e)
+{
+    while (*s < *e) { uint8_t c = pv_arena_get(ctx, p + (uint32_t)*s);       if (c==' '||c=='\t'||c=='\r'||c=='\n') (*s)++; else break; }
+    while (*e > *s) { uint8_t c = pv_arena_get(ctx, p + (uint32_t)(*e - 1)); if (c==' '||c=='\t'||c=='\r'||c=='\n') (*e)--; else break; }
+}
+static void tpl_lit(pv_ctx *ctx, uint32_t *k, uint32_t p, int32_t from, int32_t to)
+{
+    int32_t len = to - from;
+    if (len <= 0) return;
+    pv_arena_put(ctx, k, 0x01);
+    pv_arena_put(ctx, k, (uint8_t)((len >> 8) & 0xFF));
+    pv_arena_put(ctx, k, (uint8_t)(len & 0xFF));
+    for (int32_t i = from; i < to; i++) pv_arena_put(ctx, k, pv_arena_get(ctx, p + (uint32_t)i));
+}
+static void tpl_key(pv_ctx *ctx, uint32_t *k, uint8_t op, uint32_t p, int32_t s, int32_t e)
+{
+    int32_t len = e - s;
+    if (len < 0) len = 0;
+    if (len > 255) len = 255;
+    pv_arena_put(ctx, k, op);
+    pv_arena_put(ctx, k, (uint8_t)len);
+    for (int32_t i = 0; i < len; i++) pv_arena_put(ctx, k, pv_arena_get(ctx, p + (uint32_t)(s + i)));
+}
+static int pv_template_compile(pv_ctx *ctx, uint32_t p, int32_t n)
+{
+    uint32_t k = 0;
+    int32_t i = 0;
+    while (i < n) {
+        int32_t j = tpl_find2(ctx, p, n, i, '{', '{');
+        if (j < 0) { tpl_lit(ctx, &k, p, i, n); break; }
+        tpl_lit(ctx, &k, p, i, j);
+        int32_t kk = tpl_find2(ctx, p, n, j + 2, '}', '}');
+        if (kk < 0) { tpl_lit(ctx, &k, p, j, n); break; }
+        int32_t s0 = j + 2, e0 = kk;
+        tpl_trim(ctx, p, &s0, &e0);
+        uint8_t f0 = (s0 < e0) ? pv_arena_get(ctx, p + (uint32_t)s0) : 0;
+        if (f0 == '#') {
+            int32_t rs = s0 + 1, re = e0;
+            tpl_trim(ctx, p, &rs, &re);
+            int is_each = (re - rs >= 4) &&
+                pv_arena_get(ctx, p + (uint32_t)rs) == 'e' && pv_arena_get(ctx, p + (uint32_t)(rs + 1)) == 'a' &&
+                pv_arena_get(ctx, p + (uint32_t)(rs + 2)) == 'c' && pv_arena_get(ctx, p + (uint32_t)(rs + 3)) == 'h' &&
+                (rs + 4 == re || pv_arena_get(ctx, p + (uint32_t)(rs + 4)) == ' ' || pv_arena_get(ctx, p + (uint32_t)(rs + 4)) == '\t');
+            if (is_each) {
+                int32_t ls = rs + 4, le = re;
+                tpl_trim(ctx, p, &ls, &le);
+                tpl_key(ctx, &k, 0x06, p, ls, le);
+            } else {
+                tpl_key(ctx, &k, 0x03, p, rs, re);
+            }
+        } else if (f0 == '^') {
+            int32_t rs = s0 + 1, re = e0;
+            tpl_trim(ctx, p, &rs, &re);
+            tpl_key(ctx, &k, 0x04, p, rs, re);
+        } else if (f0 == '/') {
+            pv_arena_put(ctx, &k, 0x05);
+        } else {
+            tpl_key(ctx, &k, 0x02, p, s0, e0);
+        }
+        i = kk + 2;
+    }
+    return pv_arena_finish(ctx, k);
+}
+
+typedef struct {
+    pv_ctx  *ctx;
+    uint32_t mp;
+    int32_t  mk_off[TPL_MAXMODEL], mk_len[TPL_MAXMODEL];
+    int32_t  mv_off[TPL_MAXMODEL], mv_len[TPL_MAXMODEL];
+    int32_t  mcount;
+} tpl_model;
+
+static void tpl_parse_model(tpl_model *M, pv_ctx *ctx, uint32_t mp, int32_t mn)
+{
+    M->ctx = ctx; M->mp = mp; M->mcount = 0;
+    int32_t i = 0;
+    while (i < mn) {
+        int32_t start = i;
+        while (i < mn && pv_arena_get(ctx, mp + (uint32_t)i) != '\n') i++;
+        int32_t end = i;
+        if (i < mn) i++;
+        int32_t eq = start;
+        while (eq < end && pv_arena_get(ctx, mp + (uint32_t)eq) != '=') eq++;
+        if (eq < end && M->mcount < TPL_MAXMODEL) {
+            M->mk_off[M->mcount] = start;     M->mk_len[M->mcount] = eq - start;
+            M->mv_off[M->mcount] = eq + 1;    M->mv_len[M->mcount] = end - (eq + 1);
+            M->mcount++;
+        }
+    }
+}
+/* last match wins, mirroring a Python dict built by iterating lines. */
+static int32_t tpl_find_key(tpl_model *M, const uint8_t *buf, int32_t buflen)
+{
+    int32_t found = -1;
+    for (int32_t e = 0; e < M->mcount; e++) {
+        if (M->mk_len[e] != buflen) continue;
+        int32_t j = 0;
+        for (; j < buflen; j++)
+            if (pv_arena_get(M->ctx, M->mp + (uint32_t)(M->mk_off[e] + j)) != buf[j]) break;
+        if (j == buflen) found = e;
+    }
+    return found;
+}
+static int tpl_startswith(tpl_model *M, const uint8_t *buf, int32_t buflen)
+{
+    for (int32_t e = 0; e < M->mcount; e++) {
+        if (M->mk_len[e] < buflen) continue;
+        int32_t j = 0;
+        for (; j < buflen; j++)
+            if (pv_arena_get(M->ctx, M->mp + (uint32_t)(M->mk_off[e] + j)) != buf[j]) break;
+        if (j == buflen) return 1;
+    }
+    return 0;
+}
+static void tpl_resolve(tpl_model *M, pv_ctx *ctx, uint32_t pp, int32_t koff, int32_t klen,
+                        const uint8_t *prefix, int32_t plen, int32_t *voff, int32_t *vlen)
+{
+    uint8_t lk[TPL_KEYMAX];
+    int32_t l;
+    *voff = 0; *vlen = 0;
+    if (klen == 1 && pv_arena_get(ctx, pp + (uint32_t)koff) == '.') {
+        int32_t idx = tpl_find_key(M, prefix, plen);
+        if (idx >= 0) { *voff = M->mv_off[idx]; *vlen = M->mv_len[idx]; }
+        return;
+    }
+    if (plen > 0) {
+        l = 0;
+        for (int32_t i = 0; i < plen && l < TPL_KEYMAX; i++) lk[l++] = prefix[i];
+        if (l < TPL_KEYMAX) lk[l++] = '.';
+        for (int32_t i = 0; i < klen && l < TPL_KEYMAX; i++) lk[l++] = pv_arena_get(ctx, pp + (uint32_t)(koff + i));
+        int32_t idx = tpl_find_key(M, lk, l);
+        if (idx >= 0) { *voff = M->mv_off[idx]; *vlen = M->mv_len[idx]; return; }
+    }
+    l = 0;
+    for (int32_t i = 0; i < klen && l < TPL_KEYMAX; i++) lk[l++] = pv_arena_get(ctx, pp + (uint32_t)(koff + i));
+    int32_t idx2 = tpl_find_key(M, lk, l);
+    if (idx2 >= 0) { *voff = M->mv_off[idx2]; *vlen = M->mv_len[idx2]; }
+}
+static int32_t tpl_count_list(tpl_model *M, const uint8_t *full, int32_t full_len)
+{
+    int32_t c = 0;
+    while (1) {
+        uint8_t base[TPL_KEYMAX];
+        int32_t bl = 0;
+        for (int32_t i = 0; i < full_len && bl < TPL_KEYMAX; i++) base[bl++] = full[i];
+        if (bl < TPL_KEYMAX) base[bl++] = '.';
+        uint8_t dec[12];
+        int32_t dl = pjs_dec(c, dec);
+        for (int32_t i = 0; i < dl && bl < TPL_KEYMAX; i++) base[bl++] = dec[i];
+        if (tpl_find_key(M, base, bl) >= 0) { c++; continue; }
+        if (bl < TPL_KEYMAX) { base[bl++] = '.'; if (tpl_startswith(M, base, bl)) { c++; continue; } }
+        return c;
+    }
+}
+static int32_t tpl_skip(pv_ctx *ctx, uint32_t pp, int32_t pn, int32_t i)
+{
+    int depth = 1;
+    while (i < pn && depth > 0) {
+        uint8_t op = pv_arena_get(ctx, pp + (uint32_t)i); i++;
+        if (op == 0x01) {
+            int32_t ln = (pv_arena_get(ctx, pp + (uint32_t)i) << 8) | pv_arena_get(ctx, pp + (uint32_t)(i + 1));
+            i += 2 + ln;
+        } else if (op == 0x02) {
+            i += 1 + pv_arena_get(ctx, pp + (uint32_t)i);
+        } else if (op == 0x03 || op == 0x04 || op == 0x06) {
+            i += 1 + pv_arena_get(ctx, pp + (uint32_t)i); depth++;
+        } else if (op == 0x05) {
+            depth--;
+        }
+    }
+    return i;
+}
+static int pv_template_render(pv_ctx *ctx, uint32_t pp, int32_t pn, uint32_t mp, int32_t mn)
+{
+    tpl_model M;
+    tpl_parse_model(&M, ctx, mp, mn);
+    struct { int kind; uint8_t sp[TPL_KEYMAX]; int32_t splen; int32_t body; int32_t count;
+             uint8_t full[TPL_KEYMAX]; int32_t fulllen; int32_t idx; } fr[TPL_MAXDEPTH];
+    int sp = 0;
+    uint8_t prefix[TPL_KEYMAX];
+    int32_t prefixlen = 0;
+    uint32_t k = 0;
+    int32_t i = 0;
+    while (i < pn) {
+        uint8_t op = pv_arena_get(ctx, pp + (uint32_t)i); i++;
+        if (op == 0x01) {
+            int32_t ln = (pv_arena_get(ctx, pp + (uint32_t)i) << 8) | pv_arena_get(ctx, pp + (uint32_t)(i + 1));
+            i += 2;
+            for (int32_t t = 0; t < ln; t++) pv_arena_put(ctx, &k, pv_arena_get(ctx, pp + (uint32_t)(i + t)));
+            i += ln;
+        } else if (op == 0x02) {
+            int32_t kl = pv_arena_get(ctx, pp + (uint32_t)i); i++;
+            int32_t voff, vlen;
+            tpl_resolve(&M, ctx, pp, i, kl, prefix, prefixlen, &voff, &vlen);
+            for (int32_t t = 0; t < vlen; t++) pv_arena_put(ctx, &k, pv_arena_get(ctx, mp + (uint32_t)(voff + t)));
+            i += kl;
+        } else if (op == 0x03 || op == 0x04) {
+            int32_t kl = pv_arena_get(ctx, pp + (uint32_t)i); i++;
+            int32_t koff = i; i += kl;
+            int32_t voff, vlen;
+            tpl_resolve(&M, ctx, pp, koff, kl, prefix, prefixlen, &voff, &vlen);
+            int truthy = (vlen > 0);
+            int take = (op == 0x03) ? truthy : (!truthy);
+            if (take) {
+                if (sp < TPL_MAXDEPTH) {
+                    fr[sp].kind = 0;
+                    for (int32_t t = 0; t < prefixlen; t++) fr[sp].sp[t] = prefix[t];
+                    fr[sp].splen = prefixlen;
+                    sp++;
+                }
+            } else {
+                i = tpl_skip(ctx, pp, pn, i);
+            }
+        } else if (op == 0x06) {
+            int32_t kl = pv_arena_get(ctx, pp + (uint32_t)i); i++;
+            int32_t koff = i; i += kl;
+            uint8_t full[TPL_KEYMAX];
+            int32_t fl = 0;
+            if (prefixlen > 0) {
+                for (int32_t t = 0; t < prefixlen && fl < TPL_KEYMAX; t++) full[fl++] = prefix[t];
+                if (fl < TPL_KEYMAX) full[fl++] = '.';
+            }
+            for (int32_t t = 0; t < kl && fl < TPL_KEYMAX; t++) full[fl++] = pv_arena_get(ctx, pp + (uint32_t)(koff + t));
+            int32_t cnt = tpl_count_list(&M, full, fl);
+            if (cnt == 0) {
+                i = tpl_skip(ctx, pp, pn, i);
+            } else if (sp < TPL_MAXDEPTH) {
+                fr[sp].kind = 1;
+                for (int32_t t = 0; t < prefixlen; t++) fr[sp].sp[t] = prefix[t];
+                fr[sp].splen = prefixlen;
+                fr[sp].body = i; fr[sp].count = cnt;
+                for (int32_t t = 0; t < fl; t++) fr[sp].full[t] = full[t];
+                fr[sp].fulllen = fl; fr[sp].idx = 0;
+                sp++;
+                prefixlen = 0;
+                for (int32_t t = 0; t < fl && prefixlen < TPL_KEYMAX; t++) prefix[prefixlen++] = full[t];
+                if (prefixlen < TPL_KEYMAX) prefix[prefixlen++] = '.';
+                if (prefixlen < TPL_KEYMAX) prefix[prefixlen++] = '0';
+            }
+        } else if (op == 0x05) {
+            if (sp > 0) {
+                int f = sp - 1;
+                if (fr[f].kind == 1) {
+                    fr[f].idx++;
+                    if (fr[f].idx < fr[f].count) {
+                        prefixlen = 0;
+                        for (int32_t t = 0; t < fr[f].fulllen && prefixlen < TPL_KEYMAX; t++) prefix[prefixlen++] = fr[f].full[t];
+                        if (prefixlen < TPL_KEYMAX) prefix[prefixlen++] = '.';
+                        uint8_t dec[12];
+                        int32_t dl = pjs_dec(fr[f].idx, dec);
+                        for (int32_t t = 0; t < dl && prefixlen < TPL_KEYMAX; t++) prefix[prefixlen++] = dec[t];
+                        i = fr[f].body;
+                    } else {
+                        prefixlen = fr[f].splen;
+                        for (int32_t t = 0; t < prefixlen; t++) prefix[t] = fr[f].sp[t];
+                        sp--;
+                    }
+                } else {
+                    prefixlen = fr[f].splen;
+                    for (int32_t t = 0; t < prefixlen; t++) prefix[t] = fr[f].sp[t];
+                    sp--;
+                }
+            }
+        } else {
+            break;
+        }
+    }
+    return pv_arena_finish(ctx, k);
+}
+
 /* ---- default host: Random.U32 + Queue.* (mirrors HostApi) ------------- */
 
 void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
@@ -721,6 +1004,19 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         uint32_t k = 0;
         while (t > 0) pv_arena_put(ctx, &k, tmp[--t]);
         ctx->regs[rd] = pv_arena_finish(ctx, k);
+        return;
+    }
+
+    /* ---- Template.* (AOT compile-at-save + render) ------------------- */
+    if (hook == PV_HOOK_TEMPLATE_COMPILE) {
+        int h = ctx->regs[rs1];
+        ctx->regs[rd] = pv_template_compile(ctx, pv_span_p(ctx, h), pv_span_n(ctx, h));
+        return;
+    }
+    if (hook == PV_HOOK_TEMPLATE_RENDER) {
+        int hp = ctx->regs[rs1], hm = ctx->regs[rs2];
+        ctx->regs[rd] = pv_template_render(ctx, pv_span_p(ctx, hp), pv_span_n(ctx, hp),
+                                           pv_span_p(ctx, hm), pv_span_n(ctx, hm));
         return;
     }
 
