@@ -170,6 +170,180 @@ static int pv_arena_match(pv_ctx *ctx, uint32_t at, int32_t avail, const char *s
     return 1;
 }
 
+/* ---- Http.* helpers (pure string parsing, byte-exact with the interpreters) - */
+static int pv_ishex(uint8_t c)
+{
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+static uint8_t pv_hexv(uint8_t c)
+{
+    if (c >= '0' && c <= '9') return (uint8_t)(c - '0');
+    if (c >= 'a' && c <= 'f') return (uint8_t)(c - 'a' + 10);
+    return (uint8_t)(c - 'A' + 10);
+}
+static uint8_t pv_hexd(uint32_t d)
+{
+    return (uint8_t)(d < 10 ? '0' + d : 'a' + (d - 10));
+}
+/* URL-decode arena bytes [from,to) into the result span (k = running length). */
+static void pv_urldecode_into(pv_ctx *ctx, uint32_t *k, uint32_t p, int32_t from, int32_t to)
+{
+    int32_t i = from;
+    while (i < to) {
+        uint8_t c = pv_arena_get(ctx, p + (uint32_t)i);
+        if (c == '+') { pv_arena_put(ctx, k, ' '); i++; }
+        else if (c == '%' && i + 2 < to &&
+                 pv_ishex(pv_arena_get(ctx, p + (uint32_t)(i + 1))) &&
+                 pv_ishex(pv_arena_get(ctx, p + (uint32_t)(i + 2)))) {
+            uint8_t hi = pv_hexv(pv_arena_get(ctx, p + (uint32_t)(i + 1)));
+            uint8_t lo = pv_hexv(pv_arena_get(ctx, p + (uint32_t)(i + 2)));
+            pv_arena_put(ctx, k, (uint8_t)((hi << 4) | lo)); i += 3;
+        } else { pv_arena_put(ctx, k, c); i++; }
+    }
+}
+/* JSON-escape arena bytes [from,to) into the result span. */
+static void pv_jsonesc_into(pv_ctx *ctx, uint32_t *k, uint32_t p, int32_t from, int32_t to)
+{
+    for (int32_t i = from; i < to; i++) {
+        uint8_t c = pv_arena_get(ctx, p + (uint32_t)i);
+        if (c == '"') { pv_arena_put(ctx, k, '\\'); pv_arena_put(ctx, k, '"'); }
+        else if (c == '\\') { pv_arena_put(ctx, k, '\\'); pv_arena_put(ctx, k, '\\'); }
+        else if (c == '\n') { pv_arena_put(ctx, k, '\\'); pv_arena_put(ctx, k, 'n'); }
+        else if (c == '\r') { pv_arena_put(ctx, k, '\\'); pv_arena_put(ctx, k, 'r'); }
+        else if (c == '\t') { pv_arena_put(ctx, k, '\\'); pv_arena_put(ctx, k, 't'); }
+        else if (c < 0x20) {
+            pv_arena_puts(ctx, k, "\\u00");
+            pv_arena_put(ctx, k, pv_hexd((c >> 4) & 0xF));
+            pv_arena_put(ctx, k, pv_hexd(c & 0xF));
+        } else pv_arena_put(ctx, k, c);
+    }
+}
+
+/* Recursive JSON -> dotted-path key=value model (the Template {{#each}} model). */
+typedef struct { pv_ctx *ctx; uint32_t p; int32_t n; int32_t pos; uint32_t k; } pv_pjs;
+
+static uint8_t pjs_g(pv_pjs *s, int32_t i) { return pv_arena_get(s->ctx, s->p + (uint32_t)i); }
+static void pjs_skipws(pv_pjs *s)
+{
+    while (s->pos < s->n) {
+        uint8_t c = pjs_g(s, s->pos);
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') s->pos++; else break;
+    }
+}
+static int32_t pjs_string(pv_pjs *s, uint8_t *buf, int32_t cap)
+{
+    int32_t bl = 0;
+    s->pos++;   /* opening quote */
+    while (s->pos < s->n) {
+        uint8_t c = pjs_g(s, s->pos); s->pos++;
+        if (c == '"') break;
+        if (c == '\\' && s->pos < s->n) {
+            uint8_t e = pjs_g(s, s->pos); s->pos++;
+            if (e == 'n') { if (bl < cap) buf[bl++] = 0x0a; }
+            else if (e == 't') { if (bl < cap) buf[bl++] = 0x09; }
+            else if (e == 'r') { if (bl < cap) buf[bl++] = 0x0d; }
+            else if (e == 'b') { if (bl < cap) buf[bl++] = 0x08; }
+            else if (e == 'f') { if (bl < cap) buf[bl++] = 0x0c; }
+            else if (e == 'u' && s->pos + 4 <= s->n &&
+                     pv_ishex(pjs_g(s, s->pos)) && pv_ishex(pjs_g(s, s->pos + 1)) &&
+                     pv_ishex(pjs_g(s, s->pos + 2)) && pv_ishex(pjs_g(s, s->pos + 3))) {
+                uint32_t cp = ((uint32_t)pv_hexv(pjs_g(s, s->pos)) << 12) |
+                              ((uint32_t)pv_hexv(pjs_g(s, s->pos + 1)) << 8) |
+                              ((uint32_t)pv_hexv(pjs_g(s, s->pos + 2)) << 4) |
+                              (uint32_t)pv_hexv(pjs_g(s, s->pos + 3));
+                s->pos += 4;
+                if (cp < 0x80) { if (bl < cap) buf[bl++] = (uint8_t)cp; }
+                else if (cp < 0x800) {
+                    if (bl < cap) buf[bl++] = (uint8_t)(0xC0 | (cp >> 6));
+                    if (bl < cap) buf[bl++] = (uint8_t)(0x80 | (cp & 0x3F));
+                } else {
+                    if (bl < cap) buf[bl++] = (uint8_t)(0xE0 | (cp >> 12));
+                    if (bl < cap) buf[bl++] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F));
+                    if (bl < cap) buf[bl++] = (uint8_t)(0x80 | (cp & 0x3F));
+                }
+            } else { if (bl < cap) buf[bl++] = e; }
+        } else { if (bl < cap) buf[bl++] = c; }
+    }
+    return bl;
+}
+static int32_t pjs_dec(int32_t v, uint8_t *buf)
+{
+    uint8_t tmp[12]; int t = 0;
+    uint32_t u = (uint32_t)v;
+    if (u == 0) tmp[t++] = '0';
+    while (u) { tmp[t++] = (uint8_t)('0' + (u % 10u)); u /= 10u; }
+    int32_t bl = 0;
+    while (t > 0) buf[bl++] = tmp[--t];
+    return bl;
+}
+static int32_t pjs_childkey(uint8_t *prefix, int32_t plen, uint8_t *key, int32_t klen, uint8_t *out)
+{
+    int32_t o = 0;
+    if (plen > 0) {
+        for (int32_t i = 0; i < plen && o < 255; i++) out[o++] = prefix[i];
+        if (o < 255) out[o++] = '.';
+    }
+    for (int32_t i = 0; i < klen && o < 255; i++) out[o++] = key[i];
+    return o;
+}
+static void pjs_leaf(pv_pjs *s, uint8_t *prefix, int32_t plen, int32_t vstart, int32_t vend, uint8_t *vbuf, int32_t vblen)
+{
+    for (int32_t i = 0; i < plen; i++) pv_arena_put(s->ctx, &s->k, prefix[i]);
+    pv_arena_put(s->ctx, &s->k, '=');
+    if (vbuf) { for (int32_t i = 0; i < vblen; i++) pv_arena_put(s->ctx, &s->k, vbuf[i]); }
+    else { for (int32_t i = vstart; i < vend; i++) pv_arena_put(s->ctx, &s->k, pjs_g(s, i)); }
+    pv_arena_put(s->ctx, &s->k, '\n');
+}
+static void pjs_emit(pv_pjs *s, uint8_t *prefix, int32_t plen, int depth)
+{
+    if (depth > 64) return;
+    pjs_skipws(s);
+    if (s->pos >= s->n) return;
+    uint8_t c = pjs_g(s, s->pos);
+    if (c == '{') {
+        s->pos++; pjs_skipws(s);
+        if (s->pos < s->n && pjs_g(s, s->pos) == '}') { s->pos++; return; }
+        while (s->pos < s->n) {
+            pjs_skipws(s);
+            if (s->pos >= s->n || pjs_g(s, s->pos) != '"') break;
+            uint8_t key[256]; int32_t klen = pjs_string(s, key, 256);
+            pjs_skipws(s);
+            if (s->pos < s->n && pjs_g(s, s->pos) == ':') s->pos++;
+            uint8_t np[256]; int32_t npl = pjs_childkey(prefix, plen, key, klen, np);
+            pjs_emit(s, np, npl, depth + 1);
+            pjs_skipws(s);
+            if (s->pos < s->n && pjs_g(s, s->pos) == ',') { s->pos++; continue; }
+            if (s->pos < s->n && pjs_g(s, s->pos) == '}') s->pos++;
+            break;
+        }
+    } else if (c == '[') {
+        s->pos++; pjs_skipws(s);
+        if (s->pos < s->n && pjs_g(s, s->pos) == ']') { s->pos++; return; }
+        int32_t idx = 0;
+        while (s->pos < s->n) {
+            uint8_t ib[12]; int32_t ibl = pjs_dec(idx, ib);
+            uint8_t np[256]; int32_t npl = pjs_childkey(prefix, plen, ib, ibl, np);
+            pjs_emit(s, np, npl, depth + 1);
+            idx++;
+            pjs_skipws(s);
+            if (s->pos < s->n && pjs_g(s, s->pos) == ',') { s->pos++; continue; }
+            if (s->pos < s->n && pjs_g(s, s->pos) == ']') s->pos++;
+            break;
+        }
+    } else if (c == '"') {
+        uint8_t val[1024]; int32_t vl = pjs_string(s, val, 1024);
+        pjs_leaf(s, prefix, plen, 0, 0, val, vl);
+    } else {
+        int32_t start = s->pos;
+        while (s->pos < s->n) {
+            uint8_t cc = pjs_g(s, s->pos);
+            if (cc == ',' || cc == '}' || cc == ']' || cc == ' ' || cc == '\t' || cc == '\n' || cc == '\r') break;
+            s->pos++;
+        }
+        pjs_leaf(s, prefix, plen, start, s->pos, 0, 0);
+    }
+}
+
 /* ---- default host: Random.U32 + Queue.* (mirrors HostApi) ------------- */
 
 void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
@@ -482,6 +656,65 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         uint32_t k = 0;
         while (t > 0) pv_arena_put(ctx, &k, tmp[--t]);
         ctx->regs[rd] = pv_arena_finish(ctx, k);
+        return;
+    }
+
+    /* ---- Http.* (pure parsers; produce/consume the Template key=value model) - */
+    if (hook == PV_HOOK_HTTP_PARSEQUERY || hook == PV_HOOK_HTTP_PARSEFORM) {
+        int h = ctx->regs[rs1];
+        uint32_t p = pv_span_p(ctx, h);
+        int32_t l = pv_span_n(ctx, h), i = 0;
+        uint32_t k = 0;
+        while (i < l) {
+            int32_t start = i;
+            while (i < l && pv_arena_get(ctx, p + (uint32_t)i) != '&') i++;
+            int32_t end = i;
+            if (i < l) i++;                  /* skip '&' */
+            if (end == start) continue;       /* empty pair */
+            int32_t eq = start;
+            while (eq < end && pv_arena_get(ctx, p + (uint32_t)eq) != '=') eq++;
+            pv_urldecode_into(ctx, &k, p, start, eq);
+            pv_arena_put(ctx, &k, '=');
+            if (eq < end) pv_urldecode_into(ctx, &k, p, eq + 1, end);
+            pv_arena_put(ctx, &k, '\n');
+        }
+        ctx->regs[rd] = pv_arena_finish(ctx, k);
+        return;
+    }
+    if (hook == PV_HOOK_HTTP_ENCODEJSON) {
+        int h = ctx->regs[rs1];
+        uint32_t p = pv_span_p(ctx, h);
+        int32_t l = pv_span_n(ctx, h), i = 0;
+        uint32_t k = 0;
+        pv_arena_put(ctx, &k, '{');
+        int first = 1;
+        while (i < l) {
+            int32_t start = i;
+            while (i < l && pv_arena_get(ctx, p + (uint32_t)i) != '\n') i++;
+            int32_t end = i;
+            if (i < l) i++;                  /* skip '\n' */
+            int32_t eq = start;
+            while (eq < end && pv_arena_get(ctx, p + (uint32_t)eq) != '=') eq++;
+            if (eq >= end) continue;          /* no '=' -> skip line */
+            if (!first) pv_arena_put(ctx, &k, ',');
+            first = 0;
+            pv_arena_put(ctx, &k, '"');
+            pv_jsonesc_into(ctx, &k, p, start, eq);
+            pv_arena_puts(ctx, &k, "\":\"");
+            pv_jsonesc_into(ctx, &k, p, eq + 1, end);
+            pv_arena_put(ctx, &k, '"');
+        }
+        pv_arena_put(ctx, &k, '}');
+        ctx->regs[rd] = pv_arena_finish(ctx, k);
+        return;
+    }
+    if (hook == PV_HOOK_HTTP_PARSEJSON) {
+        int h = ctx->regs[rs1];
+        pv_pjs st;
+        uint8_t pref[256];
+        st.ctx = ctx; st.p = pv_span_p(ctx, h); st.n = pv_span_n(ctx, h); st.pos = 0; st.k = 0;
+        pjs_emit(&st, pref, 0, 0);
+        ctx->regs[rd] = pv_arena_finish(ctx, st.k);
         return;
     }
 

@@ -136,8 +136,26 @@ def main():
               "int x = Span.Make(1100, 8); int d = Html.Decode(x); Io.Write(d);")
         check(hz, b"&lt;b&gt;&amp;&#39;&quot;|&lt;", "html")
 
+        # Http.ParseQuery (url-decode -> model).
+        qsrc = b"q=hello+world&x=%41"
+        hq = (setbytes(1000, qsrc) +
+              f"int s = Span.Make(1000, {len(qsrc)}); int m = Http.ParseQuery(s); Io.Write(m);")
+        check(hq, b"q=hello world\nx=A\n", "http_query")
+
+        # Http.EncodeJson (model -> JSON).
+        ejsrc = b"name=Bob\nrole=admin"
+        ej = (setbytes(1000, ejsrc) +
+              f"int s = Span.Make(1000, {len(ejsrc)}); int j = Http.EncodeJson(s); Io.Write(j);")
+        check(ej, b'{"name":"Bob","role":"admin"}', "http_encodejson")
+
+        # Http.ParseJson (nested JSON -> dotted {{#each}} model).
+        pjsrc = b'{"items":[{"name":"A"},{"name":"B"}]}'
+        pj = (setbytes(1000, pjsrc) +
+              f"int s = Span.Make(1000, {len(pjsrc)}); int m = Http.ParseJson(s); Io.Write(m);")
+        check(pj, b"items.0.name=A\nitems.1.name=B\n", "http_parsejson")
+
         print("PASS first-class toC: Python VM == C interpreter == toC-compiled native, byte-exact "
-              "-- Span/String/Number/Maths/Compress/Html (compiled programs skip the bytecode VM)")
+              "-- Span/String/Number/Maths/Compress/Html/Http (compiled programs skip the bytecode VM)")
     finally:
         shutil.rmtree(BUILD, ignore_errors=True)
 
