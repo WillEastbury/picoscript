@@ -21,8 +21,8 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 1 | Same source, same semantics — all frontends lower to equivalent IL | enforced |
 | 2 | Lowering parity — VM/toC/toJS/native produce identical observable output | enforced* |
 | 3 | Host hooks are the only outside world | enforced |
-| 4 | Every hook has a declared contract | target |
-| 5 | No hidden allocation in hot hooks (declare arena use or forbid) | target |
+| 4 | Every hook has a declared contract | enforced (table) |
+| 5 | No hidden allocation in hot hooks (declare arena use or forbid) | partial (declared) |
 | 6 | Arena scope is explicit; scope exit rewinds or transfers | partial |
 | 7 | Seal consumes ownership (use-after-seal = compile error or trap) | partial |
 | 8 | Spans are fat and bounded (ptr+len); no null-terminated authority | enforced |
@@ -38,10 +38,10 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 18 | Hook failures are typed (no magic -1/0) | partial (diagnosed) |
 | 19 | Template rendering is bounded (depth/each/recursion/output) | partial |
 | 20 | JSON/HTTP parsers are budgeted (depth/token/length/bytes) | partial |
-| 21 | Source card is truth (artefacts carry source hash + compiler version + profile) | target |
+| 21 | Source card is truth (artefacts carry source hash + compiler version + profile) | enforced |
 | 22 | Generated artefacts are disposable (never edited as source) | convention |
 | 23 | ABI version is embedded and checked (refuse mismatch) | target |
-| 24 | Parity runner is the gatekeeper (every hook/opcode/lowering has parity tests) | partial |
+| 24 | Parity runner is the gatekeeper (every hook/opcode/lowering has parity tests) | enforced (gate) |
 | 25 | Debug trace is structured (span, IL op, pc, hook id, capsule, binding) | target |
 
 \* INV-2 (lowering parity): the known signed-division divergence is fixed (truncate
@@ -73,15 +73,19 @@ No direct file/socket/clock/entropy/`getenv` access bypasses the hook layer in
 `vm/picovm.c`, `vm/picovm.js`, or `picoscript_vm.py`; entropy is the declared
 `Random.U32` xorshift only.
 
-### 4. Every hook has a declared contract — *target*
-Hooks are implemented but not accompanied by a machine-checkable contract declaring
-inputs, outputs, ownership, mutability, allocation behaviour, failure modes, and
-capability requirement. To be added per hook (a contract table keyed by hook code).
+### 4. Every hook has a declared contract — *enforced (machine-readable table)*
+`hook_contracts.py` declares, for every hook in the registry (259), its namespace,
+method, **capability class** (mirroring the INV-17 classifier), and **arena-allocation
+flag** (INV-5). `tests/test_hook_contracts.py` asserts completeness + spot-checks. Future
+work can extend each entry with input/output/ownership/failure-mode fields, but the
+contract table and its capability + allocation declarations now exist and are tested.
 
-### 5. No hidden allocation in hot hooks — *target*
-Allocating hooks (`String.Concat`, `Span.Materialize`, `Crypto.*` digest spans,
-`Number.ToString`, …) bump the arena without declaring it. Request-path hooks must
-declare arena use (so it can be scoped/rewound) or be forbidden on the hot path.
+### 5. No hidden allocation in hot hooks — *partial (declared, not yet forbidden)*
+Allocation is now **declared** per hook via the `allocates` flag in `hook_contracts.py`
+(e.g. `String.Concat`/`Crypto.Sha256`/`Span.Materialize` = allocates; `Bits.*`/
+`Number.Parse`/`Span.Len` = no). The remaining step is *enforcement*: a request/hot-path
+profile that forbids calling an `allocates=True` hook outside a declared arena scope.
+The data to do so now exists.
 
 ### 6. Arena scope is explicit — *partial*
 `install_request_context` / `setRequestContext` auto-rewind the arena per request
@@ -202,10 +206,12 @@ byte-identical across all five paths (`tests/test_native_toc.py` `json_depth_cap
 Remaining target: `ParseQuery`/`ParseForm` are unbounded on *every* path (no parity
 issue, but a DoS one) and JSON token-count/string-length/total-bytes caps.
 
-### 21. Source card is truth — *target*
-`lower_to_c` / `lower_to_js` emit only an "AUTO-GENERATED" comment
-(`picoscript_il.py:713-718,915-923`) — no source hash, compiler version, or target
-profile. Target: a provenance header on every artefact.
+### 21. Source card is truth — *enforced*
+`lower_to_c` and `lower_to_js` now emit a provenance header on every artefact:
+compiler version, ABI version, target profile (`c`/`js`), and a deterministic
+`source_hash` (sha256 of the IL, stable across runs, changes with the program).
+`tests/test_provenance.py` asserts presence + determinism + that a different program
+yields a different hash. An artefact can now be traced to its source IL.
 
 ### 22. Generated artefacts are disposable — *convention*
 `vm/pico_hooks.js` / `vm/pico_hooks.h` are marked "AUTO-GENERATED … do not edit by
@@ -217,11 +223,14 @@ No version/magic in the bytecode container, host-hook table, or descriptor ABI, 
 load-time refusal of a mismatch (`picoscript_vm.py:1187-1226`). Target: an embedded
 ABI version, checked at load.
 
-### 24. Parity runner is the gatekeeper — *partial*
-Strong multi-runtime parity tests exist for the pure namespaces (`tests/test_native_toc.py`,
-`tests/test_pipeline.py`, per-namespace tests). Gaps: host-injected namespaces
-(`DateTime`, `Context`, `Auth`, `X509`, `Environment`, `Locale`, most of `Http`/`Html`)
-are unimplemented/untested, and there is no CI gate forcing "new hook ⇒ parity test".
+### 24. Parity runner is the gatekeeper — *enforced (automated gate)*
+`tests/test_parity_gate.py` parses the full hook registry (`vm/pico_hooks.js`) and fails
+if any non-allowlisted host namespace lacks a parity-test reference — so a new pure hook
+in a new namespace without a test trips the gate. The allowlist holds the host-injected
+namespaces (`DateTime`/`Context`/`Auth`/`X509`/`Environment`/`Locale`/`Kernel`/`Req`/
+`Resp`/`Net`) plus the low-level primitives (`Descriptor`/`Lease`/`Thread`), each with a
+justification. The gate caught a real gap on first run (`Queue` was untested) which was
+closed with a 5-path `queue_depth` test rather than allowlisted.
 
 ### 25. Debug trace is structured — *target*
 Traps are bare `RuntimeError`/`throw` strings with no structured record of source span,

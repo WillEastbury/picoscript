@@ -229,6 +229,14 @@ def main():
               f"int s = Span.Make(1000, {len(bigjson)}); int m = Http.ParseJson(s); Io.Write(m);")
         check(jd, b"top=7\n", "json_depth_cap")
 
+        # Queue.* parity (INV-24 coverage): enqueue increments depth identically on every
+        # path. (Queue.Enqueue's VALUE uses a non-standard register ABI -- rd is an input --
+        # so it round-trips only via direct bytecode/IPC, not the frontend; Depth is the
+        # frontend-observable, parity-clean behaviour.)
+        q = ("Queue.Enqueue(0, 1); Queue.Enqueue(0, 1); Queue.Enqueue(0, 1);"
+             "int d = Queue.Depth(0); Io.WriteByte(d);")
+        check(q, bytes([3]), "queue_depth")
+
         # Template.* : holes, sections, inverted, nesting, {{#each}} object + scalar.
         check(tpl_prog(b"Hi {{name}}!", b"name=Bob"), b"Hi Bob!", "tpl_hole")
         check(tpl_prog(b"{{#show}}yes{{/show}}", b"show=1"), b"yes", "tpl_section")

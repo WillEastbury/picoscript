@@ -26,6 +26,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import List, Optional, Tuple, Union, Dict
 
+import hashlib
+
 import picoscript as isa
 from picoscript_lang import (
     HOST_HOOK_BASE,
@@ -40,6 +42,8 @@ from picoscript_lang import (
 )
 
 NUM_REGS = 16
+PICOSCRIPT_ABI_VERSION = "1"
+PICOSCRIPT_COMPILER_VERSION = "picoscript-il/1"
 
 # Condition codes (match picoscript BRANCH_* values exactly).
 COND = {
@@ -153,6 +157,49 @@ class Inst:
         if self.text:
             parts.append(repr(self.text))
         return "  " + " ".join(parts)
+
+
+def _provenance_operand(value, vreg_ord: Dict[int, int]):
+    if value is None:
+        return None
+    if isinstance(value, Imm):
+        return ("imm", value.value)
+    if isinstance(value, VReg):
+        ordinal = vreg_ord.setdefault(value.id, len(vreg_ord))
+        return ("vreg", ordinal, value.pinned, value.name if value.pinned else "")
+    return ("raw", repr(value))
+
+
+def _provenance_inst(ins: Inst, vreg_ord: Dict[int, int]):
+    return (
+        ins.op,
+        _provenance_operand(ins.dst, vreg_ord),
+        _provenance_operand(ins.a, vreg_ord),
+        _provenance_operand(ins.b, vreg_ord),
+        tuple(_provenance_operand(arg, vreg_ord) for arg in ins.args),
+        ins.imm,
+        ins.cond,
+        ins.label,
+        ins.ns,
+        ins.method,
+        ins.text,
+        tuple(ins.targets),
+    )
+
+
+def _source_hash(insts: List[Inst]) -> str:
+    vreg_ord: Dict[int, int] = {}
+    payload = tuple(_provenance_inst(ins, vreg_ord) for ins in insts)
+    return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()[:16]
+
+
+def _provenance_header(comment_prefix: str, target_profile: str, insts: List[Inst]) -> str:
+    return (
+        f"{comment_prefix} AUTO-GENERATED from PicoScript IL.\n"
+        f"{comment_prefix} provenance: compiler_version={PICOSCRIPT_COMPILER_VERSION} "
+        f"abi_version={PICOSCRIPT_ABI_VERSION} target_profile={target_profile} "
+        f"source_hash={_source_hash(insts)}"
+    )
 
 
 class ILBuilder:
@@ -693,6 +740,7 @@ def lower_to_c(insts: List[Inst], func_name: str = "pico_main", opt: bool = True
     If `emit_main` is set, a `main()` is appended that runs `func_name` and prints
     STATUS/OUT in the same format as vm/picovm_run.c (for host validation).
     """
+    provenance = _provenance_header("//", "c", insts)
     if opt:
         insts = optimize(insts)
 
@@ -728,6 +776,7 @@ def lower_to_c(insts: List[Inst], func_name: str = "pico_main", opt: bool = True
         return str(x.value) if isinstance(x, Imm) else name_of(x)
 
     out: List[str] = []
+    out.append(provenance)
     out.append('#include "picovm.h"')
     out.append("")
     if pinned_ids:
@@ -899,6 +948,7 @@ def lower_to_js(insts: List[Inst], module_name: str = "pico", opt: bool = True) 
     The emitted module exposes `{ run(rt?), main, makeRuntime }` and works in both
     Node (`module.exports`) and the browser (`root.<module>Program`).
     """
+    provenance = _provenance_header("//", "js", insts)
     if opt:
         insts = optimize(insts)
 
@@ -930,7 +980,7 @@ def lower_to_js(insts: List[Inst], module_name: str = "pico", opt: bool = True) 
         return str(x.value) if isinstance(x, Imm) else jname(x)
 
     out: List[str] = []
-    out.append("// AUTO-GENERATED from PicoScript IL (toJS backend).")
+    out.append(provenance)
     out.append("(function (root) {")
     out.append("  'use strict';")
     out.append("  function makeRuntime() {")
