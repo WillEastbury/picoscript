@@ -20,6 +20,9 @@
 #define PV_MAX_CALL   256
 #define PV_MAX_OUT    8192
 #define PV_MAX_SPANS  1024      /* span table: handle = 1-based index, 0 = null */
+#define PV_MAX_WRITERS 16       /* Utf8Writer / Json / Xml handles */
+#define PV_MAX_READERS 16       /* Utf8Reader handles */
+#define PV_JSON_DEPTH  32       /* nested object/array depth per writer */
 
 /* ---- 16 core opcodes (bits [31:28]) ---------------------------------- */
 enum {
@@ -88,6 +91,22 @@ struct pv_ctx {
     uint32_t  arena_top;
     uint32_t  str_repl_ptr;   /* String.SetReplace pending replacement (ptr,len) */
     int32_t   str_repl_len;
+
+    /* Utf8Writer / Json / Xml handles: arena-backed byte writers (1-based handle).
+     * w_pos bytes written at w_ptr (capped at w_cap); the per-writer JSON container
+     * stack tracks comma/afterKey state. Utf8Reader: cursor over a span. Mirrors
+     * picoscript_vm writers/readers (_next_writer/_next_reader start at 1). */
+    uint32_t  w_ptr[PV_MAX_WRITERS];
+    uint32_t  w_cap[PV_MAX_WRITERS];
+    uint32_t  w_pos[PV_MAX_WRITERS];
+    int32_t   w_scount[PV_MAX_WRITERS * PV_JSON_DEPTH];
+    uint8_t   w_safter[PV_MAX_WRITERS * PV_JSON_DEPTH];
+    int       w_sp[PV_MAX_WRITERS];
+    int       w_count;
+    uint32_t  r_ptr[PV_MAX_READERS];
+    uint32_t  r_len[PV_MAX_READERS];
+    uint32_t  r_pos[PV_MAX_READERS];
+    int       r_count;
 
     pv_host_fn host;
 };

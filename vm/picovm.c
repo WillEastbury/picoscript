@@ -692,6 +692,163 @@ static int pv_template_render(pv_ctx *ctx, uint32_t pp, int32_t pn, uint32_t mp,
     return pv_arena_finish(ctx, k);
 }
 
+/* ---- Utf8Writer / Utf8Reader / Json / Xml (arena-backed; mirror _textio) ---- */
+static void pv_w_byte(pv_ctx *ctx, int w, uint8_t b)
+{
+    if (ctx->w_pos[w] < ctx->w_cap[w]) {
+        uint32_t a = ctx->w_ptr[w] + ctx->w_pos[w];
+        if (ctx->mem && a < (uint32_t)ctx->mem_size) ctx->mem[a] = b;
+        ctx->w_pos[w]++;
+    }
+}
+static void pv_w_cstr(pv_ctx *ctx, int w, const char *s) { while (*s) pv_w_byte(ctx, w, (uint8_t)*s++); }
+static void pv_w_span(pv_ctx *ctx, int w, int h)
+{
+    uint32_t p = pv_span_p(ctx, h);
+    int32_t l = pv_span_n(ctx, h);
+    for (int32_t i = 0; i < l; i++) pv_w_byte(ctx, w, pv_arena_get(ctx, p + (uint32_t)i));
+}
+static void pv_w_int(pv_ctx *ctx, int w, int32_t v)
+{
+    uint8_t tmp[16]; int t = 0, neg = 0; uint32_t u;
+    if (v < 0) { neg = 1; u = 0u - (uint32_t)v; } else u = (uint32_t)v;
+    if (u == 0) tmp[t++] = '0';
+    while (u) { tmp[t++] = (uint8_t)('0' + (u % 10u)); u /= 10u; }
+    if (neg) pv_w_byte(ctx, w, '-');
+    while (t > 0) pv_w_byte(ctx, w, tmp[--t]);
+}
+static void pv_w_json_esc(pv_ctx *ctx, int w, int h)
+{
+    uint32_t p = pv_span_p(ctx, h);
+    int32_t l = pv_span_n(ctx, h);
+    for (int32_t i = 0; i < l; i++) {
+        uint8_t c = pv_arena_get(ctx, p + (uint32_t)i);
+        if (c == '"') { pv_w_byte(ctx, w, '\\'); pv_w_byte(ctx, w, '"'); }
+        else if (c == '\\') { pv_w_byte(ctx, w, '\\'); pv_w_byte(ctx, w, '\\'); }
+        else if (c == '\n') { pv_w_byte(ctx, w, '\\'); pv_w_byte(ctx, w, 'n'); }
+        else if (c == '\r') { pv_w_byte(ctx, w, '\\'); pv_w_byte(ctx, w, 'r'); }
+        else if (c == '\t') { pv_w_byte(ctx, w, '\\'); pv_w_byte(ctx, w, 't'); }
+        else if (c < 0x20) { pv_w_cstr(ctx, w, "\\u00"); pv_w_byte(ctx, w, pv_hexd((c >> 4) & 0xF)); pv_w_byte(ctx, w, pv_hexd(c & 0xF)); }
+        else pv_w_byte(ctx, w, c);
+    }
+}
+static void pv_w_xml_esc(pv_ctx *ctx, int w, int h)
+{
+    uint32_t p = pv_span_p(ctx, h);
+    int32_t l = pv_span_n(ctx, h);
+    for (int32_t i = 0; i < l; i++) {
+        uint8_t c = pv_arena_get(ctx, p + (uint32_t)i);
+        if (c == '&') pv_w_cstr(ctx, w, "&amp;");
+        else if (c == '<') pv_w_cstr(ctx, w, "&lt;");
+        else if (c == '>') pv_w_cstr(ctx, w, "&gt;");
+        else pv_w_byte(ctx, w, c);
+    }
+}
+static void pv_json_pre(pv_ctx *ctx, int w)
+{
+    int sp = ctx->w_sp[w];
+    if (sp == 0) return;
+    int top = w * PV_JSON_DEPTH + (sp - 1);
+    if (ctx->w_safter[top]) ctx->w_safter[top] = 0;
+    else if (ctx->w_scount[top] > 0) pv_w_byte(ctx, w, ',');
+}
+static void pv_json_post(pv_ctx *ctx, int w)
+{
+    int sp = ctx->w_sp[w];
+    if (sp > 0) ctx->w_scount[w * PV_JSON_DEPTH + (sp - 1)]++;
+}
+/* Returns 1 if the hook was a Utf8Writer/Utf8Reader/Json/Xml op. */
+static int pv_textio(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
+{
+    if (hook == PV_HOOK_UTF8WRITER_NEW) {
+        if (ctx->w_count >= PV_MAX_WRITERS) { ctx->regs[rd] = 0; return 1; }
+        int w = ctx->w_count++;
+        ctx->w_ptr[w] = (uint32_t)(ctx->regs[rs1] & 0xFFFF);
+        ctx->w_cap[w] = (uint32_t)(ctx->regs[rs2] & 0xFFFF);
+        ctx->w_pos[w] = 0; ctx->w_sp[w] = 0;
+        ctx->regs[rd] = w; return 1;
+    }
+    if (hook >= PV_HOOK_UTF8WRITER_BYTE && hook <= PV_HOOK_UTF8WRITER_RESET) {
+        int w = ctx->regs[rs1];
+        if (w <= 0 || w >= ctx->w_count) { ctx->regs[rd] = 0; return 1; }
+        if (hook == PV_HOOK_UTF8WRITER_BYTE) { pv_w_byte(ctx, w, (uint8_t)ctx->regs[rs2]); return 1; }
+        if (hook == PV_HOOK_UTF8WRITER_INT) { pv_w_int(ctx, w, ctx->regs[rs2]); return 1; }
+        if (hook == PV_HOOK_UTF8WRITER_SPAN) { pv_w_span(ctx, w, ctx->regs[rs2]); return 1; }
+        if (hook == PV_HOOK_UTF8WRITER_TOSPAN) { ctx->regs[rd] = pv_span_make(ctx, ctx->w_ptr[w], (int32_t)ctx->w_pos[w]); return 1; }
+        if (hook == PV_HOOK_UTF8WRITER_LEN) { ctx->regs[rd] = (int32_t)ctx->w_pos[w]; return 1; }
+        if (hook == PV_HOOK_UTF8WRITER_RESET) { ctx->w_pos[w] = 0; ctx->w_sp[w] = 0; return 1; }
+    }
+    if (hook == PV_HOOK_UTF8READER_NEW) {
+        if (ctx->r_count >= PV_MAX_READERS) { ctx->regs[rd] = 0; return 1; }
+        int r = ctx->r_count++;
+        int sh = ctx->regs[rs1];
+        ctx->r_ptr[r] = pv_span_p(ctx, sh); ctx->r_len[r] = (uint32_t)pv_span_n(ctx, sh); ctx->r_pos[r] = 0;
+        ctx->regs[rd] = r; return 1;
+    }
+    if (hook >= PV_HOOK_UTF8READER_PEEK && hook <= PV_HOOK_UTF8READER_MATCH) {
+        int r = ctx->regs[rs1];
+        if (r <= 0 || r >= ctx->r_count) { ctx->regs[rd] = 0; return 1; }
+        uint32_t p = ctx->r_ptr[r]; uint32_t len = ctx->r_len[r];
+        if (hook == PV_HOOK_UTF8READER_PEEK) { ctx->regs[rd] = (ctx->r_pos[r] < len) ? pv_arena_get(ctx, p + ctx->r_pos[r]) : 0; return 1; }
+        if (hook == PV_HOOK_UTF8READER_NEXT) { ctx->regs[rd] = (ctx->r_pos[r] < len) ? pv_arena_get(ctx, p + ctx->r_pos[r]) : 0; if (ctx->r_pos[r] < len) ctx->r_pos[r]++; return 1; }
+        if (hook == PV_HOOK_UTF8READER_SKIPWS) { while (ctx->r_pos[r] < len) { uint8_t c = pv_arena_get(ctx, p + ctx->r_pos[r]); if (c == 32 || c == 9 || c == 10 || c == 13) ctx->r_pos[r]++; else break; } return 1; }
+        if (hook == PV_HOOK_UTF8READER_EOF) { ctx->regs[rd] = (ctx->r_pos[r] >= len) ? 1 : 0; return 1; }
+        if (hook == PV_HOOK_UTF8READER_POS) { ctx->regs[rd] = (int32_t)ctx->r_pos[r]; return 1; }
+        if (hook == PV_HOOK_UTF8READER_MATCH) {
+            if (ctx->r_pos[r] < len && pv_arena_get(ctx, p + ctx->r_pos[r]) == (uint8_t)(ctx->regs[rs2] & 0xFF)) { ctx->r_pos[r]++; ctx->regs[rd] = 1; } else ctx->regs[rd] = 0;
+            return 1;
+        }
+        if (hook == PV_HOOK_UTF8READER_INT) {
+            while (ctx->r_pos[r] < len) { uint8_t c = pv_arena_get(ctx, p + ctx->r_pos[r]); if (c == 32 || c == 9 || c == 10 || c == 13) ctx->r_pos[r]++; else break; }
+            int neg = 0;
+            if (ctx->r_pos[r] < len && pv_arena_get(ctx, p + ctx->r_pos[r]) == 0x2D) { neg = 1; ctx->r_pos[r]++; }
+            uint32_t v = 0;
+            while (ctx->r_pos[r] < len) { uint8_t c = pv_arena_get(ctx, p + ctx->r_pos[r]); if (c >= 0x30 && c <= 0x39) { v = v * 10u + (uint32_t)(c - 0x30); ctx->r_pos[r]++; } else break; }
+            ctx->regs[rd] = neg ? (int32_t)(0u - v) : (int32_t)v; return 1;
+        }
+    }
+    if (hook >= PV_HOOK_JSON_BEGINOBJECT && hook <= PV_HOOK_JSON_RAW) {
+        int w = ctx->regs[rs1];
+        if (w <= 0 || w >= ctx->w_count) { ctx->regs[rd] = 0; return 1; }
+        if (hook == PV_HOOK_JSON_BEGINOBJECT || hook == PV_HOOK_JSON_BEGINARRAY) {
+            pv_json_pre(ctx, w);
+            pv_w_byte(ctx, w, hook == PV_HOOK_JSON_BEGINOBJECT ? '{' : '[');
+            if (ctx->w_sp[w] > 0) ctx->w_scount[w * PV_JSON_DEPTH + (ctx->w_sp[w] - 1)]++;
+            if (ctx->w_sp[w] < PV_JSON_DEPTH) { int nf = w * PV_JSON_DEPTH + ctx->w_sp[w]; ctx->w_scount[nf] = 0; ctx->w_safter[nf] = 0; ctx->w_sp[w]++; }
+            return 1;
+        }
+        if (hook == PV_HOOK_JSON_ENDOBJECT || hook == PV_HOOK_JSON_ENDARRAY) {
+            if (ctx->w_sp[w] > 0) ctx->w_sp[w]--;
+            pv_w_byte(ctx, w, hook == PV_HOOK_JSON_ENDOBJECT ? '}' : ']');
+            return 1;
+        }
+        if (hook == PV_HOOK_JSON_KEY) {
+            int sp = ctx->w_sp[w];
+            if (sp > 0 && ctx->w_scount[w * PV_JSON_DEPTH + (sp - 1)] > 0) pv_w_byte(ctx, w, ',');
+            pv_w_byte(ctx, w, '"'); pv_w_json_esc(ctx, w, ctx->regs[rs2]); pv_w_byte(ctx, w, '"'); pv_w_byte(ctx, w, ':');
+            if (sp > 0) ctx->w_safter[w * PV_JSON_DEPTH + (sp - 1)] = 1;
+            return 1;
+        }
+        if (hook == PV_HOOK_JSON_STR) { pv_json_pre(ctx, w); pv_w_byte(ctx, w, '"'); pv_w_json_esc(ctx, w, ctx->regs[rs2]); pv_w_byte(ctx, w, '"'); pv_json_post(ctx, w); return 1; }
+        if (hook == PV_HOOK_JSON_INT) { pv_json_pre(ctx, w); pv_w_int(ctx, w, ctx->regs[rs2]); pv_json_post(ctx, w); return 1; }
+        if (hook == PV_HOOK_JSON_BOOL) { pv_json_pre(ctx, w); pv_w_cstr(ctx, w, ctx->regs[rs2] ? "true" : "false"); pv_json_post(ctx, w); return 1; }
+        if (hook == PV_HOOK_JSON_NULL) { pv_json_pre(ctx, w); pv_w_cstr(ctx, w, "null"); pv_json_post(ctx, w); return 1; }
+        if (hook == PV_HOOK_JSON_RAW) { pv_json_pre(ctx, w); pv_w_span(ctx, w, ctx->regs[rs2]); pv_json_post(ctx, w); return 1; }
+    }
+    if (hook >= PV_HOOK_XML_OPEN && hook <= PV_HOOK_XML_EMPTY) {
+        int w = ctx->regs[rs1];
+        if (w <= 0 || w >= ctx->w_count) { ctx->regs[rd] = 0; return 1; }
+        if (hook == PV_HOOK_XML_OPEN) { pv_w_byte(ctx, w, '<'); pv_w_span(ctx, w, ctx->regs[rs2]); return 1; }
+        if (hook == PV_HOOK_XML_ATTRNAME) { pv_w_byte(ctx, w, ' '); pv_w_span(ctx, w, ctx->regs[rs2]); pv_w_byte(ctx, w, '='); pv_w_byte(ctx, w, '"'); return 1; }
+        if (hook == PV_HOOK_XML_ATTRVALUE) { pv_w_xml_esc(ctx, w, ctx->regs[rs2]); pv_w_byte(ctx, w, '"'); return 1; }
+        if (hook == PV_HOOK_XML_OPENEND) { pv_w_byte(ctx, w, '>'); return 1; }
+        if (hook == PV_HOOK_XML_TEXT) { pv_w_xml_esc(ctx, w, ctx->regs[rs2]); return 1; }
+        if (hook == PV_HOOK_XML_CLOSE) { pv_w_byte(ctx, w, '<'); pv_w_byte(ctx, w, '/'); pv_w_span(ctx, w, ctx->regs[rs2]); pv_w_byte(ctx, w, '>'); return 1; }
+        if (hook == PV_HOOK_XML_EMPTY) { pv_w_byte(ctx, w, '/'); pv_w_byte(ctx, w, '>'); return 1; }
+    }
+    return 0;
+}
+
 /* ---- default host: Random.U32 + Queue.* (mirrors HostApi) ------------- */
 
 void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
@@ -1207,6 +1364,9 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         return;
     }
 
+    /* Utf8Writer / Utf8Reader / Json / Xml (arena-backed text/binary builders). */
+    if (pv_textio(ctx, hook, rd, rs1, rs2)) return;
+
     /* unknown host-fillable primitive: ignore (host supplies on real target) */
 }
 
@@ -1244,6 +1404,8 @@ void pv_init(pv_ctx *ctx)
     ctx->max_steps = 1000000L;
     ctx->span_count = 1;        /* handle 0 reserved as the null span */
     ctx->arena_top = 0x8000;    /* bump pointer for span results (matches PicoVM) */
+    ctx->w_count = 1;           /* Utf8Writer/Json/Xml: handle 0 reserved */
+    ctx->r_count = 1;           /* Utf8Reader: handle 0 reserved */
     ctx->host = pv_default_host;
 }
 

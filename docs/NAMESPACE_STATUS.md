@@ -22,6 +22,10 @@ where that was my only objection I implemented a representative op to prove it.
 > code-keyed call (`pv_host2` / `rt.host(code,…)`), skipping the VM. One host
 > implementation per language, zero divergence; checked by `tests/test_native_toc.py`
 > (4 runtimes from one source) and `tests/test_examples_parity.py` (`examples/*.pc`).
+> `Utf8Writer`/`Utf8Reader`/`Json`/`Xml` are now native in the C runtime too
+> (`tests/test_textio.py`), so **every pure namespace runs on all five paths**. The
+> only non-portable namespaces are the host-injected ones below (`Req`/`Resp`/
+> `Storage` read live host resources; clock/OS/entropy are external by design).
 
 (Already present: `Io`, `Json`, `Xml`, `Queue`, `Random`, `Req`, `Resp`, `Span`,
 `Storage`, `Utf8Reader`, `Utf8Writer`.)
