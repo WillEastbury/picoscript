@@ -202,8 +202,8 @@ mode" flag bundling clock+random+iteration is a possible future refinement.
 
 ### 17. Capability check before hook dispatch — *enforced (the killer rule: bindings are not ambient)*
 Every binding hook is classified into a capability class — `KERNEL`=1, `QUEUE`=2,
-`RANDOM`=4, `STORAGE`=8, `TIME`=16, `NET`=32, `CONTEXT`=64, `AUTH`=128, `ENV`=256
-(`CAP_ALL`=0x1FF) — by an identical classifier on all three runtimes (`pv_hook_cap` in
+`RANDOM`=4, `STORAGE`=8, `TIME`=16, `NET`=32, `CONTEXT`=64, `AUTH`=128, `ENV`=256,
+`CRYPTO`=512 (`CAP_ALL`=0x3FF) — by an identical classifier on all three runtimes (`pv_hook_cap` in
 `vm/picovm.c`, `hook_cap` in `picoscript_vm.py`, `hookCap` in `vm/picovm.js`). Before
 dispatch the VM checks the capsule's granted set against the hook's class and faults
 `PV_FAULT_CAPABILITY`=8 when the binding is not permitted — hook existence is no longer

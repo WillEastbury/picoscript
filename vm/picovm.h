@@ -69,9 +69,10 @@ enum {
     PV_CAP_NET     = 1 << 5,   /* Req, Resp, Http I/O (Read/Generate methods) */
     PV_CAP_CONTEXT = 1 << 6,   /* Context.* (request/connection) */
     PV_CAP_AUTH    = 1 << 7,   /* Auth.*, X509.* */
-    PV_CAP_ENV     = 1 << 8    /* Environment.*, Locale.* */
+    PV_CAP_ENV     = 1 << 8,   /* Environment.*, Locale.* */
+    PV_CAP_CRYPTO  = 1 << 9    /* Crypto.Encrypt/Decrypt (AES) */
 };
-#define PV_CAP_ALL  0x1FFu     /* default grant: every binding (host restricts to gate) */
+#define PV_CAP_ALL  0x3FFu     /* default grant: every binding (host restricts to gate) */
 
 typedef struct pv_ctx pv_ctx;
 
