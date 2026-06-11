@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""First-class toC parity: Python VM == C interpreter == toC-compiled native.
+"""First-class native parity: Python VM == C interpreter == toC-native == toJS-native.
 
-The span/string namespaces lower to first-class native C (a direct pv_host2 call,
-no bytecode VM, no string-keyed dispatch). For each construct this builds THREE
-runtimes from one source -- the Python reference VM, the portable C interpreter
-(vm/picovm_run.exe running bytecode), and a standalone native binary emitted by
-lower_to_c (emit_main) and compiled with the toolchain -- and asserts all three
-emit byte-identical output plus the known answer.
+The span/string namespaces lower to first-class native code (a direct code-keyed
+host call, no bytecode VM, no string dispatch) on BOTH the toC and toJS backends.
+For each construct this builds FOUR runtimes from one source -- the Python reference
+VM, the portable C interpreter (vm/picovm_run.exe running bytecode), a standalone
+native binary emitted by lower_to_c, and an emitted JS module (lower_to_js) whose
+runtime delegates to the shared JS host -- and asserts all four emit byte-identical
+output plus the known answer.
 """
 
 import os
@@ -20,7 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from picoscript_cfront import compile_c  # noqa: E402
-from picoscript_il import lower_to_bytecode_safe, lower_to_c  # noqa: E402
+from picoscript_il import lower_to_bytecode_safe, lower_to_c, lower_to_js  # noqa: E402
 from picoscript_vm import PicoVM  # noqa: E402
 
 VM_DIR = os.path.join(ROOT, "vm")
@@ -64,13 +65,32 @@ def c_native_out(il, slot):
     return parse_out_bytes(out.stdout)
 
 
+def js_native_out(il, slot):
+    # Emitted JS resolves picovm.js (copied into BUILD) so its runtime delegates to
+    # the shared JS host -> full namespace parity, no VM loop.
+    jsfile = os.path.join(BUILD, f"{slot}.js")
+    with open(jsfile, "w", encoding="utf-8") as f:
+        f.write(lower_to_js(il, module_name=f"pico_{slot}"))
+    runner = os.path.join(BUILD, f"run_{slot}.js")
+    with open(runner, "w", encoding="utf-8") as f:
+        f.write(f"const p = require('./{slot}.js');\n"
+                "const rt = p.run();\n"
+                "console.log('OUT ' + rt.output.map(b => b.toString(16).padStart(2, '0')).join(' '));\n")
+    out = subprocess.run(["node", runner], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    return parse_out_bytes(out.stdout)
+
+
 def check(prog, expected, slot):
-    py = b"".join(PicoVM().run(lower_to_bytecode_safe(compile_c(prog))).output)
-    ci = c_interp_out(lower_to_bytecode_safe(compile_c(prog)))
+    words = lower_to_bytecode_safe(compile_c(prog))
+    py = b"".join(PicoVM().run(words).output)
+    ci = c_interp_out(words)
     cn = c_native_out(compile_c(prog), slot)
+    jn = js_native_out(compile_c(prog), slot)
     assert py == expected, f"[{slot}] Python {py!r} != {expected!r}"
     assert ci == expected, f"[{slot}] C-interp {ci!r} != {expected!r}"
     assert cn == expected, f"[{slot}] toC-native {cn!r} != {expected!r}"
+    assert jn == expected, f"[{slot}] toJS-native {jn!r} != {expected!r}"
 
 
 def setbytes(base, data):
@@ -88,6 +108,10 @@ def main():
     if os.path.exists(BUILD):
         shutil.rmtree(BUILD)
     os.makedirs(BUILD)
+    for dep in ("picovm.js", "pico_hooks.js", "picostore.js"):
+        src = os.path.join(VM_DIR, dep)
+        if os.path.exists(src):
+            shutil.copy(src, os.path.join(BUILD, dep))
     try:
         # String.* core.
         s = (setbytes(1000, b"abc") + setbytes(1003, b"bc") + setbytes(1005, b"XY") +
@@ -180,8 +204,9 @@ def main():
         check(tpl_prog(b"{{#each xs}}[{{.}}]{{/each}}", b"xs.0=1\nxs.1=2\nxs.2=3"),
               b"[1][2][3]", "tpl_each_scalar")
 
-        print("PASS first-class toC: Python VM == C interpreter == toC-compiled native, byte-exact "
-              "-- Span/String/Number/Maths/Compress/Html/Http/Crypto/Template (compiled programs skip the bytecode VM)")
+        print("PASS first-class native: Python VM == C interpreter == toC-compiled == toJS-compiled, "
+              "byte-exact -- Span/String/Number/Maths/Compress/Html/Http/Crypto/Template "
+              "(compiled C and JS both skip the bytecode VM)")
     finally:
         shutil.rmtree(BUILD, ignore_errors=True)
 
