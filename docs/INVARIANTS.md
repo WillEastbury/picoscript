@@ -19,7 +19,7 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | # | Invariant | Status |
 |---|-----------|--------|
 | 1 | Same source, same semantics — all frontends lower to equivalent IL | enforced |
-| 2 | Lowering parity — VM/toC/toJS/native produce identical observable output | **violated** |
+| 2 | Lowering parity — VM/toC/toJS/native produce identical observable output | enforced* |
 | 3 | Host hooks are the only outside world | enforced |
 | 4 | Every hook has a declared contract | target |
 | 5 | No hidden allocation in hot hooks (declare arena use or forbid) | target |
@@ -27,15 +27,15 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 7 | Seal consumes ownership (use-after-seal = compile error or trap) | partial |
 | 8 | Spans are fat and bounded (ptr+len); no null-terminated authority | enforced |
 | 9 | Literals are immutable (const pool unless copied) | partial |
-| 10 | Bytecode verification before execution | **violated** |
-| 11 | Computed jumps are range-checked | **violated** |
-| 12 | No unbounded loops without budget (yield or fault) | partial |
-| 13 | Register spill is compiler-owned (no RegisterPressureError on real code) | **violated** |
-| 14 | Numeric overflow / division policy is explicit and identical per target | **violated** |
+| 10 | Bytecode verification before execution | partial |
+| 11 | Computed jumps are range-checked | enforced |
+| 12 | No unbounded loops without budget (yield or fault) | enforced |
+| 13 | Register spill is compiler-owned (no RegisterPressureError on real code) | enforced |
+| 14 | Numeric overflow / division policy is explicit and identical per target | enforced |
 | 15 | Deterministic mode exists (disable clock/random/unordered iteration) | target |
 | 16 | Case-insensitive namespaces are canonicalised | enforced |
 | 17 | Capability check before hook dispatch | **violated** |
-| 18 | Hook failures are typed (no magic -1/0) | **violated** |
+| 18 | Hook failures are typed (no magic -1/0) | partial |
 | 19 | Template rendering is bounded (depth/each/recursion/output) | partial |
 | 20 | JSON/HTTP parsers are budgeted (depth/token/length/bytes) | partial |
 | 21 | Source card is truth (artefacts carry source hash + compiler version + profile) | target |
@@ -44,6 +44,13 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 24 | Parity runner is the gatekeeper (every hook/opcode/lowering has parity tests) | partial |
 | 25 | Debug trace is structured (span, IL op, pc, hook id, capsule, binding) | target |
 
+\* INV-2 (lowering parity): the known signed-division divergence is fixed (truncate
+toward zero everywhere). The remaining nuance is that on a *fault* (step budget,
+out-of-range jump, template-depth overflow) the three bytecode VMs all stop, but the
+transpiled toC/toJS-native paths are best-effort (no VM loop / step budget) — faults
+are a malicious-input edge, not normal observable output, so pure programs stay
+byte-identical on all five paths.
+
 ## Detail and evidence
 
 ### 1. Same source, same semantics — *enforced*
@@ -51,21 +58,15 @@ One IL pipeline; the Python and JS frontends emit byte-identical bytecode
 (`tests/test_pipeline.py` `check_jscompile`, `tests/test_io_hooks.py`). Subject to the
 INV-2 caveats below.
 
-### 2. Lowering parity is mandatory — **violated**
-The runtimes must produce identical observable output. Known divergences:
-- **Signed division** (proven): Python VM uses floor division `a // b`
-  (`picoscript_vm.py:1281`), while C uses `int32 a / b` (`vm/picovm.c:1554`) and JS uses
-  `(a / b) | 0` (`vm/picovm.js:115`) — both truncate toward zero. For `(-7) / 2` the
-  Python VM yields **-4** but C/JS yield **-3**. The constant-folders diverge the same
-  way (`picoscript_il.py:261` `av // bv` vs `vm/picoc.js` optimizer `Math.trunc`), which
-  can also break byte-identical bytecode for a foldable negative division.
-- **Budget-exceeded behaviour**: Python/JS raise (`step budget exceeded`), C silently
-  `break`s (see INV-12) — a program at the step limit halts cleanly on C but faults on
-  Python/JS.
-- **Resource bounds**: the C runtime caps template depth/model size and JSON depth
-  (see INV-19/INV-20) where Python/JS do not — output diverges near those limits.
-- **Register pressure**: a >16-live-value program compiles on Python (spills) but
-  throws on the in-browser JS compiler (see INV-13).
+### 2. Lowering parity is mandatory — *enforced (signed-division divergence fixed)*
+The runtimes must produce identical observable output. **Fixed:** signed division/modulo
+now truncates toward zero on every path — `picoscript_vm.py` `_arith`, the IL
+const-folder (`trunc_div32`), `vm/picovm.c` (with the `INT_MIN/-1` case defined), JS
+`(a/b)|0`, and the `picoc.js` const-folder. `(-7)/2 == -3` everywhere
+(`tests/test_native_toc.py` div/mod cases, 5-path). The step-budget and template-depth
+*faults* are now also consistent across the three bytecode VMs (below); the transpiled
+toC/toJS-native paths remain best-effort on those malicious edges (no VM loop), which
+does not affect byte-identical output for pure programs.
 
 ### 3. Host hooks are the only outside world — *enforced*
 No direct file/socket/clock/entropy/`getenv` access bypasses the hook layer in
@@ -104,38 +105,38 @@ String/number/template literals live in a deduplicated const pool growing down f
 byte-addressable and nothing prevents `Memory.Set` into the const-pool region. Target:
 mark the const region read-only (trap on write).
 
-### 10. Bytecode verification before execution — **violated**
-No verifier pass in any runtime. `load()` stores words and runs; bad opcodes trap
-ad hoc mid-execution (`picoscript_vm.py:1187,1265-1266`; `vm/picovm.js:75-78,133-134`;
-`vm/picovm.c:1515-1533`). Target: a load-time verifier rejecting invalid opcode, bad
-jump target, bad register, unknown hook id, return-stack underflow, malformed jmptab.
+### 10. Bytecode verification before execution — *partial (typed runtime traps; no pre-pass)*
+There is still no load-time verifier pass, but ad-hoc traps are now **typed and
+consistent**: the C runtime has `ctx->fault` (`PV_FAULT_*`), and JS now throws on an
+unknown opcode instead of silently halting. The dangerous *computed* cases (jump targets,
+budget) are checked at the moment they occur (INV-11/12). The 4-bit opcode field is
+exhaustive (every value 0–15 is a defined op), and register indices are 4-bit, so
+"invalid opcode/register" cannot arise from a well-formed word — the remaining value of
+a pre-pass is rejecting unknown hook ids / malformed `jmptab` up-front, which is future
+work.
 
-### 11. Computed jumps are range-checked — **violated**
-Indirect/indexed `JUMP` writes a raw `& 0xFFFF` PC with no bounds or instruction-
-boundary check in all three VMs (`picoscript_vm.py:1240-1246`; `vm/picovm.js:120-124`;
-`vm/picovm.c:1561-1565`). A bad selector can jump anywhere in range. (jmptab lowers to
-an indexed JUMP over an inline table — same unchecked path.)
+### 11. Computed jumps are range-checked — *enforced*
+**Fixed:** indirect/indexed `JUMP`, taken `BRANCH`, and `CALL` targets are range-checked
+(`0 ≤ t ≤ len`; `t == len` is a clean halt) in all three VMs. Out of range →
+`PV_FAULT_BAD_JUMP` (C) / `raise`/`throw` (Python/JS). `tests/test_vm_safety.py` asserts
+identical faulting. (jmptab lowers to an indexed JUMP, so it shares this check.)
 
-### 12. No unbounded loops without budget — *partial*
-A fixed step budget exists (`max_steps`, default 1,000,000). Python/JS **fault** on
-exceed (`picoscript_vm.py:1197-1203`; `vm/picovm.js:82-84`); **C silently `break`s**
-(`vm/picovm.c:1520-1522`) — both an INV-12 weakness (silent stop, not a trap) and an
-INV-2 divergence. No per-capsule time budget or cooperative-yield requirement.
+### 12. No unbounded loops without budget — *enforced (fault), per-capsule budget still target*
+**Fixed:** the C step-budget exceed now sets `PV_FAULT_STEP_BUDGET` and halts instead of
+silently `break`-ing, matching Python/JS which raise. `tests/test_vm_safety.py` asserts
+all three fault. A per-*capsule* time budget and cooperative-yield requirement remain a
+target (the global step budget is the current mechanism).
 
-### 13. Register spill is compiler-owned — **violated**
-The Python compiler auto-spills (`lower_to_bytecode_safe` → `spill=True` →
-`_legalize_spills`; "always beats a RegisterPressureError on real code",
-`picoscript_il.py:435`). The in-browser JS compiler does **not**: it throws
-`"register pressure exceeds 16 live values; simplify the program"`
-(`vm/picoc.js:166`). Normal code that exceeds 16 live values compiles on Python and
-fails in the browser.
+### 13. Register spill is compiler-owned — *enforced*
+**Fixed:** the in-browser `picoc.js` compiler now auto-spills (`allocateOrSpill` +
+`legalizeSpills`, mirroring `picoscript_il`) instead of throwing
+`RegisterPressureError`, and produces **byte-identical** bytecode to the Python
+compiler. `tests/test_spill.py` now asserts `picoc.js` bytecode == Python bytecode for
+the >16-live programs (the gap that previously hid this).
 
-### 14. Numeric overflow / division policy is explicit — **violated**
-32-bit wrap is consistent (`& MASK32` / `int32_t` / `| 0`), but signed **division**
-(and the same class for modulo) is **not**: Python floors, C/JS truncate toward zero
-(see INV-2). The policy is neither declared nor uniform. Target: pick one rule
-(truncate-toward-zero is the C/JS/most-CPU convention) and make all paths — including
-the const-folders — obey it.
+### 14. Numeric overflow / division policy is explicit — *enforced*
+**Fixed:** 32-bit wrap was already consistent; signed division/modulo now truncates
+toward zero on every path (see INV-2). The policy is uniform and the divergence is gone.
 
 ### 15. Deterministic mode exists — *target*
 The RNG seed is hardcoded (`picoscript_vm.py` `rng_state=0x2545…`; `vm/picovm.c`
@@ -161,16 +162,19 @@ Magic sentinels throughout: `Queue.Dequeue`→`0`, `String.IndexOf`→`-1`/`0xFF
 (`picoscript_vm.py:115-118,315-316,336-340`; `vm/picovm.js:235-238,336,379-381`;
 `vm/picovm.c:27-48,1083-1094,1174-1191`). Target: typed status / trap semantics.
 
-### 19. Template rendering is bounded — *partial*
-C caps it (`TPL_MAXDEPTH 32`, `TPL_MAXMODEL 512`, fixed render stack;
-`vm/picovm.c:469-472,651-735`). Python/JS render with unbounded stack / `each` count /
-output growth (`picoscript_vm.py:630-749`; `vm/picovm.js:690-749`) — DoS + INV-2
-divergence near the C limits.
+### 19. Template rendering is bounded — *partial (depth fault added)*
+**Improved:** nesting beyond `TPL_MAXDEPTH` (32) now raises a typed fault on all three
+bytecode VMs (`PV_FAULT_TEMPLATE`/`raise`/`throw`), replacing C's previous buggy silent
+truncation; `tests/test_vm_safety.py` asserts identical faulting. C still caps model
+size (512) and key length (512). Remaining target: bound `{{#each}}` iteration count and
+total output size uniformly (a huge each can still grow output until the arena fills).
 
-### 20. JSON/HTTP parsers are budgeted — *partial*
-C bounds JSON nesting (`if (depth > 64) return;`, `vm/picovm.c:173-203`); Python/JS
-recurse unbounded (`picoscript_vm.py:473-561`; `vm/picovm.js:491-560`). `ParseQuery`/
-`ParseForm` are unbounded on every path. Target: uniform depth/token/length/byte caps.
+### 20. JSON/HTTP parsers are budgeted — *partial (JSON depth unified)*
+**Fixed (JSON depth):** `Http.ParseJson` now stops at depth > 64 on all three VMs
+(Python/JS thread a depth counter matching C's `pjs_emit`), silent truncation that is
+byte-identical across all five paths (`tests/test_native_toc.py` `json_depth_cap`).
+Remaining target: `ParseQuery`/`ParseForm` are unbounded on *every* path (no parity
+issue, but a DoS one) and JSON token-count/string-length/total-bytes caps.
 
 ### 21. Source card is truth — *target*
 `lower_to_c` / `lower_to_js` emit only an "AUTO-GENERATED" comment

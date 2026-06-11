@@ -112,7 +112,9 @@
   }
 
   // ── register allocation (loop-aware linear scan) ──────────────────────────
-  function allocate(insts) {
+  // Mirrors picoscript_il.allocate. `spill` reserves 3 shuttle regs (usable=13) and
+  // records overflow vregs in `spilled` instead of throwing -- the spill-decision pass.
+  function allocate(insts, spill) {
     var first = {}, last = {}, order = [], vregs = {};
     insts.forEach(function (ins, i) {
       operandVRegs(ins).forEach(function (v) {
@@ -140,10 +142,11 @@
       if (vregs[vid].pinned || spansCall) { first[vid] = 0; last[vid] = n; }
     });
 
-    var usable = 16;
+    var usable = spill ? 13 : 16;   // NUM_REGS-3 shuttle headroom during spill decision
     var free = []; for (var k = 0; k < usable; k++) free.push(k);
     var active = [];           // [endIndex, vid]
     var mapping = {};
+    var spilled = {}, nextSlot = 0;
     function expire(at) {
       var keep = [];
       active.forEach(function (e) {
@@ -162,11 +165,63 @@
         mapping[vid] = reg;
         active.push([last[vid], vid]);
         active.sort(function (a, b) { return a[0] - b[0]; });
+      } else if (spill) {
+        spilled[vid] = nextSlot++;
       } else {
         throw new Error("register pressure exceeds 16 live values; simplify the program");
       }
     });
-    return mapping;
+    return { mapping: mapping, spilled: spilled };
+  }
+
+  // ── automatic register spilling (mirrors picoscript_il._legalize_spills) ───
+  // Ops whose `dst` is a written destination, and ops that read `dst` as input.
+  var DST_WRITTEN = { const: 1, mov: 1, add: 1, sub: 1, mul: 1, div: 1, host: 1, load: 1, inc: 1 };
+  var DST_READ_OPS = { cmpbr: 1, inc: 1 };
+  var SPILL_CARD_BASE = 0xF000;   // reserved scratch-card region: one card per spilled vreg
+
+  function legalizeSpills(insts, spilledSet) {
+    var vids = Object.keys(spilledSet);
+    if (vids.length === 0) return insts;
+    // Home scratch card per spilled vreg, assigned in ascending vreg-id order.
+    var sorted = vids.map(Number).sort(function (a, b) { return a - b; });
+    var slot = {};
+    sorted.forEach(function (vid, i) { slot[vid] = SPILL_CARD_BASE + i; });
+    function sp(x) { return isVReg(x) && (x.id in spilledSet); }
+    function clone(ins, over) { var c = {}; for (var k in ins) c[k] = ins[k]; for (var k2 in over) c[k2] = over[k2]; return c; }
+    var out = [];
+    insts.forEach(function (ins) {
+      if (!operandVRegs(ins).some(sp)) { out.push(ins); return; }
+      var newA = ins.a, newB = ins.b, newArgs = (ins.args || []).slice();
+      if (sp(ins.a)) { var sa = new VReg("spill"); out.push(Inst("load", { dst: sa, imm: slot[ins.a.id] })); newA = sa; }
+      if (sp(ins.b)) { var sb = new VReg("spill"); out.push(Inst("load", { dst: sb, imm: slot[ins.b.id] })); newB = sb; }
+      for (var i = 0; i < newArgs.length; i++) {
+        if (sp(newArgs[i])) { var sg = new VReg("spill"); out.push(Inst("load", { dst: sg, imm: slot[newArgs[i].id] })); newArgs[i] = sg; }
+      }
+      var newDst = ins.dst, storeBack = null;
+      if (sp(ins.dst)) {
+        var sd = new VReg("spill");
+        if (DST_READ_OPS[ins.op]) out.push(Inst("load", { dst: sd, imm: slot[ins.dst.id] }));   // dst read (cmpbr/inc)
+        newDst = sd;
+        if (DST_WRITTEN[ins.op]) storeBack = [sd, slot[ins.dst.id]];                            // dst written -> store back
+      }
+      out.push(clone(ins, { dst: newDst, a: newA, b: newB, args: newArgs }));
+      if (storeBack) out.push(Inst("save", { a: storeBack[0], imm: storeBack[1] }));
+    });
+    return out;
+  }
+
+  // Allocate; on >16 live values, spill the overflow to scratch cards and re-allocate
+  // (a working slow compile beats a hard RegisterPressureError on real code -- INV-13).
+  function allocateOrSpill(insts) {
+    try {
+      return { insts: insts, mapping: allocate(insts, false).mapping };
+    } catch (e) {
+      if (!/register pressure/.test(String(e && e.message))) throw e;
+      var meta = allocate(insts, true);
+      var legal = legalizeSpills(insts, meta.spilled);
+      return { insts: legal, mapping: allocate(legal, false).mapping };
+    }
   }
 
   function phys(mapping, v) {
@@ -223,7 +278,9 @@
 
   function lowerToBytecode(insts, opt, outVars) {
     if (opt !== false) insts = optimize(insts);
-    var mapping = allocate(insts);
+    var alloc = allocateOrSpill(insts);   // auto-spills on >16 live values (INV-13)
+    insts = alloc.insts;
+    var mapping = alloc.mapping;
     if (outVars) {
       insts.forEach(function (ins) {
         operandVRegs(ins).forEach(function (v) {

@@ -79,6 +79,13 @@ def js_native_out(il, slot):
     return parse_out_bytes(out.stdout)
 
 
+def js_compile(src, lang="c"):
+    r = subprocess.run(["node", os.path.join(VM_DIR, "picoc_compile.js"), lang],
+                       input=src, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return [int(w, 16) for w in r.stdout.split()]
+
+
 def check(prog, expected, slot):
     words = lower_to_bytecode_safe(compile_c(prog))
     runs = {
@@ -90,6 +97,10 @@ def check(prog, expected, slot):
     }
     for label, got in runs.items():
         assert got == expected, f"[{slot}] {label} {got!r} != {expected!r}"
+    # The in-browser JS compiler (picoc.js) must ALSO auto-spill byte-identically to
+    # Python -- otherwise a >16-live program compiles on the server but throws in the
+    # browser (INV-13). This is the assertion that the JS spill port preserves parity.
+    assert words == js_compile(prog), f"[{slot}] picoc.js spill bytecode != Python bytecode"
 
 
 def main():
@@ -120,7 +131,8 @@ def main():
         check(cond, bytes([14]), "cond_spill")
 
         print("PASS automatic spilling: programs exceeding 16 live values compile via scratch-card "
-              "spilling and run byte-identically on all five runtimes (sum-of-20, loop, conditional)")
+              "spilling and run byte-identically on all five runtimes (sum-of-20, loop, conditional); "
+              "the in-browser picoc.js compiler auto-spills to the same bytecode (INV-13)")
     finally:
         shutil.rmtree(BUILD, ignore_errors=True)
 
