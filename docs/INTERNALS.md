@@ -22,7 +22,9 @@ parser, a lowering rule, or a host hook.
 
 The important invariant is not "there are many compilers"; it is "there is one
 semantic path." Equivalent programs should converge to the same PicoIL shape and,
-for the Python/English/BASIC family, byte-for-byte identical bytecode.
+for the Python/English/BASIC family, byte-for-byte identical bytecode. The full set
+of compiler/runtime/security invariants — and their current compliance status — lives
+in [`INVARIANTS.md`](INVARIANTS.md).
 
 ## 1. The 16-opcode ISA
 
