@@ -548,6 +548,13 @@ HOST_HOOK_CODES = {
     # Template engine (0x7A-0x7B): AOT-compiled-at-save, holes rendered at run
     ("Template", "Compile"):    0x7A,
     ("Template", "Render"):     0x7B,
+    # Arena scopes (0x7C-0x7E): bump-arena mark / rewind / reset for request-scoped
+    # allocation -- Mark() snapshots the arena, Rewind(mark) reclaims everything since,
+    # Reset() drops all arena spans back to the base. Frees the span/string namespaces
+    # from leaking across a long-running handler loop.
+    ("Arena", "Mark"):          0x7C,
+    ("Arena", "Rewind"):        0x7D,
+    ("Arena", "Reset"):         0x7E,
     # Utf8Writer (0x21-0x27) -- arena-backed string/byte writer
     ("Utf8Writer", "New"):      0x21,
     ("Utf8Writer", "Byte"):     0x22,

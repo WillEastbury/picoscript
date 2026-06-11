@@ -820,6 +820,25 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         return;
     }
 
+    /* ---- Arena scopes: Mark / Rewind / Reset the bump arena ----------- */
+    if (hook == PV_HOOK_ARENA_MARK) {
+        ctx->regs[rd] = (int32_t)((((uint32_t)ctx->span_count & 0x7FF) << 20) | (ctx->arena_top & 0xFFFFF));
+        return;
+    }
+    if (hook == PV_HOOK_ARENA_REWIND) {
+        uint32_t m = (uint32_t)ctx->regs[rs1];
+        int cnt = (int)((m >> 20) & 0x7FF);
+        ctx->arena_top = m & 0xFFFFF;
+        if (cnt < 1) cnt = 1;
+        if (cnt < ctx->span_count) ctx->span_count = cnt;
+        return;
+    }
+    if (hook == PV_HOOK_ARENA_RESET) {
+        ctx->arena_top = 0x8000;
+        ctx->span_count = 1;
+        return;
+    }
+
     /* ---- String.* (spans in, span/int out) --------------------------- */
     if (hook == PV_HOOK_STRING_LENGTH) {
         ctx->regs[rd] = pv_span_n(ctx, ctx->regs[rs1]);

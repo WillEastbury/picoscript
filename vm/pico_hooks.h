@@ -128,6 +128,9 @@
 #define PV_HOOK_XML_EMPTY                        0x79
 #define PV_HOOK_TEMPLATE_COMPILE                 0x7A
 #define PV_HOOK_TEMPLATE_RENDER                  0x7B
+#define PV_HOOK_ARENA_MARK                       0x7C
+#define PV_HOOK_ARENA_REWIND                     0x7D
+#define PV_HOOK_ARENA_RESET                      0x7E
 #define PV_HOOK_STRING_CONCAT                    0x80
 #define PV_HOOK_STRING_LENGTH                    0x81
 #define PV_HOOK_STRING_SUBSTRING                 0x82

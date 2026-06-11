@@ -69,6 +69,7 @@
     this.responseGraph = [];
     this.responseSealed = false;
     this.responseEnded = false;
+    this._handlerMark = null;   // per-request arena scope (auto rewind on each request)
   };
 
   PicoVM.prototype.load = function (words) {
@@ -208,6 +209,18 @@
       var idx = this.regs[rs2] | 0;
       this.regs[rd] = (idx >= 0 && idx < sg.len) ? this.mem[sg.ptr + idx] : 0; return;
     }
+    // ---- Arena scopes: Mark / Rewind / Reset the bump arena ----------------
+    if (name === "Arena.Mark") {
+      this.regs[rd] = ((((this.spans.length & 0x7FF) << 20) | (this.arenaTop & 0xFFFFF)) | 0); return;
+    }
+    if (name === "Arena.Rewind") {
+      var mk = this.regs[rs1] >>> 0;
+      this.arenaTop = mk & 0xFFFFF;
+      var ac = (mk >>> 20) & 0x7FF; if (ac < 1) ac = 1;
+      if (ac < this.spans.length) this.spans.length = ac;
+      return;
+    }
+    if (name === "Arena.Reset") { this.arenaTop = 0x8000; this.spans = [null]; return; }
     // ---- EL0-facing PIOS request/response hooks ---------------------------
     if (name.indexOf("Req.") === 0) {
       if (this._req(name.slice(4), rd, rs1, rs2)) return;
@@ -730,6 +743,13 @@
   // ---- PIOS Req.*/Resp.* simulated host backend --------------------------
   PicoVM.prototype.setRequestContext = function (ctx) {
     ctx = ctx || {};
+    // Automatic per-request arena scope: reclaim the previous request's spans,
+    // then re-take the post-setup base (mirrors picoscript_vm.install_request_context).
+    if (this._handlerMark) {
+      this.arenaTop = this._handlerMark[0];
+      if (this._handlerMark[1] < this.spans.length) this.spans.length = this._handlerMark[1];
+    }
+    this._handlerMark = [this.arenaTop, this.spans.length];
     var headers = ctx.headers || {}, body = ctx.body || [], hdr = {};
     Object.keys(headers).forEach(function (k) {
       hdr[String(k).toLowerCase()] = {
@@ -751,6 +771,7 @@
     this.responseEnded = false;
   };
   PicoVM.prototype.installRequestContext = PicoVM.prototype.setRequestContext;
+  PicoVM.prototype.setArenaBase = function () { this._handlerMark = [this.arenaTop, this.spans.length]; };
   PicoVM.prototype.getResponseGraph = function () {
     return this.responseGraph.map(function (d) {
       return { kind: d.kind, subtype: d.subtype, payload: d.payload };

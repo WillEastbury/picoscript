@@ -80,6 +80,11 @@ class HostApi:
         self.response_graph: List[dict] = []
         self.response_sealed = False
         self.response_ended = False
+        # Automatic per-request arena scope: snapshot of (arena_top, span_count)
+        # taken at the first handler invocation; each subsequent request rewinds
+        # to it so a reused server VM never leaks (set_arena_base() can move it
+        # forward after one-time setup such as Template.Compile).
+        self._handler_mark: Optional[tuple] = None
 
     @property
     def store(self):
@@ -189,6 +194,24 @@ class HostApi:
             idx = _sx32(vm.regs[rs2])
             vm.regs[rd] = vm.mem[s["ptr"] + idx] if 0 <= idx < s["len"] else 0
             return
+        # Arena scopes: Mark/Rewind/Reset the bump arena (request-scoped allocation).
+        if ns == "Arena":
+            if method == "Mark":
+                vm.regs[rd] = ((len(vm.spans) & 0x7FF) << 20) | (vm.arena_top & 0xFFFFF)
+                return
+            if method == "Rewind":
+                m = vm.regs[rs1] & MASK32
+                vm.arena_top = m & 0xFFFFF
+                cnt = (m >> 20) & 0x7FF
+                if cnt < 1:
+                    cnt = 1
+                if cnt < len(vm.spans):
+                    del vm.spans[cnt:]
+                return
+            if method == "Reset":
+                vm.arena_top = 0x8000
+                vm.spans = [None]
+                return
         # EL0-facing PIOS request/response hooks over a simulated in-VM backend.
         if ns == "Req":
             if self._req(vm, method, rd, rs1, rs2):
@@ -692,6 +715,15 @@ class HostApi:
         String fields are materialized as VM spans; Req.* only reads this installed
         context (I4), and the response graph is reset to exactly one builder (I2).
         """
+        # Automatic per-request arena scope: reclaim the previous request's spans,
+        # then (re)take the post-setup base before building this request -- so the
+        # server loop never relies on a human to clean up.
+        if self._handler_mark is not None:
+            top, cnt = self._handler_mark
+            vm.arena_top = top
+            if cnt < len(vm.spans):
+                del vm.spans[cnt:]
+        self._handler_mark = (vm.arena_top, len(vm.spans))
         headers = headers or {}
         body = body or []
         hdr = {}
@@ -713,6 +745,15 @@ class HostApi:
         self.response_ended = False
 
     set_request_context = install_request_context
+
+    def set_arena_base(self, vm: "PicoVM"):
+        """Commit the current arena top/span count as the per-request base.
+
+        Call after one-time setup (e.g. Template.Compile at startup) so that the
+        automatic per-request rewind in install_request_context preserves that
+        setup while still reclaiming each handler's request-scoped allocations.
+        """
+        self._handler_mark = (vm.arena_top, len(vm.spans))
 
     def get_response_graph(self) -> List[dict]:
         """Return a copy of the simulated response descriptor graph."""
