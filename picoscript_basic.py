@@ -123,6 +123,7 @@ class Tok:
     kind: str          # num,id,kw,str,op,nl,eof
     value: str
     line: int
+    pos: int = -1      # INV-25: source byte offset of the token start
 
 
 def tokenize(src: str) -> List[Tok]:
@@ -130,8 +131,9 @@ def tokenize(src: str) -> List[Tok]:
     i, n, line = 0, len(src), 1
     while i < n:
         c = src[i]
+        start = i                                       # INV-25: token start offset
         if c == "\n":
-            toks.append(Tok("nl", "\\n", line)); line += 1; i += 1; continue
+            toks.append(Tok("nl", "\\n", line, start)); line += 1; i += 1; continue
         if c in " \t\r":
             i += 1; continue
         if c == "'" or (c == "/" and i + 1 < n and src[i + 1] == "/"):
@@ -142,7 +144,7 @@ def tokenize(src: str) -> List[Tok]:
             j = i + 1; buf = []
             while j < n and src[j] != '"':
                 buf.append(src[j]); j += 1
-            toks.append(Tok("str", "".join(buf), line)); i = j + 1; continue
+            toks.append(Tok("str", "".join(buf), line, start)); i = j + 1; continue
         if c.isdigit():
             j = i
             if c == "0" and j + 1 < n and src[j + 1] in "xX":
@@ -152,7 +154,7 @@ def tokenize(src: str) -> List[Tok]:
             else:
                 while j < n and src[j].isdigit():
                     j += 1
-            toks.append(Tok("num", src[i:j], line)); i = j; continue
+            toks.append(Tok("num", src[i:j], line, start)); i = j; continue
         if c.isalpha() or c == "_":
             j = i
             while j < n and (src[j].isalnum() or src[j] == "_"):
@@ -162,16 +164,16 @@ def tokenize(src: str) -> List[Tok]:
             word = src[i:j]
             up = word.upper()
             toks.append(Tok("kw" if up in KEYWORDS else "id",
-                            up if up in KEYWORDS else word, line))
+                            up if up in KEYWORDS else word, line, start))
             i = j; continue
         two = src[i:i + 2]
         if two in _TWO:
-            toks.append(Tok("op", two, line)); i += 2; continue
+            toks.append(Tok("op", two, line, start)); i += 2; continue
         if c in _ONE:
-            toks.append(Tok("op", c, line)); i += 1; continue
+            toks.append(Tok("op", c, line, start)); i += 1; continue
         raise SyntaxError(f"line {line}: unexpected char {c!r}")
-    toks.append(Tok("nl", "\\n", line))
-    toks.append(Tok("eof", "", line))
+    toks.append(Tok("nl", "\\n", line, n))
+    toks.append(Tok("eof", "", line, n))
     return toks
 
 
@@ -316,6 +318,17 @@ class Parser:
         return stmts
 
     def parse_stmt(self) -> object:
+        # INV-25: stamp every statement with its first token's source offset.
+        start = self.peek().pos
+        node = self._parse_stmt()
+        if node is not None:
+            try:
+                node.pos = start
+            except (AttributeError, TypeError):
+                pass
+        return node
+
+    def _parse_stmt(self) -> object:
         t = self.peek()
         # label:  (id followed by ':')
         if t.kind == "id" and self.peek2().kind == "op" and self.peek2().value == ":":
@@ -657,6 +670,9 @@ class Lowerer:
         return self.b.insts
 
     def stmt(self, s):
+        p = getattr(s, "pos", -1)
+        if p is not None and p >= 0:
+            self.b.cur_pos = p           # INV-25: attribute emitted IL to this statement
         if isinstance(s, Let):
             self.assign_to(self.var(s.name), s.value)
         elif isinstance(s, Dim):

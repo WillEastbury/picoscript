@@ -25,6 +25,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from picoscript_cfront import compile_c                       # noqa: E402
+from picoscript_basic import compile_basic                    # noqa: E402
+from picoscript_python import compile_python                  # noqa: E402
+from picoscript_english import compile_english                # noqa: E402
 from picoscript_il import lower_to_bytecode_with_debug, symbolize  # noqa: E402
 from picoscript_vm import PicoVM, PicoFault                   # noqa: E402
 
@@ -66,6 +69,22 @@ const a = process.argv.slice(2);
 const r = P.compileWithDebug(src, 'c');
 console.log(JSON.stringify(P.symbolize(%d, %d, %d, r.debug, src)));
 """ % (code, pc, detail))
+
+
+def js_words_debug_lang(src, lang):
+    return js(src, """
+const r = P.compileWithDebug(src, '%s');
+const keys = Object.keys(r.debug).map(Number).sort((a,b)=>a-b);
+const dbg = keys.map(pc => { const x = r.debug[pc]; return [pc, x[0], x[1], x[2], x[3]]; });
+console.log(JSON.stringify({ words: r.words.map(w=>w>>>0), debug: dbg }));
+""" % lang)
+
+
+def js_symbolize_lang(src, lang, code, pc, detail):
+    return js(src, """
+const r = P.compileWithDebug(src, '%s');
+console.log(JSON.stringify(P.symbolize(%d, %d, %d, r.debug, src)));
+""" % (lang, code, pc, detail))
 
 
 def norm_debug(debug):
@@ -151,12 +170,41 @@ def test_const_write_fault_symbolicates():
     assert rec["line"] == 2, rec
 
 
+# Every frontend lowers to the same IL, so the debug table + symbolize() must be
+# byte-identical Python<->JS for all four dialects, and the source offset must
+# resolve to the right line (the C frontend gives line+column; the BASIC/Python/
+# English frontends attribute to the statement's line).
+FRONTENDS = [
+    ("c", compile_c, 'int x = 5;\nIo.WriteByte(x);\n', 2),
+    ("basic", compile_basic, 'LET x = 5\nIo.WriteByte(x)\n', 2),
+    ("python", compile_python, 'x = 5\nIo.WriteByte(x)\n', 2),
+    ("english", compile_english, 'Set x to 5.\nIo.WriteByte(x).\n', 2),
+]
+
+
+def test_all_frontends_debug_parity():
+    for lang, comp, src, expect_line in FRONTENDS:
+        words, debug = lower_to_bytecode_with_debug(comp(src))
+        j = js_words_debug_lang(src, lang)
+        assert [w & 0xFFFFFFFF for w in words] == j["words"], f"{lang}: words diverge"
+        assert norm_debug(debug) == j["debug"], f"{lang}: debug table diverges"
+        # The first host op symbolicates to the expected statement line on both runtimes.
+        host_pcs = [pc for pc in sorted(debug) if debug[pc][1] == "host"]
+        assert host_pcs, f"{lang}: no host op found"
+        pc = host_pcs[0]
+        py = symbolize(6, pc, 0, debug, src)
+        je = js_symbolize_lang(src, lang, 6, pc, 0)
+        assert py == je, f"{lang}: symbolize diverges: {py} != {je}"
+        assert py["line"] == expect_line, f"{lang}: expected line {expect_line}, got {py}"
+
+
 def main():
     tests = [
         test_debug_map_parity,
         test_symbolize_parity,
         test_capability_fault_symbolicates_python_and_c,
         test_const_write_fault_symbolicates,
+        test_all_frontends_debug_parity,
     ]
     failed = 0
     for t in tests:

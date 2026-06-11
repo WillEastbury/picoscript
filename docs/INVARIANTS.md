@@ -299,10 +299,12 @@ given pc symbolicates to the same record — proven in `tests/test_debuginfo.py`
 
 Source offsets are stamped onto each IL inst via `ILBuilder.cur_pos` (the tokenizers carry
 token offsets; the parser stamps each statement; the lowerer sets `cur_pos` at statement
-dispatch). The **C frontend** is wired with full byte offsets (line + column);
-BASIC/Python/English currently symbolicate **IL-op + hook id + pc** (their statement-line
-stamping is the next increment). The embedded **C runtime stays lean** — it emits only
-`pc`, with no on-device debug table (a deliberate performance-invariant choice);
+dispatch). **All four frontends are wired** (C/BASIC/Python/English, in both `picoscript_*`
+and `vm/picoc.js`): the C and BASIC frontends (single-cursor tokenizers) give byte offsets
+with line + column; the Python/English indentation tokenizers attribute to the statement's
+line. `tests/test_debuginfo.py` asserts byte-identical debug tables and symbolize() records
+across Python and JS for every dialect. The embedded **C runtime stays lean** — it emits
+only `pc`, with no on-device debug table (a deliberate performance-invariant choice);
 symbolication happens off-device (developer tooling now; the PIOS kernel in production).
 
 The remaining two fields — **capsule id** and **binding id** — are PIOS / EL1 runtime

@@ -892,21 +892,21 @@
 
   function btokenize(src) {
     var toks = [], i = 0, n = src.length;
-    function push(k, v) { toks.push({ kind: k, value: v }); }
+    function push(k, v, p) { toks.push({ kind: k, value: v, pos: p }); }
     while (i < n) {
-      var c = src[i];
-      if (c === "\n") { push("nl", "\\n"); i++; continue; }
+      var c = src[i], start = i;
+      if (c === "\n") { push("nl", "\\n", start); i++; continue; }
       if (c === " " || c === "\t" || c === "\r") { i++; continue; }
       if (c === "'" || (c === "/" && src[i + 1] === "/")) { while (i < n && src[i] !== "\n") i++; continue; }
-      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { b += src[j]; j++; } push("str", b); i = j + 1; continue; }
-      if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2)); i = j2; continue; }
-      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; if (src[j3] === "$") j3++; var w = src.slice(i, j3); var up = w.toUpperCase(); if (B_KW[up]) push("kw", up); else push("id", w); i = j3; continue; }
+      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { b += src[j]; j++; } push("str", b, start); i = j + 1; continue; }
+      if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2), start); i = j2; continue; }
+      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; if (src[j3] === "$") j3++; var w = src.slice(i, j3); var up = w.toUpperCase(); if (B_KW[up]) push("kw", up, start); else push("id", w, start); i = j3; continue; }
       var two = src.slice(i, i + 2);
-      if (B_TWO[two]) { push("op", two); i += 2; continue; }
-      if (B_ONE.indexOf(c) >= 0) { push("op", c); i++; continue; }
+      if (B_TWO[two]) { push("op", two, start); i += 2; continue; }
+      if (B_ONE.indexOf(c) >= 0) { push("op", c, start); i++; continue; }
       throw new Error("BASIC: unexpected char " + JSON.stringify(c));
     }
-    push("nl", "\\n"); push("eof", "");
+    push("nl", "\\n", n); push("eof", "", n);
     return toks;
   }
 
@@ -928,6 +928,12 @@
     },
     atKwArr: function (arr) { var t = this.peek(); return t.kind === "kw" && arr.indexOf(t.value) >= 0; },
     parseStmt: function () {
+      var start = this.peek().pos;
+      var node = this._parseStmt();
+      if (node != null) node.pos = start;
+      return node;
+    },
+    _parseStmt: function () {
       var t = this.peek();
       if (t.kind === "id" && this.peek2().kind === "op" && this.peek2().value === ":") { var name = this.next().value; this.next(); this.endLine(); return { t: "Label", name: name }; }
       if (t.kind === "kw") {
@@ -1094,6 +1100,7 @@
     },
     stmt: function (s) {
       var self = this;
+      if (typeof s.pos === "number" && s.pos >= 0) this.b.curPos = s.pos;   // INV-25
       if (s.t === "Let") this.assignTo(this.varOf(s.name), s.value);
       else if (s.t === "Dim") { var dv = this.varOf(s.name); if (s.init === null) this.b.const_(dv, 0); else this.assignTo(dv, s.init); }
       else if (s.t === "IncDec") { var iv = this.varOf(s.name); if (s.delta === 1) this.b.inc(iv); else this.b.arith("sub", iv, iv, new Imm(1)); }
@@ -1330,36 +1337,38 @@
   var PY_TWO = { "==":1,"!=":1,"<=":1,">=":1,"+=":1,"-=":1,"*=":1,"/=":1,"%=":1 };
   var PY_ONE = "+-*/%()<>=,.:";
 
-  function indentTokLine(text, out, kwset, two, one, who) {
+  function indentTokLine(text, out, kwset, two, one, who, lineStart) {
     var i = 0, n = text.length;
     while (i < n) {
-      var c = text[i];
+      var c = text[i], start = lineStart + i;
       if (c === " " || c === "\t") { i++; continue; }
       if (c === "#") break;
-      if (isDigit(c)) { var j = i; if (c === "0" && (text[j + 1] === "x" || text[j + 1] === "X")) { j += 2; while (j < n && /[0-9a-fA-F]/.test(text[j])) j++; } else { while (j < n && isDigit(text[j])) j++; } out.push({ kind: "num", value: text.slice(i, j) }); i = j; continue; }
-      if (isAlpha(c)) { var j2 = i; while (j2 < n && isAlnum(text[j2])) j2++; var w = text.slice(i, j2); if (kwset === null) out.push({ kind: "word", value: w }); else out.push({ kind: kwset[w.toLowerCase()] ? "kw" : "id", value: w }); i = j2; continue; }
-      if (c === '"' || c === "'") { var q = c, j3 = i + 1, b = ""; while (j3 < n && text[j3] !== q) { if (text[j3] === "\\" && j3 + 1 < n) { var nx = text[j3 + 1]; b += ({ n: "\n", t: "\t", "\\": "\\", '"': '"', "'": "'" }[nx] || nx); j3 += 2; } else { b += text[j3]; j3++; } } if (j3 >= n) throw new Error(who + ": unterminated string"); out.push({ kind: "str", value: b }); i = j3 + 1; continue; }
+      if (isDigit(c)) { var j = i; if (c === "0" && (text[j + 1] === "x" || text[j + 1] === "X")) { j += 2; while (j < n && /[0-9a-fA-F]/.test(text[j])) j++; } else { while (j < n && isDigit(text[j])) j++; } out.push({ kind: "num", value: text.slice(i, j), pos: start }); i = j; continue; }
+      if (isAlpha(c)) { var j2 = i; while (j2 < n && isAlnum(text[j2])) j2++; var w = text.slice(i, j2); if (kwset === null) out.push({ kind: "word", value: w, pos: start }); else out.push({ kind: kwset[w.toLowerCase()] ? "kw" : "id", value: w, pos: start }); i = j2; continue; }
+      if (c === '"' || c === "'") { var q = c, j3 = i + 1, b = ""; while (j3 < n && text[j3] !== q) { if (text[j3] === "\\" && j3 + 1 < n) { var nx = text[j3 + 1]; b += ({ n: "\n", t: "\t", "\\": "\\", '"': '"', "'": "'" }[nx] || nx); j3 += 2; } else { b += text[j3]; j3++; } } if (j3 >= n) throw new Error(who + ": unterminated string"); out.push({ kind: "str", value: b, pos: start }); i = j3 + 1; continue; }
       var tw = text.slice(i, i + 2);
-      if (two[tw]) { out.push({ kind: "op", value: tw }); i += 2; continue; }
-      if (one.indexOf(c) >= 0) { out.push({ kind: "op", value: c }); i++; continue; }
+      if (two[tw]) { out.push({ kind: "op", value: tw, pos: start }); i += 2; continue; }
+      if (one.indexOf(c) >= 0) { out.push({ kind: "op", value: c, pos: start }); i++; continue; }
       throw new Error(who + ": unexpected char " + JSON.stringify(c));
     }
   }
 
   function indentTokenize(src, kwset, two, one, who) {
     var out = [], indents = [0], lines = src.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    var offset = 0;
     for (var li = 0; li < lines.length; li++) {
-      var line = lines[li], stripped = line.replace(/^[ \t]+/, "");
+      var line = lines[li], lineStart = offset; offset += line.length + 1;
+      var stripped = line.replace(/^[ \t]+/, "");
       if (stripped === "" || stripped[0] === "#") continue;
       var indent = line.length - stripped.length;
-      if (indent > indents[indents.length - 1]) { indents.push(indent); out.push({ kind: "indent", value: "" }); }
-      else { while (indent < indents[indents.length - 1]) { indents.pop(); out.push({ kind: "dedent", value: "" }); } if (indent !== indents[indents.length - 1]) throw new Error(who + ": inconsistent indentation"); }
+      if (indent > indents[indents.length - 1]) { indents.push(indent); out.push({ kind: "indent", value: "", pos: lineStart }); }
+      else { while (indent < indents[indents.length - 1]) { indents.pop(); out.push({ kind: "dedent", value: "", pos: lineStart }); } if (indent !== indents[indents.length - 1]) throw new Error(who + ": inconsistent indentation"); }
       var before = out.length;
-      indentTokLine(line, out, kwset, two, one, who);
-      if (out.length > before) out.push({ kind: "newline", value: "" });
+      indentTokLine(line, out, kwset, two, one, who, lineStart);
+      if (out.length > before) out.push({ kind: "newline", value: "", pos: lineStart });
     }
-    while (indents.length > 1) { indents.pop(); out.push({ kind: "dedent", value: "" }); }
-    out.push({ kind: "eof", value: "" });
+    while (indents.length > 1) { indents.pop(); out.push({ kind: "dedent", value: "", pos: offset }); }
+    out.push({ kind: "eof", value: "", pos: offset });
     return out;
   }
 
@@ -1381,6 +1390,12 @@
       this.expect("dedent"); return s;
     },
     parseStmt: function () {
+      var start = this.peek().pos;
+      var node = this._parseStmt();
+      if (node != null) node.pos = start;
+      return node;
+    },
+    _parseStmt: function () {
       var t = this.peek();
       if (t.kind === "kw") {
         var kw = t.value.toLowerCase();
@@ -1518,6 +1533,12 @@
       this.expect("dedent"); return s;
     },
     parseStmt: function () {
+      var start = this.peek().pos;
+      var node = this._parseStmt();
+      if (node != null) node.pos = start;
+      return node;
+    },
+    _parseStmt: function () {
       var t = this.peek();
       if (t.kind === "word") {
         var w = t.value.toLowerCase();

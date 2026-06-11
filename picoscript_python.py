@@ -56,21 +56,23 @@ _ONE = set("+-*/%()<>=,.:")
 # ── tokenizer (significant indentation) ──────────────────────────────────────
 
 class Tok:
-    __slots__ = ("kind", "value", "line")
+    __slots__ = ("kind", "value", "line", "pos")
 
-    def __init__(self, kind, value, line):
+    def __init__(self, kind, value, line, pos=-1):
         self.kind = kind      # num,id,kw,str,op,newline,indent,dedent,eof
         self.value = value
         self.line = line
+        self.pos = pos        # INV-25: source byte offset of the token start
 
     def __repr__(self):
         return f"Tok({self.kind},{self.value!r})"
 
 
-def _tokenize_line(text: str, lineno: int, out: List[Tok]):
+def _tokenize_line(text: str, lineno: int, out: List[Tok], line_start: int = 0):
     i, n = 0, len(text)
     while i < n:
         c = text[i]
+        start = line_start + i        # INV-25: absolute source offset of this token
         if c in " \t":
             i += 1
             continue
@@ -85,7 +87,7 @@ def _tokenize_line(text: str, lineno: int, out: List[Tok]):
             else:
                 while j < n and text[j].isdigit():
                     j += 1
-            out.append(Tok("num", text[i:j], lineno))
+            out.append(Tok("num", text[i:j], lineno, start))
             i = j
             continue
         if c.isalpha() or c == "_":
@@ -93,7 +95,7 @@ def _tokenize_line(text: str, lineno: int, out: List[Tok]):
             while j < n and (text[j].isalnum() or text[j] == "_"):
                 j += 1
             word = text[i:j]
-            out.append(Tok("kw" if word.lower() in KEYWORDS else "id", word, lineno))
+            out.append(Tok("kw" if word.lower() in KEYWORDS else "id", word, lineno, start))
             i = j
             continue
         if c == '"' or c == "'":
@@ -110,16 +112,16 @@ def _tokenize_line(text: str, lineno: int, out: List[Tok]):
                     j += 1
             if j >= n:
                 raise SyntaxError(f"line {lineno}: unterminated string")
-            out.append(Tok("str", "".join(buf), lineno))
+            out.append(Tok("str", "".join(buf), lineno, start))
             i = j + 1
             continue
         two = text[i:i + 2]
         if two in _TWO:
-            out.append(Tok("op", two, lineno))
+            out.append(Tok("op", two, lineno, start))
             i += 2
             continue
         if c in _ONE:
-            out.append(Tok("op", c, lineno))
+            out.append(Tok("op", c, lineno, start))
             i += 1
             continue
         raise SyntaxError(f"line {lineno}: unexpected char {c!r}")
@@ -129,29 +131,32 @@ def tokenize(src: str) -> List[Tok]:
     out: List[Tok] = []
     indents = [0]
     raw_lines = src.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    offset = 0
     for idx, line in enumerate(raw_lines):
         lineno = idx + 1
+        line_start = offset
+        offset += len(line) + 1            # +1 for the '\n' that split() removed
         stripped = line.lstrip(" \t")
         if stripped == "" or stripped.startswith("#"):
             continue  # blank / comment-only line: no indentation effect
         indent = len(line) - len(stripped)
         if indent > indents[-1]:
             indents.append(indent)
-            out.append(Tok("indent", "", lineno))
+            out.append(Tok("indent", "", lineno, line_start))
         else:
             while indent < indents[-1]:
                 indents.pop()
-                out.append(Tok("dedent", "", lineno))
+                out.append(Tok("dedent", "", lineno, line_start))
             if indent != indents[-1]:
                 raise SyntaxError(f"line {lineno}: inconsistent indentation")
         before = len(out)
-        _tokenize_line(line, lineno, out)
+        _tokenize_line(line, lineno, out, line_start)
         if len(out) > before:
-            out.append(Tok("newline", "", lineno))
+            out.append(Tok("newline", "", lineno, line_start))
     while len(indents) > 1:
         indents.pop()
-        out.append(Tok("dedent", "", len(raw_lines)))
-    out.append(Tok("eof", "", len(raw_lines)))
+        out.append(Tok("dedent", "", len(raw_lines), offset))
+    out.append(Tok("eof", "", len(raw_lines), offset))
     return out
 
 
@@ -219,6 +224,17 @@ class Parser:
 
     # -- statements -----------------------------------------------------------
     def parse_stmt(self) -> Optional[object]:
+        # INV-25: stamp each statement with its first token's source offset.
+        start = self.peek().pos
+        node = self._parse_stmt()
+        if node is not None:
+            try:
+                node.pos = start
+            except (AttributeError, TypeError):
+                pass
+        return node
+
+    def _parse_stmt(self) -> Optional[object]:
         t = self.peek()
         if t.kind == "kw":
             kw = t.value.lower()
