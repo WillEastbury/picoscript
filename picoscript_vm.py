@@ -1284,9 +1284,28 @@ class PicoVM:
         self.halted = False
         self.steps = 0
 
+    def _verify(self):
+        """INV-10: reject static out-of-range JUMP/CALL/BRANCH targets before execution
+        (register/indexed jumps are dynamic -> runtime-checked in _step)."""
+        n = len(self.program)
+        for i, word in enumerate(self.program):
+            d = isa.decode_instruction(word)
+            op, rs2, imm16 = d["opcode"], d["rs2"], d["imm16"]
+            if op == isa.OP_JUMP and rs2 == 0:
+                tgt = imm16
+            elif op == isa.OP_CALL:
+                tgt = imm16
+            elif op == isa.OP_BRANCH:
+                tgt = i + _sx16(imm16)
+            else:
+                continue
+            if tgt < 0 or tgt > n:
+                raise PicoFault(PV_FAULT_BAD_JUMP, i, tgt, f"bad static target {tgt} at pc={i}")
+
     def run(self, words: Optional[List[int]] = None) -> "PicoVM":
         if words is not None:
             self.load(words)
+        self._verify()                       # INV-10: verify before execution
         try:
             while not self.halted:
                 if self.pc >= len(self.program):

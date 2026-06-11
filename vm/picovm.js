@@ -105,8 +105,24 @@
     this.program = Array.prototype.slice.call(words);
   };
 
+  // INV-10: static verification before execution -- reject out-of-range immediate
+  // JUMP/CALL/BRANCH targets (register/indexed jumps are dynamic -> runtime-checked).
+  PicoVM.prototype.verify = function () {
+    var n = this.program.length;
+    for (var i = 0; i < n; i++) {
+      var w = this.program[i] >>> 0;
+      var op = (w >>> 28) & 0xF, rs2 = (w >>> 16) & 0xF, imm = w & 0xFFFF, tgt;
+      if (op === OP.JUMP && rs2 === 0) tgt = imm;
+      else if (op === OP.CALL) tgt = imm;
+      else if (op === OP.BRANCH) tgt = i + sx16(imm);
+      else continue;
+      if (tgt < 0 || tgt > n) throw picoFault(FAULT.BAD_JUMP, i, tgt, "bad static target " + tgt + " at pc=" + i);
+    }
+  };
+
   PicoVM.prototype.run = function (words) {
     if (words) this.load(words);
+    this.verify();                       // INV-10: verify before execution
     while (!this.halted && this.pc < this.program.length) {
       if (this.steps >= this.maxSteps) throw picoFault(FAULT.STEP_BUDGET, this.pc, 0, "step budget exceeded");
       this.step();

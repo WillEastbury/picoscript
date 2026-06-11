@@ -171,6 +171,10 @@ void pv_init(pv_ctx *ctx);
 /* Run a bytecode program. Returns the number of steps executed. */
 long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len);
 
+/* INV-10: static pre-execution verifier. Returns PV_FAULT_* (0 = valid); on a fault,
+ * writes the offending pc and target into *fault_pc / *fault_detail when non-NULL. */
+int pv_verify(const uint32_t *program, int len, int *fault_pc, int *fault_detail);
+
 /* ---- ABI shared with emitted C (toC) and the interpreter ------------- */
 int32_t pv_load(pv_ctx *ctx, int addr16);
 void    pv_save(pv_ctx *ctx, int addr16, int32_t val);

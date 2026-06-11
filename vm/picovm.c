@@ -1560,11 +1560,45 @@ static void pv_noop(pv_ctx *ctx, int rd, int rs1, int rs2, int imm16)
     /* else genuine NOOP */
 }
 
+/* INV-10: static verification before execution. Reject a program whose static (immediate)
+ * JUMP/CALL/BRANCH targets are out of range, before running any instruction (fail-fast;
+ * rejects a tampered/corrupt module up front). Register/indexed jumps are dynamic and stay
+ * runtime-checked (INV-11). Returns a PV_FAULT_* code, or PV_FAULT_NONE if valid. */
+int pv_verify(const uint32_t *program, int len, int *fault_pc, int *fault_detail)
+{
+    for (int i = 0; i < len; i++) {
+        uint32_t w = program[i];
+        int op    = (int)((w >> 28) & 0xF);
+        int rs2   = (int)((w >> 16) & 0xF);
+        int imm16 = (int)(w & 0xFFFF);
+        int tgt;
+        if (op == PV_OP_JUMP) {
+            if (rs2 != PV_ADDR_IMM) continue;               /* register/indexed = dynamic */
+            tgt = imm16;
+        } else if (op == PV_OP_CALL) {
+            tgt = imm16;
+        } else if (op == PV_OP_BRANCH) {
+            tgt = i + (int)(int16_t)(uint16_t)imm16;
+        } else {
+            continue;
+        }
+        if (tgt < 0 || tgt > len) {
+            if (fault_pc) *fault_pc = i;
+            if (fault_detail) *fault_detail = tgt;
+            return PV_FAULT_BAD_JUMP;
+        }
+    }
+    return PV_FAULT_NONE;
+}
+
 long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len)
 {
     int pc = 0;
     ctx->halted = 0;
     ctx->steps = 0;
+    int vpc = 0, vdetail = 0;                                /* INV-10: verify before execution */
+    int vf = pv_verify(program, len, &vpc, &vdetail);
+    if (vf != PV_FAULT_NONE) { pv_set_fault(ctx, vf, vpc, vdetail); return ctx->steps; }
     while (!ctx->halted && pc < len) {
         int cur = pc;
         ctx->cur_pc = cur;

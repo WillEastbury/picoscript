@@ -27,7 +27,7 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 7 | Seal consumes ownership (use-after-seal = compile error or trap) | partial |
 | 8 | Spans are fat and bounded (ptr+len); no null-terminated authority | enforced |
 | 9 | Literals are immutable (const pool unless copied) | partial |
-| 10 | Bytecode verification before execution | partial |
+| 10 | Bytecode verification before execution | enforced (static pre-pass) |
 | 11 | Computed jumps are range-checked | enforced |
 | 12 | No unbounded loops without budget (yield or fault) | enforced |
 | 13 | Register spill is compiler-owned (no RegisterPressureError on real code) | enforced |
@@ -135,15 +135,17 @@ literals into a separate const segment loaded at init (not via `Memory.Set` byte
 range-check user writes against it. That is a deliberate redesign, deferred; flagged so no
 one assumes literals are tamper-proof today.
 
-### 10. Bytecode verification before execution — *partial (typed runtime traps; no pre-pass)*
-There is still no load-time verifier pass, but ad-hoc traps are now **typed and
-consistent**: the C runtime has `ctx->fault` (`PV_FAULT_*`), and JS now throws on an
-unknown opcode instead of silently halting. The dangerous *computed* cases (jump targets,
-budget) are checked at the moment they occur (INV-11/12). The 4-bit opcode field is
-exhaustive (every value 0–15 is a defined op), and register indices are 4-bit, so
-"invalid opcode/register" cannot arise from a well-formed word — the remaining value of
-a pre-pass is rejecting unknown hook ids / malformed `jmptab` up-front, which is future
-work.
+### 10. Bytecode verification before execution — *enforced (static pre-pass)*
+`run` now performs a static verification pass **before executing any instruction**
+(`pv_verify` in C, `PicoVM._verify` in Python, `PicoVM.verify` in JS): every immediate
+`JUMP`/`CALL`/`BRANCH` target is range-checked, and an out-of-range target faults
+(`PV_FAULT_BAD_JUMP`) up front — so a malformed/tampered module is rejected with **no side
+effects** (`tests/test_vm_safety.py` proves a side-effecting instruction before a bad jump
+produces no output). Register/indexed jumps are dynamic and stay runtime-checked (INV-11).
+Opcode and register fields are 4-bit and therefore structurally always valid; unknown host
+hook ids are left to the host-injection model (the default host ignores them, a real host
+supplies them). Combined with the module-container ABI check (INV-23), a loaded program is
+validated for structure + ABI before it runs.
 
 ### 11. Computed jumps are range-checked — *enforced*
 **Fixed:** indirect/indexed `JUMP`, taken `BRANCH`, and `CALL` targets are range-checked

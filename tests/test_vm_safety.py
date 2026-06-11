@@ -122,6 +122,19 @@ def main():
     assert c_fault(badjump) == 3, "C VM must fault (3=bad jump)"
     assert js_fault(badjump) == 3, "JS VM must fault (3=bad jump)"
 
+    # ── INV-10: verification before execution. A side-effecting instruction followed by
+    # an out-of-range static jump must be rejected by the pre-pass BEFORE the side effect
+    # runs -- so no output is produced (distinguishes verify-before-exec from a runtime trap). ──
+    verify_prog = [0x00007072, 0x9000270F]   # Io.WriteByte(r0=0); JUMP 9999 (out of range)
+    vm = PicoVM()
+    try:
+        vm.run(verify_prog)
+        raise AssertionError("verifier must reject the out-of-range static jump")
+    except PicoFault as exc:
+        assert exc.code == 3, "verifier fault must be 3=bad jump"
+    assert vm.output == [], "no instruction may execute before a failed verification (INV-10)"
+    assert c_fault(verify_prog) == 3 and js_fault(verify_prog) == 3, "C/JS must reject at verify"
+
     # ── INV-19: template render nesting beyond TPL_MAXDEPTH (32) faults (7=template). ──
     # Compile+render a 40-deep section nest on all three bytecode VMs from one source.
     sys.path.insert(0, ROOT)
