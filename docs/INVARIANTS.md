@@ -34,8 +34,8 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 14 | Numeric overflow / division policy is explicit and identical per target | enforced |
 | 15 | Deterministic mode exists (disable clock/random/unordered iteration) | target |
 | 16 | Case-insensitive namespaces are canonicalised | enforced |
-| 17 | Capability check before hook dispatch | **violated** |
-| 18 | Hook failures are typed (no magic -1/0) | partial |
+| 17 | Capability check before hook dispatch | enforced (mechanism) |
+| 18 | Hook failures are typed (no magic -1/0) | partial (diagnosed) |
 | 19 | Template rendering is bounded (depth/each/recursion/output) | partial |
 | 20 | JSON/HTTP parsers are budgeted (depth/token/length/bytes) | partial |
 | 21 | Source card is truth (artefacts carry source hash + compiler version + profile) | target |
@@ -88,22 +88,40 @@ declare arena use (so it can be scoped/rewound) or be forbidden on the hot path.
 (commit `5a09aa3`), and `Arena.Mark/Rewind/Reset` are available. Not every entry path
 declares a scope; non-server invocations rely on the caller.
 
-### 7. Seal consumes ownership — *partial*
+### 7. Seal consumes ownership — *partial (diagnosed)*
 The Python VM traps mutation of sealed preamble/headers
-(`picoscript_vm.py:780-807`, "I3 violation"). There is no compile-time use-after-seal
-check, and body/trailer/control access is not fully fenced after seal; C/JS trapping
-is weaker. Target: AOT iso-lease consumption at seal (D6) + runtime ownership-flag
-backstop on all response descriptors.
+(`picoscript_vm.py`, "I3 violation"; `tests/test_io_hooks.py::test_i3_header_after_seal_rejected`).
+**Diagnosis:** full enforcement spans the EL0/EL1 boundary — per `docs/PIOS_IO_BINDING.md`
+[D6], the strongest form is an `iso` (move-only) lease consumed at `seal` so use-after-seal
+is a **compile-time** error (AOT, zero runtime cost), backstopped by a runtime ownership
+flag on the descriptors. The PicoScript-side `Resp.*` is a simulation for parity tests;
+the authoritative enforcement is the PIOS kernel's. Tractable next step on the VM side:
+extend the post-seal trap to body/trailer/control ops (not just headers). The compile-time
+iso-lease check is a larger frontend feature.
+
+### 9. Literals are immutable — *partial (diagnosed; needs const segment)*
+Literals are interned into a deduplicated pool growing down from `0x8000` (commit
+`d550b7c`). **Diagnosis:** the pool is populated by `Memory.Set` ops emitted *in the
+bytecode itself* (before each `Span.Make`), so at runtime the VM cannot distinguish a
+compiler const-write from a user `Memory.Set` into the same address range — they are the
+same op. Enforcing read-only therefore needs an **architectural change**: relocate
+literals into a separate const segment loaded at init (not via `Memory.Set` bytecode) and
+range-check user writes against it. That is a deliberate redesign, deferred; flagged so no
+one assumes literals are tamper-proof today.
 
 ### 8. Spans are fat and bounded — *enforced*
 Every buffer is `ptr+len` (`pv_span_p`/`pv_span_n` in C; `{ptr,len}` in JS/Python).
 No `strlen`/`strcpy` authority over script data.
 
-### 9. Literals are immutable — *partial*
-String/number/template literals live in a deduplicated const pool growing down from
-`0x8000` (commit `d550b7c`). Immutability is by convention only: the arena is
-byte-addressable and nothing prevents `Memory.Set` into the const-pool region. Target:
-mark the const region read-only (trap on write).
+### 9. Literals are immutable — *partial (diagnosed; needs const segment)*
+Literals are interned into a deduplicated pool growing down from `0x8000` (commit
+`d550b7c`). **Diagnosis:** the pool is populated by `Memory.Set` ops emitted *in the
+bytecode itself* (before each `Span.Make`), so at runtime the VM cannot distinguish a
+compiler const-write from a user `Memory.Set` into the same address range — they are the
+same op. Enforcing read-only therefore needs an **architectural change**: relocate
+literals into a separate const segment loaded at init (not via `Memory.Set` bytecode) and
+range-check user writes against it. That is a deliberate redesign, deferred; flagged so no
+one assumes literals are tamper-proof today.
 
 ### 10. Bytecode verification before execution — *partial (typed runtime traps; no pre-pass)*
 There is still no load-time verifier pass, but ad-hoc traps are now **typed and
@@ -156,11 +174,19 @@ No permission/grant check precedes any hook. Dispatch is a bare lookup
 ambient. Target: a per-capsule capability set checked before dispatch (cf. the
 `FIRE_SW_IRQ` permission model).
 
-### 18. Hook failures are typed — **violated**
-Magic sentinels throughout: `Queue.Dequeue`→`0`, `String.IndexOf`→`-1`/`0xFFFFFFFF`,
-`Number.Parse`→`0`, `pv_load` missing card→`0`, `pv_card_slot`→`-1`
-(`picoscript_vm.py:115-118,315-316,336-340`; `vm/picovm.js:235-238,336,379-381`;
-`vm/picovm.c:27-48,1083-1094,1174-1191`). Target: typed status / trap semantics.
+### 18. Hook failures are typed — *partial (diagnosed; design tension)*
+Most flagged sentinels are **value-domain results, not errors**, and are intentional:
+`String.IndexOf`→`-1` ("not found", as in most languages), `Number.Parse`→`0`,
+`Queue.Dequeue` on empty→`0`, missing card→`0`. The 2-in/1-out host ABI has no separate
+error channel, so a "typed status" would require an ABI change (e.g. a side error
+register), which would break byte-parity and existing programs. Separately, the C default
+host **silently ignores** an unimplemented hook *by design* — that is the host-injection
+model (`DateTime`/`Context`/`Auth`/`X509` etc. are supplied by a real host, not the
+deterministic default), so faulting there would be wrong. **Recommendation (needs an ABI
+decision):** introduce an out-of-band typed-status register for genuinely fallible
+decoders (parse/decode/crypto-verify) without changing their primary return value, and
+keep value-domain sentinels as-is. Deferred pending that decision (not a security gap —
+the capability gate, INV-17, governs access).
 
 ### 19. Template rendering is bounded — *partial (depth fault added)*
 **Improved:** nesting beyond `TPL_MAXDEPTH` (32) now raises a typed fault on all three
