@@ -1518,7 +1518,7 @@ long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len)
     ctx->halted = 0;
     ctx->steps = 0;
     while (!ctx->halted && pc < len) {
-        if (ctx->steps >= ctx->max_steps) break;
+        if (ctx->steps >= ctx->max_steps) { ctx->fault = PV_FAULT_STEP_BUDGET; ctx->halted = 1; break; }
         ctx->steps++;
 
         uint32_t w = program[pc];
@@ -1551,25 +1551,37 @@ long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len)
             if (op == PV_OP_ADD) r = a + b;
             else if (op == PV_OP_SUB) r = a - b;
             else if (op == PV_OP_MUL) r = a * b;
-            else r = (b != 0) ? a / b : 0;
+            else if (b == 0) r = 0;
+            else if (b == -1 && a == (int32_t)0x80000000) r = a;  /* INT_MIN/-1: wrap, avoid UB */
+            else r = a / b;                                       /* truncates toward zero */
             ctx->regs[rd] = r;
             break;
         }
         case PV_OP_INC:
             ctx->regs[rd] = ctx->regs[rd] + 1;
             break;
-        case PV_OP_JUMP:
-            if (rs2 == PV_ADDR_REG)          pc = ctx->regs[rs1] & 0xFFFF;          /* PC = Rs1 */
-            else if (rs2 == PV_ADDR_REG_OFF) pc = (ctx->regs[rs1] + imm16) & 0xFFFF; /* PC = Rs1 + imm16 */
-            else                             pc = imm16;
+        case PV_OP_JUMP: {
+            int tgt;
+            if (rs2 == PV_ADDR_REG)          tgt = ctx->regs[rs1] & 0xFFFF;          /* PC = Rs1 */
+            else if (rs2 == PV_ADDR_REG_OFF) tgt = (ctx->regs[rs1] + imm16) & 0xFFFF; /* PC = Rs1 + imm16 */
+            else                             tgt = imm16;
+            if (tgt < 0 || tgt > len) { ctx->fault = PV_FAULT_BAD_JUMP; ctx->halted = 1; break; }
+            pc = tgt;   /* tgt == len falls off the end == clean halt */
             break;
+        }
         case PV_OP_BRANCH: {
             int off = (int)(int16_t)(uint16_t)imm16;
-            if (pv_branch(rs2, ctx->regs[rd], ctx->regs[rs1])) pc = cur + off;
+            if (pv_branch(rs2, ctx->regs[rd], ctx->regs[rs1])) {
+                int tgt = cur + off;
+                if (tgt < 0 || tgt > len) { ctx->fault = PV_FAULT_BAD_JUMP; ctx->halted = 1; break; }
+                pc = tgt;
+            }
             break;
         }
         case PV_OP_CALL:
-            if (ctx->call_sp < PV_MAX_CALL) ctx->call_stack[ctx->call_sp++] = pc;
+            if (imm16 < 0 || imm16 > len) { ctx->fault = PV_FAULT_BAD_JUMP; ctx->halted = 1; break; }
+            if (ctx->call_sp >= PV_MAX_CALL) { ctx->fault = PV_FAULT_CALL_OVERFLOW; ctx->halted = 1; break; }
+            ctx->call_stack[ctx->call_sp++] = pc;
             pc = imm16;
             break;
         case PV_OP_RETURN:
@@ -1589,6 +1601,7 @@ long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len)
             break;
         }
         default:
+            ctx->fault = PV_FAULT_BAD_OPCODE;
             ctx->halted = 1;
             break;
         }

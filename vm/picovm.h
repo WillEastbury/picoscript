@@ -39,6 +39,18 @@ enum {
     PV_BR_Z, PV_BR_NZ, PV_BR_EOF, PV_BR_ERR
 };
 
+/* Typed VM faults (ctx->fault). 0 = no fault. A faulted run halts and is observably
+ * different from a clean halt -- mirrors the Python/JS VMs raising. (INV-10/11/12/18) */
+enum {
+    PV_FAULT_NONE = 0,
+    PV_FAULT_STEP_BUDGET = 1,    /* step budget exhausted */
+    PV_FAULT_BAD_OPCODE  = 2,    /* opcode not in the frozen 16 */
+    PV_FAULT_BAD_JUMP    = 3,    /* computed/static jump target out of range */
+    PV_FAULT_CALL_OVERFLOW = 4,  /* call stack overflow */
+    PV_FAULT_RET_UNDERFLOW = 5,  /* RETURN with empty call stack */
+    PV_FAULT_BAD_HOOK    = 6     /* unknown host hook id */
+};
+
 typedef struct pv_ctx pv_ctx;
 
 /* Host-hook callback for OP_NOOP host hooks (Random/Queue/Storage/etc.).
@@ -68,6 +80,7 @@ struct pv_ctx {
     long      max_steps;
     int       halted;
     int       waiting;
+    int       fault;           /* PV_FAULT_*; 0 until a typed fault halts the VM */
 
     /* simple in-VM queues for the default host (Queue.*) */
     int32_t   queues[8][64];

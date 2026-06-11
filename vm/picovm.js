@@ -117,13 +117,26 @@
         break;
       }
       case OP.INC: r[rd] = (r[rd] + 1) | 0; break;
-      case OP.JUMP:
-        if (rs2 === ADDR_REG) this.pc = r[rs1] & 0xFFFF;
-        else if (rs2 === ADDR_REG_OFF) this.pc = (r[rs1] + imm) & 0xFFFF;
-        else this.pc = imm;
+      case OP.JUMP: {
+        var jt;
+        if (rs2 === ADDR_REG) jt = r[rs1] & 0xFFFF;
+        else if (rs2 === ADDR_REG_OFF) jt = (r[rs1] + imm) & 0xFFFF;
+        else jt = imm;
+        if (jt < 0 || jt > this.program.length) throw new Error("bad jump target " + jt);  // INV-11
+        this.pc = jt;
         break;
-      case OP.BRANCH: if (this._cond(rs2, r[rd], r[rs1])) this.pc = cur + sx16(imm); break;
-      case OP.CALL: this.callStack.push(this.pc); this.pc = imm; break;
+      }
+      case OP.BRANCH:
+        if (this._cond(rs2, r[rd], r[rs1])) {
+          var bt = cur + sx16(imm);
+          if (bt < 0 || bt > this.program.length) throw new Error("bad branch target " + bt);
+          this.pc = bt;
+        }
+        break;
+      case OP.CALL:
+        if (imm < 0 || imm > this.program.length) throw new Error("bad call target " + imm);
+        this.callStack.push(this.pc); this.pc = imm;
+        break;
       case OP.RETURN:
         if (this.callStack.length) this.pc = this.callStack.pop();
         else this.halted = true;
@@ -131,7 +144,7 @@
       case OP.WAIT: this.waiting = true; this.halted = true; break;
       case OP.RAISE: this.log.push("raise " + imm); break;
       case OP.DSP: this._dsp(rd, rs1, rs2, imm); break;
-      default: this.halted = true; break;
+      default: throw new Error("bad opcode " + op);   // INV-10: unknown opcode faults (was silent halt)
     }
     return !this.halted;
   };

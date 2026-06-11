@@ -99,7 +99,7 @@
         if (ins.op === "add") r = av + bv;
         else if (ins.op === "sub") r = av - bv;
         else if (ins.op === "mul") r = av * bv;
-        else r = bv !== 0 ? Math.trunc(av / bv) : 0;
+        else r = bv !== 0 ? ((av / bv) | 0) : 0;   // trunc toward zero + 2's-comp wrap (matches VM/C)
         out.push(Inst("const", { dst: ins.dst, imm: r })); return;
       }
       if (ins.op === "add" && isVReg(ins.a) && ins.dst === ins.a && isImm(ins.b) && ins.b.value === 1) {

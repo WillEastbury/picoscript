@@ -12,6 +12,7 @@
  */
 #include "picovm.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 int main(void)
 {
@@ -32,9 +33,12 @@ int main(void)
     pv_init(&ctx);
     ctx.mem = arena;
     ctx.mem_size = (long)sizeof(arena);
+    const char *ms = getenv("PICOVM_MAX_STEPS");   /* let tests drive the step budget */
+    if (ms && *ms) ctx.max_steps = atol(ms);
     long steps = pv_vm_run(&ctx, prog, n);
 
     printf("STEPS %ld\n", steps);
+    printf("FAULT %d\n", ctx.fault);
     printf("STATUS %d\n", ctx.http_status);
     printf("REGS");
     for (int i = 0; i < PV_NUM_REGS; i++) printf(" %d", ctx.regs[i]);

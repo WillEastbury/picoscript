@@ -1,5 +1,5 @@
 // picovm_run.js -- Node harness for picovm.js (parity testing vs Python/C VM).
-// Reads: first line word count N, then N hex words. Prints STEPS/STATUS/REGS/OUT.
+// Reads: first line word count N, then N hex words. Prints STEPS/FAULT/STATUS/REGS/OUT.
 const PicoVM = require("./picovm.js");
 
 let data = "";
@@ -9,10 +9,21 @@ process.stdin.on("end", () => {
   const n = parseInt(toks[0], 10);
   const words = [];
   for (let i = 0; i < n; i++) words.push(parseInt(toks[1 + i], 16) >>> 0);
-  const vm = new PicoVM();
-  vm.run(words);
-  const out = [];
+  const ms = process.env.PICOVM_MAX_STEPS;   // let tests drive the step budget
+  const vm = new PicoVM(ms ? { maxSteps: parseInt(ms, 10) } : {});
+  let fault = 0;
+  try {
+    vm.run(words);
+  } catch (e) {
+    // Map the VM trap to a typed fault code, mirroring the C runtime's ctx.fault.
+    var m = String(e && e.message || e);
+    if (m.indexOf("step budget") >= 0) fault = 1;
+    else if (m.indexOf("bad opcode") >= 0) fault = 2;
+    else if (m.indexOf("bad jump") >= 0 || m.indexOf("bad branch") >= 0 || m.indexOf("bad call") >= 0) fault = 3;
+    else fault = 99;
+  }
   console.log("STEPS " + vm.steps);
+  console.log("FAULT " + fault);
   console.log("STATUS " + vm.httpStatus);
   console.log("REGS " + Array.from(vm.regs).join(" "));
   console.log("OUT " + vm.output.map((b) => b.toString(16).padStart(2, "0")).join(" "));

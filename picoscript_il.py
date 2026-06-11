@@ -240,6 +240,24 @@ def _is_imm(x) -> bool:
     return isinstance(x, Imm)
 
 
+def trunc_div32(a: int, b: int) -> int:
+    """Signed 32-bit integer division, truncating toward zero with 2's-complement
+    wrap -- the single canonical division semantics for every path. Matches C
+    `int32 a / b` (with the INT_MIN/-1 case defined, not UB), JS `(a / b) | 0`, and
+    the VM `_arith`. Division by zero yields 0. (INV-2/INV-14: all paths identical.)"""
+    a &= 0xFFFFFFFF
+    a = a - 0x100000000 if a & 0x80000000 else a
+    b &= 0xFFFFFFFF
+    b = b - 0x100000000 if b & 0x80000000 else b
+    if b == 0:
+        return 0
+    q = abs(a) // abs(b)
+    if (a < 0) != (b < 0):
+        q = -q
+    q &= 0xFFFFFFFF
+    return q - 0x100000000 if q & 0x80000000 else q
+
+
 def optimize(insts: List[Inst]) -> List[Inst]:
     """Constant folding + redundant-move elimination + INC fusion.
 
@@ -258,7 +276,7 @@ def optimize(insts: List[Inst]) -> List[Inst]:
             elif ins.op == "mul":
                 r = av * bv
             else:
-                r = av // bv if bv != 0 else 0
+                r = trunc_div32(av, bv)
             out.append(Inst("const", dst=ins.dst, imm=r))
             continue
         # x = x + 1  ->  inc x

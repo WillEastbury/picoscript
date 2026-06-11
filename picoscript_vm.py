@@ -1239,15 +1239,23 @@ class PicoVM:
             self.regs[rd] = (self.regs[rd] + 1) & MASK32
         elif op == isa.OP_JUMP:
             if rs2 == isa.ADDR_REGISTER:
-                self.pc = self.regs[rs1] & 0xFFFF                    # PC = Rs1 (indirect)
+                tgt = self.regs[rs1] & 0xFFFF                    # PC = Rs1 (indirect)
             elif rs2 == isa.ADDR_REG_OFF:
-                self.pc = (self.regs[rs1] + imm16) & 0xFFFF          # PC = Rs1 + imm16 (indexed)
+                tgt = (self.regs[rs1] + imm16) & 0xFFFF          # PC = Rs1 + imm16 (indexed)
             else:
-                self.pc = imm16
+                tgt = imm16
+            if tgt < 0 or tgt > len(self.program):              # INV-11: range-check computed jumps
+                raise RuntimeError(f"bad jump target {tgt} at pc={cur}")
+            self.pc = tgt
         elif op == isa.OP_BRANCH:
             if self._cond(rs2, self.regs[rd], self.regs[rs1]):
-                self.pc = cur + _sx16(imm16)
+                tgt = cur + _sx16(imm16)
+                if tgt < 0 or tgt > len(self.program):
+                    raise RuntimeError(f"bad branch target {tgt} at pc={cur}")
+                self.pc = tgt
         elif op == isa.OP_CALL:
+            if imm16 < 0 or imm16 > len(self.program):
+                raise RuntimeError(f"bad call target {imm16} at pc={cur}")
             self.call_stack.append(self.pc)
             self.pc = imm16
         elif op == isa.OP_RETURN:
@@ -1278,7 +1286,13 @@ class PicoVM:
         elif op == isa.OP_MUL:
             r = a * b
         else:
-            r = a // b if b != 0 else 0
+            # Signed division truncating toward zero (INV-14): matches C int32 a/b
+            # and JS (a/b)|0. Python's // floors, so compute magnitude then re-sign.
+            if b == 0:
+                r = 0
+            else:
+                q = abs(a) // abs(b)
+                r = -q if (a < 0) != (b < 0) else q
         self.regs[rd] = r & MASK32
 
     def _cond(self, mode, a, b):

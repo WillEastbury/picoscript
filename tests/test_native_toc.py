@@ -212,6 +212,13 @@ def main():
         tc6m = b"Test Using Larger Than Block-Size Key - Hash Key First"
         check(hmac_prog(tc6k, tc6m), _hm(tc6k, tc6m), "hmac_rfc_tc6_bigkey")
 
+        # Signed division / modulo: truncate toward zero, identical on every path (INV-14).
+        check("int a = 0 - 7; int b = a / 2; Io.WriteByte(b);", bytes([253]), "div_neg_num")    # -3
+        check("int a = 7; int b = a / (0 - 2); Io.WriteByte(b);", bytes([253]), "div_neg_den")  # -3
+        check("int a = 0 - 7; int b = a / (0 - 2); Io.WriteByte(b);", bytes([3]), "div_neg_both")  # 3
+        check("int a = 0 - 8; int b = a / 3; Io.WriteByte(b);", bytes([254]), "div_neg_trunc")  # -2 (floor would be -3)
+        check("int a = 0 - 7; int b = a % 2; Io.WriteByte(b);", bytes([255]), "mod_neg")        # -1
+
         # Template.* : holes, sections, inverted, nesting, {{#each}} object + scalar.
         check(tpl_prog(b"Hi {{name}}!", b"name=Bob"), b"Hi Bob!", "tpl_hole")
         check(tpl_prog(b"{{#show}}yes{{/show}}", b"show=1"), b"yes", "tpl_section")
