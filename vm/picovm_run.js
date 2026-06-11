@@ -12,10 +12,12 @@ process.stdin.on("end", () => {
   const ms = process.env.PICOVM_MAX_STEPS;   // let tests drive the step budget
   const cps = process.env.PICOVM_CAPS;        // let tests restrict binding capabilities
   const seed = process.env.PICOVM_SEED;        // let tests pin Random.U32 nondeterminism
+  const noalloc = process.env.PICOVM_NOALLOC;   // let tests enable hot-path no-alloc mode
   var opts = {};
   if (ms) opts.maxSteps = parseInt(ms, 10);
   if (cps) opts.caps = parseInt(cps, 0) >>> 0;
   if (seed) opts.seed = parseInt(seed, 0) >>> 0;
+  if (noalloc && noalloc[0] !== "0") opts.noAlloc = true;
   const vm = new PicoVM(opts);
   let fault = 0;
   let faultPc = 0;

@@ -63,6 +63,7 @@
     this.maxSteps = opts.maxSteps || 1000000;
     this.caps = (opts.caps !== undefined) ? (opts.caps >>> 0) : CAP_ALL;  // granted bindings (INV-17)
     this._seed = (opts.seed !== undefined) ? (opts.seed >>> 0) : null;     // host-injected Random.U32 seed (INV-15)
+    this.noAlloc = !!opts.noAlloc;          // hot-path no-allocation mode (INV-5)
     // Optional external card store (PicoWAL). Must expose get(addr)->int and
     // set(addr,int); when present it persists across reset()/load(), modelling a
     // disk-backed card store. Default is an in-memory Map (VM parity unchanged).
@@ -389,6 +390,7 @@
     return out;
   };
   PicoVM.prototype._newSpanBytes = function (bytes) {
+    if (this.noAlloc) { var e = new Error("arena allocation in no-alloc mode"); e.fault = 9; e.pc = this.pc | 0; e.detail = bytes.length | 0; throw e; }  // INV-5
     var dst = this.arenaTop; this.arenaTop += bytes.length;
     for (var i = 0; i < bytes.length; i++) this.mem[dst + i] = bytes[i] & 255;
     this.spans.push({ ptr: dst, len: bytes.length });

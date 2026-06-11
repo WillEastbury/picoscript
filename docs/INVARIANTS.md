@@ -22,7 +22,7 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 2 | Lowering parity — VM/toC/toJS/native produce identical observable output | enforced* |
 | 3 | Host hooks are the only outside world | enforced |
 | 4 | Every hook has a declared contract | enforced (table) |
-| 5 | No hidden allocation in hot hooks (declare arena use or forbid) | partial (declared) |
+| 5 | No hidden allocation in hot hooks (declare arena use or forbid) | enforced (no-alloc mode) |
 | 6 | Arena scope is explicit; scope exit rewinds or transfers | partial |
 | 7 | Seal consumes ownership (use-after-seal = compile error or trap) | partial |
 | 8 | Spans are fat and bounded (ptr+len); no null-terminated authority | enforced |
@@ -80,12 +80,16 @@ flag** (INV-5). `tests/test_hook_contracts.py` asserts completeness + spot-check
 work can extend each entry with input/output/ownership/failure-mode fields, but the
 contract table and its capability + allocation declarations now exist and are tested.
 
-### 5. No hidden allocation in hot hooks — *partial (declared, not yet forbidden)*
-Allocation is now **declared** per hook via the `allocates` flag in `hook_contracts.py`
-(e.g. `String.Concat`/`Crypto.Sha256`/`Span.Materialize` = allocates; `Bits.*`/
-`Number.Parse`/`Span.Len` = no). The remaining step is *enforcement*: a request/hot-path
-profile that forbids calling an `allocates=True` hook outside a declared arena scope.
-The data to do so now exists.
+### 5. No hidden allocation in hot hooks — *enforced (declared + no-alloc mode)*
+Two layers: (1) allocation is **declared** per hook via the `allocates` flag in
+`hook_contracts.py`; (2) a runtime **no-alloc mode** *forbids* it on demand — `ctx->no_alloc`
+(C), `HostApi.no_alloc` / `PicoVM(no_alloc=True)` (Python), `new PicoVM({noAlloc})` (JS),
+`PICOVM_NOALLOC` env. When set, the single arena-allocation choke point (`pv_arena_finish`
+/ `_new_span_bytes`) faults `PV_FAULT_ALLOC`=9 instead of bumping the arena. Default off →
+no behaviour change; a host enables it for a hot/request path so a hook that would
+allocate (e.g. `String.Concat`, `Crypto.Sha256`) traps rather than silently allocating.
+`tests/test_vm_safety.py` proves an allocating hook faults (9) under no-alloc on
+Python/C/JS while a non-allocating program is unaffected.
 
 ### 6. Arena scope is explicit — *partial*
 `install_request_context` / `setRequestContext` auto-rewind the arena per request

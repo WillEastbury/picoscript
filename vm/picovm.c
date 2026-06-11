@@ -160,6 +160,7 @@ static void pv_arena_put(pv_ctx *ctx, uint32_t *k, uint8_t b)
 }
 static int pv_arena_finish(pv_ctx *ctx, uint32_t k)
 {
+    if (ctx->no_alloc) { ctx->fault = PV_FAULT_ALLOC; ctx->halted = 1; return 0; }  /* INV-5 */
     int h = pv_span_make(ctx, ctx->arena_top, (int32_t)k);
     ctx->arena_top += k;
     return h;

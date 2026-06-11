@@ -117,6 +117,7 @@ class HostApi:
         self.queues: Dict[int, List[int]] = {}
         self.rng_state = 0x2545F4914F6CDD1D
         self.caps = CAP_ALL          # granted binding capabilities (INV-17); host restricts to gate
+        self.no_alloc = False        # INV-5: when True, arena allocation in a hook raises PicoFault
         self.log: List[str] = []
         self.handlers: Dict[tuple, Callable] = {}
         # Card store (PicoStore) + program-level Storage.* context.
@@ -358,6 +359,9 @@ class HostApi:
         return bytes(vm.mem[s["ptr"]:s["ptr"] + s["len"]])
 
     def _new_span_bytes(self, vm: "PicoVM", data: bytes) -> int:
+        if self.no_alloc:                                   # INV-5: hot-path allocation is a fault
+            raise PicoFault(code=9, pc=getattr(vm, "pc", 0), detail=len(data),
+                            message="arena allocation in no-alloc mode")
         dst = vm.arena_top
         vm.mem[dst:dst + len(data)] = data
         vm.arena_top += len(data)
@@ -1229,7 +1233,7 @@ class PicoVM:
 
     def __init__(self, host: Optional[HostApi] = None, max_steps: int = 1_000_000,
                  arena_bytes: int = ARENA_BYTES, caps: Optional[int] = None,
-                 seed: Optional[int] = None):
+                 seed: Optional[int] = None, no_alloc: Optional[bool] = None):
         self.regs: List[int] = [0] * isa_num_regs()
         self.cards: Dict[int, int] = {}
         self.call_stack: List[int] = []
@@ -1246,6 +1250,8 @@ class PicoVM:
             self.host.caps = caps
         if seed is not None:                 # host-injected Random.U32 seed (INV-15)
             self.host.rng_state = seed
+        if no_alloc is not None:             # hot-path no-allocation mode (INV-5)
+            self.host.no_alloc = no_alloc
         self.max_steps = max_steps
         self.steps = 0
         self.pc = 0

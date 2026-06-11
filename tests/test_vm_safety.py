@@ -50,17 +50,31 @@ def c_fault_fields(words, max_steps=None, caps=None):
     return 0, 0, 0
 
 
-def c_fault(words, max_steps=None, caps=None):
-    return c_fault_fields(words, max_steps=max_steps, caps=caps)[0]
-
-
-def js_fault(words, max_steps=None, caps=None):
+def c_fault(words, max_steps=None, caps=None, no_alloc=False):
     inp = f"{len(words)}\n" + "\n".join(f"{w:08x}" for w in words) + "\n"
     env = dict(os.environ)
     if max_steps is not None:
         env["PICOVM_MAX_STEPS"] = str(max_steps)
     if caps is not None:
         env["PICOVM_CAPS"] = str(caps)
+    if no_alloc:
+        env["PICOVM_NOALLOC"] = "1"
+    out = subprocess.run([VM_EXE], input=inp, capture_output=True, text=True, env=env).stdout
+    for line in out.splitlines():
+        if line.startswith("FAULT"):
+            return int(line.split()[1])
+    return 0
+
+
+def js_fault(words, max_steps=None, caps=None, no_alloc=False):
+    inp = f"{len(words)}\n" + "\n".join(f"{w:08x}" for w in words) + "\n"
+    env = dict(os.environ)
+    if max_steps is not None:
+        env["PICOVM_MAX_STEPS"] = str(max_steps)
+    if caps is not None:
+        env["PICOVM_CAPS"] = str(caps)
+    if no_alloc:
+        env["PICOVM_NOALLOC"] = "1"
     out = subprocess.run(["node", os.path.join(VM_DIR, "picovm_run.js")],
                          input=inp, capture_output=True, text=True, env=env).stdout
     for line in out.splitlines():
@@ -69,9 +83,9 @@ def js_fault(words, max_steps=None, caps=None):
     return 0
 
 
-def py_faulted(words, max_steps=1_000_000, caps=None):
+def py_faulted(words, max_steps=1_000_000, caps=None, no_alloc=False):
     try:
-        PicoVM(max_steps=max_steps, caps=caps).run(words)
+        PicoVM(max_steps=max_steps, caps=caps, no_alloc=no_alloc).run(words)
         return False
     except RuntimeError:
         return True
@@ -148,10 +162,30 @@ def main():
     assert c_fault(io_hook, caps=no_random) == 0, "pure Io.WriteByte must not be gated (C)"
     assert js_fault(io_hook, caps=no_random) == 0, "pure Io.WriteByte must not be gated (JS)"
 
+    # ── INV-5: hot-path no-allocation mode. An allocating hook (String.Concat result)
+    # faults (9) under no_alloc; a non-allocating program is unaffected. ──
+    concat = (setbytes(1000, b"hi") + setbytes(1002, b"yo") +
+              "int a = Span.Make(1000, 2); int b = Span.Make(1002, 2);"
+              "int c = String.Concat(a, b); Io.Write(c);")
+    cw = lower_to_bytecode_safe(compile_c(concat))
+    # no_alloc OFF: works on all three.
+    assert not py_faulted(cw), "String.Concat must run with allocation allowed (Python)"
+    assert c_fault(cw) == 0, "String.Concat must run with allocation allowed (C)"
+    assert js_fault(cw) == 0, "String.Concat must run with allocation allowed (JS)"
+    # no_alloc ON: the result allocation faults (9) identically.
+    assert py_faulted(cw, no_alloc=True), "String.Concat must fault in no-alloc mode (Python)"
+    assert c_fault(cw, no_alloc=True) == 9, "C VM must fault (9=alloc)"
+    assert js_fault(cw, no_alloc=True) == 9, "JS VM must fault (9=alloc)"
+    # A non-allocating program is unaffected by no-alloc mode.
+    nob = lower_to_bytecode_safe(compile_c("int x = 5; Io.WriteByte(x);"))
+    assert not py_faulted(nob, no_alloc=True), "non-allocating program must not fault (Python)"
+    assert c_fault(nob, no_alloc=True) == 0, "non-allocating program must not fault (C)"
+    assert js_fault(nob, no_alloc=True) == 0, "non-allocating program must not fault (JS)"
+
     print("PASS vm safety: structured code/pc/detail faults for step-budget (INV-12), "
-          "out-of-range jump (INV-11), template depth "
-          "(INV-19) and capability gating (INV-17: bindings are not ambient) fault identically "
-          "on Python / C / JS -- pure hooks stay ungated")
+          "out-of-range jump (INV-11), template depth (INV-19), capability gating "
+          "(INV-17: bindings are not ambient) and no-alloc hot-path mode (INV-5) fault "
+          "identically on Python / C / JS -- pure/non-allocating hooks stay ungated")
 
 
 if __name__ == "__main__":

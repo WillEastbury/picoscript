@@ -50,7 +50,8 @@ enum {
     PV_FAULT_RET_UNDERFLOW = 5,  /* RETURN with empty call stack */
     PV_FAULT_BAD_HOOK    = 6,    /* unknown host hook id */
     PV_FAULT_TEMPLATE    = 7,    /* template render nesting exceeded TPL_MAXDEPTH */
-    PV_FAULT_CAPABILITY  = 8     /* hook's binding not granted to this capsule (INV-17) */
+    PV_FAULT_CAPABILITY  = 8,    /* hook's binding not granted to this capsule (INV-17) */
+    PV_FAULT_ALLOC       = 9     /* arena allocation attempted in no-alloc/hot-path mode (INV-5) */
 };
 
 /* Binding capability classes (ctx->caps bitmask). "Bindings are not ambient": a hook
@@ -105,6 +106,7 @@ struct pv_ctx {
     int       fault_detail;    /* fault-specific detail: opcode, jump target, hook id, or 0 */
     int       cur_pc;          /* current bytecode PC, retained so host faults can report it */
     uint32_t  caps;            /* granted binding capabilities (PV_CAP_*); default PV_CAP_ALL */
+    int       no_alloc;        /* when set, arena allocation in a hook faults (INV-5 hot path) */
 
     /* simple in-VM queues for the default host (Queue.*) */
     int32_t   queues[8][64];
