@@ -14,6 +14,9 @@ from picoscript_lang import (
     HOST_HOOK_CODES, HOST_HOOK_BASE, EXT_HOST_HOOK_BASE, NET_STATUS_BASE, NET_HEADER_BASE,
     NET_BODY_MARKER, NET_CLOSE_MARKER, CONTENT_TYPES,
 )
+from pico_module import hook_table_version, MODULE_MAGIC, MODULE_ABI_VERSION
+
+_HTV = hook_table_version()   # FNV-1a/32 content hash, identical in pico_module.py + picovm.js
 
 L = []
 L.append("// AUTO-GENERATED from picoscript_lang.py -- do not edit by hand.")
@@ -55,6 +58,11 @@ H.append("#define PV_NET_STATUS_BASE 0x%04X" % NET_STATUS_BASE)
 H.append("#define PV_NET_HEADER_BASE 0x%04X" % NET_HEADER_BASE)
 H.append("#define PV_NET_BODY_MARKER 0x%04X" % NET_BODY_MARKER)
 H.append("#define PV_NET_CLOSE_MARKER 0x%04X" % NET_CLOSE_MARKER)
+H.append("")
+H.append("/* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */")
+H.append("#define PV_MODULE_MAGIC 0x%08X" % (MODULE_MAGIC & 0xFFFFFFFF))
+H.append("#define PV_MODULE_ABI_VERSION %d" % MODULE_ABI_VERSION)
+H.append("#define PV_HOOK_TABLE_VERSION 0x%08X" % (_HTV & 0xFFFFFFFF))
 H.append("")
 for (ns, m), code in sorted(HOST_HOOK_CODES.items(), key=lambda kv: kv[1]):
     name = ("PV_HOOK_%s_%s" % (ns, m)).upper()

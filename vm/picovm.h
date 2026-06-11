@@ -175,6 +175,15 @@ long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len);
  * writes the offending pc and target into *fault_pc / *fault_detail when non-NULL. */
 int pv_verify(const uint32_t *program, int len, int *fault_pc, int *fault_detail);
 
+/* INV-23: module-container load result codes (negative = rejected). */
+enum {
+    PV_MODULE_ERR_TRUNCATED = -1, PV_MODULE_ERR_MAGIC = -2, PV_MODULE_ERR_ABI = -3,
+    PV_MODULE_ERR_HOOKTABLE = -4, PV_MODULE_ERR_COUNT = -5
+};
+/* Validate a versioned module container; on success returns 0 and sets *out_words/
+ * *out_count to the raw bytecode. Requires pico_hooks.h (PV_MODULE_* / PV_HOOK_TABLE_VERSION). */
+int pv_load_module(const uint32_t *container, int clen, const uint32_t **out_words, int *out_count);
+
 /* ---- ABI shared with emitted C (toC) and the interpreter ------------- */
 int32_t pv_load(pv_ctx *ctx, int addr16);
 void    pv_save(pv_ctx *ctx, int addr16, int32_t val);

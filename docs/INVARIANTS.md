@@ -247,8 +247,10 @@ and is computed **identically** by Python and JS (`tests/test_abi_version.py` as
 agree — `0xE7771083` today — and that a Python-packed module loads in JS).
 *Design choice (Option C):* the **raw in-memory** word array that the VMs and parity tests
 execute stays headerless — the container is applied only when bytecode is saved/loaded/
-distributed — so the byte-identical hot path is untouched (zero parity/test disruption). A
-C `pv_load_module` port follows the same wire format (documented follow-up).
+distributed — so the byte-identical hot path is untouched (zero parity/test disruption). The
+C runtime has `pv_load_module` (validating the generated `PV_MODULE_*` / `PV_HOOK_TABLE_VERSION`
+in `pico_hooks.h`); `tests/test_abi_version.py` confirms C runs a Python-packed module and
+rejects a tampered hook-table version, so all three runtimes agree on the wire format.
 
 ### 24. Parity runner is the gatekeeper — *enforced (automated gate)*
 `tests/test_parity_gate.py` parses the full hook registry (`vm/pico_hooks.js`) and fails

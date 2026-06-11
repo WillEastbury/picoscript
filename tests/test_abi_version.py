@@ -18,14 +18,38 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import pico_module as pm  # noqa: E402
+from picoscript_cfront import compile_c  # noqa: E402
+from picoscript_il import lower_to_bytecode_safe  # noqa: E402
 
 VM_DIR = os.path.join(ROOT, "vm")
+VM_EXE = os.path.join(VM_DIR, "picovm_run.exe")
 
 
 def _node(expr):
     r = subprocess.run(["node", "-e", expr], cwd=ROOT, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r.stdout.strip()
+
+
+def _build_c_vm():
+    cmd = [sys.executable, "-m", "ziglang", "cc", "-std=c99", "-O2",
+           os.path.join(VM_DIR, "picovm.c"), os.path.join(VM_DIR, "picovm_run.c"), "-o", VM_EXE]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def _c_run_module(container):
+    """Feed a container to the C harness in module mode; return (module_line, out_bytes)."""
+    inp = f"{len(container)}\n" + "\n".join(f"{w & 0xFFFFFFFF:08x}" for w in container) + "\n"
+    env = dict(os.environ, PICOVM_MODULE="1")
+    out = subprocess.run([VM_EXE], input=inp, capture_output=True, text=True, env=env).stdout
+    mod_line, out_bytes = None, b""
+    for line in out.splitlines():
+        if line.startswith("MODULE"):
+            mod_line = int(line.split()[1])
+        if line.startswith("OUT"):
+            out_bytes = bytes(int(x, 16) for x in line.split()[1:])
+    return mod_line, out_bytes
 
 
 def main():
@@ -77,8 +101,21 @@ def main():
         cwd=ROOT, capture_output=True, text=True)
     assert bad_load.stdout.strip() == "REFUSED", f"JS must refuse bad hook-table version: {bad_load.stdout!r}"
 
+    # The C runtime loads a Python-packed module (PV_HOOK_TABLE_VERSION generated into
+    # pico_hooks.h matches) and rejects a tampered hook-table version.
+    _build_c_vm()
+    runnable = lower_to_bytecode_safe(compile_c("int x = 65; Io.WriteByte(x);"))   # emits 'A'
+    good = pm.pack_module(runnable)
+    mod_line, out_bytes = _c_run_module(good)
+    assert mod_line == 0, f"C must accept a valid module (got MODULE {mod_line})"
+    assert out_bytes == b"A", f"C must run the loaded module (got {out_bytes!r})"
+    tampered = list(good); tampered[2] = 0x12345678            # corrupt the hook-table version
+    mod_line2, _ = _c_run_module(tampered)
+    assert mod_line2 == -4, f"C must reject a bad hook-table version with -4 (got MODULE {mod_line2})"
+
     print(f"PASS abi version: module container packs/loads + refuses magic/abi/hook-table/length "
-          f"mismatch; Python and JS agree on hook_table_version=0x{htv:08X} and exchange modules (INV-23)")
+          f"mismatch; Python, JS and C agree on hook_table_version=0x{htv:08X}, exchange modules, "
+          f"and C runs a packed module + rejects a tampered one (INV-23)")
 
 
 if __name__ == "__main__":

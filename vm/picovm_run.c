@@ -42,7 +42,17 @@ int main(void)
     if (na && *na && na[0] != '0') ctx.no_alloc = 1;
     const char *sd = getenv("PICOVM_SEED");         /* let tests pin Random.U32 nondeterminism */
     if (sd && *sd) ctx.rng_state = (uint64_t)strtoull(sd, 0, 0);
-    long steps = pv_vm_run(&ctx, prog, n);
+
+    const uint32_t *run_prog = prog; int run_len = n;
+    const char *mod = getenv("PICOVM_MODULE");      /* treat stdin as a module container (INV-23) */
+    if (mod && *mod && mod[0] != '0') {
+        const uint32_t *w; int c;
+        int rc = pv_load_module(prog, n, &w, &c);
+        if (rc != 0) { printf("MODULE %d\n", rc); return 0; }   /* rejected: do not run */
+        printf("MODULE 0\n");
+        run_prog = w; run_len = c;
+    }
+    long steps = pv_vm_run(&ctx, run_prog, run_len);
 
     printf("STEPS %ld\n", steps);
     printf("FAULT %d %d %d\n", ctx.fault, ctx.fault_pc, ctx.fault_detail);

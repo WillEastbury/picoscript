@@ -9,6 +9,11 @@
 #define PV_NET_BODY_MARKER 0xB000
 #define PV_NET_CLOSE_MARKER 0xC000
 
+/* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
+#define PV_MODULE_MAGIC 0x50534331
+#define PV_MODULE_ABI_VERSION 1
+#define PV_HOOK_TABLE_VERSION 0xE7771083
+
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
 #define PV_HOOK_KERNEL_FIRESWIRQ                 0x03

@@ -1591,6 +1591,22 @@ int pv_verify(const uint32_t *program, int len, int *fault_pc, int *fault_detail
     return PV_FAULT_NONE;
 }
 
+/* INV-23: validate a module container [MAGIC, ABI, HOOK_TABLE_VERSION, count, ...words]
+ * (same wire format as pico_module.py / picovm.js). On success returns 0 and yields the
+ * raw bytecode via out_words and out_count; otherwise a negative PV_MODULE_ERR_ code -- a
+ * module built for a different ABI or host-hook table is refused before it can run. */
+int pv_load_module(const uint32_t *container, int clen, const uint32_t **out_words, int *out_count)
+{
+    if (clen < 4) return PV_MODULE_ERR_TRUNCATED;
+    if (container[0] != (uint32_t)PV_MODULE_MAGIC)        return PV_MODULE_ERR_MAGIC;
+    if (container[1] != (uint32_t)PV_MODULE_ABI_VERSION)  return PV_MODULE_ERR_ABI;
+    if (container[2] != (uint32_t)PV_HOOK_TABLE_VERSION)  return PV_MODULE_ERR_HOOKTABLE;
+    if (container[3] != (uint32_t)(clen - 4))             return PV_MODULE_ERR_COUNT;
+    if (out_words) *out_words = container + 4;
+    if (out_count) *out_count = clen - 4;
+    return 0;
+}
+
 long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len)
 {
     int pc = 0;
