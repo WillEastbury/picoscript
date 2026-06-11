@@ -502,11 +502,51 @@
     if (c === 0) return s >= 0 ? 0x7FFFFFFF : -0x80000000;
     return Number(BigInt.asIntN(32, (BigInt(s) * 65536n) / BigInt(c)));   // trunc toward zero
   }
+  // Q16.16 exp/log: fixmul/fixdiv via BigInt for exact 64-bit intermediates matching
+  // the C int64 / Python big-int paths; series divides trunc-toward-zero.
+  var Q16_LN2 = 45426, Q16_INV_LN2 = 94548, Q16_INV_LN10 = 28462, Q16_EXP_MAX_Z = 681300;
+  function q16Fixmul(a, b) { return Number(BigInt.asIntN(32, (BigInt(a) * BigInt(b)) >> 16n)); }
+  function q16Idiv(a, n) {
+    var aa = a < 0 ? -a : a, nn = n < 0 ? -n : n, q = Math.floor(aa / nn);
+    return ((a < 0) !== (n < 0)) ? -q : q;
+  }
+  function q16Fixdiv(a, b) {
+    var num = BigInt(a) * 65536n, bb = BigInt(b);
+    var an = num < 0n ? -num : num, ab = bb < 0n ? -bb : bb, q = an / ab;
+    return Number(BigInt.asIntN(32, ((num < 0n) !== (bb < 0n)) ? -q : q));
+  }
+  function q16Exp(z) {
+    if (z >= Q16_EXP_MAX_Z) return 0x7FFFFFFF;
+    if (z <= -Q16_EXP_MAX_Z) return 0;
+    var k = (q16Fixmul(z, Q16_INV_LN2) + (Q16_ONE >> 1)) >> 16;
+    var r = (z - k * Q16_LN2) | 0, term = Q16_ONE, acc = Q16_ONE, n, i;
+    for (n = 1; n < 8; n++) { term = q16Idiv(q16Fixmul(term, r), n); acc = (acc + term) | 0; }
+    if (k >= 0) {
+      var a = acc;
+      for (i = 0; i < k; i++) { a = a * 2; if (a > 0x7FFFFFFF) return 0x7FFFFFFF; }
+      return a | 0;
+    }
+    for (i = 0; i < -k; i++) acc = acc >> 1;
+    return acc | 0;
+  }
+  function q16Log(x) {
+    if (x <= 0) return -0x80000000;
+    var e = 0, m = x;
+    while (m >= 2 * Q16_ONE) { m = m >> 1; e++; }
+    while (m < Q16_ONE) { m = m << 1; e--; }
+    var u = q16Fixdiv((m - Q16_ONE) | 0, (m + Q16_ONE) | 0);
+    var u2 = q16Fixmul(u, u), term = u, acc = 0, n;
+    for (n = 0; n < 6; n++) { acc = (acc + q16Idiv(term, 2 * n + 1)) | 0; term = q16Fixmul(term, u2); }
+    return ((2 * acc) + e * Q16_LN2) | 0;
+  }
 
   PicoVM.prototype._mathslib = function (method, rd, rs1, rs2) {
     if (method === "Sin") { this.regs[rd] = q16Sincos(this.regs[rs1] | 0)[0] | 0; return true; }
     if (method === "Cos") { this.regs[rd] = q16Sincos(this.regs[rs1] | 0)[1] | 0; return true; }
     if (method === "Tan") { this.regs[rd] = q16Tan(this.regs[rs1] | 0) | 0; return true; }
+    if (method === "Exp") { this.regs[rd] = q16Exp(this.regs[rs1] | 0) | 0; return true; }
+    if (method === "Log") { this.regs[rd] = q16Log(this.regs[rs1] | 0) | 0; return true; }
+    if (method === "Log10") { this.regs[rd] = q16Fixmul(q16Log(this.regs[rs1] | 0), Q16_INV_LN10) | 0; return true; }
     if (method === "Power") {
       var base = this.regs[rs1] | 0, exp = this.regs[rs2] | 0;
       if (exp <= 0) { this.regs[rd] = (exp === 0 ? 1 : 0) | 0; return true; }

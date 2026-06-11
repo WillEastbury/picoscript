@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Maths.* Q16.16 fixed-point transcendentals (Sin/Cos/Tan via CORDIC).
+"""Maths.* Q16.16 fixed-point transcendentals (Sin/Cos/Tan via CORDIC; Exp/Log/Log10).
 
 A value v is represented as round(v * 65536); angles are radians in Q16.16. The
 functions are all-integer CORDIC with shared constants and iteration count, so the
@@ -61,6 +61,18 @@ while (i < {STEPS}) {{
 }}
 """
 
+# exp over z in ~[-4.8, 4.4]; log/log10 over x in ~[0.5, 12]. Inputs built at runtime.
+PROG_EL = """
+int i = 0;
+while (i < 24) {
+  int z = (i - 12) * 26214; int xl = (i + 1) * 32767; int r;
+  r = Maths.Exp(z);    r = Number.ToString(r); Io.Write(r); Io.WriteByte(32);
+  r = Maths.Log(xl);   r = Number.ToString(r); Io.Write(r); Io.WriteByte(32);
+  r = Maths.Log10(xl); r = Number.ToString(r); Io.Write(r); Io.WriteByte(32);
+  i = i + 1;
+}
+"""
+
 
 def main():
     build_c_vm()
@@ -84,14 +96,40 @@ def main():
             if op == "Tan" and abs(math.cos(rad)) < 0.02:
                 continue
             max_err = max(max_err, abs(raw / ONE - ref(rad)))
-    assert max_err < 5e-3, f"fixed-point accuracy too low: max_err={max_err}"
+    assert max_err < 5e-3, f"fixed-point trig accuracy too low: max_err={max_err}"
 
     # Spot anchors (within CORDIC residual): sin(0) ~ 0, cos(0) ~ 1.0 (raw 65536).
     assert abs(int(vals[0])) <= 4, f"sin(0) must be ~0, got {vals[0]}"
     assert abs(int(vals[1]) - ONE) <= 4, f"cos(0) must be ~65536, got {vals[1]}"
 
-    print(f"PASS fixed-point: Maths.Sin/Cos/Tan Q16.16 byte-identical on Python/C/JS over "
-          f"{STEPS} runtime-computed angles; max abs error {max_err:.5f}")
+    # ── Exp / Log / Log10 ──
+    ewords = lower_to_bytecode_safe(compile_c(PROG_EL))
+    epy = b"".join(PicoVM().run(ewords).output).decode()
+    ec = run_vm(ewords, [VM_EXE])
+    ejs = run_vm(ewords, ["node", os.path.join(VM_DIR, "picovm_run.js")])
+    assert epy == ec, f"Exp/Log: Python VM != C VM\n{epy}\n{ec}"
+    assert epy == ejs, f"Exp/Log: Python VM != JS VM\n{epy}\n{ejs}"
+
+    ev = epy.split()
+    assert len(ev) == 24 * 3, f"expected 72 exp/log values, got {len(ev)}"
+    me = ml = ml10 = 0.0
+    k = 0
+    for i in range(24):
+        z = (i - 12) * 26214 / ONE
+        x = (i + 1) * 32767 / ONE
+        e_raw = int(ev[k]); k += 1
+        l_raw = int(ev[k]); k += 1
+        l10_raw = int(ev[k]); k += 1
+        if z < 4.2:   # above this exp() exceeds Q16.16 range and saturates
+            me = max(me, abs(e_raw / ONE - math.exp(z)) / max(1, math.exp(z)))
+        ml = max(ml, abs(l_raw / ONE - math.log(x)))
+        ml10 = max(ml10, abs(l10_raw / ONE - math.log10(x)))
+    assert me < 1e-3, f"exp accuracy too low: {me}"
+    assert ml < 1e-3, f"log accuracy too low: {ml}"
+    assert ml10 < 1e-3, f"log10 accuracy too low: {ml10}"
+
+    print(f"PASS fixed-point: Maths.Sin/Cos/Tan/Exp/Log/Log10 Q16.16 byte-identical on "
+          f"Python/C/JS; trig max err {max_err:.5f}, exp rel {me:.6f}, log {ml:.6f}, log10 {ml10:.6f}")
 
 
 if __name__ == "__main__":

@@ -128,6 +128,75 @@ def _q16_tan(angle: int) -> int:
     return _sx32(q)
 
 
+# Q16.16 exp/log helpers. fixmul uses arithmetic >>16 (floor); the series divisions
+# use trunc-toward-zero to match the C/JS signed-division convention (INV-2).
+Q16_LN2 = 45426
+Q16_INV_LN2 = 94548
+Q16_INV_LN10 = 28462
+Q16_EXP_MAX_Z = 681300       # ~ln(32767) in Q16.16; above this exp overflows int32
+
+
+def _q16_fixmul(a: int, b: int) -> int:
+    return _sx32((a * b) >> 16)
+
+
+def _q16_idiv(a: int, n: int) -> int:
+    q = abs(a) // abs(n)
+    return -q if (a < 0) != (n < 0) else q
+
+
+def _q16_fixdiv(a: int, b: int) -> int:
+    num = a * Q16_ONE
+    q = abs(num) // abs(b)
+    return _sx32(-q if (num < 0) != (b < 0) else q)
+
+
+def _q16_exp(z: int) -> int:
+    """e^z in Q16.16 (range-reduced by ln2, Taylor on the remainder)."""
+    if z >= Q16_EXP_MAX_Z:
+        return 0x7FFFFFFF
+    if z <= -Q16_EXP_MAX_Z:
+        return 0
+    k = (_q16_fixmul(z, Q16_INV_LN2) + (Q16_ONE >> 1)) >> 16
+    r = _sx32(z - k * Q16_LN2)
+    term = Q16_ONE
+    acc = Q16_ONE
+    for n in range(1, 8):
+        term = _q16_idiv(_q16_fixmul(term, r), n)
+        acc = _sx32(acc + term)
+    if k >= 0:
+        for _ in range(k):
+            acc *= 2
+            if acc > 0x7FFFFFFF:
+                return 0x7FFFFFFF
+    else:
+        for _ in range(-k):
+            acc >>= 1
+    return _sx32(acc)
+
+
+def _q16_log(x: int) -> int:
+    """ln(x) in Q16.16 (x>0); x = m*2^e with m in [1,2), ln(m)=2*atanh((m-1)/(m+1))."""
+    if x <= 0:
+        return -0x80000000
+    e = 0
+    m = x
+    while m >= 2 * Q16_ONE:
+        m >>= 1
+        e += 1
+    while m < Q16_ONE:
+        m <<= 1
+        e -= 1
+    u = _q16_fixdiv(m - Q16_ONE, m + Q16_ONE)
+    u2 = _q16_fixmul(u, u)
+    term = u
+    acc = 0
+    for n in range(6):
+        acc = _sx32(acc + _q16_idiv(term, 2 * n + 1))
+        term = _q16_fixmul(term, u2)
+    return _sx32(_sx32(2 * acc) + e * Q16_LN2)
+
+
 # Binding capability classes (INV-17: "bindings are not ambient"). Bit values are shared
 # verbatim with vm/picovm.h (PV_CAP_*) and vm/picovm.js so a denied hook faults identically
 # on every path. Pure computation needs no capability (class 0, always allowed).
@@ -516,6 +585,12 @@ class HostApi:
             R[rd] = _q16_sincos(_sx32(R[rs1]))[1] & MASK32; return True
         if method == "Tan":
             R[rd] = _q16_tan(_sx32(R[rs1])) & MASK32; return True
+        if method == "Exp":
+            R[rd] = _q16_exp(_sx32(R[rs1])) & MASK32; return True
+        if method == "Log":
+            R[rd] = _q16_log(_sx32(R[rs1])) & MASK32; return True
+        if method == "Log10":
+            R[rd] = _q16_fixmul(_q16_log(_sx32(R[rs1])), Q16_INV_LN10) & MASK32; return True
         if method == "Power":
             base, exp = _sx32(R[rs1]), _sx32(R[rs2])
             if exp <= 0:

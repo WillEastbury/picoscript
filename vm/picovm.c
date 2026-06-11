@@ -989,6 +989,66 @@ static int32_t pv_q16_tan(int32_t angle)
     return (int32_t)(((int64_t)s * PV_Q16_ONE) / c);   /* trunc toward zero (C99 /) */
 }
 
+/* Q16.16 exp/log. fixmul uses arithmetic >>16; series divides trunc-toward-zero. */
+#define PV_Q16_LN2       45426
+#define PV_Q16_INV_LN2   94548
+#define PV_Q16_INV_LN10  28462
+#define PV_Q16_EXP_MAX_Z 681300
+
+static int32_t pv_q16_fixmul(int32_t a, int32_t b)
+{
+    return (int32_t)(((int64_t)a * b) >> 16);
+}
+static int32_t pv_q16_idiv(int32_t a, int32_t n)   /* trunc toward zero */
+{
+    int64_t aa = (a < 0) ? -(int64_t)a : a;
+    int64_t nn = (n < 0) ? -(int64_t)n : n;
+    int64_t q = aa / nn;
+    return (int32_t)(((a < 0) != (n < 0)) ? -q : q);
+}
+static int32_t pv_q16_fixdiv(int32_t a, int32_t b)
+{
+    int64_t num = (int64_t)a * PV_Q16_ONE;
+    int64_t nn = (num < 0) ? -num : num;
+    int64_t bb = (b < 0) ? -(int64_t)b : b;
+    int64_t q = nn / bb;
+    return (int32_t)(((num < 0) != (b < 0)) ? -q : q);
+}
+static int32_t pv_q16_exp(int32_t z)
+{
+    int32_t k, r, term, acc, n, i;
+    if (z >= PV_Q16_EXP_MAX_Z) return 0x7FFFFFFF;
+    if (z <= -PV_Q16_EXP_MAX_Z) return 0;
+    k = (pv_q16_fixmul(z, PV_Q16_INV_LN2) + (PV_Q16_ONE >> 1)) >> 16;
+    r = z - k * PV_Q16_LN2;
+    term = PV_Q16_ONE; acc = PV_Q16_ONE;
+    for (n = 1; n < 8; n++) {
+        term = pv_q16_idiv(pv_q16_fixmul(term, r), n);
+        acc += term;
+    }
+    if (k >= 0) {
+        int64_t a64 = acc;
+        for (i = 0; i < k; i++) { a64 *= 2; if (a64 > 0x7FFFFFFF) return 0x7FFFFFFF; }
+        return (int32_t)a64;
+    }
+    for (i = 0; i < -k; i++) acc >>= 1;
+    return acc;
+}
+static int32_t pv_q16_log(int32_t x)
+{
+    int32_t e = 0, m = x, u, u2, term, acc = 0, n;
+    if (x <= 0) return (int32_t)0x80000000;
+    while (m >= 2 * PV_Q16_ONE) { m >>= 1; e++; }
+    while (m < PV_Q16_ONE) { m <<= 1; e--; }
+    u = pv_q16_fixdiv(m - PV_Q16_ONE, m + PV_Q16_ONE);
+    u2 = pv_q16_fixmul(u, u); term = u;
+    for (n = 0; n < 6; n++) {
+        acc += pv_q16_idiv(term, 2 * n + 1);
+        term = pv_q16_fixmul(term, u2);
+    }
+    return (2 * acc) + e * PV_Q16_LN2;
+}
+
 void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
 {
     (void)imm16;
@@ -1450,6 +1510,15 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
     }
     if (hook == PV_HOOK_MATHS_TAN) {
         ctx->regs[rd] = pv_q16_tan(ctx->regs[rs1]); return;
+    }
+    if (hook == PV_HOOK_MATHS_EXP) {
+        ctx->regs[rd] = pv_q16_exp(ctx->regs[rs1]); return;
+    }
+    if (hook == PV_HOOK_MATHS_LOG) {
+        ctx->regs[rd] = pv_q16_log(ctx->regs[rs1]); return;
+    }
+    if (hook == PV_HOOK_MATHS_LOG10) {
+        ctx->regs[rd] = pv_q16_fixmul(pv_q16_log(ctx->regs[rs1]), PV_Q16_INV_LN10); return;
     }
     if (hook == PV_HOOK_MATHS_POWER) {
         int32_t base = ctx->regs[rs1], exp = ctx->regs[rs2];
