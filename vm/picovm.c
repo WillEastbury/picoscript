@@ -156,6 +156,19 @@ static int pv_arena_finish(pv_ctx *ctx, uint32_t k)
     ctx->arena_top += k;
     return h;
 }
+static void pv_arena_puts(pv_ctx *ctx, uint32_t *k, const char *s)
+{
+    while (*s) pv_arena_put(ctx, k, (uint8_t)*s++);
+}
+static int pv_arena_match(pv_ctx *ctx, uint32_t at, int32_t avail, const char *s)
+{
+    int32_t n = 0;
+    while (s[n]) n++;
+    if (avail < n) return 0;
+    for (int32_t i = 0; i < n; i++)
+        if (pv_arena_get(ctx, at + (uint32_t)i) != (uint8_t)s[i]) return 0;
+    return 1;
+}
 
 /* ---- default host: Random.U32 + Queue.* (mirrors HostApi) ------------- */
 
@@ -472,7 +485,122 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         return;
     }
 
+    /* ---- Maths.* (pure integer: Power = modular pow, Sqrt = floor sqrt) - */
+    if (hook == PV_HOOK_MATHS_POWER) {
+        int32_t base = ctx->regs[rs1], exp = ctx->regs[rs2];
+        uint32_t r;
+        if (exp <= 0) {
+            r = (exp == 0) ? 1u : 0u;
+        } else {
+            int32_t e = (exp > 0xFFFF) ? 0xFFFF : exp;
+            r = 1u;
+            for (int32_t t = 0; t < e; t++) r = (uint32_t)(r * (uint32_t)base);
+        }
+        ctx->regs[rd] = (int32_t)r;
+        return;
+    }
+    if (hook == PV_HOOK_MATHS_SQRT) {
+        int32_t n = ctx->regs[rs1];
+        if (n <= 0) { ctx->regs[rd] = 0; return; }
+        uint32_t x = (uint32_t)n, res = 0, bit = 1u << 30;
+        while (bit > (uint32_t)n) bit >>= 2;
+        while (bit) {
+            if (x >= res + bit) { x -= res + bit; res = (res >> 1) + bit; }
+            else res >>= 1;
+            bit >>= 2;
+        }
+        ctx->regs[rd] = (int32_t)res;
+        return;
+    }
+
+    /* ---- Compress.* (reversible byte-run RLE -> (count,byte) pairs) ---- */
+    if (hook == PV_HOOK_COMPRESS_PICOCOMPRESS) {
+        int h = ctx->regs[rs1];
+        uint32_t p = pv_span_p(ctx, h);
+        int32_t l = pv_span_n(ctx, h), i = 0;
+        uint32_t k = 0;
+        while (i < l) {
+            uint8_t b0 = pv_arena_get(ctx, p + (uint32_t)i);
+            int32_t c = 1;
+            while (i + c < l && pv_arena_get(ctx, p + (uint32_t)(i + c)) == b0 && c < 255) c++;
+            pv_arena_put(ctx, &k, (uint8_t)c);
+            pv_arena_put(ctx, &k, b0);
+            i += c;
+        }
+        ctx->regs[rd] = pv_arena_finish(ctx, k);
+        return;
+    }
+    if (hook == PV_HOOK_COMPRESS_PICODECOMPRESS) {
+        int h = ctx->regs[rs1];
+        uint32_t p = pv_span_p(ctx, h);
+        int32_t l = pv_span_n(ctx, h), i = 0;
+        uint32_t k = 0;
+        while (i + 1 < l) {
+            uint8_t cnt = pv_arena_get(ctx, p + (uint32_t)i);
+            uint8_t b0 = pv_arena_get(ctx, p + (uint32_t)(i + 1));
+            for (uint8_t t = 0; t < cnt; t++) pv_arena_put(ctx, &k, b0);
+            i += 2;
+        }
+        ctx->regs[rd] = pv_arena_finish(ctx, k);
+        return;
+    }
+
+    /* ---- Html.* (entity escape; single-pass, byte-exact w/ Python) ----- */
+    if (hook == PV_HOOK_HTML_ENCODE) {
+        int h = ctx->regs[rs1];
+        uint32_t p = pv_span_p(ctx, h);
+        int32_t l = pv_span_n(ctx, h);
+        uint32_t k = 0;
+        for (int32_t i = 0; i < l; i++) {
+            uint8_t c = pv_arena_get(ctx, p + (uint32_t)i);
+            if (c == '&') pv_arena_puts(ctx, &k, "&amp;");
+            else if (c == '<') pv_arena_puts(ctx, &k, "&lt;");
+            else if (c == '>') pv_arena_puts(ctx, &k, "&gt;");
+            else if (c == '"') pv_arena_puts(ctx, &k, "&quot;");
+            else if (c == 0x27) pv_arena_puts(ctx, &k, "&#39;");
+            else pv_arena_put(ctx, &k, c);
+        }
+        ctx->regs[rd] = pv_arena_finish(ctx, k);
+        return;
+    }
+    if (hook == PV_HOOK_HTML_DECODE) {
+        int h = ctx->regs[rs1];
+        uint32_t p = pv_span_p(ctx, h);
+        int32_t l = pv_span_n(ctx, h), i = 0;
+        uint32_t k = 0;
+        while (i < l) {
+            uint8_t c = pv_arena_get(ctx, p + (uint32_t)i);
+            if (c == '&') {
+                if (pv_arena_match(ctx, p + (uint32_t)i, l - i, "&lt;"))   { pv_arena_put(ctx, &k, '<');  i += 4; continue; }
+                if (pv_arena_match(ctx, p + (uint32_t)i, l - i, "&gt;"))   { pv_arena_put(ctx, &k, '>');  i += 4; continue; }
+                if (pv_arena_match(ctx, p + (uint32_t)i, l - i, "&quot;")) { pv_arena_put(ctx, &k, '"');  i += 6; continue; }
+                if (pv_arena_match(ctx, p + (uint32_t)i, l - i, "&#39;"))  { pv_arena_put(ctx, &k, 0x27); i += 5; continue; }
+                if (pv_arena_match(ctx, p + (uint32_t)i, l - i, "&amp;"))  { pv_arena_put(ctx, &k, '&');  i += 5; continue; }
+            }
+            pv_arena_put(ctx, &k, c); i++;
+        }
+        ctx->regs[rd] = pv_arena_finish(ctx, k);
+        return;
+    }
+
     /* unknown host-fillable primitive: ignore (host supplies on real target) */
+}
+
+/* Value-based host entry: the SAME implementation as the interpreter, callable
+ * directly from emitted C (toC backend) so compiled programs skip the bytecode
+ * VM and the string-keyed pv_host. Compiled C never uses ctx->regs for data, so
+ * they are free scratch here; we marshal (a,b) -> regs, dispatch by hook code,
+ * and read back the result. Accelerated ops (e.g. Dot8 -> NEON SDOT / SMLAD)
+ * keep their inline lowering in _emit_c and are reached via pv_dot8. */
+int64_t pv_host2(pv_ctx *ctx, int hook, int64_t a, int64_t b)
+{
+    int imm16 = (hook <= 0xFF) ? (PV_HOST_HOOK_BASE | hook)
+                               : (PV_EXT_HOST_HOOK_BASE | (hook & 0x0FFF));
+    ctx->regs[1] = (int32_t)a;
+    ctx->regs[2] = (int32_t)b;
+    ctx->regs[0] = 0;
+    pv_default_host(ctx, hook, 0, 1, 2, imm16);
+    return (int64_t)ctx->regs[0];
 }
 
 int64_t pv_host(pv_ctx *ctx, const char *ns, const char *method, int64_t a, int64_t b)

@@ -678,7 +678,9 @@ def lower_to_c(insts: List[Inst], func_name: str = "pico_main", opt: bool = True
     if emit_main:
         out.append("#include <stdio.h>")
         out.append("int main(void) {")
+        out.append("    static uint8_t pico_arena[520 * 1024];   /* data arena: Memory/Span/String */")
         out.append("    pv_ctx ctx; pv_init(&ctx);")
+        out.append("    ctx.mem = pico_arena; ctx.mem_size = (long)sizeof(pico_arena);")
         out.append(f"    {module}(&ctx);")
         out.append('    printf("STEPS %ld\\n", ctx.steps);')
         out.append('    printf("STATUS %d\\n", ctx.http_status);')
@@ -765,6 +767,12 @@ def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool) -> str:
             return f"    pv_dot8_setlen(ctx, (int)({a}));"
         if ins.ns == "Dot8" and ins.method == "Of" and isinstance(ins.dst, VReg):
             return f"    {name_of(ins.dst)} = pv_dot8(ctx, (uint32_t)({a}), (uint32_t)({b}));"
+        # First-class native lowering for every other host namespace: a direct call
+        # into the shared value-based host (pv_host2), dispatched by hook code -- no
+        # bytecode VM, no string-keyed dispatch. Accelerated ops keep inline paths above.
+        code = HOST_HOOK_CODES.get((ins.ns, ins.method))
+        if code is not None:
+            return f"    {dst}pv_host2(ctx, 0x{code:X}, {a}, {b});"
         return f"    {dst}pv_host(ctx, \"{ins.ns}\", \"{ins.method}\", {a}, {b});"
     if op == "load":
         return f"    {name_of(ins.dst)} = pv_load(ctx, {ins.imm});"

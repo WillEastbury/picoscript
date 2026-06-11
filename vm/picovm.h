@@ -123,6 +123,11 @@ void    pv_net_body(pv_ctx *ctx);
 void    pv_net_close(pv_ctx *ctx);
 void    pv_net_header(pv_ctx *ctx);
 int64_t pv_host(pv_ctx *ctx, const char *ns, const char *method, int64_t a, int64_t b);
+/* Value-based host entry shared by the C interpreter and emitted C (toC): dispatch
+ * a host hook by its numeric code, returning the result value. Lets compiled
+ * programs call host namespaces (String/Number/Maths/Compress/Crypto/Html/Http/
+ * Template/Span/Io) as first-class native calls without the bytecode VM. */
+int64_t pv_host2(pv_ctx *ctx, int hook, int64_t a, int64_t b);
 int64_t pv_dsp(pv_ctx *ctx, int subop, int64_t a, int64_t b);
 
 /* Dot8: signed int8 span dot product, HW-accelerated where available
