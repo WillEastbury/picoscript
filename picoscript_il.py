@@ -819,6 +819,38 @@ class _ConstExpansion(Exception):
         self.value = value
 
 
+def _to_i32(v: int) -> int:
+    """Interpret v as a 32-bit two's-complement value (so a literal lowers to the same
+    int32 the bytecode VMs reconstruct)."""
+    return ((v & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000
+
+
+def _const_width(value: int) -> int:
+    """Words to load `value`: 2 for a sign-extended 16-bit immediate, else an 8-word
+    big-endian byte build (any other 32-bit literal)."""
+    return 2 if -32768 <= value <= 32767 else 8
+
+
+def _emit_const(words: List[int], rd: int, value: int) -> int:
+    """Append the word(s) that load `value` into register rd and return the count.
+    Small values keep the 2-word SUB/ADD-imm sequence (so existing bytecode is
+    unchanged). Larger literals are built big-endian byte-by-byte
+    (SUB; ADD b3; MUL 256; ADD b2; MUL 256; ADD b1; MUL 256; ADD b0) using only
+    sign-safe positive immediates (each byte <= 255, the multiplier 256), so any int32
+    literal lowers correctly despite the 16-bit sign-extended immediate field."""
+    E = isa.encode_instruction
+    words.append(E(isa.OP_SUB, rd=rd, rs1=rd, rs2=isa.ADDR_REGISTER, imm16=rd))   # rd = rd - rd = 0
+    if -32768 <= value <= 32767:
+        words.append(E(isa.OP_ADD, rd=rd, rs1=rd, imm16=value & 0xFFFF))          # rd = sx16(imm)
+        return 2
+    u = value & 0xFFFFFFFF
+    for sh in (24, 16, 8, 0):
+        words.append(E(isa.OP_ADD, rd=rd, rs1=rd, imm16=(u >> sh) & 0xFF))
+        if sh:
+            words.append(E(isa.OP_MUL, rd=rd, rs1=rd, imm16=256))
+    return 8
+
+
 def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True,
                            check_ownership: bool = True,
                            debug: "Optional[dict]" = None) -> List[int]:
@@ -845,9 +877,9 @@ def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True,
         if ins.op == "label":
             return 0
         if ins.op == "const":
-            return 2
+            return _const_width(ins.imm)
         if ins.op == "mov" and isinstance(ins.a, Imm):
-            return 2
+            return _const_width(ins.a.value)
         if ins.op == "jmptab":
             return len(ins.targets) + 1     # 1 computed jump + N inline table entries
         return 1
@@ -869,9 +901,7 @@ def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True,
         if ins.op == "const" or (ins.op == "mov" and isinstance(ins.a, Imm)):
             rd = _phys(mapping, ins.dst)
             value = ins.imm if ins.op == "const" else ins.a.value
-            words.append(E(isa.OP_SUB, rd=rd, rs1=rd, rs2=isa.ADDR_REGISTER, imm16=rd))  # rd = rd - rd = 0
-            words.append(E(isa.OP_ADD, rd=rd, rs1=rd, imm16=value & 0xFFFF))             # rd = 0 + imm
-            pc += 2
+            pc += _emit_const(words, rd, value)
             continue
         if ins.op == "jmptab":
             sel = _phys(mapping, ins.a)
@@ -884,9 +914,7 @@ def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True,
         try:
             words.append(_emit_word(ins, mapping, labels, pc))
         except _ConstExpansion as ce:
-            words.append(E(isa.OP_SUB, rd=ce.rd, rs1=ce.rd, rs2=isa.ADDR_REGISTER, imm16=ce.rd))
-            words.append(E(isa.OP_ADD, rd=ce.rd, rs1=ce.rd, imm16=ce.value & 0xFFFF))
-            pc += 2
+            pc += _emit_const(words, ce.rd, ce.value)
             continue
         pc += 1
 
@@ -1086,7 +1114,7 @@ def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool) -> str:
     if op == "label":
         return f"{_c_ident(ins.label)}:;"
     if op == "const":
-        return f"    {name_of(ins.dst)} = {ins.imm};"
+        return f"    {name_of(ins.dst)} = {_to_i32(ins.imm)};"
     if op == "mov":
         return f"    {name_of(ins.dst)} = {opnd(ins.a)};"
     if op in ARITH:
@@ -1359,7 +1387,7 @@ def _emit_js_inst(ins: Inst, jop, jname, label_block, label_to_func) -> Tuple[st
     """Return (js_source, is_terminator)."""
     op = ins.op
     if op == "const":
-        return f"{jname(ins.dst)} = {ins.imm};", False
+        return f"{jname(ins.dst)} = {_to_i32(ins.imm)};", False
     if op == "mov":
         return f"{jname(ins.dst)} = {jop(ins.a)};", False
     if op in ARITH:

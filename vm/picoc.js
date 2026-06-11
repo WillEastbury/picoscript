@@ -400,10 +400,26 @@
     }
     function width(ins) {
       if (ins.op === "label") return 0;
-      if (ins.op === "const") return 2;
-      if (ins.op === "mov" && isImm(ins.a)) return 2;
+      if (ins.op === "const") return (ins.imm >= -32768 && ins.imm <= 32767) ? 2 : 8;
+      if (ins.op === "mov" && isImm(ins.a)) return (ins.a.value >= -32768 && ins.a.value <= 32767) ? 2 : 8;
       if (ins.op === "jmptab") return ins.targets.length + 1;
       return 1;
+    }
+    // Load `value` into rd: 2-word SUB/ADD-imm for a 16-bit immediate (unchanged), else
+    // an 8-word big-endian byte build (SUB; ADD b3; MUL 256; ...; ADD b0) using only
+    // sign-safe positive immediates. Byte-identical to picoscript_il._emit_const.
+    function emitConst(words, rd, value) {
+      words.push(enc(OP.SUB, rd, rd, ADDR_REG, rd));   // rd = rd - rd = 0
+      if (value >= -32768 && value <= 32767) {
+        words.push(enc(OP.ADD, rd, rd, 0, value & 0xFFFF));
+        return 2;
+      }
+      var u = value >>> 0, shs = [24, 16, 8, 0], i;
+      for (i = 0; i < 4; i++) {
+        words.push(enc(OP.ADD, rd, rd, 0, (u >>> shs[i]) & 0xFF));
+        if (shs[i]) words.push(enc(OP.MUL, rd, rd, 0, 256));
+      }
+      return 8;
     }
     var labels = {}, pc = 0;
     insts.forEach(function (ins) {
@@ -415,9 +431,7 @@
       if (ins.op === "const" || (ins.op === "mov" && isImm(ins.a))) {
         var rd = phys(mapping, ins.dst);
         var value = (ins.op === "const") ? ins.imm : ins.a.value;
-        words.push(enc(OP.SUB, rd, rd, ADDR_REG, rd));   // rd = rd - rd = 0
-        words.push(enc(OP.ADD, rd, rd, 0, value & 0xFFFF));
-        pc += 2; return;
+        pc += emitConst(words, rd, value); return;
       }
       if (ins.op === "jmptab") {
         var sel = phys(mapping, ins.a);
