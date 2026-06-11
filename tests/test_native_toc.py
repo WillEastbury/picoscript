@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import hashlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -154,8 +155,17 @@ def main():
               f"int s = Span.Make(1000, {len(pjsrc)}); int m = Http.ParseJson(s); Io.Write(m);")
         check(pj, b"items.0.name=A\nitems.1.name=B\n", "http_parsejson")
 
+        # Crypto.Sha256: canonical "abc" digest + a multi-block input (padding across blocks).
+        sh = (setbytes(1000, b"abc") +
+              "int s = Span.Make(1000, 3); int d = Crypto.Sha256(s); Io.Write(d);")
+        check(sh, hashlib.sha256(b"abc").digest(), "sha256_abc")
+        msg = bytes((i * 7 + 3) & 0xFF for i in range(130))
+        shl = (setbytes(1000, msg) +
+               f"int s = Span.Make(1000, {len(msg)}); int d = Crypto.Sha256(s); Io.Write(d);")
+        check(shl, hashlib.sha256(msg).digest(), "sha256_multiblock")
+
         print("PASS first-class toC: Python VM == C interpreter == toC-compiled native, byte-exact "
-              "-- Span/String/Number/Maths/Compress/Html/Http (compiled programs skip the bytecode VM)")
+              "-- Span/String/Number/Maths/Compress/Html/Http/Crypto (compiled programs skip the bytecode VM)")
     finally:
         shutil.rmtree(BUILD, ignore_errors=True)
 
