@@ -50,6 +50,40 @@ def _sx32(v: int) -> int:
     return v - 0x100000000 if v & 0x80000000 else v
 
 
+# Binding capability classes (INV-17: "bindings are not ambient"). Bit values are shared
+# verbatim with vm/picovm.h (PV_CAP_*) and vm/picovm.js so a denied hook faults identically
+# on every path. Pure computation needs no capability (class 0, always allowed).
+CAP_KERNEL  = 1 << 0
+CAP_QUEUE   = 1 << 1
+CAP_RANDOM  = 1 << 2
+CAP_STORAGE = 1 << 3
+CAP_TIME    = 1 << 4
+CAP_NET     = 1 << 5
+CAP_CONTEXT = 1 << 6
+CAP_AUTH    = 1 << 7
+CAP_ENV     = 1 << 8
+CAP_ALL     = 0x1FF             # default grant: every binding (host restricts to gate)
+
+_CAP_BY_NS = {
+    "Kernel": CAP_KERNEL, "Queue": CAP_QUEUE, "Random": CAP_RANDOM,
+    "Req": CAP_NET, "Resp": CAP_NET, "Net": CAP_NET,
+    "Storage": CAP_STORAGE, "DateTime": CAP_TIME, "Context": CAP_CONTEXT,
+    "Auth": CAP_AUTH, "X509": CAP_AUTH, "Environment": CAP_ENV, "Locale": CAP_ENV,
+}
+
+
+def hook_cap(ns: str, method: str) -> int:
+    """Capability class a host hook needs (0 = pure). Mirrors vm/picovm.c pv_hook_cap;
+    handles the mixed namespaces (Maths/Crypto have both pure and binding members)."""
+    if ns == "Maths" and method in ("Random", "RandomRange"):
+        return CAP_RANDOM
+    if ns == "Crypto" and method == "RandomBytes":
+        return CAP_RANDOM
+    if ns == "Http" and method in ("ReadHeader", "ReadBody", "GenerateHeaders", "GenerateResponse"):
+        return CAP_NET
+    return _CAP_BY_NS.get(ns, 0)
+
+
 class HostApi:
     """Default host-hook implementation.
 
@@ -62,6 +96,7 @@ class HostApi:
     def __init__(self):
         self.queues: Dict[int, List[int]] = {}
         self.rng_state = 0x2545F4914F6CDD1D
+        self.caps = CAP_ALL          # granted binding capabilities (INV-17); host restricts to gate
         self.log: List[str] = []
         self.handlers: Dict[tuple, Callable] = {}
         # Card store (PicoStore) + program-level Storage.* context.
@@ -97,6 +132,11 @@ class HostApi:
         self.handlers[(ns, method)] = fn
 
     def call(self, vm: "PicoVM", ns: str, method: str, rd, rs1, rs2, imm16):
+        # INV-17: bindings are not ambient -- a hook touching the outside world is
+        # denied unless its capability class has been granted to this capsule.
+        need = hook_cap(ns, method)
+        if need and not (self.caps & need):
+            raise RuntimeError(f"capability denied: {ns}.{method} requires an ungranted binding")
         fn = self.handlers.get((ns, method))
         if fn is not None:
             return fn(vm, rd, rs1, rs2, imm16)
@@ -1164,7 +1204,7 @@ class PicoVM:
     """Deterministic interpreter for the 16-opcode PicoScript ISA."""
 
     def __init__(self, host: Optional[HostApi] = None, max_steps: int = 1_000_000,
-                 arena_bytes: int = ARENA_BYTES):
+                 arena_bytes: int = ARENA_BYTES, caps: Optional[int] = None):
         self.regs: List[int] = [0] * isa_num_regs()
         self.cards: Dict[int, int] = {}
         self.call_stack: List[int] = []
@@ -1177,6 +1217,8 @@ class PicoVM:
         self.arena_top = 0x8000              # bump pointer for Span.Materialize copies
         self.spans: List[Optional[dict]] = [None]   # span table; handle = 1-based index
         self.host = host or HostApi()
+        if caps is not None:                 # restrict granted bindings (INV-17)
+            self.host.caps = caps
         self.max_steps = max_steps
         self.steps = 0
         self.pc = 0

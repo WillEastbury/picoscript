@@ -10,7 +10,11 @@ process.stdin.on("end", () => {
   const words = [];
   for (let i = 0; i < n; i++) words.push(parseInt(toks[1 + i], 16) >>> 0);
   const ms = process.env.PICOVM_MAX_STEPS;   // let tests drive the step budget
-  const vm = new PicoVM(ms ? { maxSteps: parseInt(ms, 10) } : {});
+  const cps = process.env.PICOVM_CAPS;        // let tests restrict binding capabilities
+  var opts = {};
+  if (ms) opts.maxSteps = parseInt(ms, 10);
+  if (cps) opts.caps = parseInt(cps, 0) >>> 0;
+  const vm = new PicoVM(opts);
   let fault = 0;
   try {
     vm.run(words);
@@ -21,6 +25,7 @@ process.stdin.on("end", () => {
     else if (m.indexOf("bad opcode") >= 0) fault = 2;
     else if (m.indexOf("bad jump") >= 0 || m.indexOf("bad branch") >= 0 || m.indexOf("bad call") >= 0) fault = 3;
     else if (m.indexOf("template depth") >= 0) fault = 7;
+    else if (m.indexOf("capability denied") >= 0) fault = 8;
     else fault = 99;
   }
   console.log("STEPS " + vm.steps);

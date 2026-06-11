@@ -32,11 +32,13 @@ def build_c_vm():
     assert r.returncode == 0, r.stderr
 
 
-def c_fault(words, max_steps=None):
+def c_fault(words, max_steps=None, caps=None):
     inp = f"{len(words)}\n" + "\n".join(f"{w:08x}" for w in words) + "\n"
     env = dict(os.environ)
     if max_steps is not None:
         env["PICOVM_MAX_STEPS"] = str(max_steps)
+    if caps is not None:
+        env["PICOVM_CAPS"] = str(caps)
     out = subprocess.run([VM_EXE], input=inp, capture_output=True, text=True, env=env).stdout
     for line in out.splitlines():
         if line.startswith("FAULT"):
@@ -44,11 +46,13 @@ def c_fault(words, max_steps=None):
     return 0
 
 
-def js_fault(words, max_steps=None):
+def js_fault(words, max_steps=None, caps=None):
     inp = f"{len(words)}\n" + "\n".join(f"{w:08x}" for w in words) + "\n"
     env = dict(os.environ)
     if max_steps is not None:
         env["PICOVM_MAX_STEPS"] = str(max_steps)
+    if caps is not None:
+        env["PICOVM_CAPS"] = str(caps)
     out = subprocess.run(["node", os.path.join(VM_DIR, "picovm_run.js")],
                          input=inp, capture_output=True, text=True, env=env).stdout
     for line in out.splitlines():
@@ -57,9 +61,9 @@ def js_fault(words, max_steps=None):
     return 0
 
 
-def py_faulted(words, max_steps=1_000_000):
+def py_faulted(words, max_steps=1_000_000, caps=None):
     try:
-        PicoVM(max_steps=max_steps).run(words)
+        PicoVM(max_steps=max_steps, caps=caps).run(words)
         return False
     except RuntimeError:
         return True
@@ -106,8 +110,30 @@ def main():
     assert c_fault(tw) == 7, "C VM must fault (7=template depth)"
     assert js_fault(tw) == 7, "JS VM must fault (7=template depth)"
 
-    print("PASS vm safety: step-budget (INV-12), out-of-range jump (INV-11) and template "
-          "depth (INV-19) fault identically on Python / C / JS -- C no longer silently truncates")
+    # ── INV-17 (killer): bindings are not ambient. A binding hook is denied (fault 8)
+    # unless its capability class is granted; pure hooks are unaffected by the grant. ──
+    CAP_ALL = 0x1FF
+    CAP_RANDOM = 1 << 2
+    no_random = CAP_ALL & ~CAP_RANDOM
+    rand_hook = [0x00007020]   # NOOP imm16=0x7000|0x20 -> Random.U32 (RANDOM-gated)
+    io_hook = [0x00007072]     # NOOP imm16=0x7000|0x72 -> Io.WriteByte (pure)
+
+    # Granted: no fault on any VM.
+    assert not py_faulted(rand_hook, caps=CAP_ALL), "Random.U32 must run when granted (Python)"
+    assert c_fault(rand_hook, caps=CAP_ALL) == 0, "Random.U32 must run when granted (C)"
+    assert js_fault(rand_hook, caps=CAP_ALL) == 0, "Random.U32 must run when granted (JS)"
+    # Revoked CAP_RANDOM: the binding is denied identically on all three.
+    assert py_faulted(rand_hook, caps=no_random), "Random.U32 must be denied without CAP_RANDOM (Python)"
+    assert c_fault(rand_hook, caps=no_random) == 8, "C VM must fault (8=capability)"
+    assert js_fault(rand_hook, caps=no_random) == 8, "JS VM must fault (8=capability)"
+    # A pure hook (Io.WriteByte) is unaffected by the revoked binding.
+    assert not py_faulted(io_hook, caps=no_random), "pure Io.WriteByte must not be gated (Python)"
+    assert c_fault(io_hook, caps=no_random) == 0, "pure Io.WriteByte must not be gated (C)"
+    assert js_fault(io_hook, caps=no_random) == 0, "pure Io.WriteByte must not be gated (JS)"
+
+    print("PASS vm safety: step-budget (INV-12), out-of-range jump (INV-11), template depth "
+          "(INV-19) and capability gating (INV-17: bindings are not ambient) fault identically "
+          "on Python / C / JS -- pure hooks stay ungated")
 
 
 if __name__ == "__main__":

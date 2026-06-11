@@ -905,9 +905,36 @@ static int pv_textio(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
 
 /* ---- default host: Random.U32 + Queue.* (mirrors HostApi) ------------- */
 
+/* Binding capability class required by a hook (0 = pure computation, always allowed).
+ * Classified by hook code (ranges + the few mixed-namespace exceptions), kept in lockstep
+ * with the Python/JS classifiers so a denied hook faults identically on every path. */
+uint32_t pv_hook_cap(int hook)
+{
+    /* mixed-namespace exceptions first */
+    if (hook == PV_HOOK_MATHS_RANDOM || hook == PV_HOOK_MATHS_RANDOMRANGE) return PV_CAP_RANDOM;
+    if (hook == PV_HOOK_CRYPTO_RANDOMBYTES) return PV_CAP_RANDOM;
+    if (hook >= 0x130 && hook <= 0x133) return PV_CAP_NET;   /* Http Read/Generate (Parse/Encode are pure) */
+    if (hook >= 0x01 && hook <= 0x06) return PV_CAP_KERNEL;  /* Kernel.* */
+    if (hook >= 0x07 && hook <= 0x0E) return PV_CAP_NET;     /* Req.* */
+    if (hook >= 0x10 && hook <= 0x14) return PV_CAP_QUEUE;   /* Queue.* */
+    if ((hook >= 0x15 && hook <= 0x1F) || hook == 0x38 || hook == 0x39) return PV_CAP_NET;  /* Resp.* */
+    if (hook == PV_HOOK_RANDOM_U32) return PV_CAP_RANDOM;    /* Random.U32 */
+    if (hook >= 0x60 && hook <= 0x6E) return PV_CAP_STORAGE; /* Storage.* */
+    if (hook >= 0xB0 && hook <= 0xBA) return PV_CAP_TIME;    /* DateTime.* */
+    if (hook >= 0xC0 && hook <= 0xC6) return PV_CAP_ENV;     /* Locale.* */
+    if (hook >= 0xD0 && hook <= 0xD8) return PV_CAP_ENV;     /* Environment.* */
+    if (hook >= 0xE0 && hook <= 0xEE) return PV_CAP_CONTEXT; /* Context.* */
+    if (hook >= 0x110 && hook <= 0x117) return PV_CAP_AUTH;  /* X509.* */
+    if (hook >= 0x120 && hook <= 0x129) return PV_CAP_AUTH;  /* Auth.* */
+    return 0;                                                /* pure: String/Number/Maths/Span/... */
+}
+
 void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
 {
     (void)imm16;
+    /* INV-17: bindings are not ambient -- deny the hook unless its class is granted. */
+    uint32_t need = pv_hook_cap(hook);
+    if (need && !(ctx->caps & need)) { ctx->fault = PV_FAULT_CAPABILITY; ctx->halted = 1; return; }
     if (hook == PV_HOOK_RANDOM_U32) {
         uint64_t x = ctx->rng_state;
         x ^= (x << 13) & MASK32;
@@ -1468,6 +1495,7 @@ void pv_init(pv_ctx *ctx)
     ctx->http_type = 0;
     ctx->rng_state = 0x2545F4914F6CDD1DULL;
     ctx->max_steps = 1000000L;
+    ctx->caps = PV_CAP_ALL;     /* default: every binding granted; host restricts to gate (INV-17) */
     ctx->span_count = 1;        /* handle 0 reserved as the null span */
     ctx->arena_top = 0x8000;    /* bump pointer for span results (matches PicoVM) */
     ctx->w_count = 1;           /* Utf8Writer/Json/Xml: handle 0 reserved */

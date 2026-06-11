@@ -35,6 +35,8 @@ int main(void)
     ctx.mem_size = (long)sizeof(arena);
     const char *ms = getenv("PICOVM_MAX_STEPS");   /* let tests drive the step budget */
     if (ms && *ms) ctx.max_steps = atol(ms);
+    const char *cp = getenv("PICOVM_CAPS");         /* let tests restrict binding capabilities */
+    if (cp && *cp) ctx.caps = (uint32_t)strtoul(cp, 0, 0);
     long steps = pv_vm_run(&ctx, prog, n);
 
     printf("STEPS %ld\n", steps);

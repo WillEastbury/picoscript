@@ -30,6 +30,21 @@
 
   function sx16(v) { v &= 0xFFFF; return (v & 0x8000) ? v - 0x10000 : v; }
 
+  // Binding capability classes (INV-17). Bit values match vm/picovm.h PV_CAP_* and
+  // picoscript_vm.CAP_*; pure computation needs none (class 0, always allowed).
+  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256 };
+  var CAP_ALL = 0x1FF;
+  var CAP_BY_NS = { Kernel: CAP.KERNEL, Queue: CAP.QUEUE, Random: CAP.RANDOM,
+    Req: CAP.NET, Resp: CAP.NET, Net: CAP.NET, Storage: CAP.STORAGE, DateTime: CAP.TIME,
+    Context: CAP.CONTEXT, Auth: CAP.AUTH, X509: CAP.AUTH, Environment: CAP.ENV, Locale: CAP.ENV };
+  function hookCap(name) {   // "Ns.Method" -> required capability class (0 = pure)
+    var dot = name.indexOf("."), ns = name.slice(0, dot), m = name.slice(dot + 1);
+    if (ns === "Maths" && (m === "Random" || m === "RandomRange")) return CAP.RANDOM;
+    if (ns === "Crypto" && m === "RandomBytes") return CAP.RANDOM;
+    if (ns === "Http" && (m === "ReadHeader" || m === "ReadBody" || m === "GenerateHeaders" || m === "GenerateResponse")) return CAP.NET;
+    return CAP_BY_NS[ns] || 0;
+  }
+
   function PicoVM(opts) {
     opts = opts || {};
     this.hooks = opts.hooks || PV_HOOKS || { HOST_HOOK_BASE: 0x7000,
@@ -37,6 +52,7 @@
       NET_STATUS_BASE: 0x8000, NET_BODY_MARKER: 0xB000, NET_CLOSE_MARKER: 0xC000,
       NET_HEADER_BASE: 0x9000, CONTENT_TYPES: {}, BY_CODE: {} };
     this.maxSteps = opts.maxSteps || 1000000;
+    this.caps = (opts.caps !== undefined) ? (opts.caps >>> 0) : CAP_ALL;  // granted bindings (INV-17)
     // Optional external card store (PicoWAL). Must expose get(addr)->int and
     // set(addr,int); when present it persists across reset()/load(), modelling a
     // disk-backed card store. Default is an in-memory Map (VM parity unchanged).
@@ -187,6 +203,9 @@
 
   PicoVM.prototype._host = function (code, rd, rs1, rs2, imm) {
     var name = (this.hooks.BY_CODE && this.hooks.BY_CODE[code]) || ("hook_" + code);
+    // INV-17: bindings are not ambient -- deny the hook unless its class is granted.
+    var need = hookCap(name);
+    if (need && !(this.caps & need)) throw new Error("capability denied: " + name);
     if (name === "Random.U32") {
       var x = this.rng >>> 0;
       x ^= (x << 13); x >>>= 0;

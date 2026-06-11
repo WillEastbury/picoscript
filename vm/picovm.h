@@ -49,8 +49,27 @@ enum {
     PV_FAULT_CALL_OVERFLOW = 4,  /* call stack overflow */
     PV_FAULT_RET_UNDERFLOW = 5,  /* RETURN with empty call stack */
     PV_FAULT_BAD_HOOK    = 6,    /* unknown host hook id */
-    PV_FAULT_TEMPLATE    = 7     /* template render nesting exceeded TPL_MAXDEPTH */
+    PV_FAULT_TEMPLATE    = 7,    /* template render nesting exceeded TPL_MAXDEPTH */
+    PV_FAULT_CAPABILITY  = 8     /* hook's binding not granted to this capsule (INV-17) */
 };
+
+/* Binding capability classes (ctx->caps bitmask). "Bindings are not ambient": a hook
+ * that touches the outside world requires its class bit to be granted before dispatch.
+ * Pure computation (String/Number/Maths/Bits/Span/Memory/Io/Json/Xml/Template/Compress/
+ * Html/Crypto-hash/...) needs no capability (class 0). Values are shared verbatim with
+ * the Python and JS runtimes so a denied hook faults identically on every path. */
+enum {
+    PV_CAP_KERNEL  = 1 << 0,   /* Kernel.* (IRQs, profiling, tracing) */
+    PV_CAP_QUEUE   = 1 << 1,   /* Queue.* */
+    PV_CAP_RANDOM  = 1 << 2,   /* Random.*, Maths.Random/RandomRange, Crypto.RandomBytes */
+    PV_CAP_STORAGE = 1 << 3,   /* Storage.* (PicoWAL cards) */
+    PV_CAP_TIME    = 1 << 4,   /* DateTime.* (wall clock) */
+    PV_CAP_NET     = 1 << 5,   /* Req, Resp, Http I/O (Read/Generate methods) */
+    PV_CAP_CONTEXT = 1 << 6,   /* Context.* (request/connection) */
+    PV_CAP_AUTH    = 1 << 7,   /* Auth.*, X509.* */
+    PV_CAP_ENV     = 1 << 8    /* Environment.*, Locale.* */
+};
+#define PV_CAP_ALL  0x1FFu     /* default grant: every binding (host restricts to gate) */
 
 typedef struct pv_ctx pv_ctx;
 
@@ -82,6 +101,7 @@ struct pv_ctx {
     int       halted;
     int       waiting;
     int       fault;           /* PV_FAULT_*; 0 until a typed fault halts the VM */
+    uint32_t  caps;            /* granted binding capabilities (PV_CAP_*); default PV_CAP_ALL */
 
     /* simple in-VM queues for the default host (Queue.*) */
     int32_t   queues[8][64];
@@ -175,5 +195,8 @@ void    pv_raise(pv_ctx *ctx, int channel);
 
 /* default host hook (Random.U32, Queue.*) -- mirrors picoscript_vm.HostApi */
 void    pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16);
+
+/* Binding capability class required by a host hook (PV_CAP_*; 0 = pure, always allowed). */
+uint32_t pv_hook_cap(int hook);
 
 #endif /* PICOVM_H */
