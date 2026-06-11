@@ -107,6 +107,7 @@ struct pv_ctx {
     int       cur_pc;          /* current bytecode PC, retained so host faults can report it */
     uint32_t  caps;            /* granted binding capabilities (PV_CAP_*); default PV_CAP_ALL */
     int       no_alloc;        /* when set, arena allocation in a hook faults (INV-5 hot path) */
+    int       host_status;     /* INV-18: typed status of the last fallible hook (0 = OK) */
 
     /* simple in-VM queues for the default host (Queue.*) */
     int32_t   queues[8][64];

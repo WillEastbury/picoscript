@@ -524,6 +524,9 @@ HOST_HOOK_CODES = {
     ("Lease", "CachedValidate"):0x5B,
     ("Lease", "GetSpan"):       0x5C,
     ("Lease", "GetTypeHint"):   0x5D,
+    # Status hook (0x5E): out-of-band typed status of the last fallible hook (INV-18).
+    # 0=OK, 1=NOT_FOUND, 2=PARSE_ERROR, 3=EMPTY. Pure read of VM state; does not clear.
+    ("Status", "Last"):         0x5E,
     # Storage hooks (0x60-0x6E)
     ("Storage", "GetSchemaForPack"): 0x60,
     ("Storage", "SetSchemaForPack"): 0x61,

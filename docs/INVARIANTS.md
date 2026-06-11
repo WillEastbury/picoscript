@@ -35,7 +35,7 @@ runtimes/paths only, `target` = agreed rule not yet enforced.
 | 15 | Deterministic mode exists (disable clock/random/unordered iteration) | enforced (seed inject) |
 | 16 | Case-insensitive namespaces are canonicalised | enforced |
 | 17 | Capability check before hook dispatch | enforced (mechanism) |
-| 18 | Hook failures are typed (no magic -1/0) | partial (diagnosed) |
+| 18 | Hook failures are typed (no magic -1/0) | enforced (status channel) |
 | 19 | Template rendering is bounded (depth/each/recursion/output) | enforced |
 | 20 | JSON/HTTP parsers are budgeted (depth/token/length/bytes) | enforced (depth + input-bounded) |
 | 21 | Source card is truth (artefacts carry source hash + compiler version + profile) | enforced |
@@ -192,19 +192,19 @@ No permission/grant check precedes any hook. Dispatch is a bare lookup
 ambient. Target: a per-capsule capability set checked before dispatch (cf. the
 `FIRE_SW_IRQ` permission model).
 
-### 18. Hook failures are typed — *partial (diagnosed; design tension)*
-Most flagged sentinels are **value-domain results, not errors**, and are intentional:
-`String.IndexOf`→`-1` ("not found", as in most languages), `Number.Parse`→`0`,
-`Queue.Dequeue` on empty→`0`, missing card→`0`. The 2-in/1-out host ABI has no separate
-error channel, so a "typed status" would require an ABI change (e.g. a side error
-register), which would break byte-parity and existing programs. Separately, the C default
-host **silently ignores** an unimplemented hook *by design* — that is the host-injection
-model (`DateTime`/`Context`/`Auth`/`X509` etc. are supplied by a real host, not the
-deterministic default), so faulting there would be wrong. **Recommendation (needs an ABI
-decision):** introduce an out-of-band typed-status register for genuinely fallible
-decoders (parse/decode/crypto-verify) without changing their primary return value, and
-keep value-domain sentinels as-is. Deferred pending that decision (not a security gap —
-the capability gate, INV-17, governs access).
+### 18. Hook failures are typed — *enforced (out-of-band status channel)*
+A fallible hook now records a **typed status** in an out-of-band per-VM register
+(`ctx->host_status` in C, `HostApi.host_status` in Python, `this.hostStatus` in JS),
+readable via the new `Status.Last()` hook (code `0x5E`): `0`=OK, `1`=NOT_FOUND,
+`2`=PARSE_ERROR, `3`=EMPTY. `Number.Parse`, `String.IndexOf`, and `Queue.Dequeue` set it
+(0 on success, the typed code on failure). The **primary return value is unchanged** — the
+value-domain sentinels (`-1`, `0`) still flow for code that ignores them — so existing
+programs are byte-identical and parity holds; programs that care call `Status.Last()` right
+after the fallible op (errno-style). The three runtimes set identical codes for identical
+inputs (`tests/test_native_toc.py` checks `Status.Last` 5-path; the parse success condition
+was aligned so empty/invalid input is `PARSE_ERROR` everywhere). Adding the hook bumped the
+host-hook-table version, which the INV-23 module check picks up automatically. Remaining
+hooks can adopt the same channel incrementally.
 
 ### 19. Template rendering is bounded — *enforced*
 All four explosion vectors are capped, faulting `PV_FAULT_TEMPLATE`=7 identically on

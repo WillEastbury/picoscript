@@ -237,6 +237,13 @@ def main():
              "int d = Queue.Depth(0); Io.WriteByte(d);")
         check(q, bytes([3]), "queue_depth")
 
+        # Status.Last (INV-18): typed out-of-band status of the last fallible hook -- 5-path
+        # identical. Number.Parse sets 0 (OK) / 2 (PARSE_ERROR); the primary return is unchanged.
+        check('int x = Number.Parse("abc"); int s = Status.Last(); Io.WriteByte(s);',
+              bytes([2]), "status_parse_err")
+        check('int x = Number.Parse("9"); int s = Status.Last(); Io.WriteByte(s);',
+              bytes([0]), "status_parse_ok")
+
         # Template.* : holes, sections, inverted, nesting, {{#each}} object + scalar.
         check(tpl_prog(b"Hi {{name}}!", b"name=Bob"), b"Hi Bob!", "tpl_hole")
         check(tpl_prog(b"{{#show}}yes{{/show}}", b"show=1"), b"yes", "tpl_section")

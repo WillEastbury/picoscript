@@ -118,6 +118,7 @@ class HostApi:
         self.rng_state = 0x2545F4914F6CDD1D
         self.caps = CAP_ALL          # granted binding capabilities (INV-17); host restricts to gate
         self.no_alloc = False        # INV-5: when True, arena allocation in a hook raises PicoFault
+        self.host_status = 0         # INV-18: typed status of the last fallible hook (0=OK)
         self.log: List[str] = []
         self.handlers: Dict[tuple, Callable] = {}
         # Card store (PicoStore) + program-level Storage.* context.
@@ -160,6 +161,9 @@ class HostApi:
             hook = HOST_HOOK_CODES.get((ns, method), 0)
             raise PicoFault(PV_FAULT_CAPABILITY, getattr(vm, "cur_pc", 0), hook,
                             f"capability denied: {ns}.{method} requires an ungranted binding")
+        if ns == "Status" and method == "Last":      # INV-18: read out-of-band fallible-hook status
+            vm.regs[rd] = self.host_status & MASK32
+            return
         fn = self.handlers.get((ns, method))
         if fn is not None:
             return fn(vm, rd, rs1, rs2, imm16)
@@ -177,6 +181,7 @@ class HostApi:
             return
         if ns == "Queue" and method == "Dequeue":
             q = self.queues.get(rs1, [])
+            self.host_status = 0 if q else 3       # INV-18: EMPTY
             vm.regs[rd] = q.pop(0) if q else 0
             return
         if ns == "Queue" and method == "Depth":
@@ -379,7 +384,9 @@ class HostApi:
             start = max(0, _sx32(R[rs2]))
             R[rd] = self._new_span_bytes(vm, a[start:]); return True
         if method == "IndexOf":
-            R[rd] = a.find(self._span_raw(vm, R[rs2])) & MASK32; return True
+            idx = a.find(self._span_raw(vm, R[rs2]))
+            self.host_status = 0 if idx >= 0 else 1     # INV-18: NOT_FOUND
+            R[rd] = idx & MASK32; return True
         if method == "StartsWith":
             R[rd] = 1 if a.startswith(self._span_raw(vm, R[rs2])) else 0; return True
         if method == "EndsWith":
@@ -400,10 +407,13 @@ class HostApi:
     def _numberlib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
         R = vm.regs
         if method == "Parse":
+            raw = self._span_raw(vm, R[rs1]).decode("ascii", "replace").strip()
             try:
-                v = int((self._span_raw(vm, R[rs1]).decode("ascii", "replace").strip()) or "0")
+                v = int(raw)                  # empty/non-numeric -> ValueError (status 2), value 0
+                self.host_status = 0
             except ValueError:
                 v = 0
+                self.host_status = 2          # INV-18: PARSE_ERROR
             R[rd] = v & MASK32; return True
         a, b = _sx32(R[rs1]), _sx32(R[rs2])
         if method == "Abs":

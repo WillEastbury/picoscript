@@ -971,12 +971,18 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
     if (hook == PV_HOOK_QUEUE_DEQUEUE) {
         int q = rs1 & 7;
         if (ctx->qdepth[q] > 0) {
+            ctx->host_status = 0;
             ctx->regs[rd] = ctx->queues[q][0];
             for (int i = 1; i < ctx->qdepth[q]; i++) ctx->queues[q][i - 1] = ctx->queues[q][i];
             ctx->qdepth[q]--;
         } else {
+            ctx->host_status = 3;       /* INV-18: EMPTY */
             ctx->regs[rd] = 0;
         }
+        return;
+    }
+    if (hook == PV_HOOK_STATUS_LAST) {  /* INV-18: read out-of-band fallible-hook status */
+        ctx->regs[rd] = ctx->host_status;
         return;
     }
     if (hook == PV_HOOK_QUEUE_DEPTH) {
@@ -1137,6 +1143,7 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
                 if (j == lb) { found = i; break; }
             }
         }
+        ctx->host_status = (found < 0) ? 1 : 0;   /* INV-18: NOT_FOUND */
         ctx->regs[rd] = found;
         return;
     }
@@ -1234,6 +1241,7 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
             val = val * 10u + (uint32_t)(c - '0');
         }
         if (!valid) val = 0;
+        ctx->host_status = valid ? 0 : 2;          /* INV-18: PARSE_ERROR */
         ctx->regs[rd] = neg ? (int32_t)(0u - val) : (int32_t)val;
         return;
     }

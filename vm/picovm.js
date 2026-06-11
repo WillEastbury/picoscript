@@ -80,6 +80,7 @@
     this.httpType = null;
     this.queues = {};
     this.rng = (this._seed !== null) ? this._seed : (0x4F6CDD1D >>> 0);
+    this.hostStatus = 0;                      // INV-18: typed status of the last fallible hook
     this.mem = new Uint8Array(520 * 1024);   // process arena = RP2350 (Pico 2) 520 KB SRAM
     this.dotLen = 0;                          // active span length for Dot8.Of
     this.arenaTop = 0x8000;             // bump pointer for Span.Materialize copies
@@ -235,6 +236,7 @@
     // INV-17: bindings are not ambient -- deny the hook unless its class is granted.
     var need = hookCap(name);
     if (need && !(this.caps & need)) throw picoFault(FAULT.CAPABILITY, this.curPc, code, "capability denied: " + name);
+    if (name === "Status.Last") { this.regs[rd] = this.hostStatus | 0; return; }   // INV-18
     if (name === "Random.U32") {
       var x = this.rng >>> 0;
       x ^= (x << 13); x >>>= 0;
@@ -295,6 +297,7 @@
     }
     if (name === "Queue.Dequeue") {
       var q = this.queues[rs1] || [];
+      this.hostStatus = q.length ? 0 : 3;     // INV-18: EMPTY
       this.regs[rd] = q.length ? q.shift() : 0;
       return;
     }
@@ -417,7 +420,7 @@
     if (method === "Length") { this.regs[rd] = a.length; return true; }
     if (method === "Concat") { this.regs[rd] = this._newSpanBytes(a.concat(this._spanBytes(this.regs[rs2]))); return true; }
     if (method === "Substring") { var st = Math.max(0, this.regs[rs2] | 0); this.regs[rd] = this._newSpanBytes(a.slice(st)); return true; }
-    if (method === "IndexOf") { this.regs[rd] = _bfind(a, this._spanBytes(this.regs[rs2])) | 0; return true; }
+    if (method === "IndexOf") { var ix = _bfind(a, this._spanBytes(this.regs[rs2])); this.hostStatus = ix >= 0 ? 0 : 1; this.regs[rd] = ix | 0; return true; }
     if (method === "StartsWith") { var p = this._spanBytes(this.regs[rs2]); this.regs[rd] = (p.length <= a.length && _bcmp(a, p, 0)) ? 1 : 0; return true; }
     if (method === "EndsWith") { var su = this._spanBytes(this.regs[rs2]); this.regs[rd] = (su.length <= a.length && _bcmp(a, su, a.length - su.length)) ? 1 : 0; return true; }
     if (method === "ToUpper") { this.regs[rd] = this._newSpanBytes(a.map(function (c) { return (c >= 97 && c <= 122) ? c - 32 : c; })); return true; }
@@ -442,7 +445,9 @@
     if (method === "Parse") {
       var bb = this._spanBytes(this.regs[rs1]);
       var str = String.fromCharCode.apply(null, bb).trim();
-      this.regs[rd] = (/^[+-]?\d+$/.test(str) ? parseInt(str, 10) : 0) | 0;
+      var ok = /^[+-]?\d+$/.test(str);
+      this.hostStatus = ok ? 0 : 2;            // INV-18: PARSE_ERROR
+      this.regs[rd] = (ok ? parseInt(str, 10) : 0) | 0;
       return true;
     }
     var a = this.regs[rs1] | 0, b = this.regs[rs2] | 0;
