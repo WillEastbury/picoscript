@@ -15,6 +15,14 @@ where that was my only objection I implemented a representative op to prove it.
 `Compress.PicoCompress/PicoDecompress` (RLE), `Crypto.Sha256`, `Html.Encode/Decode`,
 `Http.ParseQuery/ParseForm` (url-decode -> Template model) + `Http.EncodeJson/ParseJson`
 (model <-> JSON, nested JSON flattens to the `{{#each}}` model).
+
+> **Full five-path parity.** Every namespace above is native not just in the three
+> bytecode interpreters (Python/JS/C) but in **both transpilers** too: `lower_to_c`
+> (-> native C) and `lower_to_js` (-> native JS) lower each host op to a first-class
+> code-keyed call (`pv_host2` / `rt.host(code,…)`), skipping the VM. One host
+> implementation per language, zero divergence; checked by `tests/test_native_toc.py`
+> (4 runtimes from one source) and `tests/test_examples_parity.py` (`examples/*.pc`).
+
 (Already present: `Io`, `Json`, `Xml`, `Queue`, `Random`, `Req`, `Resp`, `Span`,
 `Storage`, `Utf8Reader`, `Utf8Writer`.)
 

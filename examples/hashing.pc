@@ -1,0 +1,13 @@
+// hashing.pc -- Crypto.Sha256 + Compress over arena spans.
+// SHA-256("abc") (32-byte digest) then RLE round-trip of "aaabbbbc".
+// Deterministic + byte-identical across all five runtimes.
+    // b'abc' at 1000
+    Memory.Set(1000, 97);Memory.Set(1001, 98);Memory.Set(1002, 99);
+    // b'aaabbbbc' at 1010
+    Memory.Set(1010, 97);Memory.Set(1011, 97);Memory.Set(1012, 97);Memory.Set(1013, 98);Memory.Set(1014, 98);Memory.Set(1015, 98);
+    Memory.Set(1016, 98);Memory.Set(1017, 99);
+int s = Span.Make(1000, 3);
+int dig = Crypto.Sha256(s); Io.Write(dig); Io.WriteByte(124);  // 32-byte digest|
+int r = Span.Make(1010, 8);
+int c = Compress.PicoCompress(r);
+int d = Compress.PicoDecompress(c); Io.Write(d);               // aaabbbbc

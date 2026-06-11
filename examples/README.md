@@ -1,0 +1,56 @@
+# PicoScript examples
+
+Small programs in the various PicoScript frontends. Every program runs **byte-for-byte
+identically** on all five PicoScript runtimes — the three bytecode interpreters
+(Python `picoscript_vm.py`, JS `vm/picovm.js`, C `vm/picovm.c`) and the two
+transpilers that **skip the VM entirely** (`lower_to_c` → native C, `lower_to_js` →
+native JS).
+
+## Namespace demos (the host library, first-class on all five runtimes)
+
+| File | Shows |
+|------|-------|
+| `text_tools.pc` | `String.ToUpper/Length`, `Number.Parse/ToHex`, `Html.Encode` over arena spans |
+| `web_template.pc` | the picoweb flow: `Http.ParseQuery` → key=value model → `Template.Compile`/`Render` |
+| `hashing.pc` | `Crypto.Sha256` (32-byte digest) + `Compress.PicoCompress`/`PicoDecompress` (RLE) |
+
+These are exercised by `tests/test_examples_parity.py`, which runs each on all five
+runtimes and asserts identical output.
+
+## Language / compute demos
+
+| File | Frontend | Shows |
+|------|----------|-------|
+| `hello.pico` | v1 | minimal program |
+| `sum.pc` | C-syntax | `for` loop, `Storage`, `Net.*` response |
+| `sum.ppy` / `sum.eng` | Python-like / English-like | the same sum in other frontends |
+| `fizzbuzz.pbas` | BASIC-like | control flow |
+| `filter.pico` | v1 | branching |
+| `selfhost_emit.pc` / `selfhost_asm.pc` | C-syntax | PicoScript emitting runnable PicoScript |
+| `bitnet_ternary_matvec.pc` / `bitnet_k_matvec.pc` / `bitnet_int8_matvec.pc` | C-syntax | quantized BitNet kernels (`Dot8` → NEON SDOT / Cortex-M33 SMLAD) |
+
+## Running a program on each path
+
+```bash
+# 1) Python interpreter
+python -c "from picoscript_cfront import compile_c; from picoscript_il import lower_to_bytecode_safe; \
+           from picoscript_vm import PicoVM; \
+           w=lower_to_bytecode_safe(compile_c(open('examples/web_template.pc').read())); \
+           print(bytes(b for o in PicoVM().run(w).output for b in o))"
+
+# 2) C interpreter (bytecode)
+python -m ziglang cc -std=c99 -O2 vm/picovm.c vm/picovm_run.c -o vm/picovm_run.exe
+#   ...then feed it "<count>\n<hex words>" on stdin (see tests/test_examples_parity.py)
+
+# 3) Native C (transpile, skip the VM)
+python -c "from picoscript_cfront import compile_c; from picoscript_il import lower_to_c; \
+           print(lower_to_c(compile_c(open('examples/web_template.pc').read()), emit_main=True))" > out.c
+python -m ziglang cc -std=c99 -O3 -Ivm out.c vm/picovm.c -o out.exe && ./out.exe
+
+# 4) Native JS (transpile, skip the VM)
+python -c "from picoscript_cfront import compile_c; from picoscript_il import lower_to_js; \
+           print(lower_to_js(compile_c(open('examples/web_template.pc').read())))" > out.js
+#   require('./out.js').run() — its runtime delegates host calls to vm/picovm.js
+```
+
+For native cross-compilation to a target use `picoscript_build.py native --profile {host,pi5,pico2}`.

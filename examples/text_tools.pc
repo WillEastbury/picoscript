@@ -1,0 +1,18 @@
+// text_tools.pc -- String / Number / Html primitives over arena spans.
+// Uppercases "Hello", reports its length, parses "255" and hex-formats it,
+// and HTML-escapes "<b>". Byte-identical on all five PicoScript runtimes
+// (Python VM, JS VM, C VM, toC-native, toJS-native).
+    // b'Hello' at 1000
+    Memory.Set(1000, 72);Memory.Set(1001, 101);Memory.Set(1002, 108);Memory.Set(1003, 108);Memory.Set(1004, 111);
+    // b'<b>' at 1010
+    Memory.Set(1010, 60);Memory.Set(1011, 98);Memory.Set(1012, 62);
+    // b'255' at 1020
+    Memory.Set(1020, 50);Memory.Set(1021, 53);Memory.Set(1022, 53);
+int s = Span.Make(1000, 5);
+int up = String.ToUpper(s); Io.Write(up); Io.WriteByte(124);   // HELLO|
+Io.WriteByte(String.Length(s)); Io.WriteByte(124);             // 5|
+int nsp = Span.Make(1020, 3);
+int n = Number.Parse(nsp);
+int hx = Number.ToHex(n); Io.Write(hx); Io.WriteByte(124);     // ff|
+int tag = Span.Make(1010, 3);
+int esc = Html.Encode(tag); Io.Write(esc);                     // &lt;b&gt;

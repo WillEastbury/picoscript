@@ -3509,16 +3509,21 @@ surface. That's why this is more than "hello world with interrupts."</p>
   <strong>AArch64 NEON <code>SDOT</code></strong> (<code>--profile pi5</code>), <strong>Cortex-M33 <code>SMLAD</code></strong>
   (<code>--profile pico2</code>), or a portable scalar loop: hardware-accelerated matvec
   for quantized inference.
-- <strong><code>Memory.*</code> / <code>Io.WriteByte</code> native in <code>toC</code></strong> over a caller-provided
-  <code>ctx-&gt;mem</code> arena (default 520 KB = Pico 2 SRAM); PicoScript-compiled code
-  touches a real byte-addressable arena at native speed (no <code>pv_host</code> round-trip).
-  All three VMs (Python / JS / C, interpreter + compiled) are at parity.
-- <strong><code>Span.*</code> + <code>String.*</code> + <code>Number.*</code> + <code>Io.Write</code> native in the C VM</strong> — the
-  C runtime now carries a span table + bump arena (<code>pv_ctx.span_ptr/span_len/
-  arena_top</code>), so arena strings, slicing, the 11 <code>String.*</code> ops and the <code>Number.*</code>
-  format/parse ops run byte-for-byte identically on Python / JS / C (see
-  <code>tests/test_native_string.py</code>). <code>Template.*</code>/<code>Http.*</code>/<code>Compress.*</code>/<code>Crypto.*</code>/
-  <code>Html.*</code> build on this same model and are the remaining native port.
+- <strong>The whole host library is native + first-class on both compilers.</strong> The C
+  runtime carries a span table + bump arena (<code>pv_ctx.span_ptr/span_len/arena_top</code>),
+  and a single value-based entry <code>pv_host2(ctx, hookcode, a, b)</code> is the one host
+  implementation shared by the C interpreter and emitted C. <code>lower_to_c</code> lowers
+  each <code>Ns.Method</code> to a direct <code>pv_host2</code> call and <code>lower_to_js</code> to a code-keyed
+  <code>rt.host(code,…)</code> that delegates to the shared JS host — so compiled code skips
+  the bytecode VM and the string-keyed dispatch. <code>Span.*</code>, <code>String.*</code>, <code>Number.*</code>,
+  <code>Maths.*</code>, <code>Compress.*</code>, <code>Crypto.Sha256</code>, <code>Html.*</code>, <code>Http.*</code> and <code>Template.*</code>
+  all run byte-for-byte identically across <strong>five runtimes</strong> (Python VM, JS VM, C
+  interpreter, toC-native, toJS-native) — <code>tests/test_native_toc.py</code> builds four
+  from one source, <code>tests/test_examples_parity.py</code> runs the <code>examples/*.pc</code> demos
+  on all five.
+- <code>Memory.*</code> / <code>Io.WriteByte</code> are inlined natively in <code>toC</code>/<code>toJS</code> over a
+  caller-provided <code>ctx-&gt;mem</code> arena (default 520 KB = Pico 2 SRAM) — a real
+  byte-addressable arena at native speed, no host round-trip.
 - <code>Span.*</code> (zero-copy views), arena allocation, <code>Descriptor.*</code> / <code>Lease.*</code>,
   the host-hook ABI (extensible at will).
 - The <strong><code>toC</code> backend</strong> with <code>-O3</code> + <code>--profile {host,pi5,pico2}</code> to turn on the
@@ -3631,13 +3636,17 @@ All are host hooks (no compiler/frontend change, byte-identical bytecode), and
 all run byte-for-byte identically on the Python and JS VMs.</p>
 <blockquote>
 <p>Status: a string is a <strong>span</strong> into the arena; results bump-allocate as new
-spans. <code>String.*</code> and <code>Number.*</code> (plus the <code>Span.*</code> model and <code>Io.Write</code>) run
-byte-for-byte identically on <strong>all three runtimes</strong> — the Python VM, the JS VM,
-and the portable C VM (<code>vm/picovm.c</code>), which now carries a span table + bump
-arena (<code>pv_ctx.span_ptr/span_len/arena_top</code>). <code>Template.*</code>/<code>Http.*</code>/<code>Compress.*</code>/
-<code>Crypto.*</code>/<code>Html.*</code> remain interpreter-level (Python + JS); porting those
-larger parsers to native <code>toC</code> is the remaining follow-on (they build on the
-same span model that is now in C).</p>
+spans. The whole family — <code>Span.*</code>, <code>String.*</code>, <code>Number.*</code>, <code>Maths.*</code>,
+<code>Compress.*</code>, <code>Crypto.Sha256</code>, <code>Html.*</code>, <code>Http.*</code> and <code>Template.*</code> — now runs
+byte-for-byte identically on <strong>all five runtimes</strong>: the Python VM, the JS VM,
+the portable C VM (<code>vm/picovm.c</code>, which carries a span table + bump arena
+<code>pv_ctx.span_ptr/span_len/arena_top</code>), and — skipping the bytecode VM entirely —
+the two transpilers <code>lower_to_c</code> (native C) and <code>lower_to_js</code> (native JS). The
+compilers lower each op to a first-class code-keyed host call (<code>pv_host2</code> in C,
+<code>rt.host(code,…)</code> delegating to the shared JS host), so there is one
+implementation per language and zero divergence. Verified by
+<code>tests/test_native_toc.py</code> (four runtimes from one source) and
+<code>tests/test_examples_parity.py</code> (the <code>examples/*.pc</code> demos on all five).</p>
 </blockquote>
 <h2 id="string-0x800x8c"><code>String.*</code> (0x80–0x8C)</h2>
 <table>
@@ -3721,10 +3730,10 @@ out  = Template.Render(plan, model_span) // at RENDER time -&gt; fast, no parse
 <li>Partials (<code>{{&gt;name}}</code> including another compiled template).</li>
 <li>Sourcing the model directly from a walfs card's fields (render a card via a
   template — picowal's schema-driven SSR, but data-driven).</li>
-<li>Native <code>toC</code> lowering of <code>Template.*</code>/<code>Http.*</code>/<code>Compress.*</code>/<code>Crypto.*</code>/<code>Html.*</code>.
-  The span/string foundation (<code>Span.*</code>, <code>String.*</code>, <code>Number.*</code>, <code>Io.Write</code>) is
-  <strong>already native in <code>vm/picovm.c</code></strong>; these larger parsers build on it and are
-  the remaining port (see <code>SYSTEMS_LANGUAGE.md</code>).</li>
+<li>~~Native <code>toC</code>/<code>toJS</code> lowering~~ — <strong>done</strong>: <code>Template.*</code>/<code>Http.*</code>/<code>Compress.*</code>/
+  <code>Crypto.Sha256</code>/<code>Html.*</code> are native on the C interpreter and both transpilers.
+  ARMv8 SHA-2 / NEON acceleration of <code>Crypto.Sha256</code> (the scalar core is in place)
+  is the one remaining hardware-validated optimization.</li>
 </ul></div><div class="docpanel" id="doc-nsstatus"><h1 id="namespace-status-whats-implemented-and-the-hard-reasons-for-the-rest">Namespace status — what's implemented, and the hard reasons for the rest</h1>
 <p>This session moved most "planned" namespaces to implemented. For the remainder,
 each entry below gives the <strong>actual reason</strong> it isn't a self-contained VM
@@ -3739,8 +3748,16 @@ where that was my only objection I implemented a representative op to prove it.<
 <code>Number.*</code>, <code>Maths.Power/Sqrt</code>, <code>Template.*</code> (holes/sections/<code>{{#each}}</code>),
 <code>Compress.PicoCompress/PicoDecompress</code> (RLE), <code>Crypto.Sha256</code>, <code>Html.Encode/Decode</code>,
 <code>Http.ParseQuery/ParseForm</code> (url-decode -&gt; Template model) + <code>Http.EncodeJson/ParseJson</code>
-(model &lt;-&gt; JSON, nested JSON flattens to the <code>{{#each}}</code> model).
-(Already present: <code>Io</code>, <code>Json</code>, <code>Xml</code>, <code>Queue</code>, <code>Random</code>, <code>Req</code>, <code>Resp</code>, <code>Span</code>,
+(model &lt;-&gt; JSON, nested JSON flattens to the <code>{{#each}}</code> model).</p>
+<blockquote>
+<p><strong>Full five-path parity.</strong> Every namespace above is native not just in the three
+bytecode interpreters (Python/JS/C) but in <strong>both transpilers</strong> too: <code>lower_to_c</code>
+(-&gt; native C) and <code>lower_to_js</code> (-&gt; native JS) lower each host op to a first-class
+code-keyed call (<code>pv_host2</code> / <code>rt.host(code,…)</code>), skipping the VM. One host
+implementation per language, zero divergence; checked by <code>tests/test_native_toc.py</code>
+(4 runtimes from one source) and <code>tests/test_examples_parity.py</code> (<code>examples/*.pc</code>).</p>
+</blockquote>
+<p>(Already present: <code>Io</code>, <code>Json</code>, <code>Xml</code>, <code>Queue</code>, <code>Random</code>, <code>Req</code>, <code>Resp</code>, <code>Span</code>,
 <code>Storage</code>, <code>Utf8Reader</code>, <code>Utf8Writer</code>.)</p>
 <blockquote>
 <p><strong>Correction:</strong> I previously claimed codes &gt;0xFF "can't be dispatched (8-bit

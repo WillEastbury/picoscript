@@ -1,0 +1,19 @@
+// web_template.pc -- the picoweb flow: HTTP query string -> model -> page.
+// Http.ParseQuery decodes "name=Ada&role=admin" into the key=value model that
+// Template.Render consumes. AOT-compiled template, native on all five runtimes.
+    // b'name=Ada&role=admin' at 2000
+    Memory.Set(2000, 110);Memory.Set(2001, 97);Memory.Set(2002, 109);Memory.Set(2003, 101);Memory.Set(2004, 61);Memory.Set(2005, 65);
+    Memory.Set(2006, 100);Memory.Set(2007, 97);Memory.Set(2008, 38);Memory.Set(2009, 114);Memory.Set(2010, 111);Memory.Set(2011, 108);
+    Memory.Set(2012, 101);Memory.Set(2013, 61);Memory.Set(2014, 97);Memory.Set(2015, 100);Memory.Set(2016, 109);Memory.Set(2017, 105);
+    Memory.Set(2018, 110);
+    // "Hi {{name}} ({{role}})" at 1000
+    Memory.Set(1000, 72);Memory.Set(1001, 105);Memory.Set(1002, 32);Memory.Set(1003, 123);Memory.Set(1004, 123);Memory.Set(1005, 110);
+    Memory.Set(1006, 97);Memory.Set(1007, 109);Memory.Set(1008, 101);Memory.Set(1009, 125);Memory.Set(1010, 125);Memory.Set(1011, 32);
+    Memory.Set(1012, 40);Memory.Set(1013, 123);Memory.Set(1014, 123);Memory.Set(1015, 114);Memory.Set(1016, 111);Memory.Set(1017, 108);
+    Memory.Set(1018, 101);Memory.Set(1019, 125);Memory.Set(1020, 125);Memory.Set(1021, 41);
+int q = Span.Make(2000, 19);
+int model = Http.ParseQuery(q);
+int tmpl = Span.Make(1000, 22);
+int plan = Template.Compile(tmpl);
+int page = Template.Render(plan, model);
+Io.Write(page);                                                // Hi Ada (admin)

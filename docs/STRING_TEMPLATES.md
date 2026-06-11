@@ -6,13 +6,17 @@ All are host hooks (no compiler/frontend change, byte-identical bytecode), and
 all run byte-for-byte identically on the Python and JS VMs.
 
 > Status: a string is a **span** into the arena; results bump-allocate as new
-> spans. `String.*` and `Number.*` (plus the `Span.*` model and `Io.Write`) run
-> byte-for-byte identically on **all three runtimes** — the Python VM, the JS VM,
-> and the portable C VM (`vm/picovm.c`), which now carries a span table + bump
-> arena (`pv_ctx.span_ptr/span_len/arena_top`). `Template.*`/`Http.*`/`Compress.*`/
-> `Crypto.*`/`Html.*` remain interpreter-level (Python + JS); porting those
-> larger parsers to native `toC` is the remaining follow-on (they build on the
-> same span model that is now in C).
+> spans. The whole family — `Span.*`, `String.*`, `Number.*`, `Maths.*`,
+> `Compress.*`, `Crypto.Sha256`, `Html.*`, `Http.*` and `Template.*` — now runs
+> byte-for-byte identically on **all five runtimes**: the Python VM, the JS VM,
+> the portable C VM (`vm/picovm.c`, which carries a span table + bump arena
+> `pv_ctx.span_ptr/span_len/arena_top`), and — skipping the bytecode VM entirely —
+> the two transpilers `lower_to_c` (native C) and `lower_to_js` (native JS). The
+> compilers lower each op to a first-class code-keyed host call (`pv_host2` in C,
+> `rt.host(code,…)` delegating to the shared JS host), so there is one
+> implementation per language and zero divergence. Verified by
+> `tests/test_native_toc.py` (four runtimes from one source) and
+> `tests/test_examples_parity.py` (the `examples/*.pc` demos on all five).
 
 ## `String.*` (0x80–0x8C)
 
@@ -62,7 +66,7 @@ Example: `Render(Compile(b"{{#each row}}<td>{{.}}</td>{{/each}}"), b"row.0=A\nro
 - Partials (`{{>name}}` including another compiled template).
 - Sourcing the model directly from a walfs card's fields (render a card via a
   template — picowal's schema-driven SSR, but data-driven).
-- Native `toC` lowering of `Template.*`/`Http.*`/`Compress.*`/`Crypto.*`/`Html.*`.
-  The span/string foundation (`Span.*`, `String.*`, `Number.*`, `Io.Write`) is
-  **already native in `vm/picovm.c`**; these larger parsers build on it and are
-  the remaining port (see `SYSTEMS_LANGUAGE.md`).
+- ~~Native `toC`/`toJS` lowering~~ — **done**: `Template.*`/`Http.*`/`Compress.*`/
+  `Crypto.Sha256`/`Html.*` are native on the C interpreter and both transpilers.
+  ARMv8 SHA-2 / NEON acceleration of `Crypto.Sha256` (the scalar core is in place)
+  is the one remaining hardware-validated optimization.
