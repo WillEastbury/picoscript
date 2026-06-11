@@ -12,7 +12,8 @@ where that was my only objection I implemented a representative op to prove it.
 ## Implemented this session
 `Bits.*`, `Dot8.*` (NEON SDOT / SMLAD), native `Memory.*`/`Io`, `String.*`,
 `Number.*`, `Maths.Power/Sqrt`, `Template.*` (holes/sections/`{{#each}}`),
-`Compress.PicoCompress/PicoDecompress` (RLE), `Crypto.Sha256`, `Html.Encode/Decode`,
+`Compress.PicoCompress/PicoDecompress` (RLE), `Crypto.Sha256` + `Crypto.HmacSha256`
+(RFC 2104, parity-tested to RFC 4231 vectors), `Html.Encode/Decode`,
 `Http.ParseQuery/ParseForm` (url-decode -> Template model) + `Http.EncodeJson/ParseJson`
 (model <-> JSON, nested JSON flattens to the `{{#each}}` model).
 
@@ -80,4 +81,8 @@ implemented; the 64-bit ones are deferred for this reason.
   GenerateKeyPair/DeriveKey`, `X509.*`, `Auth.*`. Large security-sensitive
   primitives (RSA/EC/AES) + key management; signing/keygen also need entropy
   (external), and X509/Auth need a host trust store / identity provider /
-  network. Hashing (`Sha256`) is the pure, doable slice and is implemented.
+  network. The pure, doable slices are implemented: `Sha256` and now
+  `HmacSha256` (RFC 2104 over the canonical SHA-256 — two input spans key+message,
+  32-byte digest span; byte-identical on all five paths, parity-tested to the
+  RFC 4231 vectors incl. the >64-byte key-hashed-first case). `HmacSha512`/`Sha512`
+  remain deferred for the 64-bit-word-in-JS reason above.

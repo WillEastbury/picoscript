@@ -439,6 +439,7 @@
 
   PicoVM.prototype._cryptolib = function (method, rd, rs1, rs2) {
     if (method === "Sha256") { this.regs[rd] = this._newSpanBytes(_sha256(this._spanBytes(this.regs[rs1]))); return true; }
+    if (method === "HmacSha256") { this.regs[rd] = this._newSpanBytes(_hmacSha256(this._spanBytes(this.regs[rs1]), this._spanBytes(this.regs[rs2]))); return true; }
     return false;
   };
 
@@ -642,6 +643,16 @@
     var out = [];
     for (var i = 0; i < 8; i++) out.push((H[i] >>> 24) & 255, (H[i] >>> 16) & 255, (H[i] >>> 8) & 255, H[i] & 255);
     return out;
+  }
+
+  // HMAC-SHA256 (RFC 2104) over the canonical _sha256 -> == Python hmac == C runtime.
+  function _hmacSha256(key, msg) {
+    if (key.length > 64) key = _sha256(key);
+    var k = key.slice(); while (k.length < 64) k.push(0);
+    var ipad = [], opad = [];
+    for (var i = 0; i < 64; i++) { ipad.push(k[i] ^ 0x36); opad.push(k[i] ^ 0x5c); }
+    var inner = _sha256(ipad.concat(msg));
+    return _sha256(opad.concat(inner));
   }
 
   PicoVM.prototype._templatelib = function (method, rd, rs1, rs2) {

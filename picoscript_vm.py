@@ -412,6 +412,13 @@ class HostApi:
             import hashlib
             h = hashlib.sha256(self._span_raw(vm, vm.regs[rs1])).digest()
             vm.regs[rd] = self._new_span_bytes(vm, h); return True
+        if method == "HmacSha256":
+            import hashlib
+            import hmac as _hmac
+            key = self._span_raw(vm, vm.regs[rs1])
+            msg = self._span_raw(vm, vm.regs[rs2])
+            h = _hmac.new(key, msg, hashlib.sha256).digest()
+            vm.regs[rd] = self._new_span_bytes(vm, h); return True
         return False
 
     def _htmllib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:

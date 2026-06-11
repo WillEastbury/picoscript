@@ -409,6 +409,60 @@ static void pv_sha256(pv_ctx *ctx, uint32_t p, int32_t len, uint8_t out[32])
     }
 }
 
+/* ---- Crypto.HmacSha256: RFC 2104 over the canonical SHA-256 (== Python hmac == JS).
+   Streaming so the inner hash is ipad-block || message (message read from the arena)
+   without materializing a concatenation buffer. Key/message are two input spans. ---- */
+typedef struct { uint32_t H[8]; uint8_t buf[64]; int fill; uint64_t total; } pv_sha256_stream;
+static void pv_sha256_s_init(pv_sha256_stream *s)
+{
+    static const uint32_t IV[8] = { 0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
+                                     0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u };
+    for (int i = 0; i < 8; i++) s->H[i] = IV[i];
+    s->fill = 0; s->total = 0;
+}
+static void pv_sha256_s_push(pv_sha256_stream *s, uint8_t b)
+{
+    s->buf[s->fill++] = b; s->total++;
+    if (s->fill == 64) { pv_sha256_block(s->H, s->buf); s->fill = 0; }
+}
+static void pv_sha256_s_final(pv_sha256_stream *s, uint8_t out[32])
+{
+    uint64_t bitlen = s->total * 8u;
+    pv_sha256_s_push(s, 0x80);
+    while (s->fill != 56) pv_sha256_s_push(s, 0x00);
+    for (int i = 0; i < 8; i++) pv_sha256_s_push(s, (uint8_t)((bitlen >> (56 - 8 * i)) & 0xFF));
+    for (int i = 0; i < 8; i++) {
+        out[i * 4]     = (uint8_t)(s->H[i] >> 24);
+        out[i * 4 + 1] = (uint8_t)(s->H[i] >> 16);
+        out[i * 4 + 2] = (uint8_t)(s->H[i] >> 8);
+        out[i * 4 + 3] = (uint8_t)(s->H[i]);
+    }
+}
+static void pv_hmac_sha256(pv_ctx *ctx, uint32_t key_p, int32_t key_len,
+                           uint32_t msg_p, int32_t msg_len, uint8_t out[32])
+{
+    if (key_len < 0) key_len = 0;
+    if (msg_len < 0) msg_len = 0;
+    uint8_t k[64];
+    for (int i = 0; i < 64; i++) k[i] = 0;
+    if (key_len > 64) {
+        pv_sha256(ctx, key_p, key_len, k);          /* k[0..31] = H(key), k[32..63] = 0 */
+    } else {
+        for (int32_t i = 0; i < key_len; i++) k[i] = pv_arena_get(ctx, key_p + (uint32_t)i);
+    }
+    uint8_t ipad[64], opad[64];
+    for (int i = 0; i < 64; i++) { ipad[i] = (uint8_t)(k[i] ^ 0x36); opad[i] = (uint8_t)(k[i] ^ 0x5c); }
+    uint8_t inner[32];
+    pv_sha256_stream s; pv_sha256_s_init(&s);
+    for (int i = 0; i < 64; i++) pv_sha256_s_push(&s, ipad[i]);
+    for (int32_t i = 0; i < msg_len; i++) pv_sha256_s_push(&s, pv_arena_get(ctx, msg_p + (uint32_t)i));
+    pv_sha256_s_final(&s, inner);
+    pv_sha256_stream s2; pv_sha256_s_init(&s2);
+    for (int i = 0; i < 64; i++) pv_sha256_s_push(&s2, opad[i]);
+    for (int i = 0; i < 32; i++) pv_sha256_s_push(&s2, inner[i]);
+    pv_sha256_s_final(&s2, out);
+}
+
 /* ---- Template.* (AOT plan + renderer; mirrors picoscript_vm._templatelib) --
  * Plan ops: 0x01 LEN_HI LEN_LO bytes=literal, 0x02 KEYLEN key=hole, 0x03/0x04
  * KEYLEN key=(inverted) section, 0x05=end, 0x06 KEYLEN list=each. */
@@ -1201,6 +1255,18 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         int h = ctx->regs[rs1];
         uint8_t dig[32];
         pv_sha256(ctx, pv_span_p(ctx, h), pv_span_n(ctx, h), dig);
+        uint32_t k = 0;
+        for (int i = 0; i < 32; i++) pv_arena_put(ctx, &k, dig[i]);
+        ctx->regs[rd] = pv_arena_finish(ctx, k);
+        return;
+    }
+
+    /* ---- Crypto.HmacSha256 (key span, msg span -> 32-byte digest span) - */
+    if (hook == PV_HOOK_CRYPTO_HMACSHA256) {
+        int hk = ctx->regs[rs1], hm = ctx->regs[rs2];
+        uint8_t dig[32];
+        pv_hmac_sha256(ctx, pv_span_p(ctx, hk), pv_span_n(ctx, hk),
+                       pv_span_p(ctx, hm), pv_span_n(ctx, hm), dig);
         uint32_t k = 0;
         for (int i = 0; i < 32; i++) pv_arena_put(ctx, &k, dig[i]);
         ctx->regs[rd] = pv_arena_finish(ctx, k);

@@ -103,6 +103,12 @@ def tpl_prog(tmpl, model):
             f"int m = Span.Make(2000, {len(model)}); int o = Template.Render(pl, m); Io.Write(o);")
 
 
+def hmac_prog(key, msg):
+    return (setbytes(1000, key) + setbytes(2000, msg) +
+            f"int k = Span.Make(1000, {len(key)}); int m = Span.Make(2000, {len(msg)});"
+            f"int d = Crypto.HmacSha256(k, m); Io.Write(d);")
+
+
 def main():
     build_c_vm()
     if os.path.exists(BUILD):
@@ -194,6 +200,18 @@ def main():
                f"int s = Span.Make(1000, {len(msg)}); int d = Crypto.Sha256(s); Io.Write(d);")
         check(shl, hashlib.sha256(msg).digest(), "sha256_multiblock")
 
+        # Crypto.HmacSha256 (RFC 4231) -- short key, ASCII key/data, and a >64-byte key
+        # (exercises the key-is-hashed-first branch). Two input spans (key, message).
+        import hmac as _hmac
+        def _hm(key, m): return _hmac.new(key, m, hashlib.sha256).digest()
+        tc1k, tc1m = bytes([0x0b]) * 20, b"Hi There"
+        check(hmac_prog(tc1k, tc1m), _hm(tc1k, tc1m), "hmac_rfc_tc1")
+        tc2k, tc2m = b"Jefe", b"what do ya want for nothing?"
+        check(hmac_prog(tc2k, tc2m), _hm(tc2k, tc2m), "hmac_rfc_tc2")
+        tc6k = bytes([0xaa]) * 131
+        tc6m = b"Test Using Larger Than Block-Size Key - Hash Key First"
+        check(hmac_prog(tc6k, tc6m), _hm(tc6k, tc6m), "hmac_rfc_tc6_bigkey")
+
         # Template.* : holes, sections, inverted, nesting, {{#each}} object + scalar.
         check(tpl_prog(b"Hi {{name}}!", b"name=Bob"), b"Hi Bob!", "tpl_hole")
         check(tpl_prog(b"{{#show}}yes{{/show}}", b"show=1"), b"yes", "tpl_section")
@@ -205,7 +223,7 @@ def main():
               b"[1][2][3]", "tpl_each_scalar")
 
         print("PASS first-class native: Python VM == C interpreter == toC-compiled == toJS-compiled, "
-              "byte-exact -- Span/String/Number/Maths/Compress/Html/Http/Crypto/Template "
+              "byte-exact -- Span/String/Number/Maths/Compress/Html/Http/Crypto(Sha256+HmacSha256)/Template "
               "(compiled C and JS both skip the bytecode VM)")
     finally:
         shutil.rmtree(BUILD, ignore_errors=True)
