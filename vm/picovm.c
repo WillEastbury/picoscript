@@ -948,6 +948,47 @@ uint32_t pv_hook_cap(int hook)
     return 0;                                                /* pure: String/Number/Maths/Span/... */
 }
 
+/* ── Q16.16 fixed-point CORDIC (Maths.Sin/Cos/Tan, ...) ──────────────────────
+ * All-integer; constants/iteration count are shared verbatim with picoscript_vm.py
+ * (_q16_*) and vm/picovm.js so results are byte-identical on every path. */
+#define PV_Q16_ONE      65536
+#define PV_Q16_HALF_PI  102944
+#define PV_Q16_PI       205887
+#define PV_Q16_TWO_PI   411775
+#define PV_Q16_GAIN_INV 39797
+static const int32_t PV_Q16_ATAN[16] = {
+    51472, 30386, 16055, 8150, 4091, 2047, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2
+};
+
+static void pv_q16_sincos(int32_t angle, int32_t *out_sin, int32_t *out_cos)
+{
+    int32_t a = angle % PV_Q16_TWO_PI;
+    if (a < 0) a += PV_Q16_TWO_PI;
+    int32_t q = a / PV_Q16_HALF_PI;
+    int32_t r = a - q * PV_Q16_HALF_PI;
+    int32_t x = PV_Q16_GAIN_INV, y = 0, z = r, i, s, c;
+    for (i = 0; i < 16; i++) {
+        int32_t dx = x >> i, dy = y >> i;
+        if (z >= 0) { x -= dy; y += dx; z -= PV_Q16_ATAN[i]; }
+        else        { x += dy; y -= dx; z += PV_Q16_ATAN[i]; }
+    }
+    switch (q) {
+        case 0:  s = y;  c = x;  break;
+        case 1:  s = x;  c = -y; break;
+        case 2:  s = -y; c = -x; break;
+        default: s = -x; c = y;  break;
+    }
+    *out_sin = s; *out_cos = c;
+}
+
+static int32_t pv_q16_tan(int32_t angle)
+{
+    int32_t s, c;
+    pv_q16_sincos(angle, &s, &c);
+    if (c == 0) return (s >= 0) ? 0x7FFFFFFF : (int32_t)0x80000000;
+    return (int32_t)(((int64_t)s * PV_Q16_ONE) / c);   /* trunc toward zero (C99 /) */
+}
+
 void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
 {
     (void)imm16;
@@ -1399,7 +1440,17 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         return;
     }
 
-    /* ---- Maths.* (pure integer: Power = modular pow, Sqrt = floor sqrt) - */
+    /* ---- Maths.* (pure integer: Power = modular pow, Sqrt = floor sqrt;
+       Sin/Cos/Tan = Q16.16 CORDIC) - */
+    if (hook == PV_HOOK_MATHS_SIN) {
+        int32_t s, c; pv_q16_sincos(ctx->regs[rs1], &s, &c); ctx->regs[rd] = s; return;
+    }
+    if (hook == PV_HOOK_MATHS_COS) {
+        int32_t s, c; pv_q16_sincos(ctx->regs[rs1], &s, &c); ctx->regs[rd] = c; return;
+    }
+    if (hook == PV_HOOK_MATHS_TAN) {
+        ctx->regs[rd] = pv_q16_tan(ctx->regs[rs1]); return;
+    }
     if (hook == PV_HOOK_MATHS_POWER) {
         int32_t base = ctx->regs[rs1], exp = ctx->regs[rs2];
         uint32_t r;

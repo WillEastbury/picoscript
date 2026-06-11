@@ -72,6 +72,62 @@ def _sx32(v: int) -> int:
     return v - 0x100000000 if v & 0x80000000 else v
 
 
+# ── Q16.16 fixed-point CORDIC (Maths.Sin/Cos/Tan, ...) ───────────────────────
+# All-integer; the constants/iteration count below are shared verbatim with
+# vm/picovm.c and vm/picovm.js so the result is byte-identical on every path.
+# A value v is represented as round(v * 65536); angles are radians in Q16.16.
+Q16_ONE = 1 << 16
+Q16_HALF_PI = 102944
+Q16_PI = 205887
+Q16_TWO_PI = 411775
+Q16_CORDIC_GAIN_INV = 39797     # 1/prod(sqrt(1+2^-2i)) in Q16.16, pre-cancels CORDIC gain
+Q16_ATAN = (51472, 30386, 16055, 8150, 4091, 2047, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2)
+
+
+def _q16_cordic_quad(r: int):
+    """CORDIC rotation for r in [0, HALF_PI); returns (sin, cos) in Q16.16."""
+    x = Q16_CORDIC_GAIN_INV
+    y = 0
+    z = r
+    for i in range(16):
+        dx = x >> i
+        dy = y >> i
+        if z >= 0:
+            x = _sx32(x - dy); y = _sx32(y + dx); z -= Q16_ATAN[i]
+        else:
+            x = _sx32(x + dy); y = _sx32(y - dx); z += Q16_ATAN[i]
+    return y, x
+
+
+def _q16_sincos(angle: int):
+    """(sin, cos) in Q16.16 for a Q16.16 radian angle, via quadrant reduction."""
+    a = angle % Q16_TWO_PI
+    if a < 0:
+        a += Q16_TWO_PI
+    q = a // Q16_HALF_PI
+    r = a - q * Q16_HALF_PI
+    s, c = _q16_cordic_quad(r)
+    if q == 0:
+        return s, c
+    if q == 1:
+        return c, _sx32(-s)
+    if q == 2:
+        return _sx32(-s), _sx32(-c)
+    return _sx32(-c), s
+
+
+def _q16_tan(angle: int) -> int:
+    """tan in Q16.16 = sin/cos (trunc-toward-zero divide); saturates when cos == 0."""
+    s, c = _q16_sincos(angle)
+    if c == 0:
+        return 0x7FFFFFFF if s >= 0 else -0x80000000
+    num = s * Q16_ONE
+    q = abs(num) // abs(c)
+    if (num < 0) != (c < 0):
+        q = -q
+    return _sx32(q)
+
+
 # Binding capability classes (INV-17: "bindings are not ambient"). Bit values are shared
 # verbatim with vm/picovm.h (PV_CAP_*) and vm/picovm.js so a denied hook faults identically
 # on every path. Pure computation needs no capability (class 0, always allowed).
@@ -451,9 +507,15 @@ class HostApi:
         return False
 
     def _mathslib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
-        # Pure-integer Maths ops (the float transcendentals Sin/Cos/Log/Exp need a
-        # fixed-point convention and are left planned; see STRING_TEMPLATES.md).
+        # Pure-integer Maths ops; the transcendentals are fixed-point Q16.16 (CORDIC,
+        # byte-identical across Python/C/JS -- see _q16_* above and vm/picovm.{c,js}).
         R = vm.regs
+        if method == "Sin":
+            R[rd] = _q16_sincos(_sx32(R[rs1]))[0] & MASK32; return True
+        if method == "Cos":
+            R[rd] = _q16_sincos(_sx32(R[rs1]))[1] & MASK32; return True
+        if method == "Tan":
+            R[rd] = _q16_tan(_sx32(R[rs1])) & MASK32; return True
         if method == "Power":
             base, exp = _sx32(R[rs1]), _sx32(R[rs2])
             if exp <= 0:

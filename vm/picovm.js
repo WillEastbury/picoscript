@@ -476,7 +476,37 @@
     return false;
   };
 
+  // ── Q16.16 fixed-point CORDIC (Maths.Sin/Cos/Tan, ...) ──────────────────────
+  // All-integer; constants/iteration count shared verbatim with picoscript_vm.py
+  // (_q16_*) and vm/picovm.c so results are byte-identical on every path.
+  var Q16_ONE = 65536, Q16_HALF_PI = 102944, Q16_PI = 205887, Q16_TWO_PI = 411775, Q16_GAIN_INV = 39797;
+  var Q16_ATAN = [51472, 30386, 16055, 8150, 4091, 2047, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2];
+  function q16Sincos(angle) {
+    var a = (angle | 0) % Q16_TWO_PI;
+    if (a < 0) a += Q16_TWO_PI;
+    var q = (a / Q16_HALF_PI) | 0;
+    var r = a - q * Q16_HALF_PI;
+    var x = Q16_GAIN_INV, y = 0, z = r, i, dx, dy;
+    for (i = 0; i < 16; i++) {
+      dx = x >> i; dy = y >> i;
+      if (z >= 0) { x = (x - dy) | 0; y = (y + dx) | 0; z -= Q16_ATAN[i]; }
+      else { x = (x + dy) | 0; y = (y - dx) | 0; z += Q16_ATAN[i]; }
+    }
+    if (q === 0) return [y, x];
+    if (q === 1) return [x, (-y) | 0];
+    if (q === 2) return [(-y) | 0, (-x) | 0];
+    return [(-x) | 0, y];
+  }
+  function q16Tan(angle) {
+    var sc = q16Sincos(angle), s = sc[0], c = sc[1];
+    if (c === 0) return s >= 0 ? 0x7FFFFFFF : -0x80000000;
+    return Number(BigInt.asIntN(32, (BigInt(s) * 65536n) / BigInt(c)));   // trunc toward zero
+  }
+
   PicoVM.prototype._mathslib = function (method, rd, rs1, rs2) {
+    if (method === "Sin") { this.regs[rd] = q16Sincos(this.regs[rs1] | 0)[0] | 0; return true; }
+    if (method === "Cos") { this.regs[rd] = q16Sincos(this.regs[rs1] | 0)[1] | 0; return true; }
+    if (method === "Tan") { this.regs[rd] = q16Tan(this.regs[rs1] | 0) | 0; return true; }
     if (method === "Power") {
       var base = this.regs[rs1] | 0, exp = this.regs[rs2] | 0;
       if (exp <= 0) { this.regs[rd] = (exp === 0 ? 1 : 0) | 0; return true; }
