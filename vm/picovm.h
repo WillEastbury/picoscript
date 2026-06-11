@@ -48,7 +48,8 @@ enum {
     PV_FAULT_BAD_JUMP    = 3,    /* computed/static jump target out of range */
     PV_FAULT_CALL_OVERFLOW = 4,  /* call stack overflow */
     PV_FAULT_RET_UNDERFLOW = 5,  /* RETURN with empty call stack */
-    PV_FAULT_BAD_HOOK    = 6     /* unknown host hook id */
+    PV_FAULT_BAD_HOOK    = 6,    /* unknown host hook id */
+    PV_FAULT_TEMPLATE    = 7     /* template render nesting exceeded TPL_MAXDEPTH */
 };
 
 typedef struct pv_ctx pv_ctx;

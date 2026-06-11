@@ -87,8 +87,27 @@ def main():
     assert c_fault(badjump) == 3, "C VM must fault (3=bad jump)"
     assert js_fault(badjump) == 3, "JS VM must fault (3=bad jump)"
 
-    print("PASS vm safety: step-budget (INV-12) and out-of-range jump (INV-11) fault "
-          "identically on Python / C / JS -- C no longer silently truncates")
+    # ── INV-19: template render nesting beyond TPL_MAXDEPTH (32) faults (4=template). ──
+    # Compile+render a 40-deep section nest on all three bytecode VMs from one source.
+    sys.path.insert(0, ROOT)
+    from picoscript_cfront import compile_c           # noqa: E402
+    from picoscript_il import lower_to_bytecode_safe   # noqa: E402
+
+    def setbytes(base, data):
+        return "".join(f"Memory.Set({base + i}, {b});" for i, b in enumerate(data))
+
+    tmpl = b"{{#a}}" * 40 + b"x" + b"{{/a}}" * 40
+    model = b"a=1"
+    src = (setbytes(1000, tmpl) + setbytes(3000, model) +
+           f"int t = Span.Make(1000, {len(tmpl)}); int pl = Template.Compile(t);"
+           f"int m = Span.Make(3000, {len(model)}); int o = Template.Render(pl, m); Io.Write(o);")
+    tw = lower_to_bytecode_safe(compile_c(src))
+    assert py_faulted(tw), "Python VM must fault on template depth > 32"
+    assert c_fault(tw) == 7, "C VM must fault (7=template depth)"
+    assert js_fault(tw) == 7, "JS VM must fault (7=template depth)"
+
+    print("PASS vm safety: step-budget (INV-12), out-of-range jump (INV-11) and template "
+          "depth (INV-19) fault identically on Python / C / JS -- C no longer silently truncates")
 
 
 if __name__ == "__main__":

@@ -533,7 +533,8 @@
       if (prefix.length === 0) return key.slice();
       var nk = prefix.slice(); nk.push(0x2e); pushAll(nk, key); return nk;
     }
-    function emit(prefix) {
+    function emit(prefix, depth) {
+      if (depth > 64) return;   // INV-20: bound JSON nesting depth (matches C pjs_emit depth>64)
       skipws();
       if (pos[0] >= n) return;
       var c = s[pos[0]];
@@ -545,7 +546,7 @@
           if (pos[0] >= n || s[pos[0]] !== 0x22) break;
           var key = parseString(); skipws();
           if (pos[0] < n && s[pos[0]] === 0x3a) pos[0] += 1;
-          emit(childKey(prefix, key)); skipws();
+          emit(childKey(prefix, key), depth + 1); skipws();
           if (pos[0] < n && s[pos[0]] === 0x2c) { pos[0] += 1; continue; }
           if (pos[0] < n && s[pos[0]] === 0x7d) pos[0] += 1;
           break;
@@ -556,7 +557,7 @@
         var idx = 0;
         while (pos[0] < n) {
           var ik = _strBytes(String(idx));
-          emit(childKey(prefix, ik)); idx += 1; skipws();
+          emit(childKey(prefix, ik), depth + 1); idx += 1; skipws();
           if (pos[0] < n && s[pos[0]] === 0x2c) { pos[0] += 1; continue; }
           if (pos[0] < n && s[pos[0]] === 0x5d) pos[0] += 1;
           break;
@@ -569,7 +570,7 @@
         pushAll(out, prefix); out.push(0x3d); for (var q = start; q < pos[0]; q++) out.push(s[q]); out.push(0x0a);
       }
     }
-    skipws(); emit([]);
+    skipws(); emit([], 0);
     return out;
   };
 
@@ -738,14 +739,19 @@
         else if (op === 0x03 || op === 0x04) {
           var kl2 = plan[i++], key = plan.slice(i, i + kl2); i += kl2;
           var truthy = resolve(key, prefix).length > 0;
-          if (op === 0x03 ? truthy : !truthy) stack.push(["sec", prefix, 0, 0, "", 0]);
-          else i = skipBlock(i);
+          if (op === 0x03 ? truthy : !truthy) {
+            if (stack.length >= 32) throw new Error("template depth exceeded");  // INV-19: TPL_MAXDEPTH
+            stack.push(["sec", prefix, 0, 0, "", 0]);
+          } else i = skipBlock(i);
         }
         else if (op === 0x06) {
           var kl3 = plan[i++], lk = _keystr(plan.slice(i, i + kl3)); i += kl3;
           var full = prefix ? (prefix + "." + lk) : lk, cnt = countList(full);
           if (cnt === 0) i = skipBlock(i);
-          else { stack.push(["each", prefix, i, cnt, full, 0]); prefix = full + ".0"; }
+          else {
+            if (stack.length >= 32) throw new Error("template depth exceeded");
+            stack.push(["each", prefix, i, cnt, full, 0]); prefix = full + ".0";
+          }
         }
         else if (op === 0x05) {
           if (stack.length) {

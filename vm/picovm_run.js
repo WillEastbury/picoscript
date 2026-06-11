@@ -20,6 +20,7 @@ process.stdin.on("end", () => {
     if (m.indexOf("step budget") >= 0) fault = 1;
     else if (m.indexOf("bad opcode") >= 0) fault = 2;
     else if (m.indexOf("bad jump") >= 0 || m.indexOf("bad branch") >= 0 || m.indexOf("bad call") >= 0) fault = 3;
+    else if (m.indexOf("template depth") >= 0) fault = 7;
     else fault = 99;
   }
   console.log("STEPS " + vm.steps);

@@ -680,12 +680,11 @@ static int pv_template_render(pv_ctx *ctx, uint32_t pp, int32_t pn, uint32_t mp,
             int truthy = (vlen > 0);
             int take = (op == 0x03) ? truthy : (!truthy);
             if (take) {
-                if (sp < TPL_MAXDEPTH) {
-                    fr[sp].kind = 0;
-                    for (int32_t t = 0; t < prefixlen; t++) fr[sp].sp[t] = prefix[t];
-                    fr[sp].splen = prefixlen;
-                    sp++;
-                }
+                if (sp >= TPL_MAXDEPTH) { ctx->fault = PV_FAULT_TEMPLATE; ctx->halted = 1; break; }
+                fr[sp].kind = 0;
+                for (int32_t t = 0; t < prefixlen; t++) fr[sp].sp[t] = prefix[t];
+                fr[sp].splen = prefixlen;
+                sp++;
             } else {
                 i = tpl_skip(ctx, pp, pn, i);
             }
@@ -702,7 +701,8 @@ static int pv_template_render(pv_ctx *ctx, uint32_t pp, int32_t pn, uint32_t mp,
             int32_t cnt = tpl_count_list(&M, full, fl);
             if (cnt == 0) {
                 i = tpl_skip(ctx, pp, pn, i);
-            } else if (sp < TPL_MAXDEPTH) {
+            } else {
+                if (sp >= TPL_MAXDEPTH) { ctx->fault = PV_FAULT_TEMPLATE; ctx->halted = 1; break; }
                 fr[sp].kind = 1;
                 for (int32_t t = 0; t < prefixlen; t++) fr[sp].sp[t] = prefix[t];
                 fr[sp].splen = prefixlen;

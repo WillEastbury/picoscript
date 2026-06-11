@@ -219,6 +219,16 @@ def main():
         check("int a = 0 - 8; int b = a / 3; Io.WriteByte(b);", bytes([254]), "div_neg_trunc")  # -2 (floor would be -3)
         check("int a = 0 - 7; int b = a % 2; Io.WriteByte(b);", bytes([255]), "mod_neg")        # -1
 
+        # JSON nesting bound (INV-20): a shallow scalar emits; a leaf nested beyond the
+        # depth-64 cap is truncated -- identically on every path (silent, no fault).
+        deep = b'{"deep":1}'
+        for _ in range(70):
+            deep = b'{"a":' + deep + b'}'
+        bigjson = b'{"top":7,"nested":' + deep + b'}'
+        jd = (setbytes(1000, bigjson) +
+              f"int s = Span.Make(1000, {len(bigjson)}); int m = Http.ParseJson(s); Io.Write(m);")
+        check(jd, b"top=7\n", "json_depth_cap")
+
         # Template.* : holes, sections, inverted, nesting, {{#each}} object + scalar.
         check(tpl_prog(b"Hi {{name}}!", b"name=Bob"), b"Hi Bob!", "tpl_hole")
         check(tpl_prog(b"{{#show}}yes{{/show}}", b"show=1"), b"yes", "tpl_section")

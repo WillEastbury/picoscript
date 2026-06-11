@@ -513,7 +513,9 @@ class HostApi:
                     b.append(c)
             return bytes(b)
 
-        def emit(prefix):
+        def emit(prefix, depth):
+            if depth > 64:          # INV-20: bound JSON nesting depth (matches C pjs_emit depth>64)
+                return
             skipws()
             if pos[0] >= n:
                 return
@@ -529,7 +531,7 @@ class HostApi:
                     key = parse_string(); skipws()
                     if pos[0] < n and s[pos[0]] == 0x3a:
                         pos[0] += 1
-                    emit(key if not prefix else prefix + b"." + key); skipws()
+                    emit(key if not prefix else prefix + b"." + key, depth + 1); skipws()
                     if pos[0] < n and s[pos[0]] == 0x2c:
                         pos[0] += 1; continue
                     if pos[0] < n and s[pos[0]] == 0x7d:
@@ -542,7 +544,7 @@ class HostApi:
                 idx = 0
                 while pos[0] < n:
                     ik = str(idx).encode()
-                    emit(ik if not prefix else prefix + b"." + ik); idx += 1; skipws()
+                    emit(ik if not prefix else prefix + b"." + ik, depth + 1); idx += 1; skipws()
                     if pos[0] < n and s[pos[0]] == 0x2c:
                         pos[0] += 1; continue
                     if pos[0] < n and s[pos[0]] == 0x5d:
@@ -557,7 +559,7 @@ class HostApi:
                 out.extend(prefix); out.append(0x3d); out.extend(s[start:pos[0]]); out.append(0x0a)
 
         skipws()
-        emit(b"")
+        emit(b"", 0)
         return bytes(out)
 
     def _httplib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
@@ -684,6 +686,8 @@ class HostApi:
                     key = bytes(plan[i:i + kl]); i += kl
                     truthy = len(resolve(key, prefix)) > 0
                     if (truthy if op == 0x03 else (not truthy)):
+                        if len(stack) >= 32:             # INV-19: bound nesting (matches C TPL_MAXDEPTH)
+                            raise RuntimeError("template depth exceeded")
                         stack.append(["sec", prefix, 0, 0, b"", 0])
                     else:
                         i = skip_block(i)
@@ -695,6 +699,8 @@ class HostApi:
                     if cnt == 0:
                         i = skip_block(i)
                     else:
+                        if len(stack) >= 32:
+                            raise RuntimeError("template depth exceeded")
                         stack.append(["each", prefix, i, cnt, full, 0])
                         prefix = full + b".0"
                 elif op == 0x05:                         # end of section / each
