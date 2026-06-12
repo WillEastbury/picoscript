@@ -4,11 +4,16 @@
 the PIOS build agent). No VM/driver code is changed by this document.
 
 **Layering principle (the contract this doc encodes):**
-- **PicoScript owns** the *language features* (the `Device`/`Mmio`/`Stream` namespaces),
-  the *compiler components* (hook lowering, capability gating, binding lifecycle,
-  source-span/INV-25), and the *declared hook surface* OS code plugs into.
-- **PIOS (EL1) owns** the *security surface* (capability enforcement, register-window
-  whitelisting, lease validation/revoke, DMA-buffer ownership) and the *actual drivers*.
+- **PicoScript owns** the *language features* (GPIO via the existing `Storage.*` card
+  model; `Device`/`Stream` namespaces for future high-bandwidth streaming), the *compiler
+  components* (hook lowering, capability gating, binding lifecycle, source-span/INV-25),
+  and the *declared hook surface* OS code plugs into.
+- **PIOS (EL1) owns** the *security surface* (capability enforcement, per-pin allow-list,
+  lease validation/revoke, DMA-buffer ownership) and the *actual drivers*.
+
+**No direct hardware-level access.** Raw register/MMIO access is deliberately *not*
+exposed (see §2) — GPIO and other low-bandwidth control is a hardware-backed **card in a
+pack**, so it inherits the already-governed card security model.
 
 This is the same split as `docs/PIOS_HOST_BINDINGS.md` and `docs/INV25_PIOS_TRACE.md`:
 PicoScript stays pure, deterministic and 5-path byte-identical; the device is an injected,
@@ -33,43 +38,67 @@ already exist in the language:
 | Streaming lifecycle | binding kinds `stream` / `duplex` (`PIOS_IO_BINDING.md` §5) |
 | Register field extract/insert | `Bits.*` (And/Or/Xor/Shl/Shr/Sar) |
 
-So the new surface is small: an **enumeration/open** layer (`Device.*`), a **streaming
-ring** layer (`Stream.*`, thin sugar over `Lease`+`Descriptor`+`WaitIRQ`), and a
-**register-window** layer (`Mmio.*`, genuinely new).
+So the new surface is small: **GPIO needs nothing new** (a pin is a `Storage.*` card, §2b),
+and the future streaming class adds an **enumeration/open** layer (`Device.*`) plus a
+**streaming-ring** layer (`Stream.*`, thin sugar over `Lease`+`Descriptor`+`WaitIRQ`).
+There is **no register-level layer** — raw MMIO is rejected (§2).
 
 ---
 
-## 2. Two device classes (one coherent spec, two APIs)
+## 2. Device classes — streaming (later) and GPIO-via-cards (first)
 
-### 2a. Streaming / DMA-ring devices — `Device.*` + `Stream.*`
+> **Security decision (rejected: raw MMIO).** An earlier draft proposed an `Mmio.*`
+> register-window class. It is **rejected**: raw register access — even windowed — is a
+> privilege-escalation / brick-the-SoC footgun and the wrong default for an
+> isolation-first runtime. **PicoScript exposes no direct hardware-level access.** All
+> low-bandwidth control goes through the card model below; the OS keeps register access
+> entirely on its side of the boundary.
+
+### 2a. Streaming / DMA-ring devices — `Device.*` + `Stream.*` (future)
 High-bandwidth producer/consumer ring of DMA buffers: **camera frames, HDMI scanout,
 PCIe/NVMe blocks, SDIO/QSPI blocks, Ethernet RX/TX.** Maps almost verbatim onto
-`Descriptor` + `Lease` + a FIFO of ready-events. Zero-copy: the capsule leases a buffer
-the DMA engine filled, reads it through the lease span, releases it back to the ring.
+`Descriptor` + `Lease` + a FIFO of ready-events. Zero-copy. **Not started yet** — designed
+here for when high-bandwidth streaming is needed.
 
-### 2b. Register / MMIO control devices — `Mmio.*`
-Low-bandwidth, synchronous, latency-sensitive register pokes: **GPIO, I²C, SPI config,
-PWM, clock/reset.** Needs a new model: a **kernel-validated register window** (a lease
-over a *whitelisted* MMIO range) plus typed `Peek`/`Poke`; `Bits.*` does the field work.
-This is the security-sensitive class — see §6.
+### 2b. GPIO / low-bandwidth control — **a pin is a card in a pack** (start here)
+A GPIO pin needs **no new primitive**: it is a **card in a kernel-backed pack**, read and
+written through the existing `Storage.*` card API. This inherits the whole card stack —
+lease lifetime, capability gating, per-pack/per-card schema, and the deterministic-replay
+provider — for free, with **zero direct hardware access** from the capsule.
 
-Both classes flow through the same `pooldesc`/lease/FIFO substrate and the same I1–I8
-invariants; only the lifecycle contract differs.
+- **Pack** — a virtual, kernel-backed pack (e.g. `"gpio"`, or per-controller `"gpio0"`),
+  selected with `Storage.UsePack`. Its cards are pins instead of WALFS blobs.
+- **Pin card** — keyed by pin (`"gp17"` / pin index). Its value is a **normalised integer
+  in `[0, 1024]`** (10-bit full-scale; the kernel maps to native resolution — Pico PWM is
+  16-bit, ADC 12-bit):
+  - digital input read → **`0`** (low) or **`1024`** (high);
+  - digital output write → `0` drives low, `1024` drives high (intermediate values are
+    thresholded by the driver);
+  - PWM-capable output → duty cycle = `value / 1024` (0 %..100 %);
+  - ADC-capable input → reading scaled to `0..1024`.
+- **Capability via schema** — `Storage.GetSchemaForPack("gpio")` returns each pin's
+  **direction** (in / out / both) and **kind** (digital / pwm / adc), so a capsule discovers
+  a pin's range and capability without touching hardware. Direction/mode is set through the
+  schema (board config / kernel) or a mode field on the card — see §10.
+
+Both the streaming ring and the GPIO pack flow through the same `pooldesc`/lease substrate
+and the same I1–I8 invariants; only the lifecycle differs. **There is no register-level
+class.**
 
 ---
 
 ## 3. Language surface (proposed)
 
 All host hooks are **2-in/1-out** (`rd`, `rs1`, `rs2`) — a hard ABI constraint. Ops that
-need >2 inputs (open with mode+config, poke with window+offset+value) take a **config
-descriptor span** built by the program and pass its handle, exactly as AES packs
+need >2 inputs (stream open with mode+config, a `Gpio.Write` with pin+value+flags) take a
+**config descriptor span** built by the program and pass its handle, exactly as AES packs
 `IV||payload` into one span. This keeps the generic `Ns.Method` lowering unchanged (no
 frontend edits).
 
 ### `Device.*` — enumeration & lifecycle
 ```
 Device.Open(idSpan, cfgDesc) -> devHandle      // idSpan = "gpio0"/"csi0"/"eth0"/"nvme0"; cfgDesc packs mode/flags
-Device.Caps(devHandle)       -> capsBitsInt    // class bits the device exposes (stream/mmio/duplex)
+Device.Caps(devHandle)       -> capsBitsInt    // class bits the device exposes (stream/duplex)
 Device.Close(devHandle)      -> ()             // releases all leases + the device binding
 Device.Status(devHandle)     -> statusInt      // typed status (errno-style; see Status.Last, INV-18)
 ```
@@ -89,37 +118,53 @@ syscall/transition** (the async message-ABI rule). Backpressure is the existing
 `LEASE_REVOKE`: under pressure the kernel reclaims the oldest lease; `ringCfgDesc.policy`
 chooses block-vs-drop.
 
-### `Mmio.*` — validated register window
+### `Mmio.*` — REJECTED (no register-level access; see §2)
+Use the GPIO card surface below for control devices. There is no `Peek`/`Poke`.
+
+### GPIO — the existing `Storage.*` card API on a hardware-backed pack
+No new hooks are required for the minimum GPIO surface — a pin is a card:
 ```
-Mmio.Open(devHandle, windowCfgDesc) -> windowHandle    // windowCfgDesc: which named window + RO/RW; kernel validates against whitelist
-Mmio.Peek(windowHandle, offsetInt)  -> wordInt          // read reg at window+offset (offset bounds-checked)
-Mmio.Poke(pokeDesc)                 -> ()               // pokeDesc packs (windowHandle, offset, value) -- 3 inputs -> descriptor
-Mmio.Barrier(windowHandle)          -> ()               // memory/ordering barrier (DSB/DMB equivalent)
-Mmio.Close(windowHandle)            -> ()
+Storage.UsePack("gpio")                         // select the kernel-backed GPIO pack
+Storage.GetSchemaForPack("gpio") -> schemaSpan  // per-pin direction (in/out) + kind (digital/pwm/adc)
+Storage.ReadCard("gp17")         -> valueInt     // 0..1024 (digital reads -> 0 or 1024)
+Storage.UpdateCard("gp17", v)    -> ()           // write 0..1024 (digital: 0=low/1024=high; pwm: duty=v/1024)
+Storage.QueryCard(...)           -> ...          // enumerate available pins
 ```
-A window is a **lease over a kernel-whitelisted physical range**; `Peek`/`Poke` are
-offset-bounded *into that window only*. There are no raw pointers (I4). `Bits.*` composes
-field extract/insert on the read-modify-write.
+Optional thin sugar (a *convenience* lowering onto the same card hooks, only if the
+ergonomics are wanted — adds a clean `CAP_GPIO` gate and pin-name resolution):
+```
+Gpio.Read(pinSpan)            -> valueInt        // = Storage.ReadCard on the gpio pack
+Gpio.Write(modeDesc)          -> ()              // modeDesc packs (pin, value) -- 2 inputs fit; >2 use a descriptor
+Gpio.Mode(modeDesc)           -> ()              // set direction/kind where the board allows it
+```
+The sugar is optional; the card API alone is sufficient and is the recommended baseline
+(it reuses everything and needs no new hook codes).
 
 ---
 
 ## 4. Hook codes & capability classes (proposed reservations)
 
-- **Hook range:** `0x130–0x16F` is free (current table tops out at Auth `0x129`; the byte
-  range is dense). Suballocate e.g. `Device 0x130–0x137`, `Stream 0x138–0x147`,
-  `Mmio 0x148–0x14F`, with `0x150–0x16F` reserved for growth. *Confirm against the live
-  table + `EXT_HOST_HOOK_BASE` at reservation time; adding hooks bumps
+- **Hook range:** the **GPIO baseline needs no new hook codes** (pins are `Storage.*`
+  cards). For the future streaming class, `0x130–0x16F` is free (current table tops out at
+  Auth `0x129`; the byte range is dense) — suballocate e.g. `Device 0x130–0x137`,
+  `Stream 0x138–0x147`, optional `Gpio` sugar `0x148–0x14B`, `0x14C–0x16F` reserved for
+  growth. *Confirm against the live table + `EXT_HOST_HOOK_BASE` at reservation time;
+  adding hooks bumps
   `PV_HOOK_TABLE_VERSION` (INV-23), which the module check adapts to automatically.*
 - **Capability classes** (continue from `CAP_CRYPTO = 1<<9`; security-first ⇒ fine-grained):
-  - `CAP_DEVICE = 1<<10` — enumerate/open any device (coarse gate).
-  - `CAP_DMA    = 1<<11` — `Stream.*` (DMA-ring buffers).
-  - `CAP_MMIO   = 1<<12` — `Mmio.*` (register windows — the dangerous one).
-  - Per-bus refinement (`CAP_GPIO`, `CAP_PCIE`, …) is left to a **per-device allow-list in
-    the open path** rather than burning a capability bit each — the kernel checks the
-    capsule's grant table for `idSpan` at `Device.Open`. This keeps the bitmask small while
-    still gating per device instance (the finer-grained security control).
+  - `CAP_DEVICE = 1<<10` — enumerate/open a streaming device (coarse gate, future).
+  - `CAP_DMA    = 1<<11` — `Stream.*` (DMA-ring buffers, future).
+  - `CAP_GPIO   = 1<<12` — access the hardware-backed GPIO pack (the only control gate;
+    **no `CAP_MMIO`** — there is no register-level access).
+  - **Per-instance gating** is a **per-pin allow-list** in the capsule's grant table,
+    checked by the kernel on each `ReadCard`/`UpdateCard` against the pin key — instance-
+    level security with no capability-bit exhaustion and no address windows. The same
+    per-`idSpan` allow-list gates streaming devices at `Device.Open`.
   - `CAP_ALL` widens accordingly (e.g. `0x3FF -> 0x1FFF`); default grant stays "all" so
     existing programs are unaffected, and the harness/`PICOVM_CAPS` restricts to gate.
+  - For the **GPIO-card baseline**, gating can also reuse the existing storage capability +
+    the per-pin allow-list (since pins are cards) — a dedicated `CAP_GPIO` is recommended
+    for a clear audit boundary but is not strictly required.
 
 ---
 
@@ -133,10 +178,11 @@ field extract/insert on the read-modify-write.
    — identical bit values, so a denied device binding faults `PV_FAULT_CAPABILITY`=8
    byte-identically on every path (INV-17).
 3. **Config-descriptor helpers**: a small in-language convention (or `Descriptor.Make` +
-   `Memory.Set`) to pack open/poke args into a span, since hooks are 2-in/1-out.
+   `Memory.Set`) to pack stream-open / multi-arg `Gpio` args into a span, since hooks are
+   2-in/1-out.
 4. **Typed failures** via the existing `Status.Last` channel (INV-18): `Device.Open`
-   failure, lease timeout, bad MMIO offset, etc. set a typed code; the primary return is a
-   null handle / 0.
+   failure, lease timeout, an out-of-range or not-permitted pin, etc. set a typed code; the
+   primary return is a null handle / 0.
 5. **Source-span / structured traps** come for free (INV-25) — a fault in a device hook
    already carries `code/pc/detail`; PIOS adds `capsule_id`/`binding_id`.
 
@@ -146,13 +192,15 @@ field extract/insert on the read-modify-write.
 
 Security is the first priority; this is where it bites. PIOS MUST:
 
-1. **Capability check before dispatch** (INV-17) — honour the `CAP_DEVICE/DMA/MMIO` bits
-   *and* the per-`idSpan` allow-list in the capsule's grant table. Hook existence is not
-   permission.
-2. **MMIO window whitelisting** — `Mmio.Open` resolves a *named* window to a physical
-   range only if that capsule is granted it; `Peek/Poke` are bounds-checked into the
-   window. **Never a raw address from the script.** A poke outside the window faults. This
-   is the control that prevents isolation breach / SoC brick.
+1. **Capability check before dispatch** (INV-17) — honour the `CAP_DEVICE/DMA/GPIO` bits
+   *and* the per-`idSpan` / per-pin allow-list in the capsule's grant table. Hook existence
+   is not permission.
+2. **GPIO pin allow-list (replaces MMIO whitelisting)** — the GPIO pack is kernel-backed;
+   `ReadCard`/`UpdateCard` are gated per-pin against the capsule's grant table, writes are
+   clamped to `[0, 1024]`, and **direction is honoured** (an input pin cannot be driven).
+   **No physical address is ever exposed to the capsule** — the kernel translates a pin
+   card op into the pin operation entirely on its side. (There is no register window to
+   validate because there is no register-level access — §2.)
 3. **DMA-buffer ownership** (I2/I3, the iso-lease model, `PIOS_IO_BINDING.md` D6) — a ring
    buffer has exactly one owner at a time; ownership *moves* capsule↔device at
    `Stream.Next`/`Submit`/`Release`. Use-after-release faults (poison + generation bump,
@@ -161,13 +209,13 @@ Security is the first priority; this is where it bites. PIOS MUST:
 4. **Validated leases + eventual release** (I4/I8) — every `Stream.Span` read goes through
    a validated lease; `LEASE_REVOKE` reclaims under pressure; scope exit auto-releases.
 5. **Deterministic providers** (INV-15) — in seeded/replay mode every device hook is a
-   deterministic provider (recorded camera frames, a fake register window, a canned block
-   stream) so a recorded trace replays byte-for-byte. **This is what lets a device-using
-   capsule still run on the Python/JS VMs and in tests.**
+   deterministic provider (recorded camera frames, a fake GPIO pin holding its value, a
+   canned block stream) so a recorded trace replays byte-for-byte. **This is what lets a
+   device-using capsule still run on the Python/JS VMs and in tests.**
 6. **No hidden allocation in hot device hooks** (INV-5) — `Stream.Next`/`Span`/`Release`
    are arena-free or declare arena use; honour `no_alloc`.
-7. **DoS/quotas** — ring depth, MMIO poke rate, and per-capsule device count are bounded
-   (a streaming capsule cannot starve the kernel).
+7. **DoS/quotas** — ring depth, GPIO write rate, and per-capsule device/pin count are
+   bounded (a streaming capsule cannot starve the kernel).
 
 ---
 
@@ -194,57 +242,72 @@ ambient"):
 
 | Invariant | How device bindings satisfy it |
 |-----------|--------------------------------|
-| INV-3 outside world only via hooks | all hardware access is `Device/Stream/Mmio` hooks |
+| INV-3 outside world only via hooks | GPIO via `Storage.*` cards; streaming via `Device/Stream` hooks |
 | INV-4 every hook has a contract | signatures + ownership/lifetime declared here |
 | INV-5 no hidden alloc in hot hooks | `Stream.Next/Span/Release` arena-free / declared |
-| INV-7 seal consumes ownership | `Stream`/`Mmio` handles use the iso-lease (move) model |
-| INV-15 deterministic mode | deterministic providers for replay/test |
-| INV-17 capability before dispatch | `CAP_DEVICE/DMA/MMIO` + per-`idSpan` allow-list |
-| INV-18 typed failures | `Status.Last` for open/lease/offset errors |
-| INV-24 parity gate | hooks present on all 5 paths; deterministic providers tested |
+| INV-7 seal consumes ownership | `Stream` handles use the iso-lease (move) model |
+| INV-15 deterministic mode | deterministic providers for replay/test (fake pin / recorded ring) |
+| INV-17 capability before dispatch | `CAP_DEVICE/DMA/GPIO` + per-`idSpan`/per-pin allow-list |
+| INV-18 typed failures | `Status.Last` for open/lease/pin errors |
+| INV-24 parity gate | hooks/cards present on all 5 paths; deterministic providers tested |
 | INV-25 structured traps | `code/pc/detail` + PIOS `capsule_id/binding_id` |
 | I1–I8 (binding) | reuse `pooldesc`+lease+FIFO; one-owner, validated, eventual release |
 
-No invariant is weakened; the only *new* surface is the MMIO window, governed by §6.2.
+No invariant is weakened, and **no register-level surface exists** — GPIO reuses the
+already-governed card model, so there is no new dangerous primitive to secure.
 
 ---
 
 ## 9. Worked bring-up examples (mapping to existing PIOS drivers)
 
-- **RP1 Ethernet RX (stream)** — `Device.Open("eth0")` → `Stream.Open(dir=RX, depth=…,
-  policy=drop-oldest)` → loop `l = Stream.Next; s = Stream.Span(l); …consume…;
-  Stream.Release(l)`. This *is* the RP1 "MIP-edge IRQ → drain RX ring → IACK re-arm"
-  flow, wrapped: `Stream.Next` hides the `WaitIRQ` + drain + re-arm.
-- **SD2 / QSPI block device (stream, bidir)** — `Device.Open("sd2"/"qspi0")` →
-  `Stream.Open(dir=RW)`; read = `Next`/`Span`/`Release`, write = lease a free buffer,
-  `Stream.Span` (write), `Stream.Submit`. (SD2 wiring/clock and QSPI pinout are kernel
-  facts; the capsule sees only the ring.)
-- **GPIO/I²C control (mmio)** — `Device.Open("gpio0")` → `Mmio.Open(window="gpio", RW)` →
-  `Mmio.Poke(pack(w, SET_OFFSET, mask))`, `v = Mmio.Peek(w, LEVEL_OFFSET)`; `Bits.*` builds
-  the field masks.
-- **HDMI scanout (stream, TX)** — `Stream.Open(dir=TX)`; the capsule fills framebuffer
-  leases and `Submit`s them to the scanout ring.
+- **GPIO digital out (start here)** — `Storage.UsePack("gpio");
+  Storage.UpdateCard("gp17", 1024)` drives gp17 high; `Storage.UpdateCard("gp17", 0)` low.
+  On the Python/JS VMs the gpio pack is an in-memory card (a fake pin); on PIOS it drives
+  the real pin. Same bytecode.
+- **GPIO digital in** — `int v = Storage.ReadCard("gp16");` → `0` or `1024`.
+- **PWM out** — on a PWM-capable pin, `Storage.UpdateCard("gp18", 512)` = 50 % duty
+  (`512/1024`); the kernel scales to the native 16-bit PWM.
+- **ADC in** — on an ADC pin, `Storage.ReadCard("gp26")` returns the reading scaled to
+  `0..1024` (kernel maps from native 12-bit).
+- **RP1 Ethernet RX (stream, future)** — `Device.Open("eth0")` → `Stream.Open(dir=RX,
+  policy=drop-oldest)` → loop `l = Stream.Next; s = Stream.Span(l); …; Stream.Release(l)`.
+  This *is* the RP1 "MIP-edge IRQ → drain RX ring → IACK re-arm" flow, wrapped.
+- **SD2 / QSPI block (stream, future)** — `Stream.Open(dir=RW)`; read =
+  `Next`/`Span`/`Release`, write = lease a free buffer, `Stream.Span` (write),
+  `Stream.Submit`. (SD2 wiring/clock + QSPI pinout are kernel facts; the capsule sees only
+  the ring.)
+- **HDMI scanout (stream, future)** — `Stream.Open(dir=TX)`; the capsule fills framebuffer
+  leases and `Submit`s them.
 
 ---
 
 ## 10. Open decisions for PIOS / future implementation
 
-1. **Capability granularity** — confirm coarse `CAP_DEVICE/DMA/MMIO` + per-`idSpan`
-   allow-list (this spec's recommendation) vs a bit per bus. (Security-first: the
-   per-`idSpan` allow-list gives instance-level gating without bit exhaustion.)
-2. **Window naming** — the registry of named MMIO windows per SoC (Pi5 RP1, Pico2 RP2350)
-   and who owns the whitelist (board config vs kernel build).
-3. **Backpressure policy default** — block vs drop-oldest per device class.
-4. **Hook range confirmation** — `0x130–0x16F` vs the `EXT_HOST_HOOK_BASE` block.
+1. **Value range endpoint** — confirm `[0, 1024]` inclusive with `1024` = full-scale (duty
+   `v/1024`, so 0 %..100 % inclusive) and digital = `{0, 1024}`.
+2. **Pin direction/mode** — fixed by board config / schema, or settable by the capsule
+   (`Gpio.Mode` / a card mode field)? Default: board/kernel fixes it; capsule reads it via
+   `GetSchemaForPack`.
+3. **GPIO gating** — dedicated `CAP_GPIO` (recommended, clean audit boundary) vs reuse the
+   storage capability + per-pin allow-list. Either way the per-pin allow-list is the
+   instance control.
+4. **Pack/pin naming** — pin keys (`"gp17"` vs index) and pack names per SoC (Pi5 RP1,
+   Pico2 RP2350); owned by board config.
+5. **Streaming (future)** — backpressure default (block vs drop-oldest) and hook-range
+   confirmation (`0x130–0x16F` vs `EXT_HOST_HOOK_BASE`) when the streaming class is built.
 
 ## 11. Next implementation step (deferred until requested)
 
-When green-lit, the PicoScript-side work is small and parity-safe:
-1. Reserve the namespaces + hook codes in `picoscript_lang.py`; regen `vm/pico_hooks.*`.
-2. Add the capability bits + classifier entries (3 VMs) and widen `CAP_ALL`.
-3. Implement **deterministic providers** in the three VMs (recorded ring / fake window) so
-   the hooks run + replay byte-identically; add a `tests/test_device.py` parity test.
-4. Hand the driver + security surface to the PIOS build agent against §6.
+When green-lit, **start with GPIO** — it is small and parity-safe and needs no new opcode:
+1. Stand up a **kernel-backed virtual pack** convention; on the Python/JS/C VMs implement
+   the **deterministic provider** = an in-memory gpio pack whose pin cards hold `0..1024`
+   (digital pins quantise to `{0, 1024}`), so `ReadCard`/`UpdateCard` run + replay
+   byte-identically. Optionally add the thin `Gpio.*` sugar + `CAP_GPIO` + classifier
+   entries (3 VMs) and widen `CAP_ALL`.
+2. Add a `tests/test_gpio.py` 5-path parity test (write/read a pin card; digital
+   quantisation; PWM duty scaling) plus capability-gating.
+3. Hand the real pin driver + per-pin allow-list to the PIOS build agent against §6.
+4. The streaming class (`Device.*`/`Stream.*`) follows later, unchanged from this design.
 
 No driver, security enforcement, or VM device behaviour is built until then; this document
 is the contract both sides implement against.
