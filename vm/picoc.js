@@ -268,7 +268,7 @@
     if (op === "host") {
       var hook = HOOK_BY_NAME[ins.ns + "." + ins.method];
       if (hook === undefined) throw new Error("unknown host hook " + ins.ns + "." + ins.method);
-      var imm = (H.HOST_HOOK_BASE | hook);
+      var imm = (hook <= 0xff) ? (H.HOST_HOOK_BASE | hook) : (H.EXT_HOST_HOOK_BASE | (hook & 0xfff));
       var hrd = isVReg(ins.dst) ? phys(mapping, ins.dst) : 0;
       var hrs1 = (ins.args[0] && isVReg(ins.args[0])) ? phys(mapping, ins.args[0]) : 0;
       var hrs2 = (ins.args[1] && isVReg(ins.args[1])) ? phys(mapping, ins.args[1]) : 0;
@@ -892,7 +892,7 @@
   // ========================================================================
   // BASIC-LIKE FRONTEND (port of picoscript_basic.py)
   // ========================================================================
-  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","DISPATCH","ENDDISPATCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD"].forEach(function (k) { B_KW[k] = 1; });
+  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","DISPATCH","ENDDISPATCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD","STORE","GPIO","LOAD"].forEach(function (k) { B_KW[k] = 1; });
   var B_CMPW = { EQ:"EQ", NE:"NE", LT:"LT", GT:"GT", LE:"LE", GE:"GE" };
   var B_CMPS = { "==":"EQ", "!=":"NE", "<>":"NE", "=":"EQ", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
   var B_COMPARATORS = {}; for (var _k in B_CMPW) B_COMPARATORS[_k] = B_CMPW[_k]; for (var _k2 in B_CMPS) B_COMPARATORS[_k2] = B_CMPS[_k2];
@@ -970,6 +970,9 @@
         if (kw === "BREAK") { this.next(); this.endLine(); return { t: "Break" }; }
         if (kw === "SKIP") { this.next(); this.endLine(); return { t: "Skip" }; }
         if (kw === "PRINT") { this.next(); var v = this.parseExpr(); this.endLine(); return { t: "Print", value: v }; }
+        if (kw === "STORE") { this.next(); var sc = this.parseStoreBody(false); this.endLine(); return { t: "CallStmt", call: sc }; }
+        if (kw === "LOAD") { this.next(); var lc = this.parseLoadBody(false); this.endLine(); return { t: "CallStmt", call: lc }; }
+        if (kw === "GPIO") { this.next(); var gc = this.parseGpioBody(false); this.endLine(); return { t: "CallStmt", call: gc }; }
         throw new Error("BASIC: unexpected keyword " + kw);
       }
       if (t.kind === "id") {
@@ -994,9 +997,68 @@
     parseDim: function () {
       this.eatKw("DIM"); var name = this.next().value; var init = null;
       if (this.peek().kind === "op" && this.peek().value === "=") { this.next(); init = this.parseExpr(); }
+      else if (this.peekWord() === "NEW") { this.eatWord(); this.expectWord("CARD"); init = { t: "Call", ns: "Storage", method: "AddCard", args: [] }; }
       this.endLine(); return { t: "Dim", name: name, init: init };
     },
-    parseLet: function (eat) { if (eat) this.eatKw("LET"); var name = this.next().value; this.eatOp("="); var v = this.parseExpr(); this.endLine(); return { t: "Let", name: name, value: v }; },
+    parseLet: function (eat) { if (eat) this.eatKw("LET"); var name = this.next().value; if (this.peekWord() === "NEW") { this.eatWord(); this.expectWord("CARD"); this.endLine(); return { t: "Let", name: name, value: { t: "Call", ns: "Storage", method: "AddCard", args: [] } }; } this.eatOp("="); var v = this.parseExpr(); this.endLine(); return { t: "Let", name: name, value: v }; },
+    peekWord: function () { var t = this.peek(); if (t.kind === "id") return t.value.toUpperCase(); if (t.kind === "kw") return t.value; return null; },
+    eatWord: function () { var t = this.next(); if (t.kind !== "id" && t.kind !== "kw") throw new Error("BASIC: expected a word got " + t.value); return t.value.toUpperCase(); },
+    expectWord: function (e) { var w = this.eatWord(); if (w !== e) throw new Error("BASIC: expected " + e + " got " + w); },
+    parseStoreBody: function (wantValue) {
+      var verb = this.eatWord();
+      if (wantValue && verb !== "NEW") throw new Error("BASIC: STORE " + verb + " is a statement, not a value");
+      if (verb === "USE") { this.expectWord("PACK"); return { t: "Call", ns: "Storage", method: "UsePack", args: [this.parseAtom()] }; }
+      if (verb === "SET") {
+        if (this.peekWord() === "PACK") { this.eatWord(); return { t: "Call", ns: "Storage", method: "UsePack", args: [this.parseAtom()] }; }
+        var field = this.parseAtom(); this.eatOp("="); var rhs = this.parseExpr();
+        var method = (rhs.t === "Str") ? "SetFieldStr" : "SetField";
+        return { t: "Call", ns: "Storage", method: method, args: [field, rhs] };
+      }
+      if (verb === "DELETE") { this.expectWord("CARD"); return { t: "Call", ns: "Storage", method: "DeleteCard", args: [this.parseAtom()] }; }
+      if (verb === "NEW") { this.expectWord("CARD"); return { t: "Call", ns: "Storage", method: "AddCard", args: [] }; }
+      throw new Error("BASIC: unknown STORE verb " + verb);
+    },
+    parseLoadBody: function (wantValue) {
+      var w = this.peekWord();
+      if (w === "CARD") { this.eatWord(); return { t: "Call", ns: "Storage", method: "EditCard", args: [this.parseAtom()] }; }
+      if (w === "QUERY") { this.eatWord(); return { t: "Call", ns: "Storage", method: "QueryCard", args: [this.parseAtom()] }; }
+      if (w === "RESULT") { this.eatWord(); return { t: "Call", ns: "Storage", method: "QueryResult", args: [this.parseAtom()] }; }
+      var field = this.parseAtom();
+      if (this.peekWord() === "AS") { this.eatWord(); this.expectWord("TEXT"); return { t: "Call", ns: "Storage", method: "GetFieldStr", args: [field] }; }
+      return { t: "Call", ns: "Storage", method: "GetField", args: [field] };
+    },
+    parseGpioBody: function (wantValue) {
+      var verb = this.eatWord();
+      if (verb === "COUNT") return { t: "Call", ns: "Gpio", method: "Count", args: [] };
+      if (verb === "READ") return { t: "Call", ns: "Gpio", method: "Read", args: [this.parseAtom()] };
+      if (verb === "WRITE") {
+        if (wantValue) throw new Error("BASIC: GPIO WRITE is a statement, not a value");
+        var pin = this.parseAtom(); this.eatOp("="); var val = this.parseExpr();
+        return { t: "Call", ns: "Gpio", method: "Write", args: [pin, val] };
+      }
+      if (verb === "DIR" || verb === "PULL") {
+        var pin2 = this.parseAtom();
+        if (!wantValue && this.peek().kind === "op" && this.peek().value === "=") {
+          this.eatOp("=");
+          var rhs2 = (verb === "DIR") ? this.parseDirValue() : this.parsePullValue();
+          return { t: "Call", ns: "Gpio", method: (verb === "DIR" ? "SetDir" : "SetPull"), args: [pin2, rhs2] };
+        }
+        return { t: "Call", ns: "Gpio", method: (verb === "DIR" ? "GetDir" : "GetPull"), args: [pin2] };
+      }
+      throw new Error("BASIC: unknown GPIO verb " + verb);
+    },
+    parseDirValue: function () {
+      var t = this.peek();
+      if (t.kind === "kw" && t.value === "IN") { this.next(); return { t: "Num", value: 0 }; }
+      if (t.kind === "id" && (t.value.toUpperCase() === "OUT" || t.value.toUpperCase() === "OUTPUT")) { this.next(); return { t: "Num", value: 1 }; }
+      if (t.kind === "id" && t.value.toUpperCase() === "INPUT") { this.next(); return { t: "Num", value: 0 }; }
+      return this.parseExpr();
+    },
+    parsePullValue: function () {
+      var t = this.peek();
+      if (t.kind === "id") { var w = t.value.toUpperCase(); if (w === "NONE") { this.next(); return { t: "Num", value: 0 }; } if (w === "UP") { this.next(); return { t: "Num", value: 1 }; } if (w === "DOWN") { this.next(); return { t: "Num", value: 2 }; } }
+      return this.parseExpr();
+    },
     parseIf: function () {
       this.eatKw("IF"); var cond = this.parseCondition(); this.eatKw("THEN"); this.endLine();
       var body = this.parseBlock("ELSEIF", "ELSE", "ENDIF"); var arms = [[cond, body]]; var els = null;
@@ -1067,6 +1129,9 @@
       var t = this.next();
       if (t.kind === "num") return { t: "Num", value: numval(t.value) };
       if (t.kind === "str") return { t: "Str", value: t.value };
+      if (t.kind === "kw" && t.value === "STORE") return this.parseStoreBody(true);
+      if (t.kind === "kw" && t.value === "LOAD") return this.parseLoadBody(true);
+      if (t.kind === "kw" && t.value === "GPIO") return this.parseGpioBody(true);
       if (t.kind === "kw" && t.value === "IIF") {
         this.eatOp("("); var c = this.parseExpr(); this.eatOp(",");
         var th = this.parseExpr(); this.eatOp(","); var el = this.parseExpr(); this.eatOp(")");

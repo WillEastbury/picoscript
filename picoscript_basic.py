@@ -74,6 +74,7 @@ KEYWORDS = {
     "DO", "LOOP", "UNTIL",
     "BREAK", "SKIP", "INC", "DEC", "IIF",
     "EQ", "NE", "LT", "GT", "LE", "GE", "MOD",
+    "STORE", "GPIO", "LOAD",
 }
 CMP_WORDS = {"EQ": "EQ", "NE": "NE", "LT": "LT", "GT": "GT", "LE": "LE", "GE": "GE"}
 
@@ -372,6 +373,12 @@ class Parser:
                 self.next(); self.end_line(); return Skip()
             if kw == "PRINT":
                 self.next(); v = self.parse_expr(); self.end_line(); return Print(v)
+            if kw == "STORE":
+                self.next(); call = self.parse_store_body(False); self.end_line(); return CallStmt(call)
+            if kw == "LOAD":
+                self.next(); call = self.parse_load_body(False); self.end_line(); return CallStmt(call)
+            if kw == "GPIO":
+                self.next(); call = self.parse_gpio_body(False); self.end_line(); return CallStmt(call)
             raise SyntaxError(f"line {t.line}: unexpected keyword {kw}")
         # assignment: id = expr / id += expr   OR bare call: Ns.Method(...) / NAME(...)
         if t.kind == "id":
@@ -403,6 +410,9 @@ class Parser:
         if eat_let:
             self.eat_kw("LET")
         name = self.next().value
+        if self._peek_word() == "NEW":
+            self._eat_word(); self._expect_word("CARD"); self.end_line()
+            return Let(name, Call("Storage", "AddCard", []))
         self.eat_op("=")
         v = self.parse_expr()
         self.end_line()
@@ -415,8 +425,117 @@ class Parser:
         if self.peek().kind == "op" and self.peek().value == "=":
             self.next()
             init = self.parse_expr()
+        elif self._peek_word() == "NEW":
+            self._eat_word(); self._expect_word("CARD")
+            init = Call("Storage", "AddCard", [])
         self.end_line()
         return Dim(name, init)
+
+    # ── readable storage / device DSL (BASIC-idiomatic; lowers to canonical
+    #    Storage.*/Gpio.* calls so bytecode is byte-identical with vm/picoc.js).
+    #    STORE = writes, LOAD = reads, GPIO = pins. Sub-words (USE/PACK/CARD/DIR/
+    #    UP/OUT/...) are matched contextually so they stay usable as identifiers. ─
+    def _peek_word(self) -> Optional[str]:
+        t = self.peek()
+        if t.kind == "id":
+            return t.value.upper()
+        if t.kind == "kw":
+            return t.value
+        return None
+
+    def _eat_word(self) -> str:
+        t = self.next()
+        if t.kind not in ("id", "kw"):
+            raise SyntaxError(f"line {t.line}: expected a word, got {t.value!r}")
+        return t.value.upper()
+
+    def _expect_word(self, expected: str) -> None:
+        w = self._eat_word()
+        if w != expected:
+            raise SyntaxError(f"line {self.peek().line}: expected {expected!r}, got {w!r}")
+
+    def parse_store_body(self, want_value: bool) -> Call:
+        verb = self._eat_word()
+        if want_value and verb != "NEW":
+            raise SyntaxError(f"line {self.peek().line}: STORE {verb} is a statement, not a value")
+        if verb == "USE":
+            self._expect_word("PACK")
+            return Call("Storage", "UsePack", [self.parse_atom()])
+        if verb == "SET":
+            if self._peek_word() == "PACK":
+                self._eat_word()
+                return Call("Storage", "UsePack", [self.parse_atom()])
+            field = self.parse_atom()
+            self.eat_op("=")
+            rhs = self.parse_expr()
+            method = "SetFieldStr" if isinstance(rhs, Str) else "SetField"
+            return Call("Storage", method, [field, rhs])
+        if verb == "DELETE":
+            self._expect_word("CARD")
+            return Call("Storage", "DeleteCard", [self.parse_atom()])
+        if verb == "NEW":
+            self._expect_word("CARD")
+            return Call("Storage", "AddCard", [])
+        raise SyntaxError(f"line {self.peek().line}: unknown STORE verb {verb!r}")
+
+    def parse_load_body(self, want_value: bool) -> Call:
+        w = self._peek_word()
+        if w == "CARD":
+            self._eat_word()
+            return Call("Storage", "EditCard", [self.parse_atom()])
+        if w == "QUERY":
+            self._eat_word()
+            return Call("Storage", "QueryCard", [self.parse_atom()])
+        if w == "RESULT":
+            self._eat_word()
+            return Call("Storage", "QueryResult", [self.parse_atom()])
+        field = self.parse_atom()
+        if self._peek_word() == "AS":
+            self._eat_word(); self._expect_word("TEXT")
+            return Call("Storage", "GetFieldStr", [field])
+        return Call("Storage", "GetField", [field])
+
+    def parse_gpio_body(self, want_value: bool) -> Call:
+        verb = self._eat_word()
+        if verb == "COUNT":
+            return Call("Gpio", "Count", [])
+        if verb == "READ":
+            return Call("Gpio", "Read", [self.parse_atom()])
+        if verb == "WRITE":
+            if want_value:
+                raise SyntaxError(f"line {self.peek().line}: GPIO WRITE is a statement, not a value")
+            pin = self.parse_atom(); self.eat_op("="); val = self.parse_expr()
+            return Call("Gpio", "Write", [pin, val])
+        if verb in ("DIR", "PULL"):
+            pin = self.parse_atom()
+            if (not want_value) and self.peek().kind == "op" and self.peek().value == "=":
+                self.eat_op("=")
+                rhs = self._parse_dir_value() if verb == "DIR" else self._parse_pull_value()
+                return Call("Gpio", "SetDir" if verb == "DIR" else "SetPull", [pin, rhs])
+            return Call("Gpio", "GetDir" if verb == "DIR" else "GetPull", [pin])
+        raise SyntaxError(f"line {self.peek().line}: unknown GPIO verb {verb!r}")
+
+    def _parse_dir_value(self) -> object:
+        t = self.peek()
+        if t.kind == "kw" and t.value == "IN":
+            self.next(); return Num(0)
+        if t.kind == "id" and t.value.upper() in ("OUT", "OUTPUT"):
+            self.next(); return Num(1)
+        if t.kind == "id" and t.value.upper() == "INPUT":
+            self.next(); return Num(0)
+        return self.parse_expr()
+
+    def _parse_pull_value(self) -> object:
+        t = self.peek()
+        if t.kind == "id":
+            w = t.value.upper()
+            if w == "NONE":
+                self.next(); return Num(0)
+            if w == "UP":
+                self.next(); return Num(1)
+            if w == "DOWN":
+                self.next(); return Num(2)
+        return self.parse_expr()
 
     def parse_if(self) -> If:
         self.eat_kw("IF")
@@ -607,6 +726,12 @@ class Parser:
             return Num(int(t.value, 0))
         if t.kind == "str":
             return Str(t.value)
+        if t.kind == "kw" and t.value == "STORE":
+            return self.parse_store_body(True)
+        if t.kind == "kw" and t.value == "LOAD":
+            return self.parse_load_body(True)
+        if t.kind == "kw" and t.value == "GPIO":
+            return self.parse_gpio_body(True)
         if t.kind == "kw" and t.value == "IIF":
             self.eat_op("(")
             cond = self.parse_expr(); self.eat_op(",")
