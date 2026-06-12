@@ -140,6 +140,56 @@ Gpio.Mode(modeDesc)           -> ()              // set direction/kind where the
 The sugar is optional; the card API alone is sufficient and is the recommended baseline
 (it reuses everything and needs no new hook codes).
 
+### Inbound streams — reading request/RX **without FIFOs or descriptors**
+This is the consumer side of the same binding substrate, and the platform **already hides
+the FIFO/descriptor plumbing** behind two read facades. A capsule never touches a FIFO, a
+`pooldesc`, or a raw pointer — it reads through accessors that return **leased spans**:
+
+- **`Req.*`** (binding primitive) — `Req.Method()`, `Req.Path()`, `Req.Header(nameSpan)`,
+  `Req.BodyMode()`, `Req.BodyCount()`, `Req.BodySpan(idx)`. The kernel parses the inbound
+  message into a bound context (`ctx_desc`: leased header table + body) and installs it;
+  the capsule just looks things up.
+- **`Context.*`** (web facade) — `Context.GetVerb/GetPath/GetHeaders/GetQueryString/
+  GetBody/GetUser/GetClientCert/GetTraceId`, richer sugar over the same context.
+
+**Zero-copy + safe is the whole point** — every accessor returns a **span** (fat `ptr+len`,
+INV-8) that points *into the leased kernel/DMA buffer*, never a copy into the capsule arena.
+Safety is the lease (the same model as §6): the span is **bounds-checked** (you physically
+cannot read past the body — I1 length-bounding), **validated** (I4), **revocable**
+(`LEASE_REVOKE` under pressure), and **auto-released at handler scope exit** (I8);
+use-after-release faults. So it is DMA/descriptor zero-copy *without* the usual zero-copy
+footguns — the lease is the safety wrapper, and the FIFO/descriptor mechanics live entirely
+below the binding.
+
+**Two body modes, both hidden** (`ctx_desc.body_mode`, `PIOS_IO_BINDING.md` §3):
+- **small / known-length → materialized**: `Req.BodyCount()` + `Req.BodySpan(i)` return the
+  inline leased spans. Fast path, no FIFO at all.
+- **large / chunked / unknown-length → pull cursor**: a `Req.BodyPull(max) -> span`
+  accessor returns the next chunk as a leased span, **blocking (yielding the CPU) until
+  bytes arrive**; loop until EOF. The platform issues the `BODY_PULL`/`BODY_CHUNK` FIFO
+  exchange underneath — the capsule only ever sees "next chunk span."
+
+Parse **in place** over the leased span — `Utf8Reader.*`, `Http.ParseJson`,
+`Http.ParseQuery`/`ParseForm`, `Json.*` — so there is no copy between "received bytes" and
+"parsed value".
+
+> **Gap (specified, not yet realised):** `Req.BodyPull` is in `PIOS_IO_BINDING.md` but is
+> **not a reserved hook** (Req currently tops out at `BodySpan` 0x0E) and has no VM
+> deterministic provider, so today only the *materialized* body path runs in-language. The
+> nicer ergonomic is to expose the streamed body as an **inbound `Reader`** (a `Utf8Reader`
+> whose source is the body stream): the capsule does `Reader.Next()`/`Read(n)` and the
+> platform pulls + leases chunks transparently and zero-copy. See §11.
+
+### Schema / typed-field layer (picowal/walfs) — reserved but not realised
+The card model's **schema features are declared but stubbed**: `Storage.GetSchemaForPack`
+(0x60), `SetSchemaForPack` (0x61), `EditCard` (0x69), `GetField` (0x6A), `SetField` (0x6B),
+`GetFieldStr` (0x6D), `QueryResult` (0x6E) all have reserved hook codes but are `OP_NOOP`
+placeholders with no VM host implementation. This is the **missing piece** for both data
+cards *and* the GPIO model: a pin card wants a schema to declare its `direction`/`kind`/
+`range`, and data cards want typed fields + schema-validated CRUD + field-filtered query.
+Realising the walfs schema engine in the deterministic VM host (byte-identical across the
+three VMs, parity-tested) is the work — see §11.
+
 ---
 
 ## 4. Hook codes & capability classes (proposed reservations)
@@ -293,21 +343,47 @@ already-governed card model, so there is no new dangerous primitive to secure.
    instance control.
 4. **Pack/pin naming** — pin keys (`"gp17"` vs index) and pack names per SoC (Pi5 RP1,
    Pico2 RP2350); owned by board config.
-5. **Streaming (future)** — backpressure default (block vs drop-oldest) and hook-range
+5. **Inbound streamed body** — confirm the shape: a low-level `Req.BodyPull(max) -> span`
+   accessor vs a higher-level inbound `Reader` (recommended) the platform feeds from the
+   chunk pull. Either way the FIFO/descriptor pull stays hidden and the chunk is a leased
+   zero-copy span.
+6. **Schema scope** — how much of the walfs schema to realise first: minimal (typed
+   field get/set + schema-declared GPIO pin kind) vs full (validation + field-filtered
+   query). Recommended: minimal first (unblocks GPIO), full query later.
+7. **Streaming (future)** — backpressure default (block vs drop-oldest) and hook-range
    confirmation (`0x130–0x16F` vs `EXT_HOST_HOOK_BASE`) when the streaming class is built.
 
-## 11. Next implementation step (deferred until requested)
+## 11. Next implementation steps (deferred until requested)
 
-When green-lit, **start with GPIO** — it is small and parity-safe and needs no new opcode:
-1. Stand up a **kernel-backed virtual pack** convention; on the Python/JS/C VMs implement
-   the **deterministic provider** = an in-memory gpio pack whose pin cards hold `0..1024`
-   (digital pins quantise to `{0, 1024}`), so `ReadCard`/`UpdateCard` run + replay
-   byte-identically. Optionally add the thin `Gpio.*` sugar + `CAP_GPIO` + classifier
-   entries (3 VMs) and widen `CAP_ALL`.
-2. Add a `tests/test_gpio.py` 5-path parity test (write/read a pin card; digital
-   quantisation; PWM duty scaling) plus capability-gating.
+Three independent, parity-safe pieces, in dependency order:
+
+**(A) Walfs schema / typed-field layer — realise the reserved-but-NOOP Storage hooks.**
+This unblocks both data cards and the GPIO model (a pin card needs a schema for
+`direction`/`kind`/`range`). Implement, byte-identical across the three VM hosts + a
+parity test: `GetSchemaForPack`/`SetSchemaForPack` (typed field defs, name→field-id),
+`GetField`/`SetField`/`GetFieldStr` (typed field read/write), schema-validated
+`AddCard`/`UpdateCard`, and `QueryCard`/`QueryResult` (field-filtered). No new hook codes —
+they already exist (0x60/0x61/0x69–0x6E).
+
+**(B) GPIO via cards** (depends on A for the pin schema) — small, parity-safe, no new
+opcode:
+1. A **kernel-backed virtual pack** convention; on the Python/JS/C VMs a **deterministic
+   provider** = an in-memory gpio pack whose pin cards hold `0..1024` (digital pins
+   quantise to `{0, 1024}`), so `ReadCard`/`UpdateCard` run + replay byte-identically.
+   Optionally the thin `Gpio.*` sugar + `CAP_GPIO` + classifier entries (3 VMs) +
+   widen `CAP_ALL`.
+2. `tests/test_gpio.py` 5-path parity (write/read a pin card; digital quantisation; PWM
+   duty scaling) + capability-gating.
 3. Hand the real pin driver + per-pin allow-list to the PIOS build agent against §6.
-4. The streaming class (`Device.*`/`Stream.*`) follows later, unchanged from this design.
 
-No driver, security enforcement, or VM device behaviour is built until then; this document
-is the contract both sides implement against.
+**(C) Streamed inbound reader — hide the body pull FIFO.** Reserve `Req.BodyPull`
+(+`Req.BodyEof`) or, preferred, an **inbound `Reader`** whose source is the body stream
+(`Reader.Next()`/`Read(n)` pulls + leases chunks transparently, zero-copy). VM
+deterministic provider = a canned chunk stream; parity test feeds a multi-chunk body. The
+materialized path (`BodySpan`) already works.
+
+**(D, later) Streaming devices** (`Device.*`/`Stream.*`) — the DMA-ring class for
+camera/Ethernet/block/HDMI, unchanged from this design.
+
+No driver, security enforcement, or VM device behaviour is built until requested; this
+document is the contract both sides implement against.
