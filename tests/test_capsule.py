@@ -8,11 +8,11 @@ address parsing/formatting (canonical + typed); and the source/bytecode pairing.
 """
 
 import os
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-
 from picocapsule import (  # noqa: E402
     Manifest, serialize, parse, format_address, parse_address,
     source_for, code_for, is_capsule_pack,
@@ -96,6 +96,15 @@ def test_minimal_manifest():
     text = serialize(m)
     assert "principal" not in text and "mem_kib" not in text  # optionals omitted
     assert serialize(parse(text)) == text
+
+
+def test_js_mirror_matches_python_and_doc():
+    # vm/picocapsule.js must emit byte-identical canonical text to picocapsule.py
+    # (so capsule card 0 is identical whoever authored it) and round-trip in JS.
+    r = subprocess.run(["node", os.path.join(ROOT, "vm", "picocapsule_check.js")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == DOC_EXAMPLE, "vm/picocapsule.js serialize drifted from picocapsule.py / doc"
 
 
 def main():

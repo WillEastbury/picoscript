@@ -116,6 +116,11 @@ fifo/requests   -> descriptor card/range (web -> api, depth 64, frame_max 1024)
 Canonical **text is primary** — it is the simplest cross-agent interchange and is
 what `Capsule.Serialize` emits by default.
 
+**Card 0 stays clean.** The canonical manifest is the *model* (pack `1024`, cards
+`1001`/`10001`, …). Adapter/backend mapping — e.g. a runtime that flattens model
+pack `1024` onto an existing flat store — **must not** appear in card 0; keep that
+mapping in UI/runtime metadata only, so card 0 stays portable across backends.
+
 ---
 
 ## 4. PicoScript-provided primitives (contract surface)
@@ -142,11 +147,19 @@ IO binding declarations (compile to manifest metadata, **not** runtime bytecode)
 `Bind.Tcp(port)`, `Bind.Fifo(name)`, `Bind.Card(card)`.
 
 Serializer: `Capsule.Serialize(manifest) -> bytes` (canonical §3 text),
-`Capsule.Deserialize(bytes) -> manifest`.
+`Capsule.Deserialize(bytes) -> manifest`. Reference implementations:
+`picocapsule.py` and the byte-identical browser mirror `vm/picocapsule.js`
+(`Manifest` + `serialize`/`parse` + `formatAddress`/`parseAddress`/`sourceFor`/`codeFor`).
 
 ### 4b. Pack/card runtime hooks (provider-backed)
 `Pack.Use(pack)`; `Card.Read(card) -> span`; `Card.Write(card, span) -> ok`;
 `Card.Address(pack, card) -> span`.
+
+**Write-then-verify (required).** `Card.Write` — and the browser reference store —
+**must read the card back and compare bytes** (little-endian word-for-word for
+bytecode cards) before reporting success. A real deployment bug had a bytecode
+card silently holding source text; a write whose read-back does not match **must
+fail**, not report success.
 
 ### 4c. Source/bytecode pairing helpers
 `Capsule.SourceFor(N) -> 1000 + N`; `Capsule.CodeFor(N) -> 10000 + N`.
@@ -171,6 +184,17 @@ Server.Main {
 ```
 This compiles to the endpoint-shaped bytecode the port-82 worker already expects
 (request-context setup → status → body).
+
+**Body output: prefer `Io.WriteByte` for now.** In the current port-82 worker the
+`print("42")` / string-span path does not behave as expected; emit the body with
+`Io.WriteByte` (e.g. `52`,`50` for `"42"`). Lower-level form the worker accepts
+today:
+```c
+int ignored = Context.GetPath();
+Net.Status(200);
+Io.WriteByte(52);
+Io.WriteByte(50);
+```
 
 ### 4f. Debug / source map (already implemented — INV-25)
 `lower_to_bytecode_with_debug` / `symbolize` (and `picoc.js compileWithDebug`)
