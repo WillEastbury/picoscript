@@ -71,9 +71,10 @@ enum {
     PV_CAP_AUTH    = 1 << 7,   /* Auth.*, X509.* */
     PV_CAP_ENV     = 1 << 8,   /* Environment.*, Locale.* */
     PV_CAP_CRYPTO  = 1 << 9,   /* Crypto.Encrypt/Decrypt (AES) */
-    PV_CAP_GPIO    = 1 << 10   /* Gpio.* (device pins; OS/emulator-backed) */
+    PV_CAP_GPIO    = 1 << 10,  /* Gpio.* (device pins; OS/emulator-backed) */
+    PV_CAP_CAPSULE = 1 << 11   /* Pack/Card/Fifo (capsule store + intra-capsule IPC) */
 };
-#define PV_CAP_ALL  0x7FFu     /* default grant: every binding (host restricts to gate) */
+#define PV_CAP_ALL  0xFFFu     /* default grant: every binding (host restricts to gate) */
 
 typedef struct pv_ctx pv_ctx;
 

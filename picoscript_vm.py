@@ -309,7 +309,8 @@ CAP_AUTH    = 1 << 7
 CAP_ENV     = 1 << 8
 CAP_CRYPTO  = 1 << 9
 CAP_GPIO    = 1 << 10           # Gpio.* (device pins; OS/emulator-backed)
-CAP_ALL     = 0x7FF             # default grant: every binding (host restricts to gate)
+CAP_CAPSULE = 1 << 11           # Pack/Card/Fifo (capsule store + intra-capsule IPC)
+CAP_ALL     = 0xFFF             # default grant: every binding (host restricts to gate)
 
 _CAP_BY_NS = {
     "Kernel": CAP_KERNEL, "Queue": CAP_QUEUE, "Random": CAP_RANDOM,
@@ -317,6 +318,7 @@ _CAP_BY_NS = {
     "Storage": CAP_STORAGE, "DateTime": CAP_TIME, "Context": CAP_CONTEXT,
     "Auth": CAP_AUTH, "X509": CAP_AUTH, "Environment": CAP_ENV, "Locale": CAP_ENV,
     "Gpio": CAP_GPIO,
+    "Pack": CAP_CAPSULE, "Card": CAP_CAPSULE, "Fifo": CAP_CAPSULE,
 }
 
 

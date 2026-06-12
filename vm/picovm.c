@@ -947,6 +947,7 @@ uint32_t pv_hook_cap(int hook)
     if (hook >= 0x110 && hook <= 0x117) return PV_CAP_AUTH;  /* X509.* */
     if (hook >= 0x120 && hook <= 0x129) return PV_CAP_AUTH;  /* Auth.* */
     if (hook >= 0x150 && hook <= 0x156) return PV_CAP_GPIO;  /* Gpio.* */
+    if (hook >= 0x160 && hook <= 0x167) return PV_CAP_CAPSULE; /* Pack/Card/Fifo */
     return 0;                                                /* pure: String/Number/Maths/Span/... */
 }
 

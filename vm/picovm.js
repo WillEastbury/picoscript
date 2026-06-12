@@ -41,11 +41,12 @@
 
   // Binding capability classes (INV-17). Bit values match vm/picovm.h PV_CAP_* and
   // picoscript_vm.CAP_*; pure computation needs none (class 0, always allowed).
-  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024 };
-  var CAP_ALL = 0x7FF;
+  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024, CAPSULE: 2048 };
+  var CAP_ALL = 0xFFF;
   var CAP_BY_NS = { Kernel: CAP.KERNEL, Queue: CAP.QUEUE, Random: CAP.RANDOM,
     Req: CAP.NET, Resp: CAP.NET, Net: CAP.NET, Storage: CAP.STORAGE, DateTime: CAP.TIME,
-    Context: CAP.CONTEXT, Auth: CAP.AUTH, X509: CAP.AUTH, Environment: CAP.ENV, Locale: CAP.ENV, Gpio: CAP.GPIO };
+    Context: CAP.CONTEXT, Auth: CAP.AUTH, X509: CAP.AUTH, Environment: CAP.ENV, Locale: CAP.ENV, Gpio: CAP.GPIO,
+    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE };
   function hookCap(name) {   // "Ns.Method" -> required capability class (0 = pure)
     var dot = name.indexOf("."), ns = name.slice(0, dot), m = name.slice(dot + 1);
     if (ns === "Maths" && (m === "Random" || m === "RandomRange")) return CAP.RANDOM;

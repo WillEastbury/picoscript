@@ -286,6 +286,14 @@
       0x154: "Gpio.GetPull",
       0x155: "Gpio.Write",
       0x156: "Gpio.Read",
+      0x160: "Pack.Use",
+      0x161: "Card.Read",
+      0x162: "Card.Write",
+      0x163: "Card.Address",
+      0x164: "Fifo.Open",
+      0x165: "Fifo.Send",
+      0x166: "Fifo.Recv",
+      0x167: "Fifo.Poll",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }

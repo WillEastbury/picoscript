@@ -26,6 +26,7 @@ _CAP_BY_NS = {
     "Environment": "ENV",
     "Locale": "ENV",
     "Gpio": "GPIO",
+    "Pack": "CAPSULE", "Card": "CAPSULE", "Fifo": "CAPSULE",
 }
 
 _HOOK_RE = re.compile(r'0x([0-9A-Fa-f]+):\s*"([^"]+)"')
@@ -113,12 +114,15 @@ _ALLOCATING_HOOKS = frozenset({
     "Auth.RequestToken",
     "Auth.GetToken",
     "Auth.RefreshToken",
+    "Card.Read",
+    "Card.Address",
+    "Fifo.Recv",
 })
 
 _ALLOCATING_NAMESPACES = frozenset({"Compress", "Json", "Xml"})
 _VALID_CAPABILITIES = frozenset({
     "KERNEL", "QUEUE", "RANDOM", "STORAGE", "TIME", "NET",
-    "CONTEXT", "AUTH", "ENV", "GPIO", "pure",
+    "CONTEXT", "AUTH", "ENV", "GPIO", "CAPSULE", "pure",
 })
 
 

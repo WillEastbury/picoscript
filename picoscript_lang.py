@@ -763,6 +763,20 @@ HOST_HOOK_CODES = {
     ("Gpio", "GetPull"):        0x0154,   # rs1=pin                       rd=pull
     ("Gpio", "Write"):          0x0155,   # rs1=pin rs2=value[0,1024]     rd=ok
     ("Gpio", "Read"):           0x0156,   # rs1=pin                       rd=value[0,1024]
+    # Capsule runtime hooks (0x0160-0x0167): pack-aware card store + intra-capsule
+    # IPC FIFOs that a capsule process calls at runtime. Provider-backed (browser
+    # PiosCapsuleStore reference / PIOS real backend). Manifest building + the
+    # source/bytecode card pairing are the picocapsule lib (authoring time), not
+    # runtime hooks. FIFOs are declared in the manifest; Fifo.Open resolves by name.
+    # See docs/PIOS_CAPSULE_HANDOFF.md.
+    ("Pack", "Use"):            0x0160,   # rs1=pack                      rd=ok
+    ("Card", "Read"):           0x0161,   # rs1=card                      rd=span
+    ("Card", "Write"):          0x0162,   # rs1=card  rs2=span            rd=ok
+    ("Card", "Address"):        0x0163,   # rs1=pack  rs2=card            rd=span (pack/card)
+    ("Fifo", "Open"):           0x0164,   # rs1=name-span                 rd=handle
+    ("Fifo", "Send"):           0x0165,   # rs1=handle rs2=span           rd=ok
+    ("Fifo", "Recv"):           0x0166,   # rs1=handle                    rd=span
+    ("Fifo", "Poll"):           0x0167,   # rs1=handle                    rd=count
 }
 HOST_HOOK_NAMES = {v: k for k, v in HOST_HOOK_CODES.items()}
 

@@ -39,6 +39,9 @@ ALLOWLISTED_NAMESPACES = {
     "Thread",       # Scheduler/preemption hints depend on the host scheduler.
     "Gpio",         # Device pins: browser ships a reference emulator, PIOS the real
                     # driver + per-pin allow-list, so behaviour is platform-injected.
+    "Pack",         # Capsule pack selector -- provider-backed (PiosCapsuleStore).
+    "Card",         # Capsule card read/write/address -- provider-backed.
+    "Fifo",         # Intra-capsule IPC FIFOs -- provider-backed.
 }
 
 
