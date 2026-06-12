@@ -841,6 +841,10 @@
     if (name.indexOf("Storage.") === 0) {
       if (this._storage(name.slice(8), rd, rs1, rs2)) return;
     }
+    // ---- program-level GPIO emulator: Gpio.* (reference; PIOS injects real driver)
+    if (name.indexOf("Gpio.") === 0) {
+      if (this._gpio(name.slice(5), rd, rs1, rs2)) return;
+    }
     // ---- String.* arena string library -------------------------------------
     if (name.indexOf("String.") === 0) {
       if (this._stringlib(name.slice(7), rd, rs1, rs2)) return;
@@ -1776,6 +1780,23 @@
       var qi = this.regs[rs1] | 0;
       this.regs[rd] = (qi >= 0 && qi < st.results.length) ? st.results[qi] : 0; return true;
     }
+    return false;
+  };
+
+  // Reference GPIO emulator (browser/sim). Mirrors picoscript_vm HostApi._gpio:
+  // pins carry [0,1024]; dir 0=in/1=out; pull 0=none/1=up/2=down. Real pins are an
+  // injected OS provider on PIOS; this keeps Python and JS byte-identical.
+  PicoVM.prototype._gpio = function (method, rd, rs1, rs2) {
+    if (!this._gp) this._gp = {};
+    if (method === "Count") { this.regs[rd] = 40; return true; }
+    var pin = this.regs[rs1] | 0;
+    var st = this._gp[pin] || (this._gp[pin] = { dir: 0, pull: 0, value: 0 });
+    if (method === "SetDir") { st.dir = (this.regs[rs2] | 0) ? 1 : 0; this.regs[rd] = 1; return true; }
+    if (method === "GetDir") { this.regs[rd] = st.dir; return true; }
+    if (method === "SetPull") { var p = this.regs[rs2] | 0; st.pull = (p === 1 || p === 2) ? p : 0; this.regs[rd] = 1; return true; }
+    if (method === "GetPull") { this.regs[rd] = st.pull; return true; }
+    if (method === "Write") { var v = this.regs[rs2] | 0; st.value = v < 0 ? 0 : (v > 1024 ? 1024 : v); this.regs[rd] = 1; return true; }
+    if (method === "Read") { this.regs[rd] = st.value; return true; }
     return false;
   };
 

@@ -1,14 +1,11 @@
-Server-entry contract: Server.Main { } (C) + SERVER..ENDSERVER (BASIC)
+GPIO reference emulator runtime (Gpio.* on Python + JS VMs)
 
-PIOS #6: a clear server-endpoint entry form. Transparent wrapper -- the body is the
-program entry, compiling to the endpoint-shaped bytecode the port-82 worker expects
-(request-context setup + Net.Status + body). Honours "BASIC not C": the BASIC form
-is a block keyword pair, no braces.
-- C frontend: Server.Main { ... } (picoscript_cfront.py).
-- BASIC frontend: SERVER ... ENDSERVER (picoscript_basic.py).
-- Mirrored byte-for-byte in vm/picoc.js (CParser/CLowerer + BParser/BLowerer).
-- Transparent: wrapped bytecode == bare body; BASIC SERVER == C Server.Main for an
-  equivalent program; Python frontend == JS frontend. tests/test_dsl.py.
-Regenerated docs/playground.html. Full suite green.
+Makes Gpio.* functional in the reference simulator/debugger (the hooks shipped as
+ABI in ac2b1fe; the runtime was NOOP). HostApi._gpio (picoscript_vm.py) + the
+vm/picovm.js _gpio mirror, byte-identical: per-pin {dir,pull,value}; value
+saturates to [0,1024]; dir 0=in/1=out; pull 0=none/1=up/2=down; Count()=40
+(reference header size). GPIO is platform-injected (PIOS supplies the real per-pin
+driver), so the C VM stays NOOP and behaviour is asserted as Python VM == JS VM
+rather than on the 5-path gate. tests/test_devices.py. Regenerated playground.html.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

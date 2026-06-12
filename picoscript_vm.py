@@ -359,6 +359,7 @@ class HostApi:
         self.cur_pack = 0
         self.cur_card = 0
         self.query_results: List[int] = []
+        self.gpio: Dict[int, dict] = {}   # reference GPIO emulator: pin -> {dir,pull,value}
         # Text/binary I/O: arena-backed writer + reader handle tables.
         self.writers: Dict[int, dict] = {}
         self.readers: Dict[int, dict] = {}
@@ -536,6 +537,9 @@ class HostApi:
         # Program-level card store: Storage.* over a PicoStore (text via byte-spans).
         if ns == "Storage":
             if self._storage(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Gpio":
+            if self._gpio(vm, method, rd, rs1, rs2):
                 return
         # String.* arena string library.
         if ns == "String":
@@ -1540,6 +1544,45 @@ class HostApi:
         if method == "QueryResult":
             idx = _sx32(vm.regs[rs1])
             vm.regs[rd] = self.query_results[idx] if 0 <= idx < len(self.query_results) else 0
+            return True
+        return False
+
+    def _gpio(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        """Reference GPIO emulator (browser/sim). Pins carry an analog value in
+        [0,1024]; dir 0=in/1=out; pull 0=none/1=up/2=down. The real pins are an
+        injected OS provider on PIOS (per-pin allow-list + driver); this mirror
+        keeps Python and JS byte-identical so the sim/debugger behaves the same.
+        """
+        if method == "Count":
+            vm.regs[rd] = 40                 # reference header size (Pi-style); board config may override
+            return True
+        pin = vm.regs[rs1] & MASK32
+        st = self.gpio.get(pin)
+        if st is None:
+            st = {"dir": 0, "pull": 0, "value": 0}
+            self.gpio[pin] = st
+        if method == "SetDir":
+            st["dir"] = 1 if (vm.regs[rs2] & MASK32) else 0
+            vm.regs[rd] = 1
+            return True
+        if method == "GetDir":
+            vm.regs[rd] = st["dir"]
+            return True
+        if method == "SetPull":
+            p = vm.regs[rs2] & MASK32
+            st["pull"] = p if p in (0, 1, 2) else 0
+            vm.regs[rd] = 1
+            return True
+        if method == "GetPull":
+            vm.regs[rd] = st["pull"]
+            return True
+        if method == "Write":
+            v = _sx32(vm.regs[rs2])
+            st["value"] = 0 if v < 0 else (1024 if v > 1024 else v)
+            vm.regs[rd] = 1
+            return True
+        if method == "Read":
+            vm.regs[rd] = st["value"]
             return True
         return False
 
