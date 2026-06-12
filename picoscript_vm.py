@@ -360,6 +360,7 @@ class HostApi:
         self.cur_card = 0
         self.query_results: List[int] = []
         self.gpio: Dict[int, dict] = {}   # reference GPIO emulator: pin -> {dir,pull,value}
+        self.schemas: Dict[int, bytes] = {}   # per-pack typed-field schema span bytes (0x60/0x61)
         # Text/binary I/O: arena-backed writer + reader handle tables.
         self.writers: Dict[int, dict] = {}
         self.readers: Dict[int, dict] = {}
@@ -1486,6 +1487,14 @@ class HostApi:
         plain integers. Cards are dict records held in a PicoStore.
         """
         pack = str(self.cur_pack)
+        if method == "GetSchemaForPack":
+            data = self.schemas.get(vm.regs[rs1] & MASK32, b"")
+            vm.regs[rd] = self._new_span_bytes(vm, data)
+            return True
+        if method == "SetSchemaForPack":
+            self.schemas[vm.regs[rs1] & MASK32] = self._span_raw(vm, vm.regs[rs2])
+            vm.regs[rd] = 1
+            return True
         if method == "UsePack":
             self.cur_pack = vm.regs[rs1] & MASK32
             vm.regs[rd] = self.cur_pack

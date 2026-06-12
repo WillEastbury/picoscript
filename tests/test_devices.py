@@ -76,6 +76,36 @@ def test_gpio_emulator_py_equals_js():
     assert out_py(words) == out_js(words)
 
 
+def _raw_js(words):
+    inp = f"{len(words)}\n" + "\n".join(f"{w:08x}" for w in words) + "\n"
+    r = subprocess.run(["node", os.path.join(VM_DIR, "picovm_run.js")],
+                       input=inp, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    for line in r.stdout.splitlines():
+        p = line.split()
+        if p and p[0] == "OUT":
+            return bytes(int(x, 16) for x in p[1:])
+    return b""
+
+
+SCHEMA_PROG = (
+    'int schema = "id:int;qty:int";\n'
+    'Storage.SetSchemaForPack(1024, schema);\n'
+    'int got = Storage.GetSchemaForPack(1024);\n'
+    'Io.Write(got);\n'
+)
+
+
+def test_schema_hooks_roundtrip_py_equals_js():
+    # Storage.SetSchemaForPack/GetSchemaForPack store + return the schema span
+    # bytes per pack (were NOOP). Round-trips exactly and identically Python<->JS.
+    words = lower_to_bytecode_safe(compile_c(SCHEMA_PROG))
+    host = HostApi(); vm = PicoVM(host=host); vm.load(words); vm.run()
+    py = b"".join(vm.output)
+    assert py == _raw_js(words)
+    assert py == b"id:int;qty:int"
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

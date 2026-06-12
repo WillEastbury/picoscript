@@ -1,11 +1,12 @@
-GPIO reference emulator runtime (Gpio.* on Python + JS VMs)
+Implement Storage.GetSchemaForPack/SetSchemaForPack (were NOOP)
 
-Makes Gpio.* functional in the reference simulator/debugger (the hooks shipped as
-ABI in ac2b1fe; the runtime was NOOP). HostApi._gpio (picoscript_vm.py) + the
-vm/picovm.js _gpio mirror, byte-identical: per-pin {dir,pull,value}; value
-saturates to [0,1024]; dir 0=in/1=out; pull 0=none/1=up/2=down; Count()=40
-(reference header size). GPIO is platform-injected (PIOS supplies the real per-pin
-driver), so the C VM stays NOOP and behaviour is asserted as Python VM == JS VM
-rather than on the 5-path gate. tests/test_devices.py. Regenerated playground.html.
+Closes the schema-hooks runtime gap: the 0x60/0x61 hooks were compiled + arg-checked
+but NOOP at runtime. Per-pack typed-field schema is now stored + returned as span
+bytes:
+- SetSchemaForPack(pack, span): store the schema span bytes for that pack.
+- GetSchemaForPack(pack): return them as a fresh arena span (empty if unset).
+HostApi (picoscript_vm.py) + the vm/picovm.js mirror, byte-identical: set->get
+round-trips exactly and identically Python<->JS. tests/test_devices.py. The typed
+field-record format + the schema designer UI build on this. Regenerated playground.html.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

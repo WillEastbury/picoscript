@@ -1245,10 +1245,16 @@
   PicoVM.prototype._storage = function (method, rd, rs1, rs2) {
     if (!this._st) {
       var ST = storeLib();
-      this._st = { store: new ST.PicoStore(), pack: 0, card: 0, results: [] };
+      this._st = { store: new ST.PicoStore(), pack: 0, card: 0, results: [], schemas: {} };
     }
     var st = this._st;
     var pack = String(st.pack);
+    if (method === "GetSchemaForPack") {
+      this.regs[rd] = this._newSpanBytes(st.schemas[this.regs[rs1] | 0] || []); return true;
+    }
+    if (method === "SetSchemaForPack") {
+      st.schemas[this.regs[rs1] | 0] = this._spanBytes(this.regs[rs2]); this.regs[rd] = 1; return true;
+    }
     if (method === "UsePack") { st.pack = this.regs[rs1] | 0; this.regs[rd] = st.pack; return true; }
     if (method === "AddCard") { var cid = st.store.create(pack, {}); st.card = cid; this.regs[rd] = cid; return true; }
     if (method === "EditCard") {
