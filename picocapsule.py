@@ -222,3 +222,32 @@ def parse(text: str) -> Manifest:
             else:
                 raise ValueError(f"indented line {line!r} outside a block")
     return m
+
+
+# ── INV-25 debug/source-map (companion card for capsule deployment) ──────────
+
+def serialize_debug_map(debug: dict) -> str:
+    """Deterministic text for an INV-25 debug map (pc -> (src_off, op, ns, method)).
+
+    Stored in a capsule companion card next to the bytecode card so a fault from a
+    stripped on-device binary symbolicates off-device (see docs/INV25_PIOS_TRACE.md).
+    One line per pc, ascending: 'pc off op ns method' ('-' = None). Byte-identical to
+    vm/picocapsule.js serializeDebugMap.
+    """
+    lines = []
+    for pc in sorted(debug):
+        off, op, ns, method = debug[pc]
+        lines.append("%d %d %s %s %s" % (pc, off, op, ns if ns else "-", method if method else "-"))
+    return ("\n".join(lines) + "\n") if lines else ""
+
+
+def parse_debug_map(text: str) -> dict:
+    """Inverse of serialize_debug_map -> {pc: (off, op, ns, method)}."""
+    out = {}
+    for line in text.split("\n"):
+        if not line.strip():
+            continue
+        pc, off, op, ns, method = line.split(" ")
+        out[int(pc)] = (int(off), op, None if ns == "-" else ns, None if method == "-" else method)
+    return out
+

@@ -134,10 +134,30 @@
     return m;
   }
 
+  // ── INV-25 debug/source-map (companion card) -- mirrors picocapsule.py ─────
+  function serializeDebugMap(debug) {
+    var pcs = Object.keys(debug).map(Number).sort(function (a, b) { return a - b; });
+    var lines = pcs.map(function (pc) {
+      var r = debug[pc];
+      return pc + " " + r[0] + " " + r[1] + " " + (r[2] == null ? "-" : r[2]) + " " + (r[3] == null ? "-" : r[3]);
+    });
+    return lines.length ? lines.join("\n") + "\n" : "";
+  }
+  function parseDebugMap(text) {
+    var out = {};
+    text.split("\n").forEach(function (line) {
+      if (!line.trim()) return;
+      var p = line.split(" ");
+      out[parseInt(p[0], 10)] = [parseInt(p[1], 10), p[2], p[3] === "-" ? null : p[3], p[4] === "-" ? null : p[4]];
+    });
+    return out;
+  }
+
   return {
     Manifest: Manifest, serialize: serialize, parse: parse,
     formatAddress: formatAddress, parseAddress: parseAddress,
     sourceFor: sourceFor, codeFor: codeFor, isCapsulePack: isCapsulePack,
+    serializeDebugMap: serializeDebugMap, parseDebugMap: parseDebugMap,
     CAPSULE_PACK_MIN: CAPSULE_PACK_MIN, CAPSULE_PACK_MAX: CAPSULE_PACK_MAX
   };
 });

@@ -107,6 +107,24 @@ def test_js_mirror_matches_python_and_doc():
     assert r.stdout == DOC_EXAMPLE, "vm/picocapsule.js serialize drifted from picocapsule.py / doc"
 
 
+def test_debug_map_roundtrip_and_js_parity():
+    # INV-25 debug map (pc -> off,op,ns,method) serialises deterministically for a
+    # capsule companion card: round-trips, and vm/picocapsule.js emits identical text.
+    import json
+    from picoscript_il import lower_to_bytecode_with_debug
+    from picoscript_cfront import compile_c
+    from picocapsule import serialize_debug_map, parse_debug_map
+    _, dbg = lower_to_bytecode_with_debug(compile_c('int a = 1;\nGpio.Write(2, 1024);\nprint(a);\n'))
+    text = serialize_debug_map(dbg)
+    assert parse_debug_map(text) == dbg
+    assert serialize_debug_map(parse_debug_map(text)) == text
+    js_in = {str(pc): list(rec) for pc, rec in dbg.items()}
+    node = "var C=require('./vm/picocapsule.js');process.stdout.write(C.serializeDebugMap(%s));" % json.dumps(js_in)
+    r = subprocess.run(["node", "-e", node], capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == text
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -151,6 +151,12 @@ Serializer: `Capsule.Serialize(manifest) -> bytes` (canonical §3 text),
 `picocapsule.py` and the byte-identical browser mirror `vm/picocapsule.js`
 (`Manifest` + `serialize`/`parse` + `formatAddress`/`parseAddress`/`sourceFor`/`codeFor`).
 
+> **Authoring model (resolved):** these builder primitives **are** the manifest
+> authoring surface — `picocapsule` (Python + JS). A capsule is an authored
+> *artifact* (card 0), not a runtime program, so there is intentionally **no**
+> separate in-bytecode "capsule DSL"; you build the manifest with `picocapsule`
+> (or a thin CLI over it) and write the result to card 0.
+
 ### 4b. Pack/card runtime hooks (provider-backed)
 `Pack.Use(pack)`; `Card.Read(card) -> span`; `Card.Write(card, span) -> ok`;
 `Card.Address(pack, card) -> span`.
@@ -201,7 +207,10 @@ Io.WriteByte(50);
 produce `pc -> source offset`, `pc -> op id`, `pc -> namespace/method id`,
 byte-identical Python↔JS. For capsule deployment this map is stored in a
 **companion metadata card** alongside each bytecode card (off-device
-symbolication keeps the runtime lean). See `docs/INV25_PIOS_TRACE.md`.
+symbolication keeps the runtime lean). The companion-card encoding is
+`picocapsule.serialize_debug_map` / `serializeDebugMap` — deterministic, one line
+per pc `pc off op ns method` (`-` = none), byte-identical Python↔JS;
+`parse_debug_map` inverts it. See `docs/INV25_PIOS_TRACE.md`.
 
 ---
 

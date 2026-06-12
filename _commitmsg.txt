@@ -1,14 +1,15 @@
-Pluggable provider seam for the browser card/GPIO layer
+Capsule debug-map companion-card encoding + resolve capsule authoring model
 
-Refactors the browser VM (vm/picovm.js) so the card store and GPIO behind
-Storage.*/Gpio.* are injectable, per the device-bindings design: the editor (and
-PIOS adapters like PiosCapsuleStore) can supply their own backend without forking
-the VM.
-- new PicoVM({ cardStore, gpioProvider }): cardStore is any PicoStore-compatible
-  CRUD+query object; gpioProvider is { pins: {}, count: N } the program drives and
-  the editor renders (so the GPIO visual observes pin state live).
-- Defaults are the built-in reference store + emulator, so VM parity is unchanged
-  (full suite green, incl. test_devices Python==JS, test_store, test_runtime_storage).
-The Python VM stays the reference oracle (unchanged). Regenerated playground.html.
+debugmap-capsule: picocapsule.serialize_debug_map / parse_debug_map (+ the
+vm/picocapsule.js mirror serializeDebugMap/parseDebugMap) -- deterministic text
+(one line per pc: "pc off op ns method", "-"=none) for the INV-25 debug map,
+stored in a capsule companion card next to the bytecode so a stripped on-device
+binary symbolicates off-device. Round-trips + byte-identical Python<->JS
+(tests/test_capsule.py).
+
+capsule-dsl (resolved): the manifest builder primitives ARE picocapsule (Python +
+JS). A capsule is an authored artifact (card 0), not a runtime program, so there
+is intentionally no separate in-bytecode capsule DSL; documented in
+docs/PIOS_CAPSULE_HANDOFF.md section 4a.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
