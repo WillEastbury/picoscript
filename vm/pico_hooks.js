@@ -279,6 +279,13 @@
       0x147: "Html.Decode",
       0x148: "Html.Serialize",
       0x149: "Html.QuerySelector",
+      0x150: "Gpio.Count",
+      0x151: "Gpio.SetDir",
+      0x152: "Gpio.GetDir",
+      0x153: "Gpio.SetPull",
+      0x154: "Gpio.GetPull",
+      0x155: "Gpio.Write",
+      0x156: "Gpio.Read",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }

@@ -308,13 +308,15 @@ CAP_CONTEXT = 1 << 6
 CAP_AUTH    = 1 << 7
 CAP_ENV     = 1 << 8
 CAP_CRYPTO  = 1 << 9
-CAP_ALL     = 0x3FF             # default grant: every binding (host restricts to gate)
+CAP_GPIO    = 1 << 10           # Gpio.* (device pins; OS/emulator-backed)
+CAP_ALL     = 0x7FF             # default grant: every binding (host restricts to gate)
 
 _CAP_BY_NS = {
     "Kernel": CAP_KERNEL, "Queue": CAP_QUEUE, "Random": CAP_RANDOM,
     "Req": CAP_NET, "Resp": CAP_NET, "Net": CAP_NET,
     "Storage": CAP_STORAGE, "DateTime": CAP_TIME, "Context": CAP_CONTEXT,
     "Auth": CAP_AUTH, "X509": CAP_AUTH, "Environment": CAP_ENV, "Locale": CAP_ENV,
+    "Gpio": CAP_GPIO,
 }
 
 

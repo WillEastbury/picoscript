@@ -748,6 +748,21 @@ HOST_HOOK_CODES = {
     ("Html", "Decode"):         0x0147,
     ("Html", "Serialize"):      0x0148,
     ("Html", "QuerySelector"):  0x0149,
+    # Gpio device library (0x0150-0x0156) -- pins exposed as cards carrying an
+    # analog value in [0, 1024] (digital reads/writes saturate to 0 or 1024;
+    # PWM/ADC-capable pins use the full range). Direction (in/out) and pull
+    # (none/up/down) are configured by the program. The behaviour behind these
+    # hooks is supplied by an injected GPIO provider: the browser ships an
+    # emulator (vm/picodevices.js); PIOS supplies the real driver + per-pin
+    # allow-list. All ops stay within the 2-in/1-out host ABI. See
+    # docs/PIOS_PROVIDER_CONTRACT.md.
+    ("Gpio", "Count"):          0x0150,   # rd = pin count                (rs ignored)
+    ("Gpio", "SetDir"):         0x0151,   # rs1=pin rs2=dir(0=in,1=out)   rd=ok
+    ("Gpio", "GetDir"):         0x0152,   # rs1=pin                       rd=dir
+    ("Gpio", "SetPull"):        0x0153,   # rs1=pin rs2=pull(0=none,1=up,2=down) rd=ok
+    ("Gpio", "GetPull"):        0x0154,   # rs1=pin                       rd=pull
+    ("Gpio", "Write"):          0x0155,   # rs1=pin rs2=value[0,1024]     rd=ok
+    ("Gpio", "Read"):           0x0156,   # rs1=pin                       rd=value[0,1024]
 }
 HOST_HOOK_NAMES = {v: k for k, v in HOST_HOOK_CODES.items()}
 

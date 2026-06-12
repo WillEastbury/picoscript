@@ -37,6 +37,8 @@ ALLOWLISTED_NAMESPACES = {
     "Descriptor",   # Host descriptor metadata / bulk-transfer plumbing.
     "Lease",        # Host-enforced lease capabilities and lifetime validation.
     "Thread",       # Scheduler/preemption hints depend on the host scheduler.
+    "Gpio",         # Device pins: browser ships a reference emulator, PIOS the real
+                    # driver + per-pin allow-list, so behaviour is platform-injected.
 }
 
 
