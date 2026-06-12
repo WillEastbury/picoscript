@@ -74,7 +74,7 @@ KEYWORDS = {
     "DO", "LOOP", "UNTIL",
     "BREAK", "SKIP", "INC", "DEC", "IIF",
     "EQ", "NE", "LT", "GT", "LE", "GE", "MOD",
-    "STORE", "GPIO", "LOAD",
+    "STORE", "GPIO", "LOAD", "SERVER", "ENDSERVER",
 }
 CMP_WORDS = {"EQ": "EQ", "NE": "NE", "LT": "LT", "GT": "GT", "LE": "LE", "GE": "GE"}
 
@@ -241,6 +241,9 @@ class Gosub:
 class Sub:
     name: str; body: list
 @dataclass
+class ServerMain:
+    body: list                       # transparent server-entry wrapper; lowers body inline
+@dataclass
 class Return: pass
 @dataclass
 class Break: pass
@@ -365,6 +368,8 @@ class Parser:
                 self.next(); name = self.next().value; self.end_line(); return Gosub(name)
             if kw == "SUB":
                 return self.parse_sub()
+            if kw == "SERVER":
+                return self.parse_server()
             if kw == "RETURN":
                 self.next(); self.end_line(); return Return()
             if kw == "BREAK":
@@ -670,6 +675,16 @@ class Parser:
         self.eat_kw("ENDSUB"); self.end_line()
         return Sub(name, body)
 
+    def parse_server(self) -> ServerMain:
+        # SERVER ... ENDSERVER -- BASIC server-entry block (the no-braces form of
+        # Server.Main { ... }). Transparent wrapper: the body becomes the program
+        # entry, compiling to the endpoint-shaped bytecode the PIOS worker expects.
+        self.eat_kw("SERVER")
+        self.end_line()
+        body = self.parse_block("ENDSERVER")
+        self.eat_kw("ENDSERVER"); self.end_line()
+        return ServerMain(body)
+
     def parse_call_from_id(self) -> Call:
         ns = self.next().value
         self.eat_op(".")
@@ -842,6 +857,9 @@ class Lowerer:
             self.lower_print(s)
         elif isinstance(s, CallStmt):
             self.lower_call(s.call, want_value=False)
+        elif isinstance(s, ServerMain):
+            for st in s.body:
+                self.stmt(st)
         else:
             raise SyntaxError(f"cannot lower {s}")
 

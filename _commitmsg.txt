@@ -1,20 +1,14 @@
-Add capsule runtime-hook ABI (Pack/Card/Fifo) + CAP_CAPSULE
+Server-entry contract: Server.Main { } (C) + SERVER..ENDSERVER (BASIC)
 
-Runtime host hooks a capsule process calls at runtime (provider-backed: browser
-PiosCapsuleStore reference / PIOS real backend), per docs/PIOS_CAPSULE_HANDOFF.md:
-- Pack.Use (0x0160), Card.Read/Write/Address (0x0161-0x0163),
-  Fifo.Open/Send/Recv/Poll (0x0164-0x0167). All within the 2-in/1-out host ABI,
-  so every frontend lowers them via the generic Ns.Method path (5-path compile
-  parity, no compiler changes). FIFOs are declared in the manifest (Capsule.Fifo);
-  Fifo.Open resolves by name.
-- CAP_CAPSULE = 1<<11 added identically to picoscript_vm.py, vm/picovm.js,
-  vm/picovm.h and the classifier vm/picovm.c; CAP_ALL widened 0x7FF -> 0xFFF.
-- hook_contracts + test_hook_contracts allow the CAPSULE class; Card.Read/Address/
-  Fifo.Recv marked arena-allocating. Pack/Card/Fifo added to the parity-gate
-  allowlist (platform-injected, like Gpio). Regenerated pico_hooks.js + .h (276).
-
-Manifest building + source/bytecode pairing remain the picocapsule lib (authoring
-time), not runtime hooks. The runtime providers land with the browser
-PiosCapsuleStore reference.
+PIOS #6: a clear server-endpoint entry form. Transparent wrapper -- the body is the
+program entry, compiling to the endpoint-shaped bytecode the port-82 worker expects
+(request-context setup + Net.Status + body). Honours "BASIC not C": the BASIC form
+is a block keyword pair, no braces.
+- C frontend: Server.Main { ... } (picoscript_cfront.py).
+- BASIC frontend: SERVER ... ENDSERVER (picoscript_basic.py).
+- Mirrored byte-for-byte in vm/picoc.js (CParser/CLowerer + BParser/BLowerer).
+- Transparent: wrapped bytecode == bare body; BASIC SERVER == C Server.Main for an
+  equivalent program; Python frontend == JS frontend. tests/test_dsl.py.
+Regenerated docs/playground.html. Full suite green.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

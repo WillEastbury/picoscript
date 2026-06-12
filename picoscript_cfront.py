@@ -179,6 +179,9 @@ class Break: pass
 @dataclass
 class Continue: pass
 @dataclass
+class ServerMain:
+    body: list                       # transparent server-entry wrapper: Server.Main { ... }
+@dataclass
 class Switch:
     expr: object; cases: list; default: Optional[list]   # cases = [(value, body), ...]
 @dataclass
@@ -301,6 +304,12 @@ class Parser:
                 self.next(); self.expect(";"); return Break()
             if t.value == "continue":
                 self.next(); self.expect(";"); return Continue()
+        # Server.Main { ... } -- server-entry wrapper (transparent: body is the entry).
+        if (t.kind == "id" and t.value == "Server" and self.i + 3 < len(self.toks)
+                and self.toks[self.i + 1].value == "." and self.toks[self.i + 2].value == "Main"
+                and self.toks[self.i + 3].value == "{"):
+            self.next(); self.next(); self.next()     # Server . Main
+            return ServerMain(self.parse_block())
         if t.value == "{":
             return ExprStmt(None) if False else self._block_stmt()
         # label:  name :
@@ -614,6 +623,9 @@ class Lowerer:
             if not self.loop_stack:
                 raise SyntaxError("continue outside loop")
             self.b.jmp(self.loop_stack[-1][0])
+        elif isinstance(s, ServerMain):
+            for st in s.body:
+                self.stmt(st)
         else:
             raise SyntaxError(f"cannot lower statement {s}")
 

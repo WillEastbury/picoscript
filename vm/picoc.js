@@ -528,6 +528,9 @@
         if (t.value === "break") { this.next(); this.expect(";"); return { t: "Break" }; }
         if (t.value === "continue") { this.next(); this.expect(";"); return { t: "Continue" }; }
       }
+      if (t.kind === "id" && t.value === "Server" && this.toks[this.i + 1] && this.toks[this.i + 1].value === "." && this.toks[this.i + 2] && this.toks[this.i + 2].value === "Main" && this.toks[this.i + 3] && this.toks[this.i + 3].value === "{") {
+        this.next(); this.next(); this.next(); return { t: "ServerMain", body: this.parseBlock() };
+      }
       if (t.value === "{") { return { t: "If", cond: { t: "Num", value: 1 }, then: this.parseBlock(), els: null }; }
       if (t.kind === "id" && this.toks[this.i + 1].value === ":") { var lab = this.next().value; this.next(); return { t: "Label", name: lab }; }
       if (t.kind === "id" && this.toks[this.i + 1].value === "=") {
@@ -702,6 +705,7 @@
       else if (s.t === "ExprStmt") { if (s.expr != null) this.eval(s.expr, false); }
       else if (s.t === "Break") { if (!this.loop.length) throw new Error("break outside loop"); this.b.jmp(this.loop[this.loop.length - 1][1]); }
       else if (s.t === "Continue") { if (!this.loop.length) throw new Error("continue outside loop"); this.b.jmp(this.loop[this.loop.length - 1][0]); }
+      else if (s.t === "ServerMain") s.body.forEach(function (st) { self.stmt(st); });
       else throw new Error("C: cannot lower " + s.t);
     },
     assignTo: function (dst, e) {
@@ -892,7 +896,7 @@
   // ========================================================================
   // BASIC-LIKE FRONTEND (port of picoscript_basic.py)
   // ========================================================================
-  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","DISPATCH","ENDDISPATCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD","STORE","GPIO","LOAD"].forEach(function (k) { B_KW[k] = 1; });
+  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","DISPATCH","ENDDISPATCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD","STORE","GPIO","LOAD","SERVER","ENDSERVER"].forEach(function (k) { B_KW[k] = 1; });
   var B_CMPW = { EQ:"EQ", NE:"NE", LT:"LT", GT:"GT", LE:"LE", GE:"GE" };
   var B_CMPS = { "==":"EQ", "!=":"NE", "<>":"NE", "=":"EQ", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
   var B_COMPARATORS = {}; for (var _k in B_CMPW) B_COMPARATORS[_k] = B_CMPW[_k]; for (var _k2 in B_CMPS) B_COMPARATORS[_k2] = B_CMPS[_k2];
@@ -966,6 +970,7 @@
         if (kw === "GOTO") { this.next(); var nm = this.next().value; this.endLine(); return { t: "Goto", label: nm }; }
         if (kw === "GOSUB") { this.next(); var nm2 = this.next().value; this.endLine(); return { t: "Gosub", name: nm2 }; }
         if (kw === "SUB") return this.parseSub();
+        if (kw === "SERVER") return this.parseServer();
         if (kw === "RETURN") { this.next(); this.endLine(); return { t: "Return" }; }
         if (kw === "BREAK") { this.next(); this.endLine(); return { t: "Break" }; }
         if (kw === "SKIP") { this.next(); this.endLine(); return { t: "Skip" }; }
@@ -1107,6 +1112,7 @@
       this.eatKw("ENDDISPATCH"); this.endLine(); return { t: "Dispatch", expr: expr, cases: cases, def: def };
     },
     parseSub: function () { this.eatKw("SUB"); var name = this.next().value; this.endLine(); var body = this.parseBlock("ENDSUB"); this.eatKw("ENDSUB"); this.endLine(); return { t: "Sub", name: name, body: body }; },
+    parseServer: function () { this.eatKw("SERVER"); this.endLine(); var body = this.parseBlock("ENDSERVER"); this.eatKw("ENDSERVER"); this.endLine(); return { t: "ServerMain", body: body }; },
     parseCallFromId: function () { var ns = this.next().value; this.eatOp("."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
     parseArgs: function () { this.eatOp("("); var a = []; if (!(this.peek().kind === "op" && this.peek().value === ")")) { a.push(this.parseExpr()); while (this.peek().kind === "op" && this.peek().value === ",") { this.next(); a.push(this.parseExpr()); } } this.eatOp(")"); return a; },
     parseCondition: function () { return this.parseExpr(); },
@@ -1198,6 +1204,7 @@
       else if (s.t === "Dispatch") this.lowerDispatch(s);
       else if (s.t === "Print") { if (s.value.t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, s.value.value)], null); } else { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); } }
       else if (s.t === "CallStmt") this.lowerCall(s.call, false);
+      else if (s.t === "ServerMain") s.body.forEach(function (st) { self.stmt(st); });
       else throw new Error("BASIC: cannot lower " + s.t);
     },
     assignTo: function (dst, e) {

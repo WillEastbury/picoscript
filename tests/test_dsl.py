@@ -146,6 +146,21 @@ def test_ext_hook_encoding_py_equals_js():
     assert bc(src, compile_c) == js_compile(src, "c")
 
 
+def test_server_entry_transparent_and_parity():
+    # Server.Main { ... } (C) / SERVER ... ENDSERVER (BASIC) are transparent
+    # wrappers: the body is the program entry, byte-identical to the bare body and
+    # across the Python and JS frontends. The two surface forms agree too.
+    cwrap = "Server.Main {\n  Net.Status(200);\n  Io.WriteByte(52);\n  Io.WriteByte(50);\n}\n"
+    cbare = "Net.Status(200);\nIo.WriteByte(52);\nIo.WriteByte(50);\n"
+    bwrap = "SERVER\nNet.Status(200)\nIo.WriteByte(52)\nIo.WriteByte(50)\nENDSERVER\n"
+    bbare = "Net.Status(200)\nIo.WriteByte(52)\nIo.WriteByte(50)\n"
+    assert bc(cwrap, compile_c) == bc(cbare, compile_c)
+    assert bc(bwrap) == bc(bbare)
+    assert bc(bwrap) == bc(cwrap, compile_c)
+    assert bc(cwrap, compile_c) == js_compile(cwrap, "c")
+    assert bc(bwrap) == js_compile(bwrap, "basic")
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
