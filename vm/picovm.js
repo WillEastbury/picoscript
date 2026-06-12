@@ -70,6 +70,12 @@
     // set(addr,int); when present it persists across reset()/load(), modelling a
     // disk-backed card store. Default is an in-memory Map (VM parity unchanged).
     this._extCards = opts.cards || null;
+    // Pluggable provider layer (browser harness): the editor / PIOS can inject a
+    // card store (PicoStore-compatible CRUD+query, e.g. PiosCapsuleStore) and/or a
+    // GPIO provider ({ pins: {}, count: N }) to back Storage.*/Gpio.*. Defaults are
+    // the built-in reference store + emulator, so VM parity is unchanged.
+    this._cardStore = opts.cardStore || null;
+    this._gpioProvider = opts.gpioProvider || null;
     this.reset();
   }
 
@@ -1245,7 +1251,7 @@
   PicoVM.prototype._storage = function (method, rd, rs1, rs2) {
     if (!this._st) {
       var ST = storeLib();
-      this._st = { store: new ST.PicoStore(), pack: 0, card: 0, results: [], schemas: {} };
+      this._st = { store: this._cardStore || new ST.PicoStore(), pack: 0, card: 0, results: [], schemas: {} };
     }
     var st = this._st;
     var pack = String(st.pack);
@@ -1304,10 +1310,10 @@
   // pins carry [0,1024]; dir 0=in/1=out; pull 0=none/1=up/2=down. Real pins are an
   // injected OS provider on PIOS; this keeps Python and JS byte-identical.
   PicoVM.prototype._gpio = function (method, rd, rs1, rs2) {
-    if (!this._gp) this._gp = {};
-    if (method === "Count") { this.regs[rd] = 40; return true; }
+    var g = this._gpioProvider || this._gp || (this._gp = { pins: {}, count: 40 });
+    if (method === "Count") { this.regs[rd] = g.count; return true; }
     var pin = this.regs[rs1] | 0;
-    var st = this._gp[pin] || (this._gp[pin] = { dir: 0, pull: 0, value: 0 });
+    var st = g.pins[pin] || (g.pins[pin] = { dir: 0, pull: 0, value: 0 });
     if (method === "SetDir") { st.dir = (this.regs[rs2] | 0) ? 1 : 0; this.regs[rd] = 1; return true; }
     if (method === "GetDir") { this.regs[rd] = st.dir; return true; }
     if (method === "SetPull") { var p = this.regs[rs2] | 0; st.pull = (p === 1 || p === 2) ? p : 0; this.regs[rd] = 1; return true; }

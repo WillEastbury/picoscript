@@ -1,12 +1,14 @@
-Implement Storage.GetSchemaForPack/SetSchemaForPack (were NOOP)
+Pluggable provider seam for the browser card/GPIO layer
 
-Closes the schema-hooks runtime gap: the 0x60/0x61 hooks were compiled + arg-checked
-but NOOP at runtime. Per-pack typed-field schema is now stored + returned as span
-bytes:
-- SetSchemaForPack(pack, span): store the schema span bytes for that pack.
-- GetSchemaForPack(pack): return them as a fresh arena span (empty if unset).
-HostApi (picoscript_vm.py) + the vm/picovm.js mirror, byte-identical: set->get
-round-trips exactly and identically Python<->JS. tests/test_devices.py. The typed
-field-record format + the schema designer UI build on this. Regenerated playground.html.
+Refactors the browser VM (vm/picovm.js) so the card store and GPIO behind
+Storage.*/Gpio.* are injectable, per the device-bindings design: the editor (and
+PIOS adapters like PiosCapsuleStore) can supply their own backend without forking
+the VM.
+- new PicoVM({ cardStore, gpioProvider }): cardStore is any PicoStore-compatible
+  CRUD+query object; gpioProvider is { pins: {}, count: N } the program drives and
+  the editor renders (so the GPIO visual observes pin state live).
+- Defaults are the built-in reference store + emulator, so VM parity is unchanged
+  (full suite green, incl. test_devices Python==JS, test_store, test_runtime_storage).
+The Python VM stays the reference oracle (unchanged). Regenerated playground.html.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
