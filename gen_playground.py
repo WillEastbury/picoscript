@@ -430,6 +430,25 @@ PAGE = r"""<!DOCTYPE html>
   .gpio-pin .bar > i { display:block; height:100%; background:var(--accent); }
   .gpio-pin .val { width:38px; text-align:right; font-family:"SF Mono",monospace; color:var(--text); }
   .gpio-pin.drivable { cursor:pointer; } .gpio-pin.drivable:hover { border-color:var(--accent); }
+  /* Cards / schema designer */
+  .schema-tools { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; font-size:11px; }
+  .schema-tools .muted { color:var(--muted); }
+  .schema-wrap { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+  .schema-col { flex:1; min-width:250px; }
+  .schema-col h4 { margin:0 0 6px; font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); display:flex; align-items:center; gap:8px; }
+  .sd-table { width:100%; border-collapse:collapse; font-size:11px; margin-bottom:6px; }
+  .sd-table th,.sd-table td { border:1px solid #2c313f; padding:3px 6px; text-align:left; }
+  .sd-table th { color:var(--muted); font-weight:600; }
+  .sd-table td .x { color:var(--err); cursor:pointer; float:right; font-weight:700; }
+  .field-add { display:flex; gap:5px; align-items:center; flex-wrap:wrap; }
+  .field-add input,.field-add select { padding:4px 6px; font-size:11px; }
+  .sd-card { border:1px solid #2c313f; border-radius:6px; padding:6px 8px; margin-bottom:5px; background:#0c0e14; }
+  .sd-card .ch { display:flex; align-items:center; gap:6px; font-size:10px; color:var(--muted); margin-bottom:4px; }
+  .sd-card .ch .x { margin-left:auto; color:var(--err); cursor:pointer; }
+  .sd-fld { display:flex; align-items:center; gap:6px; font-size:11px; margin:2px 0; }
+  .sd-fld label { width:96px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sd-fld input { flex:1; padding:3px 6px; font-size:11px; }
+  .sd-empty { color:var(--muted); font-size:11px; }
   @media (max-width:800px){
     .sidebar { width:180px; }
     .regs { grid-template-columns:repeat(2,1fr); }
@@ -481,6 +500,7 @@ PAGE = r"""<!DOCTYPE html>
       <button onclick="toggleDbg(this,'dbg-output')">Output</button>
       <button onclick="toggleDbg(this,'dbg-src')">Source Editor</button>
       <button onclick="toggleDbg(this,'dbg-gpio')">GPIO</button>
+      <button onclick="toggleDbg(this,'dbg-cards')">Cards</button>
       <button style="margin-left:auto" onclick="collapseDbg()">&#9660; Collapse</button>
     </div>
     <div class="dbg-panels" id="dbgPanels" style="max-height:220px">
@@ -514,6 +534,14 @@ PAGE = r"""<!DOCTYPE html>
           <span class="muted">Run a program that uses <b>Gpio.*</b> (or the <b>GPIO</b> DSL). Outputs show what it wrote (0&ndash;1024); click an <b>IN</b> pin to drive it, then re-run.</span>
         </div>
         <div class="gpio-header" id="gpioHeader"></div>
+      </div>
+      <div class="dbg-panel" id="dbg-cards">
+        <div class="schema-tools">
+          pack <input id="sdPack" type="number" value="0" min="0" style="width:64px" onchange="renderCards()">
+          <button class="ghost" onclick="sdClear()">Clear store</button>
+          <span class="muted">Design a typed schema and author cards. The running program shares this store via <b>Storage.*</b> / the <b>STORE</b>/<b>LOAD</b> DSL.</span>
+        </div>
+        <div class="schema-wrap" id="cardsView"></div>
       </div>
     </div>
   </div>
@@ -653,6 +681,50 @@ function renderGpio(){
   host.innerHTML=html;
 }
 
+// ---- device panel: cards + schema designer (shared cardStore) --------------
+var CARDSTORE = (typeof PicoStore!=='undefined') ? new PicoStore.PicoStore() : null;
+var SD_TYPES = ['int','str','bool','uint8','int16','int32','uint16','uint32','utf8','latin1','blob'];
+var SD_SCHEMA_KEY='picoscript.schemas.v1';
+function sdSchemas(){ try{var ls=filesSafeLocalStorage();return ls?(JSON.parse(ls.getItem(SD_SCHEMA_KEY)||'{}')||{}):{};}catch(e){return {};} }
+function sdSchemasWrite(s){ try{var ls=filesSafeLocalStorage();if(ls)ls.setItem(SD_SCHEMA_KEY,JSON.stringify(s));}catch(e){} }
+function sdPack(){ return String((document.getElementById('sdPack')||{}).value||'0'); }
+function sdSchema(){ return sdSchemas()[sdPack()]||[]; }
+function sdStrType(t){ return t==='str'||t==='utf8'||t==='latin1'||t==='blob'; }
+function sdAddField(){
+  var el=document.getElementById('sdFName'), name=(el?el.value:'').trim();
+  if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)){ if(typeof alert==='function')alert('field name must be a simple identifier'); return; }
+  var type=document.getElementById('sdFType').value, s=sdSchemas(), p=sdPack();
+  s[p]=(s[p]||[]).filter(function(f){return f.name!==name;}).concat([{name:name,type:type}]);
+  sdSchemasWrite(s); renderCards();
+}
+function sdRemoveField(name){ var s=sdSchemas(),p=sdPack(); s[p]=(s[p]||[]).filter(function(f){return f.name!==name;}); sdSchemasWrite(s); renderCards(); }
+function sdAddCard(){ if(!CARDSTORE) return; var rec={}; sdSchema().forEach(function(f){ rec[f.name]=sdStrType(f.type)?'':0; }); CARDSTORE.create(sdPack(), rec); renderCards(); }
+function sdDeleteCard(id){ if(CARDSTORE){ CARDSTORE.delete(sdPack(), id); renderCards(); } }
+function sdSetField(id,name,el,isStr){ if(!CARDSTORE) return; var f={}; f[name]=isStr?el.value:(parseInt(el.value,10)||0); CARDSTORE.patch(sdPack(), id, f); }
+function sdClear(){ if(typeof PicoStore!=='undefined'){ CARDSTORE=new PicoStore.PicoStore(); } renderCards(); }
+function renderCards(){
+  var host=document.getElementById('cardsView'); if(!host) return;
+  var schema=sdSchema(), p=sdPack();
+  var fhtml='<table class="sd-table"><tr><th>field</th><th>type</th></tr>';
+  if(!schema.length) fhtml+='<tr><td colspan="2" class="sd-empty">no fields yet</td></tr>';
+  schema.forEach(function(f){ fhtml+='<tr><td>'+esc(f.name)+'<span class="x" title="remove" onclick="sdRemoveField(\''+f.name+'\')">&times;</span></td><td>'+esc(f.type)+'</td></tr>'; });
+  fhtml+='</table><div class="field-add"><input id="sdFName" placeholder="field name" style="width:110px"><select id="sdFType">'+SD_TYPES.map(function(t){return '<option>'+t+'</option>';}).join('')+'</select><button class="ghost" onclick="sdAddField()">+ field</button></div>';
+  var cards = CARDSTORE ? CARDSTORE.all(p) : [];
+  var chtml='';
+  if(!cards.length) chtml='<div class="sd-empty">no cards in pack '+esc(p)+'</div>';
+  cards.forEach(function(e){ var id=e[0], rec=e[1]||{};
+    var flds = schema.length?schema:Object.keys(rec).map(function(k){return {name:k,type:(typeof rec[k]==='string'?'str':'int')};});
+    chtml+='<div class="sd-card"><div class="ch">card #'+id+'<span class="x" onclick="sdDeleteCard('+id+')">delete</span></div>';
+    if(!flds.length) chtml+='<div class="sd-empty">empty</div>';
+    flds.forEach(function(f){ var isStr=sdStrType(f.type), v=rec[f.name]; if(v===undefined)v=isStr?'':0;
+      chtml+='<div class="sd-fld"><label title="'+esc(f.name)+'">'+esc(f.name)+'</label><input '+(isStr?'':'type="number"')+' value="'+esc(String(v)).replace(/"/g,'&quot;')+'" onchange="sdSetField('+id+',\''+f.name+'\',this,'+(isStr?'true':'false')+')"></div>';
+    });
+    chtml+='</div>';
+  });
+  host.innerHTML='<div class="schema-col"><h4>Schema &middot; pack '+esc(p)+'</h4>'+fhtml+'</div>'+
+                 '<div class="schema-col"><h4>Cards <button class="ghost" onclick="sdAddCard()">+ card</button></h4>'+chtml+'</div>';
+}
+
 function toggleDbg(btn, panelId){
   document.querySelectorAll('.dbg-bar button').forEach(function(b){ b.classList.remove('active'); });
   btn.classList.add('active');
@@ -763,7 +835,7 @@ function compileSrc(run){
     dbgReset(); if(run) dbgRun();
   } catch(e){ err.textContent=String(e.message||e); err.style.color='#ff7b72'; }
 }
-function dbgReset(){ DBG.vm=new PicoVM({gpioProvider:GP}); DBG.vm.load(DBG.words); render(); }
+function dbgReset(){ DBG.vm=new PicoVM({gpioProvider:GP, cardStore:CARDSTORE}); DBG.vm.load(DBG.words); render(); }
 function dbgStep(){ if(DBG.vm){ DBG.vm.step(); render(); } }
 function dbgRun(){ if(!DBG.vm) dbgReset(); var g=0; while(DBG.vm.step()&&g++<200000){} render(); }
 
@@ -779,6 +851,7 @@ function render(){
   document.getElementById('state').textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;
   document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']';
   renderGpio();
+  renderCards();
 }
 
 function jsDisasm(w){
@@ -808,6 +881,7 @@ document.getElementById('lang').addEventListener('change',function(){onLangChang
 (function(){var ls=filesSafeLocalStorage(),active='';try{active=ls?ls.getItem(PS_ACTIVE_FILE_KEY)||'':'';}catch(e){} if(active&&filesRead()[active]) psFilesOpen(active); else filesRender();})();
 compileSrc(false);
 renderGpio();
+renderCards();
 </script>
 </body>
 </html>"""
