@@ -104,6 +104,22 @@
   .file-meta { color:var(--muted); font-size:10px; margin-top:3px; }
   .file-empty,.file-status { color:var(--muted); font-size:11px; line-height:1.4; }
   .cerr { font-family:monospace; font-size:11px; min-height:14px; }
+  /* GPIO header visual (wired to the injected gpioProvider) */
+  .gpio-tools { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
+  .gpio-tools .muted { color:var(--muted); font-size:11px; }
+  .gpio-header { display:grid; grid-template-columns:1fr 1fr; gap:4px 14px; max-width:700px; }
+  .gpio-pin { display:flex; align-items:center; gap:6px; background:#0c0e14; border:1px solid #2c313f;
+    border-radius:6px; padding:4px 7px; font-size:11px; }
+  .gpio-pin .pn { color:var(--muted); font-family:"SF Mono",monospace; width:20px; text-align:right; }
+  .gpio-pin .pl { font-weight:600; width:40px; }
+  .gpio-pin .dir { font-size:9px; font-weight:700; border-radius:8px; padding:1px 5px; width:26px; text-align:center; }
+  .gpio-pin .dir.out { background:var(--c); color:#0f1117; } .gpio-pin .dir.in { background:#2c313f; color:var(--muted); }
+  .gpio-pin .pull { font-size:9px; color:var(--muted); width:24px; text-align:center; font-weight:700; }
+  .gpio-pin .pull.up { color:#7ee787; } .gpio-pin .pull.dn { color:#79c0ff; }
+  .gpio-pin .bar { flex:1; height:8px; background:#1b2030; border-radius:4px; overflow:hidden; min-width:40px; }
+  .gpio-pin .bar > i { display:block; height:100%; background:var(--accent); }
+  .gpio-pin .val { width:38px; text-align:right; font-family:"SF Mono",monospace; color:var(--text); }
+  .gpio-pin.drivable { cursor:pointer; } .gpio-pin.drivable:hover { border-color:var(--accent); }
   @media (max-width:800px){
     .sidebar { width:180px; }
     .regs { grid-template-columns:repeat(2,1fr); }
@@ -154,6 +170,7 @@
       <button onclick="toggleDbg(this,'dbg-regs')">Registers</button>
       <button onclick="toggleDbg(this,'dbg-output')">Output</button>
       <button onclick="toggleDbg(this,'dbg-src')">Source Editor</button>
+      <button onclick="toggleDbg(this,'dbg-gpio')">GPIO</button>
       <button style="margin-left:auto" onclick="collapseDbg()">&#9660; Collapse</button>
     </div>
     <div class="dbg-panels" id="dbgPanels" style="max-height:220px">
@@ -180,6 +197,13 @@
           <button class="ghost" onclick="dbgReset()">Reset</button>
         </div>
         <div id="cerr" class="cerr"></div>
+      </div>
+      <div class="dbg-panel" id="dbg-gpio">
+        <div class="gpio-tools">
+          <button class="ghost" onclick="gpioReset()">Reset pins</button>
+          <span class="muted">Run a program that uses <b>Gpio.*</b> (or the <b>GPIO</b> DSL). Outputs show what it wrote (0&ndash;1024); click an <b>IN</b> pin to drive it, then re-run.</span>
+        </div>
+        <div class="gpio-header" id="gpioHeader"></div>
       </div>
     </div>
   </div>
@@ -4007,6 +4031,30 @@ function debugCard(i){
 // ---- debugger panels -------------------------------------------------------
 var DBG = { words:[], disasm:[], vm:null };
 
+// ---- device panel: GPIO header visual (wired to the provider seam) ----------
+var GP = { pins:{}, count:40 };
+var PULL_LABEL = ['\u2014','UP','DN'];
+function gpioReset(){ GP.pins={}; renderGpio(); }
+function gpioDrive(pin){
+  var st=GP.pins[pin]||(GP.pins[pin]={dir:0,pull:0,value:0});
+  var v=(typeof prompt==='function')?prompt('Drive input pin GP'+pin+' value (0\u20131024):',String(st.value)):null;
+  if(v===null) return; st.value=Math.max(0,Math.min(1024,parseInt(v,10)||0)); renderGpio();
+}
+function renderGpio(){
+  var host=document.getElementById('gpioHeader'); if(!host) return;
+  var html='';
+  for(var p=0;p<GP.count;p++){
+    var st=GP.pins[p]||{dir:0,pull:0,value:0}, isOut=st.dir===1, w=Math.round(st.value/1024*100);
+    html+='<div class="gpio-pin'+(isOut?'':' drivable')+'"'+(isOut?'':' onclick="gpioDrive('+p+')"')+'>'+
+      '<span class="pn">'+p+'</span><span class="pl">GP'+p+'</span>'+
+      '<span class="dir '+(isOut?'out':'in')+'">'+(isOut?'OUT':'IN')+'</span>'+
+      '<span class="pull '+(st.pull===1?'up':st.pull===2?'dn':'')+'">'+(PULL_LABEL[st.pull]||'\u2014')+'</span>'+
+      '<span class="bar"><i style="width:'+w+'%"></i></span>'+
+      '<span class="val">'+st.value+'</span></div>';
+  }
+  host.innerHTML=html;
+}
+
 function toggleDbg(btn, panelId){
   document.querySelectorAll('.dbg-bar button').forEach(function(b){ b.classList.remove('active'); });
   btn.classList.add('active');
@@ -4117,7 +4165,7 @@ function compileSrc(run){
     dbgReset(); if(run) dbgRun();
   } catch(e){ err.textContent=String(e.message||e); err.style.color='#ff7b72'; }
 }
-function dbgReset(){ DBG.vm=new PicoVM(); DBG.vm.load(DBG.words); render(); }
+function dbgReset(){ DBG.vm=new PicoVM({gpioProvider:GP}); DBG.vm.load(DBG.words); render(); }
 function dbgStep(){ if(DBG.vm){ DBG.vm.step(); render(); } }
 function dbgRun(){ if(!DBG.vm) dbgReset(); var g=0; while(DBG.vm.step()&&g++<200000){} render(); }
 
@@ -4132,6 +4180,7 @@ function render(){
     return '<div class="r">R'+idx+' <b>'+v+'</b></div>';}).join('');
   document.getElementById('state').textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;
   document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']';
+  renderGpio();
 }
 
 function jsDisasm(w){
@@ -4160,6 +4209,7 @@ document.getElementById('src').addEventListener('input',filesRender);
 document.getElementById('lang').addEventListener('change',function(){onLangChange();});
 (function(){var ls=filesSafeLocalStorage(),active='';try{active=ls?ls.getItem(PS_ACTIVE_FILE_KEY)||'':'';}catch(e){} if(active&&filesRead()[active]) psFilesOpen(active); else filesRender();})();
 compileSrc(false);
+renderGpio();
 </script>
 </body>
 </html>
