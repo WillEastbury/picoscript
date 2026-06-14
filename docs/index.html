@@ -266,6 +266,10 @@
             <p style="margin-top:10px"><b>PicoWAL cards:</b> Persistent card packs via PicoBinarySerializer. Use <code>Storage.UsePack/AddCard/SetField/QueryCard</code>.</p>
             <p style="margin-top:10px"><b>FIFO:</b> Inbound (request descriptors) and outbound (response graph). All inter-capsule communication is kernel-mediated.</p>
             <p style="margin-top:10px"><b>Zero-copy:</b> The kernel manages memory via descriptors and leases. <code>Lease.Acquire/GetSpan</code> reads without copying. The programmer does <b>not</b> manage DMA directly. Invariants: one owner (I2), sealed immutability (I3), validated leases (I4), eventual release (I8).</p>
+            <p style="margin-top:14px"><b>GPIO (devices):</b> Pins carry an analog value in [0,1024]. Hooks <code>Gpio.SetDir/GetDir/SetPull/GetPull/Write/Read/Count</code>. Readable BASIC DSL: <code>GPIO DIR 2 = OUT</code>, <code>GPIO PULL 5 = UP</code>, <code>GPIO WRITE 2 = 1024</code>; reads <code>GPIO READ 2</code> / <code>GPIO DIR 2</code> / <code>GPIO COUNT</code>. The playground renders a live labelled pin header.</p>
+            <p style="margin-top:10px"><b>Cards / storage DSL:</b> a readable BASIC split &mdash; <b>STORE</b> writes, <b>LOAD</b> reads. Writes: <code>STORE USE PACK 1</code>, <code>DIM A NEW CARD</code>, <code>STORE SET "qty" = 42</code>, <code>STORE DELETE CARD id</code>. Reads: <code>DIM A = LOAD CARD id</code>, <code>LOAD "qty"</code> / <code>LOAD "qty" AS TEXT</code>, <code>LOAD QUERY "qty &gt; 40"</code>, <code>LOAD RESULT 0</code>. Typed pack schemas via <code>Storage.GetSchemaForPack/SetSchemaForPack</code> + the playground schema designer.</p>
+            <p style="margin-top:10px"><b>Server entry:</b> mark an endpoint with <code>Server.Main { ... }</code> (C) or <code>SERVER ... ENDSERVER</code> (BASIC); the compiler guarantees the request-context + status + body bytecode the kernel worker expects.</p>
+            <p style="margin-top:10px"><b>Capsules:</b> a capsule is a pack namespace (packs 1024&ndash;4095). Card 0 holds a deterministic manifest; source = card 1000+N, bytecode = 10000+N. Runtime hooks <code>Pack.Use/Card.Read/Write/Address/Fifo.Open/Send/Recv/Poll</code> (capability <code>CAP_CAPSULE</code>). Author manifests with <code>picocapsule</code> (Python + byte-identical <code>vm/picocapsule.js</code>); full contract in <code>docs/PIOS_CAPSULE_HANDOFF.md</code>.</p>
           </div>
         </div>
         <div class="ref-section" id="ref-samples"><h2 style="color:var(--accent);margin-bottom:10px">Application Samples</h2><div id="samplesContent"></div></div>
@@ -3746,7 +3750,8 @@ where that was my only objection I implemented a representative op to prove it.<
 <h2 id="implemented-this-session">Implemented this session</h2>
 <p><code>Bits.*</code>, <code>Dot8.*</code> (NEON SDOT / SMLAD), native <code>Memory.*</code>/<code>Io</code>, <code>String.*</code>,
 <code>Number.*</code>, <code>Maths.Power/Sqrt</code>, <code>Template.*</code> (holes/sections/<code>{{#each}}</code>),
-<code>Compress.PicoCompress/PicoDecompress</code> (RLE), <code>Crypto.Sha256</code>, <code>Html.Encode/Decode</code>,
+<code>Compress.PicoCompress/PicoDecompress</code> (RLE), <code>Crypto.Sha256</code> + <code>Crypto.HmacSha256</code>
+(RFC 2104, parity-tested to RFC 4231 vectors), <code>Html.Encode/Decode</code>,
 <code>Http.ParseQuery/ParseForm</code> (url-decode -&gt; Template model) + <code>Http.EncodeJson/ParseJson</code>
 (model &lt;-&gt; JSON, nested JSON flattens to the <code>{{#each}}</code> model).</p>
 <blockquote>
@@ -3811,7 +3816,11 @@ implemented; the 64-bit ones are deferred for this reason.</p>
   GenerateKeyPair/DeriveKey</code>, <code>X509.*</code>, <code>Auth.*</code>. Large security-sensitive
   primitives (RSA/EC/AES) + key management; signing/keygen also need entropy
   (external), and X509/Auth need a host trust store / identity provider /
-  network. Hashing (<code>Sha256</code>) is the pure, doable slice and is implemented.</li>
+  network. The pure, doable slices are implemented: <code>Sha256</code> and now
+  <code>HmacSha256</code> (RFC 2104 over the canonical SHA-256 — two input spans key+message,
+  32-byte digest span; byte-identical on all five paths, parity-tested to the
+  RFC 4231 vectors incl. the &gt;64-byte key-hashed-first case). <code>HmacSha512</code>/<code>Sha512</code>
+  remain deferred for the 64-bit-word-in-JS reason above.</li>
 </ul></div><div class="docpanel" id="doc-internals"><h1 id="picoscript-deep-internals">PicoScript deep internals</h1>
 <blockquote>
 <p><strong>Deep technical internals.</strong> This page is for implementers and contributors who
@@ -3833,7 +3842,9 @@ parser, a lowering rule, or a host hook.</p>
 </code></pre>
 <p>The important invariant is not "there are many compilers"; it is "there is one
 semantic path." Equivalent programs should converge to the same PicoIL shape and,
-for the Python/English/BASIC family, byte-for-byte identical bytecode.</p>
+for the Python/English/BASIC family, byte-for-byte identical bytecode. The full set
+of compiler/runtime/security invariants — and their current compliance status — lives
+in <a href="INVARIANTS.md"><code>INVARIANTS.md</code></a>.</p>
 <h2 id="1-the-16-opcode-isa">1. The 16-opcode ISA</h2>
 <p>The hardware contract lives in <code>picoscript.py</code> and is mirrored by the VMs. Every
 instruction is one 32-bit word:</p>
@@ -4370,6 +4381,8 @@ lowering convention or host contract.</p>
       0x5B: "Lease.CachedValidate",
       0x5C: "Lease.GetSpan",
       0x5D: "Lease.GetTypeHint",
+      0x5E: "Status.Last",
+      0x5F: "Memory.SetConst",
       0x60: "Storage.GetSchemaForPack",
       0x61: "Storage.SetSchemaForPack",
       0x62: "Storage.AddCard",
@@ -4537,6 +4550,21 @@ lowering convention or host contract.</p>
       0x147: "Html.Decode",
       0x148: "Html.Serialize",
       0x149: "Html.QuerySelector",
+      0x150: "Gpio.Count",
+      0x151: "Gpio.SetDir",
+      0x152: "Gpio.GetDir",
+      0x153: "Gpio.SetPull",
+      0x154: "Gpio.GetPull",
+      0x155: "Gpio.Write",
+      0x156: "Gpio.Read",
+      0x160: "Pack.Use",
+      0x161: "Card.Read",
+      0x162: "Card.Write",
+      0x163: "Card.Address",
+      0x164: "Fifo.Open",
+      0x165: "Fifo.Send",
+      0x166: "Fifo.Recv",
+      0x167: "Fifo.Poll",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }
@@ -4572,8 +4600,34 @@ lowering convention or host contract.</p>
   var ADDR_REG = 0x1;
   var ADDR_REG_OFF = 0x3;
   var BR = { EQ: 0, NE: 1, LT: 2, GT: 3, LE: 4, GE: 5, Z: 6, NZ: 7, EOF: 8, ERR: 9 };
+  var FAULT = { STEP_BUDGET: 1, BAD_OPCODE: 2, BAD_JUMP: 3, TEMPLATE: 7, CAPABILITY: 8, ALLOC: 9, CONST_WRITE: 10 };
+
+  function picoFault(code, pc, detail, msg) {
+    var e = new Error(msg);
+    e.fault = code;
+    e.pc = (pc == null) ? 0 : pc;
+    e.detail = (detail == null) ? 0 : detail;
+    return e;
+  }
 
   function sx16(v) { v &= 0xFFFF; return (v & 0x8000) ? v - 0x10000 : v; }
+
+  // Binding capability classes (INV-17). Bit values match vm/picovm.h PV_CAP_* and
+  // picoscript_vm.CAP_*; pure computation needs none (class 0, always allowed).
+  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024, CAPSULE: 2048 };
+  var CAP_ALL = 0xFFF;
+  var CAP_BY_NS = { Kernel: CAP.KERNEL, Queue: CAP.QUEUE, Random: CAP.RANDOM,
+    Req: CAP.NET, Resp: CAP.NET, Net: CAP.NET, Storage: CAP.STORAGE, DateTime: CAP.TIME,
+    Context: CAP.CONTEXT, Auth: CAP.AUTH, X509: CAP.AUTH, Environment: CAP.ENV, Locale: CAP.ENV, Gpio: CAP.GPIO,
+    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE };
+  function hookCap(name) {   // "Ns.Method" -> required capability class (0 = pure)
+    var dot = name.indexOf("."), ns = name.slice(0, dot), m = name.slice(dot + 1);
+    if (ns === "Maths" && (m === "Random" || m === "RandomRange")) return CAP.RANDOM;
+    if (ns === "Crypto" && m === "RandomBytes") return CAP.RANDOM;
+    if (ns === "Crypto" && (m === "Encrypt" || m === "Decrypt")) return CAP.CRYPTO;
+    if (ns === "Http" && (m === "ReadHeader" || m === "ReadBody" || m === "GenerateHeaders" || m === "GenerateResponse")) return CAP.NET;
+    return CAP_BY_NS[ns] || 0;
+  }
 
   function PicoVM(opts) {
     opts = opts || {};
@@ -4582,10 +4636,19 @@ lowering convention or host contract.</p>
       NET_STATUS_BASE: 0x8000, NET_BODY_MARKER: 0xB000, NET_CLOSE_MARKER: 0xC000,
       NET_HEADER_BASE: 0x9000, CONTENT_TYPES: {}, BY_CODE: {} };
     this.maxSteps = opts.maxSteps || 1000000;
+    this.caps = (opts.caps !== undefined) ? (opts.caps >>> 0) : CAP_ALL;  // granted bindings (INV-17)
+    this._seed = (opts.seed !== undefined) ? (opts.seed >>> 0) : null;     // host-injected Random.U32 seed (INV-15)
+    this.noAlloc = !!opts.noAlloc;          // hot-path no-allocation mode (INV-5)
     // Optional external card store (PicoWAL). Must expose get(addr)->int and
     // set(addr,int); when present it persists across reset()/load(), modelling a
     // disk-backed card store. Default is an in-memory Map (VM parity unchanged).
     this._extCards = opts.cards || null;
+    // Pluggable provider layer (browser harness): the editor / PIOS can inject a
+    // card store (PicoStore-compatible CRUD+query, e.g. PiosCapsuleStore) and/or a
+    // GPIO provider ({ pins: {}, count: N }) to back Storage.*/Gpio.*. Defaults are
+    // the built-in reference store + emulator, so VM parity is unchanged.
+    this._cardStore = opts.cardStore || null;
+    this._gpioProvider = opts.gpioProvider || null;
     this.reset();
   }
 
@@ -4597,12 +4660,15 @@ lowering convention or host contract.</p>
     this.httpStatus = -1;
     this.httpType = null;
     this.queues = {};
-    this.rng = 0x4F6CDD1D >>> 0;
+    this.rng = (this._seed !== null) ? this._seed : (0x4F6CDD1D >>> 0);
+    this.hostStatus = 0;                      // INV-18: typed status of the last fallible hook
+    this.constFloor = 0x8000;                 // INV-9: lowest literal const-pool address ([floor,0x8000) RO)
     this.mem = new Uint8Array(520 * 1024);   // process arena = RP2350 (Pico 2) 520 KB SRAM
     this.dotLen = 0;                          // active span length for Dot8.Of
     this.arenaTop = 0x8000;             // bump pointer for Span.Materialize copies
     this.spans = [null];                // span table; handle = index (1-based)
     this.pc = 0;
+    this.curPc = 0;
     this.steps = 0;
     this.halted = false;
     this.waiting = false;
@@ -4614,6 +4680,9 @@ lowering convention or host contract.</p>
     this.responseGraph = [];
     this.responseSealed = false;
     this.responseEnded = false;
+    this.responseMode = null;            // 'unary' | 'stream' (set at Seal / terminal verb)
+    this.responseBodyStarted = false;    // first Resp.Write opens the body phase
+    this.responseStreamClosed = false;   // Resp.EndStream closes the stream/body phase
     this._handlerMark = null;   // per-request arena scope (auto rewind on each request)
   };
 
@@ -4622,10 +4691,26 @@ lowering convention or host contract.</p>
     this.program = Array.prototype.slice.call(words);
   };
 
+  // INV-10: static verification before execution -- reject out-of-range immediate
+  // JUMP/CALL/BRANCH targets (register/indexed jumps are dynamic -> runtime-checked).
+  PicoVM.prototype.verify = function () {
+    var n = this.program.length;
+    for (var i = 0; i < n; i++) {
+      var w = this.program[i] >>> 0;
+      var op = (w >>> 28) & 0xF, rs2 = (w >>> 16) & 0xF, imm = w & 0xFFFF, tgt;
+      if (op === OP.JUMP && rs2 === 0) tgt = imm;
+      else if (op === OP.CALL) tgt = imm;
+      else if (op === OP.BRANCH) tgt = i + sx16(imm);
+      else continue;
+      if (tgt < 0 || tgt > n) throw picoFault(FAULT.BAD_JUMP, i, tgt, "bad static target " + tgt + " at pc=" + i);
+    }
+  };
+
   PicoVM.prototype.run = function (words) {
     if (words) this.load(words);
+    this.verify();                       // INV-10: verify before execution
     while (!this.halted && this.pc < this.program.length) {
-      if (this.steps >= this.maxSteps) throw new Error("step budget exceeded");
+      if (this.steps >= this.maxSteps) throw picoFault(FAULT.STEP_BUDGET, this.pc, 0, "step budget exceeded");
       this.step();
     }
     return this;
@@ -4642,6 +4727,7 @@ lowering convention or host contract.</p>
     var rs2 = (w >>> 16) & 0xF;
     var imm = w & 0xFFFF;
     var cur = this.pc;
+    this.curPc = cur;
     this.pc++;
     var r = this.regs;
 
@@ -4662,13 +4748,26 @@ lowering convention or host contract.</p>
         break;
       }
       case OP.INC: r[rd] = (r[rd] + 1) | 0; break;
-      case OP.JUMP:
-        if (rs2 === ADDR_REG) this.pc = r[rs1] & 0xFFFF;
-        else if (rs2 === ADDR_REG_OFF) this.pc = (r[rs1] + imm) & 0xFFFF;
-        else this.pc = imm;
+      case OP.JUMP: {
+        var jt;
+        if (rs2 === ADDR_REG) jt = r[rs1] & 0xFFFF;
+        else if (rs2 === ADDR_REG_OFF) jt = (r[rs1] + imm) & 0xFFFF;
+        else jt = imm;
+        if (jt < 0 || jt > this.program.length) throw picoFault(FAULT.BAD_JUMP, cur, jt, "bad jump target " + jt);  // INV-11
+        this.pc = jt;
         break;
-      case OP.BRANCH: if (this._cond(rs2, r[rd], r[rs1])) this.pc = cur + sx16(imm); break;
-      case OP.CALL: this.callStack.push(this.pc); this.pc = imm; break;
+      }
+      case OP.BRANCH:
+        if (this._cond(rs2, r[rd], r[rs1])) {
+          var bt = cur + sx16(imm);
+          if (bt < 0 || bt > this.program.length) throw picoFault(FAULT.BAD_JUMP, cur, bt, "bad branch target " + bt);
+          this.pc = bt;
+        }
+        break;
+      case OP.CALL:
+        if (imm < 0 || imm > this.program.length) throw picoFault(FAULT.BAD_JUMP, cur, imm, "bad call target " + imm);
+        this.callStack.push(this.pc); this.pc = imm;
+        break;
       case OP.RETURN:
         if (this.callStack.length) this.pc = this.callStack.pop();
         else this.halted = true;
@@ -4676,7 +4775,7 @@ lowering convention or host contract.</p>
       case OP.WAIT: this.waiting = true; this.halted = true; break;
       case OP.RAISE: this.log.push("raise " + imm); break;
       case OP.DSP: this._dsp(rd, rs1, rs2, imm); break;
-      default: this.halted = true; break;
+      default: throw picoFault(FAULT.BAD_OPCODE, cur, op, "bad opcode " + op);   // INV-10: unknown opcode faults (was silent halt)
     }
     return !this.halted;
   };
@@ -4719,6 +4818,10 @@ lowering convention or host contract.</p>
 
   PicoVM.prototype._host = function (code, rd, rs1, rs2, imm) {
     var name = (this.hooks.BY_CODE && this.hooks.BY_CODE[code]) || ("hook_" + code);
+    // INV-17: bindings are not ambient -- deny the hook unless its class is granted.
+    var need = hookCap(name);
+    if (need && !(this.caps & need)) throw picoFault(FAULT.CAPABILITY, this.curPc, code, "capability denied: " + name);
+    if (name === "Status.Last") { this.regs[rd] = this.hostStatus | 0; return; }   // INV-18
     if (name === "Random.U32") {
       var x = this.rng >>> 0;
       x ^= (x << 13); x >>>= 0;
@@ -4729,7 +4832,17 @@ lowering convention or host contract.</p>
       return;
     }
     // ---- memory + span / slice / materialize -----------------------------
-    if (name === "Memory.Set") { this.mem[(this.regs[rs1] >>> 0) % (520 * 1024)] = this.regs[rs2] & 0xFF; return; }
+    if (name === "Memory.Set") {
+      var ma = (this.regs[rs1] >>> 0) % (520 * 1024);
+      if (ma >= this.constFloor && ma < 0x8000) throw picoFault(FAULT.CONST_WRITE, this.curPc, ma, "write to read-only literal const region");  // INV-9
+      this.mem[ma] = this.regs[rs2] & 0xFF; return;
+    }
+    if (name === "Memory.SetConst") {   // INV-9: compiler-only literal write
+      var mc = (this.regs[rs1] >>> 0) % (520 * 1024);
+      this.mem[mc] = this.regs[rs2] & 0xFF;
+      if (mc < this.constFloor) this.constFloor = mc;
+      return;
+    }
     if (name === "Memory.Get") { this.regs[rd] = this.mem[(this.regs[rs1] >>> 0) % (520 * 1024)]; return; }
     if (name === "Span.Make") {
       this.spans.push({ ptr: this.regs[rs1] & 0xFFFF, len: Math.max(0, this.regs[rs2] | 0) });
@@ -4779,6 +4892,7 @@ lowering convention or host contract.</p>
     }
     if (name === "Queue.Dequeue") {
       var q = this.queues[rs1] || [];
+      this.hostStatus = q.length ? 0 : 3;     // INV-18: EMPTY
       this.regs[rd] = q.length ? q.shift() : 0;
       return;
     }
@@ -4816,6 +4930,10 @@ lowering convention or host contract.</p>
     // ---- program-level card store: Storage.* over a PicoStore --------------
     if (name.indexOf("Storage.") === 0) {
       if (this._storage(name.slice(8), rd, rs1, rs2)) return;
+    }
+    // ---- program-level GPIO emulator: Gpio.* (reference; PIOS injects real driver)
+    if (name.indexOf("Gpio.") === 0) {
+      if (this._gpio(name.slice(5), rd, rs1, rs2)) return;
     }
     // ---- String.* arena string library -------------------------------------
     if (name.indexOf("String.") === 0) {
@@ -4890,6 +5008,7 @@ lowering convention or host contract.</p>
     return out;
   };
   PicoVM.prototype._newSpanBytes = function (bytes) {
+    if (this.noAlloc) { var e = new Error("arena allocation in no-alloc mode"); e.fault = 9; e.pc = this.pc | 0; e.detail = bytes.length | 0; throw e; }  // INV-5
     var dst = this.arenaTop; this.arenaTop += bytes.length;
     for (var i = 0; i < bytes.length; i++) this.mem[dst + i] = bytes[i] & 255;
     this.spans.push({ ptr: dst, len: bytes.length });
@@ -4900,7 +5019,7 @@ lowering convention or host contract.</p>
     if (method === "Length") { this.regs[rd] = a.length; return true; }
     if (method === "Concat") { this.regs[rd] = this._newSpanBytes(a.concat(this._spanBytes(this.regs[rs2]))); return true; }
     if (method === "Substring") { var st = Math.max(0, this.regs[rs2] | 0); this.regs[rd] = this._newSpanBytes(a.slice(st)); return true; }
-    if (method === "IndexOf") { this.regs[rd] = _bfind(a, this._spanBytes(this.regs[rs2])) | 0; return true; }
+    if (method === "IndexOf") { var ix = _bfind(a, this._spanBytes(this.regs[rs2])); this.hostStatus = ix >= 0 ? 0 : 1; this.regs[rd] = ix | 0; return true; }
     if (method === "StartsWith") { var p = this._spanBytes(this.regs[rs2]); this.regs[rd] = (p.length <= a.length && _bcmp(a, p, 0)) ? 1 : 0; return true; }
     if (method === "EndsWith") { var su = this._spanBytes(this.regs[rs2]); this.regs[rd] = (su.length <= a.length && _bcmp(a, su, a.length - su.length)) ? 1 : 0; return true; }
     if (method === "ToUpper") { this.regs[rd] = this._newSpanBytes(a.map(function (c) { return (c >= 97 && c <= 122) ? c - 32 : c; })); return true; }
@@ -4925,7 +5044,9 @@ lowering convention or host contract.</p>
     if (method === "Parse") {
       var bb = this._spanBytes(this.regs[rs1]);
       var str = String.fromCharCode.apply(null, bb).trim();
-      this.regs[rd] = (/^[+-]?\d+$/.test(str) ? parseInt(str, 10) : 0) | 0;
+      var ok = /^[+-]?\d+$/.test(str);
+      this.hostStatus = ok ? 0 : 2;            // INV-18: PARSE_ERROR
+      this.regs[rd] = (ok ? parseInt(str, 10) : 0) | 0;
       return true;
     }
     var a = this.regs[rs1] | 0, b = this.regs[rs2] | 0;
@@ -4940,7 +5061,77 @@ lowering convention or host contract.</p>
     return false;
   };
 
+  // ── Q16.16 fixed-point CORDIC (Maths.Sin/Cos/Tan, ...) ──────────────────────
+  // All-integer; constants/iteration count shared verbatim with picoscript_vm.py
+  // (_q16_*) and vm/picovm.c so results are byte-identical on every path.
+  var Q16_ONE = 65536, Q16_HALF_PI = 102944, Q16_PI = 205887, Q16_TWO_PI = 411775, Q16_GAIN_INV = 39797;
+  var Q16_ATAN = [51472, 30386, 16055, 8150, 4091, 2047, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2];
+  function q16Sincos(angle) {
+    var a = (angle | 0) % Q16_TWO_PI;
+    if (a < 0) a += Q16_TWO_PI;
+    var q = (a / Q16_HALF_PI) | 0;
+    var r = a - q * Q16_HALF_PI;
+    var x = Q16_GAIN_INV, y = 0, z = r, i, dx, dy;
+    for (i = 0; i < 16; i++) {
+      dx = x >> i; dy = y >> i;
+      if (z >= 0) { x = (x - dy) | 0; y = (y + dx) | 0; z -= Q16_ATAN[i]; }
+      else { x = (x + dy) | 0; y = (y - dx) | 0; z += Q16_ATAN[i]; }
+    }
+    if (q === 0) return [y, x];
+    if (q === 1) return [x, (-y) | 0];
+    if (q === 2) return [(-y) | 0, (-x) | 0];
+    return [(-x) | 0, y];
+  }
+  function q16Tan(angle) {
+    var sc = q16Sincos(angle), s = sc[0], c = sc[1];
+    if (c === 0) return s >= 0 ? 0x7FFFFFFF : -0x80000000;
+    return Number(BigInt.asIntN(32, (BigInt(s) * 65536n) / BigInt(c)));   // trunc toward zero
+  }
+  // Q16.16 exp/log: fixmul/fixdiv via BigInt for exact 64-bit intermediates matching
+  // the C int64 / Python big-int paths; series divides trunc-toward-zero.
+  var Q16_LN2 = 45426, Q16_INV_LN2 = 94548, Q16_INV_LN10 = 28462, Q16_EXP_MAX_Z = 681300;
+  function q16Fixmul(a, b) { return Number(BigInt.asIntN(32, (BigInt(a) * BigInt(b)) >> 16n)); }
+  function q16Idiv(a, n) {
+    var aa = a < 0 ? -a : a, nn = n < 0 ? -n : n, q = Math.floor(aa / nn);
+    return ((a < 0) !== (n < 0)) ? -q : q;
+  }
+  function q16Fixdiv(a, b) {
+    var num = BigInt(a) * 65536n, bb = BigInt(b);
+    var an = num < 0n ? -num : num, ab = bb < 0n ? -bb : bb, q = an / ab;
+    return Number(BigInt.asIntN(32, ((num < 0n) !== (bb < 0n)) ? -q : q));
+  }
+  function q16Exp(z) {
+    if (z >= Q16_EXP_MAX_Z) return 0x7FFFFFFF;
+    if (z <= -Q16_EXP_MAX_Z) return 0;
+    var k = (q16Fixmul(z, Q16_INV_LN2) + (Q16_ONE >> 1)) >> 16;
+    var r = (z - k * Q16_LN2) | 0, term = Q16_ONE, acc = Q16_ONE, n, i;
+    for (n = 1; n < 8; n++) { term = q16Idiv(q16Fixmul(term, r), n); acc = (acc + term) | 0; }
+    if (k >= 0) {
+      var a = acc;
+      for (i = 0; i < k; i++) { a = a * 2; if (a > 0x7FFFFFFF) return 0x7FFFFFFF; }
+      return a | 0;
+    }
+    for (i = 0; i < -k; i++) acc = acc >> 1;
+    return acc | 0;
+  }
+  function q16Log(x) {
+    if (x <= 0) return -0x80000000;
+    var e = 0, m = x;
+    while (m >= 2 * Q16_ONE) { m = m >> 1; e++; }
+    while (m < Q16_ONE) { m = m << 1; e--; }
+    var u = q16Fixdiv((m - Q16_ONE) | 0, (m + Q16_ONE) | 0);
+    var u2 = q16Fixmul(u, u), term = u, acc = 0, n;
+    for (n = 0; n < 6; n++) { acc = (acc + q16Idiv(term, 2 * n + 1)) | 0; term = q16Fixmul(term, u2); }
+    return ((2 * acc) + e * Q16_LN2) | 0;
+  }
+
   PicoVM.prototype._mathslib = function (method, rd, rs1, rs2) {
+    if (method === "Sin") { this.regs[rd] = q16Sincos(this.regs[rs1] | 0)[0] | 0; return true; }
+    if (method === "Cos") { this.regs[rd] = q16Sincos(this.regs[rs1] | 0)[1] | 0; return true; }
+    if (method === "Tan") { this.regs[rd] = q16Tan(this.regs[rs1] | 0) | 0; return true; }
+    if (method === "Exp") { this.regs[rd] = q16Exp(this.regs[rs1] | 0) | 0; return true; }
+    if (method === "Log") { this.regs[rd] = q16Log(this.regs[rs1] | 0) | 0; return true; }
+    if (method === "Log10") { this.regs[rd] = q16Fixmul(q16Log(this.regs[rs1] | 0), Q16_INV_LN10) | 0; return true; }
     if (method === "Power") {
       var base = this.regs[rs1] | 0, exp = this.regs[rs2] | 0;
       if (exp <= 0) { this.regs[rd] = (exp === 0 ? 1 : 0) | 0; return true; }
@@ -4982,8 +5173,86 @@ lowering convention or host contract.</p>
     return false;
   };
 
+  // ── AES-256-CTR (Crypto.Encrypt/Decrypt). Tables + algorithm byte-identical with
+  // picoscript_vm.py and vm/picovm.c; CTR is symmetric so encrypt == decrypt. ──
+  var AES_SBOX = [
+    0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
+    0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
+    0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
+    0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75,
+    0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84,
+    0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
+    0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8,
+    0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2,
+    0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
+    0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb,
+    0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
+    0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
+    0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
+    0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
+    0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
+    0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16
+  ];
+  var AES_RCON = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d];
+  function aesXtime(a) { return (a & 0x80) ? ((a << 1) ^ 0x1B) & 0xFF : (a << 1) & 0xFF; }
+  function aesGmul(a, b) { var r = 0, i; for (i = 0; i < 8; i++) { if (b & 1) r ^= a; a = aesXtime(a); b >>= 1; } return r & 0xFF; }
+  function aes256KeyExpand(key) {
+    var rk = new Array(240), i, j, t = [0, 0, 0, 0], tmp;
+    for (i = 0; i < 32; i++) rk[i] = key[i];
+    for (i = 8; i < 60; i++) {
+      for (j = 0; j < 4; j++) t[j] = rk[(i - 1) * 4 + j];
+      if (i % 8 === 0) {
+        tmp = t[0]; t[0] = t[1]; t[1] = t[2]; t[2] = t[3]; t[3] = tmp;
+        for (j = 0; j < 4; j++) t[j] = AES_SBOX[t[j]];
+        t[0] ^= AES_RCON[(i >> 3) - 1];
+      } else if (i % 8 === 4) {
+        for (j = 0; j < 4; j++) t[j] = AES_SBOX[t[j]];
+      }
+      for (j = 0; j < 4; j++) rk[i * 4 + j] = rk[(i - 8) * 4 + j] ^ t[j];
+    }
+    return rk;
+  }
+  function aes256EncryptBlock(inb, rk) {
+    var s = new Array(16), t = new Array(16), out = new Array(16), i, c, r, rnd, a0, a1, a2, a3;
+    for (i = 0; i < 16; i++) s[i] = inb[i] ^ rk[i];
+    for (rnd = 1; rnd < 14; rnd++) {
+      for (i = 0; i < 16; i++) s[i] = AES_SBOX[s[i]];
+      for (r = 0; r < 4; r++) for (c = 0; c < 4; c++) t[r + 4 * c] = s[r + 4 * ((c + r) & 3)];
+      for (c = 0; c < 4; c++) {
+        a0 = t[4 * c]; a1 = t[4 * c + 1]; a2 = t[4 * c + 2]; a3 = t[4 * c + 3];
+        s[4 * c]     = (aesGmul(a0, 2) ^ aesGmul(a1, 3) ^ a2 ^ a3) & 0xFF;
+        s[4 * c + 1] = (a0 ^ aesGmul(a1, 2) ^ aesGmul(a2, 3) ^ a3) & 0xFF;
+        s[4 * c + 2] = (a0 ^ a1 ^ aesGmul(a2, 2) ^ aesGmul(a3, 3)) & 0xFF;
+        s[4 * c + 3] = (aesGmul(a0, 3) ^ a1 ^ a2 ^ aesGmul(a3, 2)) & 0xFF;
+      }
+      for (i = 0; i < 16; i++) s[i] ^= rk[rnd * 16 + i];
+    }
+    for (i = 0; i < 16; i++) s[i] = AES_SBOX[s[i]];
+    for (r = 0; r < 4; r++) for (c = 0; c < 4; c++) t[r + 4 * c] = s[r + 4 * ((c + r) & 3)];
+    for (i = 0; i < 16; i++) out[i] = t[i] ^ rk[14 * 16 + i];
+    return out;
+  }
+  function aes256Ctr(key, iv, data) {
+    var rk = aes256KeyExpand(key), out = [], ctr = iv.slice(0), off, j, ks;
+    for (off = 0; off < data.length; off += 16) {
+      ks = aes256EncryptBlock(ctr, rk);
+      for (j = 0; j < 16 && off + j < data.length; j++) out.push(data[off + j] ^ ks[j]);
+      for (j = 15; j >= 0; j--) { ctr[j] = (ctr[j] + 1) & 0xFF; if (ctr[j]) break; }
+    }
+    return out;
+  }
+
   PicoVM.prototype._cryptolib = function (method, rd, rs1, rs2) {
     if (method === "Sha256") { this.regs[rd] = this._newSpanBytes(_sha256(this._spanBytes(this.regs[rs1]))); return true; }
+    if (method === "HmacSha256") { this.regs[rd] = this._newSpanBytes(_hmacSha256(this._spanBytes(this.regs[rs1]), this._spanBytes(this.regs[rs2]))); return true; }
+    if (method === "Encrypt" || method === "Decrypt") {
+      var key = this._spanBytes(this.regs[rs1]), data = this._spanBytes(this.regs[rs2]);
+      if (key.length !== 32 || data.length < 16) { this.hostStatus = 2; this.regs[rd] = 0; return true; }
+      this.hostStatus = 0;
+      var iv = data.slice(0, 16);
+      this.regs[rd] = this._newSpanBytes(iv.concat(aes256Ctr(key, iv, data.slice(16))));
+      return true;
+    }
     return false;
   };
 
@@ -5064,7 +5333,8 @@ lowering convention or host contract.</p>
       if (prefix.length === 0) return key.slice();
       var nk = prefix.slice(); nk.push(0x2e); pushAll(nk, key); return nk;
     }
-    function emit(prefix) {
+    function emit(prefix, depth) {
+      if (depth > 64) return;   // INV-20: bound JSON nesting depth (matches C pjs_emit depth>64)
       skipws();
       if (pos[0] >= n) return;
       var c = s[pos[0]];
@@ -5076,7 +5346,7 @@ lowering convention or host contract.</p>
           if (pos[0] >= n || s[pos[0]] !== 0x22) break;
           var key = parseString(); skipws();
           if (pos[0] < n && s[pos[0]] === 0x3a) pos[0] += 1;
-          emit(childKey(prefix, key)); skipws();
+          emit(childKey(prefix, key), depth + 1); skipws();
           if (pos[0] < n && s[pos[0]] === 0x2c) { pos[0] += 1; continue; }
           if (pos[0] < n && s[pos[0]] === 0x7d) pos[0] += 1;
           break;
@@ -5087,7 +5357,7 @@ lowering convention or host contract.</p>
         var idx = 0;
         while (pos[0] < n) {
           var ik = _strBytes(String(idx));
-          emit(childKey(prefix, ik)); idx += 1; skipws();
+          emit(childKey(prefix, ik), depth + 1); idx += 1; skipws();
           if (pos[0] < n && s[pos[0]] === 0x2c) { pos[0] += 1; continue; }
           if (pos[0] < n && s[pos[0]] === 0x5d) pos[0] += 1;
           break;
@@ -5100,7 +5370,7 @@ lowering convention or host contract.</p>
         pushAll(out, prefix); out.push(0x3d); for (var q = start; q < pos[0]; q++) out.push(s[q]); out.push(0x0a);
       }
     }
-    skipws(); emit([]);
+    skipws(); emit([], 0);
     return out;
   };
 
@@ -5189,6 +5459,16 @@ lowering convention or host contract.</p>
     return out;
   }
 
+  // HMAC-SHA256 (RFC 2104) over the canonical _sha256 -> == Python hmac == C runtime.
+  function _hmacSha256(key, msg) {
+    if (key.length > 64) key = _sha256(key);
+    var k = key.slice(); while (k.length < 64) k.push(0);
+    var ipad = [], opad = [];
+    for (var i = 0; i < 64; i++) { ipad.push(k[i] ^ 0x36); opad.push(k[i] ^ 0x5c); }
+    var inner = _sha256(ipad.concat(msg));
+    return _sha256(opad.concat(inner));
+  }
+
   PicoVM.prototype._templatelib = function (method, rd, rs1, rs2) {
     var trim = function (a) { var p = 0, q = a.length; while (p < q && _ws(a[p])) p++; while (q > p && _ws(a[q - 1])) q--; return a.slice(p, q); };
     if (method === "Compile") {
@@ -5223,7 +5503,14 @@ lowering convention or host contract.</p>
     }
     if (method === "Render") {
       var plan = this._spanBytes(this.regs[rs1]), mb = this._spanBytes(this.regs[rs2]), model = {}, cur = [];
-      var commit = function (ln) { var eq = ln.indexOf(0x3d); if (eq >= 0) model[_keystr(ln.slice(0, eq))] = ln.slice(eq + 1); };
+      var self = this, mcount = 0;
+      var commit = function (ln) {
+        var eq = ln.indexOf(0x3d);
+        if (eq >= 0) {
+          if (++mcount > 512) throw picoFault(FAULT.TEMPLATE, self.curPc, mcount, "template model exceeded");  // INV-19
+          model[_keystr(ln.slice(0, eq))] = ln.slice(eq + 1);
+        }
+      };
       for (var p = 0; p < mb.length; p++) { if (mb[p] === 0x0a) { commit(cur); cur = []; } else cur.push(mb[p]); }
       commit(cur);
       var resolve = function (keyArr, prefix) {
@@ -5253,20 +5540,27 @@ lowering convention or host contract.</p>
       };
       var out = [], prefix = "", stack = [], i = 0, n = plan.length;
       while (i < n) {
+        if (out.length > 262144) throw picoFault(FAULT.TEMPLATE, this.curPc, out.length, "template output exceeded");  // INV-19
         var op = plan[i++];
         if (op === 0x01) { var ln2 = (plan[i] << 8) | plan[i + 1]; i += 2; for (var q = 0; q < ln2; q++) out.push(plan[i + q]); i += ln2; }
         else if (op === 0x02) { var kl = plan[i++]; var v = resolve(plan.slice(i, i + kl), prefix); i += kl; for (var r = 0; r < v.length; r++) out.push(v[r]); }
         else if (op === 0x03 || op === 0x04) {
           var kl2 = plan[i++], key = plan.slice(i, i + kl2); i += kl2;
           var truthy = resolve(key, prefix).length > 0;
-          if (op === 0x03 ? truthy : !truthy) stack.push(["sec", prefix, 0, 0, "", 0]);
-          else i = skipBlock(i);
+          if (op === 0x03 ? truthy : !truthy) {
+            if (stack.length >= 32) throw picoFault(FAULT.TEMPLATE, this.curPc, 0, "template depth exceeded");  // INV-19: TPL_MAXDEPTH
+            stack.push(["sec", prefix, 0, 0, "", 0]);
+          } else i = skipBlock(i);
         }
         else if (op === 0x06) {
           var kl3 = plan[i++], lk = _keystr(plan.slice(i, i + kl3)); i += kl3;
           var full = prefix ? (prefix + "." + lk) : lk, cnt = countList(full);
+          if (cnt > 100000) throw picoFault(FAULT.TEMPLATE, this.curPc, cnt, "template each-count exceeded");  // INV-19
           if (cnt === 0) i = skipBlock(i);
-          else { stack.push(["each", prefix, i, cnt, full, 0]); prefix = full + ".0"; }
+          else {
+            if (stack.length >= 32) throw picoFault(FAULT.TEMPLATE, this.curPc, 0, "template depth exceeded");
+            stack.push(["each", prefix, i, cnt, full, 0]); prefix = full + ".0";
+          }
         }
         else if (op === 0x05) {
           if (stack.length) {
@@ -5314,6 +5608,9 @@ lowering convention or host contract.</p>
     this.responseGraph = [];
     this.responseSealed = false;
     this.responseEnded = false;
+    this.responseMode = null;
+    this.responseBodyStarted = false;
+    this.responseStreamClosed = false;
   };
   PicoVM.prototype.installRequestContext = PicoVM.prototype.setRequestContext;
   PicoVM.prototype.setArenaBase = function () { this._handlerMark = [this.arenaTop, this.spans.length]; };
@@ -5335,6 +5632,15 @@ lowering convention or host contract.</p>
     // I3: after Seal, the preamble and headers are immutable/frozen.
     if (this.responseSealed) throw new Error("I3 violation: response preamble/headers sealed");
   };
+  PicoVM.prototype._ensureHeaderPhase = function () {
+    // I6: headers belong to the preamble/header phase, which precedes the body
+    // phase. Status may still be set last, but a header may not follow a body write.
+    if (this.responseBodyStarted) throw new Error("I6 violation: header after body phase started");
+  };
+  PicoVM.prototype._ensureStreamOpen = function () {
+    // I6: body writes are illegal once the stream phase is closed (Resp.EndStream).
+    if (this.responseStreamClosed) throw new Error("I6 violation: body write after stream phase closed");
+  };
   PicoVM.prototype._desc = function (kind, subtype, payload) {
     return { kind: kind, subtype: subtype == null ? null : subtype, payload: payload == null ? null : payload };
   };
@@ -5353,15 +5659,21 @@ lowering convention or host contract.</p>
     }
     this.responseGraph.push(desc);
   };
-  PicoVM.prototype._respSeal = function () {
+  PicoVM.prototype._respSeal = function (explicit) {
     this._ensureResponseOpen();
-    if (!this.responseSealed) {
-      this.responseGraph.push(this._desc("DESC_COMMIT", "SEAL", null));
-      this.responseSealed = true;
+    if (this.responseSealed) {
+      // I3 (use-after-seal): re-sealing via the explicit verb is rejected;
+      // Respond's internal seal is idempotent.
+      if (explicit) throw new Error("I3 violation: response already sealed");
+      return;
     }
+    this.responseGraph.push(this._desc("DESC_COMMIT", "SEAL", null));
+    this.responseSealed = true;
+    if (explicit && this.responseMode === null) this.responseMode = "stream";
   };
   PicoVM.prototype._respEnd = function () {
     this._ensureResponseOpen();
+    if (this.responseMode === null) this.responseMode = "unary";
     this.responseGraph.push(this._desc("DESC_COMMIT", "END", null));
     this.responseEnded = true;
   };
@@ -5381,12 +5693,13 @@ lowering convention or host contract.</p>
     var R = this.regs;
     if (method === "Status") { this._respStatus(R[rs1]); return true; }
     if (method === "Header") {
-      this._ensureResponseOpen(); this._ensurePreambleMutable();
+      this._ensureResponseOpen(); this._ensurePreambleMutable(); this._ensureHeaderPhase();
       this.responseGraph.push(this._desc("DESC_HEADER", null, { name: this._spanPayload(R[rs1]), value: this._spanPayload(R[rs2]) }));
       return true;
     }
     if (method === "Write") {
-      this._ensureResponseOpen();
+      this._ensureResponseOpen(); this._ensureStreamOpen();
+      this.responseBodyStarted = true;
       this.responseGraph.push(this._desc("DESC_BODY", null, this._spanPayload(R[rs1])));
       return true;
     }
@@ -5395,12 +5708,18 @@ lowering convention or host contract.</p>
       this.responseGraph.push(this._desc("DESC_TRAILER", null, { name: this._spanPayload(R[rs1]), value: this._spanPayload(R[rs2]) }));
       return true;
     }
-    if (method === "Seal") { this._respSeal(); return true; }
+    if (method === "Seal") { this._respSeal(true); return true; }
     if (method === "End") { this._respEnd(); return true; }
-    if (method === "Respond") { this._respStatus(R[rs1]); this._respSeal(); this._respEnd(); return true; }
+    if (method === "Respond") { this._respStatus(R[rs1]); this._respSeal(false); this._respEnd(); return true; }
     if (method === "Flush") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "FLUSH", null)); return true; }
     if (method === "Continue") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "CONTINUE_100", null)); return true; }
-    if (method === "EndStream") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "END_STREAM", null)); return true; }
+    if (method === "EndStream") {
+      this._ensureResponseOpen(); this._ensureStreamOpen();
+      if (this.responseMode !== "stream") throw new Error("I6 violation: EndStream outside stream mode (no open stream phase)");
+      this.responseGraph.push(this._desc("DESC_CONTROL", "END_STREAM", null));
+      this.responseStreamClosed = true;
+      return true;
+    }
     if (method === "Upgrade") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_UPGRADE", null, this._spanPayload(R[rs1]))); return true; }
     if (method === "Abort") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_ABORT", null, { code: R[rs1] | 0 })); this.responseEnded = true; return true; }
     if (method === "EarlyHints") { this._ensureResponseOpen(); this.responseGraph.push(this._desc("DESC_CONTROL", "EARLY_HINTS_103", null)); return true; }
@@ -5505,10 +5824,16 @@ lowering convention or host contract.</p>
   PicoVM.prototype._storage = function (method, rd, rs1, rs2) {
     if (!this._st) {
       var ST = storeLib();
-      this._st = { store: new ST.PicoStore(), pack: 0, card: 0, results: [] };
+      this._st = { store: this._cardStore || new ST.PicoStore(), pack: 0, card: 0, results: [], schemas: {} };
     }
     var st = this._st;
     var pack = String(st.pack);
+    if (method === "GetSchemaForPack") {
+      this.regs[rd] = this._newSpanBytes(st.schemas[this.regs[rs1] | 0] || []); return true;
+    }
+    if (method === "SetSchemaForPack") {
+      st.schemas[this.regs[rs1] | 0] = this._spanBytes(this.regs[rs2]); this.regs[rd] = 1; return true;
+    }
     if (method === "UsePack") { st.pack = this.regs[rs1] | 0; this.regs[rd] = st.pack; return true; }
     if (method === "AddCard") { var cid = st.store.create(pack, {}); st.card = cid; this.regs[rd] = cid; return true; }
     if (method === "EditCard") {
@@ -5554,6 +5879,23 @@ lowering convention or host contract.</p>
     return false;
   };
 
+  // Reference GPIO emulator (browser/sim). Mirrors picoscript_vm HostApi._gpio:
+  // pins carry [0,1024]; dir 0=in/1=out; pull 0=none/1=up/2=down. Real pins are an
+  // injected OS provider on PIOS; this keeps Python and JS byte-identical.
+  PicoVM.prototype._gpio = function (method, rd, rs1, rs2) {
+    var g = this._gpioProvider || this._gp || (this._gp = { pins: {}, count: 40 });
+    if (method === "Count") { this.regs[rd] = g.count; return true; }
+    var pin = this.regs[rs1] | 0;
+    var st = g.pins[pin] || (g.pins[pin] = { dir: 0, pull: 0, value: 0 });
+    if (method === "SetDir") { st.dir = (this.regs[rs2] | 0) ? 1 : 0; this.regs[rd] = 1; return true; }
+    if (method === "GetDir") { this.regs[rd] = st.dir; return true; }
+    if (method === "SetPull") { var p = this.regs[rs2] | 0; st.pull = (p === 1 || p === 2) ? p : 0; this.regs[rd] = 1; return true; }
+    if (method === "GetPull") { this.regs[rd] = st.pull; return true; }
+    if (method === "Write") { var v = this.regs[rs2] | 0; st.value = v < 0 ? 0 : (v > 1024 ? 1024 : v); this.regs[rd] = 1; return true; }
+    if (method === "Read") { this.regs[rd] = st.value; return true; }
+    return false;
+  };
+
   PicoVM.prototype._dsp = function (rd, rs1, rs2, imm) {
     var a = this.regs[rs1] | 0;
     if (rs2 === 0x4) this.regs[rd] = a < 0 ? 0 : a;          // RELU
@@ -5577,6 +5919,44 @@ lowering convention or host contract.</p>
   PicoVM.prototype.outputText = function () {
     return new TextDecoder("utf-8").decode(new Uint8Array(this.output));
   };
+
+  // ── module container: embedded + checked ABI version (INV-23) ─────────────
+  // Mirrors pico_module.py byte-for-byte: [MAGIC, ABI, HOOK_TABLE_VERSION, count, ...words].
+  // load refuses a module whose magic/ABI/hook-table version != this runtime.
+  var MODULE_MAGIC = 0x50534331;       // "PSC1"
+  var MODULE_ABI_VERSION = 1;
+  function _fnv1a32(str) {              // FNV-1a/32 over UTF-8 bytes (hook names are ASCII)
+    var h = 0x811C9DC5;
+    for (var i = 0; i < str.length; i++) h = Math.imul(h ^ (str.charCodeAt(i) & 0xFF), 0x01000193) >>> 0;
+    return h >>> 0;
+  }
+  function hookTableVersion() {
+    var bc = PV_HOOKS.BY_CODE || {};
+    var codes = Object.keys(bc).map(function (k) { return parseInt(k, 10); }).sort(function (a, b) { return a - b; });
+    var lines = codes.map(function (c) { return c + ":" + bc[c]; });
+    return _fnv1a32(lines.join("\n"));
+  }
+  function packModule(words) {
+    var out = [MODULE_MAGIC >>> 0, MODULE_ABI_VERSION >>> 0, hookTableVersion(), words.length >>> 0];
+    for (var i = 0; i < words.length; i++) out.push(words[i] >>> 0);
+    return out;
+  }
+  function loadModule(container) {
+    if (!container || container.length < 4) throw new Error("ModuleAbiError: truncated module header");
+    var magic = container[0] >>> 0, abi = container[1] >>> 0, htv = container[2] >>> 0, count = container[3] >>> 0;
+    if (magic !== (MODULE_MAGIC >>> 0)) throw new Error("ModuleAbiError: bad module magic 0x" + magic.toString(16));
+    if (abi !== MODULE_ABI_VERSION) throw new Error("ModuleAbiError: ABI version mismatch module=" + abi + " runtime=" + MODULE_ABI_VERSION);
+    var expect = hookTableVersion();
+    if (htv !== expect) throw new Error("ModuleAbiError: host hook table version mismatch module=0x" + htv.toString(16) + " runtime=0x" + expect.toString(16));
+    var words = container.slice(4);
+    if (words.length !== count) throw new Error("ModuleAbiError: word count mismatch header=" + count + " actual=" + words.length);
+    return words.map(function (w) { return w >>> 0; });
+  }
+  PicoVM.packModule = packModule;
+  PicoVM.loadModule = loadModule;
+  PicoVM.hookTableVersion = hookTableVersion;
+  PicoVM.MODULE_MAGIC = MODULE_MAGIC;
+  PicoVM.MODULE_ABI_VERSION = MODULE_ABI_VERSION;
 
   return PicoVM;
 });
@@ -5645,25 +6025,26 @@ lowering convention or host contract.</p>
   // Inst is a plain object: { op, dst, a, b, cond, label, ns, method, args, imm, text }
   function Inst(op, f) { f = f || {}; f.op = op; if (!f.args) f.args = []; return f; }
 
-  function ILBuilder() { this.insts = []; this._ln = 0; }
+  function ILBuilder() { this.insts = []; this._ln = 0; this.curPos = -1; }
   ILBuilder.prototype = {
     vreg: function (n) { return new VReg(n); },
     newLabel: function (h) { this._ln++; return (h || "L") + this._ln; },
-    const_: function (d, v) { this.insts.push(Inst("const", { dst: d, imm: v })); },
-    mov: function (d, s) { this.insts.push(Inst("mov", { dst: d, a: s })); },
-    arith: function (op, d, a, b) { this.insts.push(Inst(op, { dst: d, a: a, b: b })); },
-    inc: function (d) { this.insts.push(Inst("inc", { dst: d })); },
-    cmpbr: function (c, a, b, l) { this.insts.push(Inst("cmpbr", { cond: c, a: a, b: b, label: l })); },
-    jmp: function (l) { this.insts.push(Inst("jmp", { label: l })); },
-    jmptab: function (sel, targets, def) { this.insts.push(Inst("jmptab", { a: sel, targets: targets, label: def })); },
-    label: function (n) { this.insts.push(Inst("label", { label: n })); },
-    call: function (l) { this.insts.push(Inst("call", { label: l })); },
-    ret: function () { this.insts.push(Inst("ret", {})); },
-    host: function (ns, m, args, d) { this.insts.push(Inst("host", { ns: ns, method: m, args: args || [], dst: d || null })); },
-    load: function (d, a) { this.insts.push(Inst("load", { dst: d, imm: a })); },
-    save: function (s, a) { this.insts.push(Inst("save", { a: s, imm: a })); },
-    pipe: function (s, a) { this.insts.push(Inst("pipe", { a: s, imm: a })); },
-    net: function (k, v) { this.insts.push(Inst("net", { method: k, imm: (typeof v === "number" ? v : 0), text: (typeof v === "string" ? v : "") })); }
+    _push: function (ins) { ins.pos = this.curPos; this.insts.push(ins); return ins; },   // INV-25: stamp source offset
+    const_: function (d, v) { this._push(Inst("const", { dst: d, imm: v })); },
+    mov: function (d, s) { this._push(Inst("mov", { dst: d, a: s })); },
+    arith: function (op, d, a, b) { this._push(Inst(op, { dst: d, a: a, b: b })); },
+    inc: function (d) { this._push(Inst("inc", { dst: d })); },
+    cmpbr: function (c, a, b, l) { this._push(Inst("cmpbr", { cond: c, a: a, b: b, label: l })); },
+    jmp: function (l) { this._push(Inst("jmp", { label: l })); },
+    jmptab: function (sel, targets, def) { this._push(Inst("jmptab", { a: sel, targets: targets, label: def })); },
+    label: function (n) { this._push(Inst("label", { label: n })); },
+    call: function (l) { this._push(Inst("call", { label: l })); },
+    ret: function () { this._push(Inst("ret", {})); },
+    host: function (ns, m, args, d) { this._push(Inst("host", { ns: ns, method: m, args: args || [], dst: d || null })); },
+    load: function (d, a) { this._push(Inst("load", { dst: d, imm: a })); },
+    save: function (s, a) { this._push(Inst("save", { a: s, imm: a })); },
+    pipe: function (s, a) { this._push(Inst("pipe", { a: s, imm: a })); },
+    net: function (k, v) { this._push(Inst("net", { method: k, imm: (typeof v === "number" ? v : 0), text: (typeof v === "string" ? v : "") })); }
   };
 
   function operandVRegs(ins) {
@@ -5682,11 +6063,11 @@ lowering convention or host contract.</p>
         if (ins.op === "add") r = av + bv;
         else if (ins.op === "sub") r = av - bv;
         else if (ins.op === "mul") r = av * bv;
-        else r = bv !== 0 ? Math.trunc(av / bv) : 0;
-        out.push(Inst("const", { dst: ins.dst, imm: r })); return;
+        else r = bv !== 0 ? ((av / bv) | 0) : 0;   // trunc toward zero + 2's-comp wrap (matches VM/C)
+        out.push(Inst("const", { dst: ins.dst, imm: r, pos: ins.pos })); return;
       }
       if (ins.op === "add" && isVReg(ins.a) && ins.dst === ins.a && isImm(ins.b) && ins.b.value === 1) {
-        out.push(Inst("inc", { dst: ins.dst })); return;
+        out.push(Inst("inc", { dst: ins.dst, pos: ins.pos })); return;
       }
       if (ins.op === "mov" && isVReg(ins.a) && ins.dst === ins.a) return;
       out.push(ins);
@@ -5695,7 +6076,9 @@ lowering convention or host contract.</p>
   }
 
   // ── register allocation (loop-aware linear scan) ──────────────────────────
-  function allocate(insts) {
+  // Mirrors picoscript_il.allocate. `spill` reserves 3 shuttle regs (usable=13) and
+  // records overflow vregs in `spilled` instead of throwing -- the spill-decision pass.
+  function allocate(insts, spill) {
     var first = {}, last = {}, order = [], vregs = {};
     insts.forEach(function (ins, i) {
       operandVRegs(ins).forEach(function (v) {
@@ -5723,10 +6106,11 @@ lowering convention or host contract.</p>
       if (vregs[vid].pinned || spansCall) { first[vid] = 0; last[vid] = n; }
     });
 
-    var usable = 16;
+    var usable = spill ? 13 : 16;   // NUM_REGS-3 shuttle headroom during spill decision
     var free = []; for (var k = 0; k < usable; k++) free.push(k);
     var active = [];           // [endIndex, vid]
     var mapping = {};
+    var spilled = {}, nextSlot = 0;
     function expire(at) {
       var keep = [];
       active.forEach(function (e) {
@@ -5745,11 +6129,63 @@ lowering convention or host contract.</p>
         mapping[vid] = reg;
         active.push([last[vid], vid]);
         active.sort(function (a, b) { return a[0] - b[0]; });
+      } else if (spill) {
+        spilled[vid] = nextSlot++;
       } else {
         throw new Error("register pressure exceeds 16 live values; simplify the program");
       }
     });
-    return mapping;
+    return { mapping: mapping, spilled: spilled };
+  }
+
+  // ── automatic register spilling (mirrors picoscript_il._legalize_spills) ───
+  // Ops whose `dst` is a written destination, and ops that read `dst` as input.
+  var DST_WRITTEN = { const: 1, mov: 1, add: 1, sub: 1, mul: 1, div: 1, host: 1, load: 1, inc: 1 };
+  var DST_READ_OPS = { cmpbr: 1, inc: 1 };
+  var SPILL_CARD_BASE = 0xF000;   // reserved scratch-card region: one card per spilled vreg
+
+  function legalizeSpills(insts, spilledSet) {
+    var vids = Object.keys(spilledSet);
+    if (vids.length === 0) return insts;
+    // Home scratch card per spilled vreg, assigned in ascending vreg-id order.
+    var sorted = vids.map(Number).sort(function (a, b) { return a - b; });
+    var slot = {};
+    sorted.forEach(function (vid, i) { slot[vid] = SPILL_CARD_BASE + i; });
+    function sp(x) { return isVReg(x) && (x.id in spilledSet); }
+    function clone(ins, over) { var c = {}; for (var k in ins) c[k] = ins[k]; for (var k2 in over) c[k2] = over[k2]; return c; }
+    var out = [];
+    insts.forEach(function (ins) {
+      if (!operandVRegs(ins).some(sp)) { out.push(ins); return; }
+      var newA = ins.a, newB = ins.b, newArgs = (ins.args || []).slice();
+      if (sp(ins.a)) { var sa = new VReg("spill"); out.push(Inst("load", { dst: sa, imm: slot[ins.a.id] })); newA = sa; }
+      if (sp(ins.b)) { var sb = new VReg("spill"); out.push(Inst("load", { dst: sb, imm: slot[ins.b.id] })); newB = sb; }
+      for (var i = 0; i < newArgs.length; i++) {
+        if (sp(newArgs[i])) { var sg = new VReg("spill"); out.push(Inst("load", { dst: sg, imm: slot[newArgs[i].id] })); newArgs[i] = sg; }
+      }
+      var newDst = ins.dst, storeBack = null;
+      if (sp(ins.dst)) {
+        var sd = new VReg("spill");
+        if (DST_READ_OPS[ins.op]) out.push(Inst("load", { dst: sd, imm: slot[ins.dst.id] }));   // dst read (cmpbr/inc)
+        newDst = sd;
+        if (DST_WRITTEN[ins.op]) storeBack = [sd, slot[ins.dst.id]];                            // dst written -> store back
+      }
+      out.push(clone(ins, { dst: newDst, a: newA, b: newB, args: newArgs }));
+      if (storeBack) out.push(Inst("save", { a: storeBack[0], imm: storeBack[1] }));
+    });
+    return out;
+  }
+
+  // Allocate; on >16 live values, spill the overflow to scratch cards and re-allocate
+  // (a working slow compile beats a hard RegisterPressureError on real code -- INV-13).
+  function allocateOrSpill(insts) {
+    try {
+      return { insts: insts, mapping: allocate(insts, false).mapping };
+    } catch (e) {
+      if (!/register pressure/.test(String(e && e.message))) throw e;
+      var meta = allocate(insts, true);
+      var legal = legalizeSpills(insts, meta.spilled);
+      return { insts: legal, mapping: allocate(legal, false).mapping };
+    }
   }
 
   function phys(mapping, v) {
@@ -5795,7 +6231,7 @@ lowering convention or host contract.</p>
     if (op === "host") {
       var hook = HOOK_BY_NAME[ins.ns + "." + ins.method];
       if (hook === undefined) throw new Error("unknown host hook " + ins.ns + "." + ins.method);
-      var imm = (H.HOST_HOOK_BASE | hook);
+      var imm = (hook <= 0xff) ? (H.HOST_HOOK_BASE | hook) : (H.EXT_HOST_HOOK_BASE | (hook & 0xfff));
       var hrd = isVReg(ins.dst) ? phys(mapping, ins.dst) : 0;
       var hrs1 = (ins.args[0] && isVReg(ins.args[0])) ? phys(mapping, ins.args[0]) : 0;
       var hrs2 = (ins.args[1] && isVReg(ins.args[1])) ? phys(mapping, ins.args[1]) : 0;
@@ -5804,9 +6240,120 @@ lowering convention or host contract.</p>
     throw new Error("cannot lower IL op " + op);
   }
 
-  function lowerToBytecode(insts, opt, outVars) {
+  // INV-7 compile-time iso-lease: byte-identical to picoscript_il.verify_response_ownership.
+  // Forward must-dataflow (AND-merge) over the IL CFG; a Resp.* op illegal on every
+  // path to it is a compile error. State is a 4-bit mask SEALED=1/ENDED=2/BODY=4/
+  // STREAM_CLOSED=8 (all monotonic); AND-merge is order-independent, the check loop
+  // walks reachable points in ascending index order, so the first violation reported
+  // matches the Python gate exactly.
+  var RESP_GRAPH_METHODS = {
+    Status: 1, Header: 1, Write: 1, Trailer: 1, Seal: 1, Respond: 1, End: 1, Abort: 1,
+    Flush: 1, Continue: 1, EndStream: 1, Upgrade: 1, EarlyHints: 1
+  };
+  function verifyResponseOwnership(insts) {
+    var n = insts.length, i, j, sc;
+    var hasResp = false;
+    for (i = 0; i < n; i++) { if (insts[i].op === "host" && insts[i].ns === "Resp") { hasResp = true; break; } }
+    if (!hasResp) return;
+
+    var labelAt = {};
+    for (i = 0; i < n; i++) { if (insts[i].op === "label") labelAt[insts[i].label] = i; }
+
+    function succs(i) {
+      var ins = insts[i], op = ins.op, out = [], k, tg;
+      if (op === "jmp") { return (ins.label in labelAt) ? [labelAt[ins.label]] : []; }
+      if (op === "ret") { return []; }
+      if (op === "cmpbr") {
+        if (i + 1 < n) out.push(i + 1);
+        if (ins.label in labelAt) out.push(labelAt[ins.label]);
+        return out;
+      }
+      if (op === "jmptab") {
+        tg = ins.targets || [];
+        for (k = 0; k < tg.length; k++) { if (tg[k] in labelAt) out.push(labelAt[tg[k]]); }
+        if (ins.label in labelAt) out.push(labelAt[ins.label]);
+        return out;
+      }
+      if (op === "call") {
+        if (i + 1 < n) out.push(i + 1);
+        if (ins.label in labelAt) out.push(labelAt[ins.label]);
+        return out;
+      }
+      return (i + 1 < n) ? [i + 1] : [];
+    }
+
+    var reachable = {}, stack = (n ? [0] : []), idx;
+    while (stack.length) {
+      idx = stack.pop();
+      if (idx < 0 || idx >= n || reachable[idx]) continue;
+      reachable[idx] = true;
+      sc = succs(idx);
+      for (j = 0; j < sc.length; j++) stack.push(sc[j]);
+    }
+
+    var preds = {};
+    for (i in reachable) preds[i] = [];
+    for (i in reachable) {
+      sc = succs(+i);
+      for (j = 0; j < sc.length; j++) { if (reachable[sc[j]]) preds[sc[j]].push(+i); }
+    }
+
+    var SEALED = 1, ENDED = 2, BODY = 4, STREAM_CLOSED = 8, TOP = 15, BOT = 0;
+    function transfer(mask, ins) {
+      if (ins.op === "host" && ins.ns === "Resp") {
+        var m = ins.method;
+        if (m === "Seal") mask |= SEALED;
+        else if (m === "Respond") mask |= (SEALED | ENDED);
+        else if (m === "End" || m === "Abort") mask |= ENDED;
+        else if (m === "Write") mask |= BODY;
+        else if (m === "EndStream") mask |= STREAM_CLOSED;
+      }
+      return mask;
+    }
+
+    var order = Object.keys(reachable).map(Number).sort(function (a, b) { return a - b; });
+    var IN = {}, OUT = {}, p, inv, outv, key;
+    for (i = 0; i < order.length; i++) { IN[order[i]] = TOP; OUT[order[i]] = TOP; }
+    var changed = true;
+    while (changed) {
+      changed = false;
+      for (i = 0; i < order.length; i++) {
+        key = order[i];
+        if (key === 0 || preds[key].length === 0) {
+          inv = BOT;
+        } else {
+          inv = TOP;
+          for (p = 0; p < preds[key].length; p++) inv &= OUT[preds[key][p]];
+        }
+        if (inv !== IN[key]) { IN[key] = inv; changed = true; }
+        outv = transfer(IN[key], insts[key]);
+        if (outv !== OUT[key]) { OUT[key] = outv; changed = true; }
+      }
+    }
+
+    for (i = 0; i < order.length; i++) {
+      var ins = insts[order[i]];
+      if (ins.op !== "host" || ins.ns !== "Resp") continue;
+      var mask = IN[order[i]], m = ins.method;
+      if ((mask & ENDED) && RESP_GRAPH_METHODS[m])
+        throw new Error("INV-7: Resp." + m + " after the response was finalized (use-after-end)");
+      if ((m === "Status" || m === "Header") && (mask & SEALED))
+        throw new Error("INV-7: Resp." + m + " after Seal (use-after-seal; preamble/headers are committed)");
+      if (m === "Seal" && (mask & SEALED))
+        throw new Error("INV-7: Resp.Seal after Seal (use-after-seal; double seal)");
+      if (m === "Header" && (mask & BODY))
+        throw new Error("INV-7: Resp.Header after a body write (header phase is over)");
+      if (m === "Write" && (mask & STREAM_CLOSED))
+        throw new Error("INV-7: Resp.Write after EndStream (stream phase closed)");
+    }
+  }
+
+  function lowerToBytecode(insts, opt, outVars, checkOwnership, debug) {
+    if (checkOwnership !== false) verifyResponseOwnership(insts);
     if (opt !== false) insts = optimize(insts);
-    var mapping = allocate(insts);
+    var alloc = allocateOrSpill(insts);   // auto-spills on >16 live values (INV-13)
+    insts = alloc.insts;
+    var mapping = alloc.mapping;
     if (outVars) {
       insts.forEach(function (ins) {
         operandVRegs(ins).forEach(function (v) {
@@ -5816,10 +6363,26 @@ lowering convention or host contract.</p>
     }
     function width(ins) {
       if (ins.op === "label") return 0;
-      if (ins.op === "const") return 2;
-      if (ins.op === "mov" && isImm(ins.a)) return 2;
+      if (ins.op === "const") return (ins.imm >= -32768 && ins.imm <= 32767) ? 2 : 8;
+      if (ins.op === "mov" && isImm(ins.a)) return (ins.a.value >= -32768 && ins.a.value <= 32767) ? 2 : 8;
       if (ins.op === "jmptab") return ins.targets.length + 1;
       return 1;
+    }
+    // Load `value` into rd: 2-word SUB/ADD-imm for a 16-bit immediate (unchanged), else
+    // an 8-word big-endian byte build (SUB; ADD b3; MUL 256; ...; ADD b0) using only
+    // sign-safe positive immediates. Byte-identical to picoscript_il._emit_const.
+    function emitConst(words, rd, value) {
+      words.push(enc(OP.SUB, rd, rd, ADDR_REG, rd));   // rd = rd - rd = 0
+      if (value >= -32768 && value <= 32767) {
+        words.push(enc(OP.ADD, rd, rd, 0, value & 0xFFFF));
+        return 2;
+      }
+      var u = value >>> 0, shs = [24, 16, 8, 0], i;
+      for (i = 0; i < 4; i++) {
+        words.push(enc(OP.ADD, rd, rd, 0, (u >>> shs[i]) & 0xFF));
+        if (shs[i]) words.push(enc(OP.MUL, rd, rd, 0, 256));
+      }
+      return 8;
     }
     var labels = {}, pc = 0;
     insts.forEach(function (ins) {
@@ -5831,9 +6394,7 @@ lowering convention or host contract.</p>
       if (ins.op === "const" || (ins.op === "mov" && isImm(ins.a))) {
         var rd = phys(mapping, ins.dst);
         var value = (ins.op === "const") ? ins.imm : ins.a.value;
-        words.push(enc(OP.SUB, rd, rd, ADDR_REG, rd));   // rd = rd - rd = 0
-        words.push(enc(OP.ADD, rd, rd, 0, value & 0xFFFF));
-        pc += 2; return;
+        pc += emitConst(words, rd, value); return;
       }
       if (ins.op === "jmptab") {
         var sel = phys(mapping, ins.a);
@@ -5844,6 +6405,18 @@ lowering convention or host contract.</p>
       words.push(emitWord(ins, mapping, labels, pc));
       pc += 1;
     });
+    // INV-25: build pc -> [off, op, ns, method] from the SAME final insts/width the
+    // words were emitted from (side-band; the word stream above is byte-identical).
+    if (debug) {
+      pc = 0;
+      insts.forEach(function (ins) {
+        var w = width(ins);
+        if (w === 0) return;
+        var rec = [ins.pos, ins.op, ins.ns != null ? ins.ns : null, ins.method != null ? ins.method : null];
+        for (var p = pc; p < pc + w; p++) debug[p] = rec;
+        pc += w;
+      });
+    }
     return words;
   }
 
@@ -5865,21 +6438,21 @@ lowering convention or host contract.</p>
 
   function ctokenize(src) {
     var toks = [], i = 0, n = src.length;
-    function push(k, v) { toks.push({ kind: k, value: v }); }
+    function push(k, v, p) { toks.push({ kind: k, value: v, pos: p }); }   // INV-25: pos = token start offset
     while (i < n) {
-      var c = src[i];
+      var c = src[i], start = i;
       if (c === " " || c === "\t" || c === "\r" || c === "\n") { i++; continue; }
       if (c === "/" && src[i + 1] === "/") { while (i < n && src[i] !== "\n") i++; continue; }
       if (c === "/" && src[i + 1] === "*") { i += 2; while (i + 1 < n && !(src[i] === "*" && src[i + 1] === "/")) i++; i += 2; continue; }
-      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { if (src[j] === "\\" && j + 1 < n) { b += src[j + 1]; j += 2; continue; } b += src[j]; j++; } push("str", b); i = j + 1; continue; }
-      if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2)); i = j2; continue; }
-      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; var w = src.slice(i, j3); var low = w.toLowerCase(); if (C_KW[low]) push("kw", low); else push("id", w); i = j3; continue; }
+      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { if (src[j] === "\\" && j + 1 < n) { b += src[j + 1]; j += 2; continue; } b += src[j]; j++; } push("str", b, start); i = j + 1; continue; }
+      if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2), start); i = j2; continue; }
+      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; var w = src.slice(i, j3); var low = w.toLowerCase(); if (C_KW[low]) push("kw", low, start); else push("id", w, start); i = j3; continue; }
       var two = src.slice(i, i + 2);
-      if (C_TWO[two]) { push("op", two); i += 2; continue; }
-      if (C_ONE.indexOf(c) >= 0) { push("op", c); i++; continue; }
+      if (C_TWO[two]) { push("op", two, start); i += 2; continue; }
+      if (C_ONE.indexOf(c) >= 0) { push("op", c, start); i++; continue; }
       throw new Error("C: unexpected char " + JSON.stringify(c));
     }
-    push("eof", "");
+    push("eof", "", n);
     return toks;
   }
 
@@ -5897,6 +6470,13 @@ lowering convention or host contract.</p>
     },
     parseBlock: function () { this.expect("{"); var s = []; while (!this.accept("}")) { if (this.peek().kind === "eof") throw new Error("C: unterminated block"); s.push(this.parseStmt()); } return s; },
     parseStmt: function () {
+      // INV-25: stamp every statement node with its first token's source offset.
+      var start = this.peek().pos;
+      var node = this._parseStmt();
+      if (node != null) node.pos = start;
+      return node;
+    },
+    _parseStmt: function () {
       var t = this.peek();
       if (t.kind === "kw") {
         if (t.value === "int" || t.value === "var") return this.parseDecl();
@@ -5910,6 +6490,9 @@ lowering convention or host contract.</p>
         if (t.value === "return") { this.next(); if (this.accept(";")) return { t: "Return", value: null }; var v = this.parseExpr(); this.expect(";"); return { t: "Return", value: v }; }
         if (t.value === "break") { this.next(); this.expect(";"); return { t: "Break" }; }
         if (t.value === "continue") { this.next(); this.expect(";"); return { t: "Continue" }; }
+      }
+      if (t.kind === "id" && t.value === "Server" && this.toks[this.i + 1] && this.toks[this.i + 1].value === "." && this.toks[this.i + 2] && this.toks[this.i + 2].value === "Main" && this.toks[this.i + 3] && this.toks[this.i + 3].value === "{") {
+        this.next(); this.next(); this.next(); return { t: "ServerMain", body: this.parseBlock() };
       }
       if (t.value === "{") { return { t: "If", cond: { t: "Num", value: 1 }, then: this.parseBlock(), els: null }; }
       if (t.kind === "id" && this.toks[this.i + 1].value === ":") { var lab = this.next().value; this.next(); return { t: "Label", name: lab }; }
@@ -6024,6 +6607,15 @@ lowering convention or host contract.</p>
     parseArgs: function () { this.expect("("); var a = []; if (!this.accept(")")) { a.push(this.parseExpr()); while (this.accept(",")) a.push(this.parseExpr()); this.expect(")"); } return a; }
   };
 
+  // C-frontend aliases: libc spellings -> canonical (ns, method). Mirrors
+  // picoscript_cfront.C_ALIASES so Python- and JS-compiled bytecode stay identical.
+  var C_ALIASES = {
+    strlen: ["String", "Length"], strcat: ["String", "Concat"], strstr: ["String", "IndexOf"],
+    toupper: ["String", "ToUpper"], tolower: ["String", "ToLower"], substr: ["String", "Substring"],
+    atoi: ["Number", "Parse"], itoa: ["Number", "ToString"], tohex: ["Number", "ToHex"],
+    abs: ["Number", "Abs"], sqrt: ["Maths", "Sqrt"], pow: ["Maths", "Power"], sha256: ["Crypto", "Sha256"]
+  };
+
   // Stage a string literal's UTF-8 bytes in a scratch arena region and return a
   // span over them (two alternating slots). Mirrors picoscript_*.emit_str_span.
   function emitStrSpan(self, text) {
@@ -6039,7 +6631,7 @@ lowering convention or host contract.</p>
     for (var i = 0; i < data.length; i++) {
       b.const_(areg, base + i);
       b.const_(vreg, data[i]);
-      b.host("Memory", "Set", [areg, vreg], null);
+      b.host("Memory", "SetConst", [areg, vreg], null);
     }
     b.const_(areg, base);
     b.const_(vreg, data.length);
@@ -6061,6 +6653,7 @@ lowering convention or host contract.</p>
     },
     stmt: function (s) {
       var self = this;
+      if (typeof s.pos === "number" && s.pos >= 0) this.b.curPos = s.pos;   // INV-25
       if (s.t === "Decl") { var v = this.varOf(s.name); if (s.init != null) this.assignTo(v, s.init); else this.b.const_(v, 0); }
       else if (s.t === "Assign") this.assignTo(this.varOf(s.name), s.value);
       else if (s.t === "If") this.lowerIf(s);
@@ -6075,6 +6668,7 @@ lowering convention or host contract.</p>
       else if (s.t === "ExprStmt") { if (s.expr != null) this.eval(s.expr, false); }
       else if (s.t === "Break") { if (!this.loop.length) throw new Error("break outside loop"); this.b.jmp(this.loop[this.loop.length - 1][1]); }
       else if (s.t === "Continue") { if (!this.loop.length) throw new Error("continue outside loop"); this.b.jmp(this.loop[this.loop.length - 1][0]); }
+      else if (s.t === "ServerMain") s.body.forEach(function (st) { self.stmt(st); });
       else throw new Error("C: cannot lower " + s.t);
     },
     assignTo: function (dst, e) {
@@ -6230,6 +6824,10 @@ lowering convention or host contract.</p>
       var ns = c.ns, m = c.method;
       if (ns == null) {
         if (m.toLowerCase() === "print") { if (c.args[0].t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, c.args[0].value)], null); return null; } var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
+        var ak = m.toLowerCase();
+        if (C_ALIASES[ak] && !this.funcs.some(function (f) { return f.name.toLowerCase() === ak; })) {
+          return this.lowerCall({ t: "Call", ns: C_ALIASES[ak][0], method: C_ALIASES[ak][1], args: c.args }, want);
+        }
         this.b.call("fn_" + m.toLowerCase()); return null;
       }
       if (ns.toUpperCase() === "NET") {
@@ -6261,7 +6859,7 @@ lowering convention or host contract.</p>
   // ========================================================================
   // BASIC-LIKE FRONTEND (port of picoscript_basic.py)
   // ========================================================================
-  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","DISPATCH","ENDDISPATCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD"].forEach(function (k) { B_KW[k] = 1; });
+  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","DISPATCH","ENDDISPATCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD","STORE","GPIO","LOAD","SERVER","ENDSERVER"].forEach(function (k) { B_KW[k] = 1; });
   var B_CMPW = { EQ:"EQ", NE:"NE", LT:"LT", GT:"GT", LE:"LE", GE:"GE" };
   var B_CMPS = { "==":"EQ", "!=":"NE", "<>":"NE", "=":"EQ", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
   var B_COMPARATORS = {}; for (var _k in B_CMPW) B_COMPARATORS[_k] = B_CMPW[_k]; for (var _k2 in B_CMPS) B_COMPARATORS[_k2] = B_CMPS[_k2];
@@ -6275,21 +6873,21 @@ lowering convention or host contract.</p>
 
   function btokenize(src) {
     var toks = [], i = 0, n = src.length;
-    function push(k, v) { toks.push({ kind: k, value: v }); }
+    function push(k, v, p) { toks.push({ kind: k, value: v, pos: p }); }
     while (i < n) {
-      var c = src[i];
-      if (c === "\n") { push("nl", "\\n"); i++; continue; }
+      var c = src[i], start = i;
+      if (c === "\n") { push("nl", "\\n", start); i++; continue; }
       if (c === " " || c === "\t" || c === "\r") { i++; continue; }
       if (c === "'" || (c === "/" && src[i + 1] === "/")) { while (i < n && src[i] !== "\n") i++; continue; }
-      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { b += src[j]; j++; } push("str", b); i = j + 1; continue; }
-      if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2)); i = j2; continue; }
-      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; var w = src.slice(i, j3); var up = w.toUpperCase(); if (B_KW[up]) push("kw", up); else push("id", w); i = j3; continue; }
+      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { b += src[j]; j++; } push("str", b, start); i = j + 1; continue; }
+      if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2), start); i = j2; continue; }
+      if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; if (src[j3] === "$") j3++; var w = src.slice(i, j3); var up = w.toUpperCase(); if (B_KW[up]) push("kw", up, start); else push("id", w, start); i = j3; continue; }
       var two = src.slice(i, i + 2);
-      if (B_TWO[two]) { push("op", two); i += 2; continue; }
-      if (B_ONE.indexOf(c) >= 0) { push("op", c); i++; continue; }
+      if (B_TWO[two]) { push("op", two, start); i += 2; continue; }
+      if (B_ONE.indexOf(c) >= 0) { push("op", c, start); i++; continue; }
       throw new Error("BASIC: unexpected char " + JSON.stringify(c));
     }
-    push("nl", "\\n"); push("eof", "");
+    push("nl", "\\n", n); push("eof", "", n);
     return toks;
   }
 
@@ -6311,6 +6909,12 @@ lowering convention or host contract.</p>
     },
     atKwArr: function (arr) { var t = this.peek(); return t.kind === "kw" && arr.indexOf(t.value) >= 0; },
     parseStmt: function () {
+      var start = this.peek().pos;
+      var node = this._parseStmt();
+      if (node != null) node.pos = start;
+      return node;
+    },
+    _parseStmt: function () {
       var t = this.peek();
       if (t.kind === "id" && this.peek2().kind === "op" && this.peek2().value === ":") { var name = this.next().value; this.next(); this.endLine(); return { t: "Label", name: name }; }
       if (t.kind === "kw") {
@@ -6329,14 +6933,24 @@ lowering convention or host contract.</p>
         if (kw === "GOTO") { this.next(); var nm = this.next().value; this.endLine(); return { t: "Goto", label: nm }; }
         if (kw === "GOSUB") { this.next(); var nm2 = this.next().value; this.endLine(); return { t: "Gosub", name: nm2 }; }
         if (kw === "SUB") return this.parseSub();
+        if (kw === "SERVER") return this.parseServer();
         if (kw === "RETURN") { this.next(); this.endLine(); return { t: "Return" }; }
         if (kw === "BREAK") { this.next(); this.endLine(); return { t: "Break" }; }
         if (kw === "SKIP") { this.next(); this.endLine(); return { t: "Skip" }; }
         if (kw === "PRINT") { this.next(); var v = this.parseExpr(); this.endLine(); return { t: "Print", value: v }; }
+        if (kw === "STORE") { this.next(); var sc = this.parseStoreBody(false); this.endLine(); return { t: "CallStmt", call: sc }; }
+        if (kw === "LOAD") { this.next(); var lc = this.parseLoadBody(false); this.endLine(); return { t: "CallStmt", call: lc }; }
+        if (kw === "GPIO") { this.next(); var gc = this.parseGpioBody(false); this.endLine(); return { t: "CallStmt", call: gc }; }
         throw new Error("BASIC: unexpected keyword " + kw);
       }
       if (t.kind === "id") {
         var nx = this.peek2();
+        if (t.value.toUpperCase() === "POKE" && !(nx.kind === "op" && nx.value === "(")) {
+          this.next();                                  // classic no-parens form: POKE addr, value
+          var pa = this.parseExpr(); this.eatOp(",");
+          var pb = this.parseExpr(); this.endLine();
+          return { t: "CallStmt", call: { t: "Call", ns: null, method: "poke", args: [pa, pb] } };
+        }
         if (nx.kind === "op" && nx.value === "=") return this.parseLet(false);
         if (nx.kind === "op" && B_ASSIGN[nx.value]) {
           var an = this.next().value; var aop = B_ASSIGN[this.next().value];
@@ -6344,15 +6958,75 @@ lowering convention or host contract.</p>
           return { t: "Let", name: an, value: { t: "Bin", op: aop, lhs: { t: "Var", name: an }, rhs: arhs } };
         }
         if (nx.kind === "op" && nx.value === ".") { var call = this.parseCallFromId(); this.endLine(); return { t: "CallStmt", call: call }; }
+        if (nx.kind === "op" && nx.value === "(") { var cn = this.next().value; var cargs = this.parseArgs(); this.endLine(); return { t: "CallStmt", call: { t: "Call", ns: null, method: cn, args: cargs } }; }
       }
       throw new Error("BASIC: cannot parse statement at " + t.value);
     },
     parseDim: function () {
       this.eatKw("DIM"); var name = this.next().value; var init = null;
       if (this.peek().kind === "op" && this.peek().value === "=") { this.next(); init = this.parseExpr(); }
+      else if (this.peekWord() === "NEW") { this.eatWord(); this.expectWord("CARD"); init = { t: "Call", ns: "Storage", method: "AddCard", args: [] }; }
       this.endLine(); return { t: "Dim", name: name, init: init };
     },
-    parseLet: function (eat) { if (eat) this.eatKw("LET"); var name = this.next().value; this.eatOp("="); var v = this.parseExpr(); this.endLine(); return { t: "Let", name: name, value: v }; },
+    parseLet: function (eat) { if (eat) this.eatKw("LET"); var name = this.next().value; if (this.peekWord() === "NEW") { this.eatWord(); this.expectWord("CARD"); this.endLine(); return { t: "Let", name: name, value: { t: "Call", ns: "Storage", method: "AddCard", args: [] } }; } this.eatOp("="); var v = this.parseExpr(); this.endLine(); return { t: "Let", name: name, value: v }; },
+    peekWord: function () { var t = this.peek(); if (t.kind === "id") return t.value.toUpperCase(); if (t.kind === "kw") return t.value; return null; },
+    eatWord: function () { var t = this.next(); if (t.kind !== "id" && t.kind !== "kw") throw new Error("BASIC: expected a word got " + t.value); return t.value.toUpperCase(); },
+    expectWord: function (e) { var w = this.eatWord(); if (w !== e) throw new Error("BASIC: expected " + e + " got " + w); },
+    parseStoreBody: function (wantValue) {
+      var verb = this.eatWord();
+      if (wantValue && verb !== "NEW") throw new Error("BASIC: STORE " + verb + " is a statement, not a value");
+      if (verb === "USE") { this.expectWord("PACK"); return { t: "Call", ns: "Storage", method: "UsePack", args: [this.parseAtom()] }; }
+      if (verb === "SET") {
+        if (this.peekWord() === "PACK") { this.eatWord(); return { t: "Call", ns: "Storage", method: "UsePack", args: [this.parseAtom()] }; }
+        var field = this.parseAtom(); this.eatOp("="); var rhs = this.parseExpr();
+        var method = (rhs.t === "Str") ? "SetFieldStr" : "SetField";
+        return { t: "Call", ns: "Storage", method: method, args: [field, rhs] };
+      }
+      if (verb === "DELETE") { this.expectWord("CARD"); return { t: "Call", ns: "Storage", method: "DeleteCard", args: [this.parseAtom()] }; }
+      if (verb === "NEW") { this.expectWord("CARD"); return { t: "Call", ns: "Storage", method: "AddCard", args: [] }; }
+      throw new Error("BASIC: unknown STORE verb " + verb);
+    },
+    parseLoadBody: function (wantValue) {
+      var w = this.peekWord();
+      if (w === "CARD") { this.eatWord(); return { t: "Call", ns: "Storage", method: "EditCard", args: [this.parseAtom()] }; }
+      if (w === "QUERY") { this.eatWord(); return { t: "Call", ns: "Storage", method: "QueryCard", args: [this.parseAtom()] }; }
+      if (w === "RESULT") { this.eatWord(); return { t: "Call", ns: "Storage", method: "QueryResult", args: [this.parseAtom()] }; }
+      var field = this.parseAtom();
+      if (this.peekWord() === "AS") { this.eatWord(); this.expectWord("TEXT"); return { t: "Call", ns: "Storage", method: "GetFieldStr", args: [field] }; }
+      return { t: "Call", ns: "Storage", method: "GetField", args: [field] };
+    },
+    parseGpioBody: function (wantValue) {
+      var verb = this.eatWord();
+      if (verb === "COUNT") return { t: "Call", ns: "Gpio", method: "Count", args: [] };
+      if (verb === "READ") return { t: "Call", ns: "Gpio", method: "Read", args: [this.parseAtom()] };
+      if (verb === "WRITE") {
+        if (wantValue) throw new Error("BASIC: GPIO WRITE is a statement, not a value");
+        var pin = this.parseAtom(); this.eatOp("="); var val = this.parseExpr();
+        return { t: "Call", ns: "Gpio", method: "Write", args: [pin, val] };
+      }
+      if (verb === "DIR" || verb === "PULL") {
+        var pin2 = this.parseAtom();
+        if (!wantValue && this.peek().kind === "op" && this.peek().value === "=") {
+          this.eatOp("=");
+          var rhs2 = (verb === "DIR") ? this.parseDirValue() : this.parsePullValue();
+          return { t: "Call", ns: "Gpio", method: (verb === "DIR" ? "SetDir" : "SetPull"), args: [pin2, rhs2] };
+        }
+        return { t: "Call", ns: "Gpio", method: (verb === "DIR" ? "GetDir" : "GetPull"), args: [pin2] };
+      }
+      throw new Error("BASIC: unknown GPIO verb " + verb);
+    },
+    parseDirValue: function () {
+      var t = this.peek();
+      if (t.kind === "kw" && t.value === "IN") { this.next(); return { t: "Num", value: 0 }; }
+      if (t.kind === "id" && (t.value.toUpperCase() === "OUT" || t.value.toUpperCase() === "OUTPUT")) { this.next(); return { t: "Num", value: 1 }; }
+      if (t.kind === "id" && t.value.toUpperCase() === "INPUT") { this.next(); return { t: "Num", value: 0 }; }
+      return this.parseExpr();
+    },
+    parsePullValue: function () {
+      var t = this.peek();
+      if (t.kind === "id") { var w = t.value.toUpperCase(); if (w === "NONE") { this.next(); return { t: "Num", value: 0 }; } if (w === "UP") { this.next(); return { t: "Num", value: 1 }; } if (w === "DOWN") { this.next(); return { t: "Num", value: 2 }; } }
+      return this.parseExpr();
+    },
     parseIf: function () {
       this.eatKw("IF"); var cond = this.parseCondition(); this.eatKw("THEN"); this.endLine();
       var body = this.parseBlock("ELSEIF", "ELSE", "ENDIF"); var arms = [[cond, body]]; var els = null;
@@ -6401,6 +7075,7 @@ lowering convention or host contract.</p>
       this.eatKw("ENDDISPATCH"); this.endLine(); return { t: "Dispatch", expr: expr, cases: cases, def: def };
     },
     parseSub: function () { this.eatKw("SUB"); var name = this.next().value; this.endLine(); var body = this.parseBlock("ENDSUB"); this.eatKw("ENDSUB"); this.endLine(); return { t: "Sub", name: name, body: body }; },
+    parseServer: function () { this.eatKw("SERVER"); this.endLine(); var body = this.parseBlock("ENDSERVER"); this.eatKw("ENDSERVER"); this.endLine(); return { t: "ServerMain", body: body }; },
     parseCallFromId: function () { var ns = this.next().value; this.eatOp("."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
     parseArgs: function () { this.eatOp("("); var a = []; if (!(this.peek().kind === "op" && this.peek().value === ")")) { a.push(this.parseExpr()); while (this.peek().kind === "op" && this.peek().value === ",") { this.next(); a.push(this.parseExpr()); } } this.eatOp(")"); return a; },
     parseCondition: function () { return this.parseExpr(); },
@@ -6423,15 +7098,41 @@ lowering convention or host contract.</p>
       var t = this.next();
       if (t.kind === "num") return { t: "Num", value: numval(t.value) };
       if (t.kind === "str") return { t: "Str", value: t.value };
+      if (t.kind === "kw" && t.value === "STORE") return this.parseStoreBody(true);
+      if (t.kind === "kw" && t.value === "LOAD") return this.parseLoadBody(true);
+      if (t.kind === "kw" && t.value === "GPIO") return this.parseGpioBody(true);
       if (t.kind === "kw" && t.value === "IIF") {
         this.eatOp("("); var c = this.parseExpr(); this.eatOp(",");
         var th = this.parseExpr(); this.eatOp(","); var el = this.parseExpr(); this.eatOp(")");
         return { t: "Ternary", cond: c, then: th, els: el };
       }
       if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.eatOp(")"); return e; }
-      if (t.kind === "id") { if (this.peek().kind === "op" && this.peek().value === ".") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; } return { t: "Var", name: t.value }; }
+      if (t.kind === "id") { if (this.peek().kind === "op" && this.peek().value === ".") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; } if (this.peek().kind === "op" && this.peek().value === "(") { return { t: "Call", ns: null, method: t.value, args: this.parseArgs() }; } return { t: "Var", name: t.value }; }
       throw new Error("BASIC: unexpected token " + t.value);
     }
+  };
+
+  // Idiomatic aliases for the BASIC + (shared-lowerer) Python/English frontends ->
+  // canonical (ns, method). Mirrors picoscript_basic.BP_ALIASES/BP_RADIX so Python-
+  // and JS-compiled bytecode stay identical. Keys lowercase; a user SUB of the same
+  // name takes precedence. Radix formatters follow each language's convention.
+  var BP_ALIASES = {
+    poke: ["Memory", "Set"], peek: ["Memory", "Get"],
+    len: ["String", "Length"], "mid$": ["String", "Substring"],
+    "ucase$": ["String", "ToUpper"], "lcase$": ["String", "ToLower"],
+    instr: ["String", "IndexOf"], val: ["Number", "Parse"],
+    "str$": ["Number", "ToString"], abs: ["Number", "Abs"],
+    sqr: ["Maths", "Sqrt"], "oct$": ["Number", "ToOctal"], "bin$": ["Number", "ToBinary"],
+    span: ["Span", "Make"], sha256: ["Crypto", "Sha256"],
+    min: ["Number", "Min"], max: ["Number", "Max"],
+    str: ["Number", "ToString"], int: ["Number", "Parse"],
+    pow: ["Maths", "Power"], upper: ["String", "ToUpper"],
+    lower: ["String", "ToLower"], find: ["String", "IndexOf"],
+    substr: ["String", "Substring"]
+  };
+  var BP_RADIX = {
+    hex: ["ToHex", "0x", false], oct: ["ToOctal", "0o", false],
+    bin: ["ToBinary", "0b", false], "hex$": ["ToHex", null, true]
   };
 
   function BLowerer() { this.b = new ILBuilder(); this.vars = {}; this.subs = []; this.scopes = []; this._strlitN = 0; }
@@ -6447,6 +7148,7 @@ lowering convention or host contract.</p>
     },
     stmt: function (s) {
       var self = this;
+      if (typeof s.pos === "number" && s.pos >= 0) this.b.curPos = s.pos;   // INV-25
       if (s.t === "Let") this.assignTo(this.varOf(s.name), s.value);
       else if (s.t === "Dim") { var dv = this.varOf(s.name); if (s.init === null) this.b.const_(dv, 0); else this.assignTo(dv, s.init); }
       else if (s.t === "IncDec") { var iv = this.varOf(s.name); if (s.delta === 1) this.b.inc(iv); else this.b.arith("sub", iv, iv, new Imm(1)); }
@@ -6465,6 +7167,7 @@ lowering convention or host contract.</p>
       else if (s.t === "Dispatch") this.lowerDispatch(s);
       else if (s.t === "Print") { if (s.value.t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, s.value.value)], null); } else { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); } }
       else if (s.t === "CallStmt") this.lowerCall(s.call, false);
+      else if (s.t === "ServerMain") s.body.forEach(function (st) { self.stmt(st); });
       else throw new Error("BASIC: cannot lower " + s.t);
     },
     assignTo: function (dst, e) {
@@ -6629,6 +7332,22 @@ lowering convention or host contract.</p>
     },
     lowerCall: function (c, want) {
       var ns = c.ns, m = c.method;
+      if (ns == null) {
+        var key = m.toLowerCase();
+        var isSub = this.subs.some(function (s) { return s.name.toLowerCase() === key; });
+        if (BP_RADIX[key] && !isSub) {
+          var r = BP_RADIX[key], cm = r[0], prefix = r[1], upper = r[2];
+          var val = this.eval(c.args[0]);
+          var d = this.b.vreg(); this.b.host("Number", cm, [val], d);
+          if (upper) { var outU = this.b.vreg(); this.b.host("String", "ToUpper", [d], outU); return outU; }
+          if (prefix) { var pre = emitStrSpan(this, prefix); var outP = this.b.vreg(); this.b.host("String", "Concat", [pre, d], outP); return outP; }
+          return d;
+        }
+        if (BP_ALIASES[key] && !isSub) {
+          var al = BP_ALIASES[key];
+          return this.lowerCall({ t: "Call", ns: al[0], method: al[1], args: c.args }, want);
+        }
+      }
       if (ns != null && ns.toUpperCase() === "NET") {
         var M = m.toUpperCase();
         if (M === "STATUS") this.b.net("status", intlit(c.args[0]));
@@ -6667,36 +7386,38 @@ lowering convention or host contract.</p>
   var PY_TWO = { "==":1,"!=":1,"<=":1,">=":1,"+=":1,"-=":1,"*=":1,"/=":1,"%=":1 };
   var PY_ONE = "+-*/%()<>=,.:";
 
-  function indentTokLine(text, out, kwset, two, one, who) {
+  function indentTokLine(text, out, kwset, two, one, who, lineStart) {
     var i = 0, n = text.length;
     while (i < n) {
-      var c = text[i];
+      var c = text[i], start = lineStart + i;
       if (c === " " || c === "\t") { i++; continue; }
       if (c === "#") break;
-      if (isDigit(c)) { var j = i; if (c === "0" && (text[j + 1] === "x" || text[j + 1] === "X")) { j += 2; while (j < n && /[0-9a-fA-F]/.test(text[j])) j++; } else { while (j < n && isDigit(text[j])) j++; } out.push({ kind: "num", value: text.slice(i, j) }); i = j; continue; }
-      if (isAlpha(c)) { var j2 = i; while (j2 < n && isAlnum(text[j2])) j2++; var w = text.slice(i, j2); if (kwset === null) out.push({ kind: "word", value: w }); else out.push({ kind: kwset[w.toLowerCase()] ? "kw" : "id", value: w }); i = j2; continue; }
-      if (c === '"' || c === "'") { var q = c, j3 = i + 1, b = ""; while (j3 < n && text[j3] !== q) { if (text[j3] === "\\" && j3 + 1 < n) { var nx = text[j3 + 1]; b += ({ n: "\n", t: "\t", "\\": "\\", '"': '"', "'": "'" }[nx] || nx); j3 += 2; } else { b += text[j3]; j3++; } } if (j3 >= n) throw new Error(who + ": unterminated string"); out.push({ kind: "str", value: b }); i = j3 + 1; continue; }
+      if (isDigit(c)) { var j = i; if (c === "0" && (text[j + 1] === "x" || text[j + 1] === "X")) { j += 2; while (j < n && /[0-9a-fA-F]/.test(text[j])) j++; } else { while (j < n && isDigit(text[j])) j++; } out.push({ kind: "num", value: text.slice(i, j), pos: start }); i = j; continue; }
+      if (isAlpha(c)) { var j2 = i; while (j2 < n && isAlnum(text[j2])) j2++; var w = text.slice(i, j2); if (kwset === null) out.push({ kind: "word", value: w, pos: start }); else out.push({ kind: kwset[w.toLowerCase()] ? "kw" : "id", value: w, pos: start }); i = j2; continue; }
+      if (c === '"' || c === "'") { var q = c, j3 = i + 1, b = ""; while (j3 < n && text[j3] !== q) { if (text[j3] === "\\" && j3 + 1 < n) { var nx = text[j3 + 1]; b += ({ n: "\n", t: "\t", "\\": "\\", '"': '"', "'": "'" }[nx] || nx); j3 += 2; } else { b += text[j3]; j3++; } } if (j3 >= n) throw new Error(who + ": unterminated string"); out.push({ kind: "str", value: b, pos: start }); i = j3 + 1; continue; }
       var tw = text.slice(i, i + 2);
-      if (two[tw]) { out.push({ kind: "op", value: tw }); i += 2; continue; }
-      if (one.indexOf(c) >= 0) { out.push({ kind: "op", value: c }); i++; continue; }
+      if (two[tw]) { out.push({ kind: "op", value: tw, pos: start }); i += 2; continue; }
+      if (one.indexOf(c) >= 0) { out.push({ kind: "op", value: c, pos: start }); i++; continue; }
       throw new Error(who + ": unexpected char " + JSON.stringify(c));
     }
   }
 
   function indentTokenize(src, kwset, two, one, who) {
     var out = [], indents = [0], lines = src.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    var offset = 0;
     for (var li = 0; li < lines.length; li++) {
-      var line = lines[li], stripped = line.replace(/^[ \t]+/, "");
+      var line = lines[li], lineStart = offset; offset += line.length + 1;
+      var stripped = line.replace(/^[ \t]+/, "");
       if (stripped === "" || stripped[0] === "#") continue;
       var indent = line.length - stripped.length;
-      if (indent > indents[indents.length - 1]) { indents.push(indent); out.push({ kind: "indent", value: "" }); }
-      else { while (indent < indents[indents.length - 1]) { indents.pop(); out.push({ kind: "dedent", value: "" }); } if (indent !== indents[indents.length - 1]) throw new Error(who + ": inconsistent indentation"); }
+      if (indent > indents[indents.length - 1]) { indents.push(indent); out.push({ kind: "indent", value: "", pos: lineStart }); }
+      else { while (indent < indents[indents.length - 1]) { indents.pop(); out.push({ kind: "dedent", value: "", pos: lineStart }); } if (indent !== indents[indents.length - 1]) throw new Error(who + ": inconsistent indentation"); }
       var before = out.length;
-      indentTokLine(line, out, kwset, two, one, who);
-      if (out.length > before) out.push({ kind: "newline", value: "" });
+      indentTokLine(line, out, kwset, two, one, who, lineStart);
+      if (out.length > before) out.push({ kind: "newline", value: "", pos: lineStart });
     }
-    while (indents.length > 1) { indents.pop(); out.push({ kind: "dedent", value: "" }); }
-    out.push({ kind: "eof", value: "" });
+    while (indents.length > 1) { indents.pop(); out.push({ kind: "dedent", value: "", pos: offset }); }
+    out.push({ kind: "eof", value: "", pos: offset });
     return out;
   }
 
@@ -6718,6 +7439,12 @@ lowering convention or host contract.</p>
       this.expect("dedent"); return s;
     },
     parseStmt: function () {
+      var start = this.peek().pos;
+      var node = this._parseStmt();
+      if (node != null) node.pos = start;
+      return node;
+    },
+    _parseStmt: function () {
       var t = this.peek();
       if (t.kind === "kw") {
         var kw = t.value.toLowerCase();
@@ -6742,7 +7469,7 @@ lowering convention or host contract.</p>
         if (nx.kind === "op" && nx.value === "=") { var nm = this.next().value; this.next(); var vv = this.parseExpr(); this.expect("newline"); return { t: "Let", name: nm, value: vv }; }
         if (nx.kind === "op" && PY_AUG[nx.value]) { var an = this.next().value; var op = PY_AUG[this.next().value]; var rhs = this.parseExpr(); this.expect("newline"); return { t: "Let", name: an, value: { t: "Bin", op: op, lhs: { t: "Var", name: an }, rhs: rhs } }; }
         if (nx.kind === "op" && nx.value === ".") { var call = this.parseCallFromId(); this.expect("newline"); return { t: "CallStmt", call: call }; }
-        if (nx.kind === "op" && nx.value === "(") { var gn = this.next().value; this.expect("op", "("); this.expect("op", ")"); this.expect("newline"); return { t: "Gosub", name: gn }; }
+        if (nx.kind === "op" && nx.value === "(") { var gn = this.next().value; var gargs = this.parseArgs(); this.expect("newline"); if (gargs.length === 0) return { t: "Gosub", name: gn }; return { t: "CallStmt", call: { t: "Call", ns: null, method: gn, args: gargs } }; }
       }
       throw new Error("Python: cannot parse statement at " + t.value);
     },
@@ -6823,7 +7550,7 @@ lowering convention or host contract.</p>
       if (t.kind === "str") return { t: "Str", value: t.value };
       if (t.kind === "kw" && (t.value.toLowerCase() === "true" || t.value.toLowerCase() === "false")) return { t: "Num", value: t.value.toLowerCase() === "true" ? 1 : 0 };
       if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.expect("op", ")"); return e; }
-      if (t.kind === "id") { if (this.at("op", ".")) { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; } return { t: "Var", name: t.value }; }
+      if (t.kind === "id") { if (this.at("op", ".")) { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; } if (this.at("op", "(")) { return { t: "Call", ns: null, method: t.value, args: this.parseArgs() }; } return { t: "Var", name: t.value }; }
       throw new Error("Python: unexpected token " + t.value);
     }
   };
@@ -6855,6 +7582,12 @@ lowering convention or host contract.</p>
       this.expect("dedent"); return s;
     },
     parseStmt: function () {
+      var start = this.peek().pos;
+      var node = this._parseStmt();
+      if (node != null) node.pos = start;
+      return node;
+    },
+    _parseStmt: function () {
       var t = this.peek();
       if (t.kind === "word") {
         var w = t.value.toLowerCase();
@@ -7002,6 +7735,37 @@ lowering convention or host contract.</p>
   };
   function compileEnglish(src) { return new BLowerer().lowerProgram(new EnParser(entokenize(src)).parseProgram()); }
 
+  // ── INV-25: structured debug trace -- symbolication (mirrors picoscript_il) ──
+  var FAULT_NAMES = {
+    0: "none", 1: "step_budget", 2: "bad_opcode", 3: "bad_jump", 4: "call_overflow",
+    5: "ret_underflow", 6: "bad_hook", 7: "template", 8: "capability", 9: "alloc", 10: "const_write"
+  };
+  function offsetToLineCol(source, off) {
+    if (source == null || off == null || off < 0 || off > source.length) return [0, 0];
+    var line = 1, lastNl = -1;
+    for (var k = 0; k < off; k++) { if (source[k] === "\n") { line++; lastNl = k; } }
+    return [line, off - lastNl];
+  }
+  function sourceLineText(source, off) {
+    if (source == null || off == null || off < 0 || off > source.length) return "";
+    var start = source.lastIndexOf("\n", off - 1) + 1;
+    var end = source.indexOf("\n", off);
+    if (end < 0) end = source.length;
+    return source.slice(start, end);
+  }
+  function symbolize(code, pc, detail, debug, source) {
+    source = source || "";
+    var rec = (debug && Object.prototype.hasOwnProperty.call(debug, pc)) ? debug[pc] : null;
+    var off = rec ? rec[0] : -1, op = rec ? rec[1] : "", ns = rec ? rec[2] : null, method = rec ? rec[3] : null;
+    var lc = offsetToLineCol(source, off);
+    var target = ns ? (ns + "." + method) : (op || "?");
+    return {
+      code: code, fault: (FAULT_NAMES[code] !== undefined ? FAULT_NAMES[code] : String(code)),
+      pc: pc, detail: detail, op: op || "?", target: target,
+      off: off, line: lc[0], col: lc[1], source_line: sourceLineText(source, off)
+    };
+  }
+
   function compileIL(src, lang) {
     return (lang === "basic") ? compileBasic(src)
          : (lang === "python") ? compilePython(src)
@@ -7023,6 +7787,15 @@ lowering convention or host contract.</p>
     compileBasic: function (src) { return { words: lowerToBytecode(compileBasic(src), true), il: compileBasic(src) }; },
     compilePython: function (src) { return { words: lowerToBytecode(compilePython(src), true), il: compilePython(src) }; },
     compileEnglish: function (src) { return { words: lowerToBytecode(compileEnglish(src), true), il: compileEnglish(src) }; },
+    compileWithDebug: function (src, lang) {
+      var dbg = {};
+      var words = lowerToBytecode(compileIL(src, lang), true, null, true, dbg);
+      return { words: words, debug: dbg };
+    },
+    symbolize: symbolize,
+    offsetToLineCol: offsetToLineCol,
+    sourceLineText: sourceLineText,
+    FAULT_NAMES: FAULT_NAMES,
     _lowerToBytecode: lowerToBytecode,
     _VReg: VReg, _Imm: Imm, _ILBuilder: ILBuilder, _canonHost: canonHost, _encodeCardAddr: encodeCardAddr,
     _COND: COND, _COND_NEGATE: COND_NEGATE
@@ -7216,7 +7989,7 @@ lowering convention or host contract.</p>
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
 <script>
 var DATA=[{"title": "Variables & arithmetic", "desc": "Declare variables with DIM and evaluate expressions. Both styles are case-insensitive for keywords and variable names; one global scope.", "c": {"src": "int a = 6;\nint b = 7;\nprint(a * b + 1);", "words": ["50010000", "40000006", "41000000", "50010000", "40000007", "42000000", "60110002", "43000001", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #6", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R2, R0, #0", "MUL R0, R1, R2", "ADD R3, R0, #1", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [43], "status": -1}, "basic": {"src": "DIM A = 6\nDIM B = 7\nPRINT A * B + 1", "words": ["50010000", "40000006", "41000000", "50010000", "40000007", "42000000", "60110002", "43000001", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #6", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R2, R0, #0", "MUL R0, R1, R2", "ADD R3, R0, #1", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [43], "status": -1}, "python": {"src": "a = 6\nb = 7\nprint(a * b + 1)", "words": ["50010000", "40000006", "41000000", "50010000", "40000007", "42000000", "60110002", "43000001", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #6", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R2, R0, #0", "MUL R0, R1, R2", "ADD R3, R0, #1", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [43], "status": -1}, "english": {"src": "Set a to 6.\nSet b to 7.\nPrint a times b plus 1.", "words": ["50010000", "40000006", "41000000", "50010000", "40000007", "42000000", "60110002", "43000001", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #6", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R2, R0, #0", "MUL R0, R1, R2", "ADD R3, R0, #1", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [43], "status": -1}}, {"title": "Conditional (if / else)", "desc": "Branch on a comparison. C uses braces; BASIC uses IF/THEN/ELSE/ENDIF. BASIC accepts symbol (>, =, <>) or word (GT, EQ, NE) comparators.", "c": {"src": "int x = 7;\nif (x > 5) {\n    print(100);\n} else {\n    print(200);\n}", "words": ["50010000", "40000007", "41000000", "50010000", "40000005", "a1040006", "50010000", "40000064", "2000fffe", "3000fffe", "9000000f", "50010000", "400000c8", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #100", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 15", "SUB R0, R0, R0", "ADD R0, R0, #200", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [100], "status": -1}, "basic": {"src": "DIM X = 7\nIF X > 5 THEN\n    PRINT 100\nELSE\n    PRINT 200\nENDIF", "words": ["50010000", "40000007", "41000000", "50010000", "40000005", "a1040006", "50010000", "40000064", "2000fffe", "3000fffe", "9000000f", "50010000", "400000c8", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #100", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 15", "SUB R0, R0, R0", "ADD R0, R0, #200", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [100], "status": -1}, "python": {"src": "x = 7\nif x > 5:\n    print(100)\nelse:\n    print(200)", "words": ["50010000", "40000007", "41000000", "50010000", "40000005", "a1040006", "50010000", "40000064", "2000fffe", "3000fffe", "9000000f", "50010000", "400000c8", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #100", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 15", "SUB R0, R0, R0", "ADD R0, R0, #200", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [100], "status": -1}, "english": {"src": "Set x to 7.\nIf x is greater than 5:\n    Print 100.\nOtherwise:\n    Print 200.", "words": ["50010000", "40000007", "41000000", "50010000", "40000005", "a1040006", "50010000", "40000064", "2000fffe", "3000fffe", "9000000f", "50010000", "400000c8", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #7", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #100", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 15", "SUB R0, R0, R0", "ADD R0, R0, #200", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [100], "status": -1}}, {"title": "While loop", "desc": "Repeat while a condition holds (factorial of 5).", "c": {"src": "int n = 5;\nint f = 1;\nwhile (n > 1) {\n    f = f * n;\n    n = n - 1;\n}\nprint(f);", "words": ["50010000", "40000005", "41000000", "50010000", "40000001", "42000000", "50010000", "40000001", "a1040004", "62210001", "51100001", "90000006", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #5", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH LE R1, R0, +4", "MUL R2, R2, R1", "SUB R1, R1, #1", "JUMP 6", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [120], "status": -1}, "basic": {"src": "DIM N = 5\nDIM F = 1\nWHILE N > 1\n    F = F * N\n    DEC N\nENDWHILE\nPRINT F", "words": ["50010000", "40000005", "41000000", "50010000", "40000001", "42000000", "50010000", "40000001", "a1040004", "62210001", "51100001", "90000006", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #5", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH LE R1, R0, +4", "MUL R2, R2, R1", "SUB R1, R1, #1", "JUMP 6", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [120], "status": -1}, "python": {"src": "n = 5\nf = 1\nwhile n > 1:\n    f = f * n\n    n -= 1\nprint(f)", "words": ["50010000", "40000005", "41000000", "50010000", "40000001", "42000000", "50010000", "40000001", "a1040004", "62210001", "51100001", "90000006", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #5", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH LE R1, R0, +4", "MUL R2, R2, R1", "SUB R1, R1, #1", "JUMP 6", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [120], "status": -1}, "english": {"src": "Set n to 5.\nSet f to 1.\nWhile n is greater than 1:\n    Set f to f times n.\n    Decrease n by 1.\nPrint f.", "words": ["50010000", "40000005", "41000000", "50010000", "40000001", "42000000", "50010000", "40000001", "a1040004", "62210001", "51100001", "90000006", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #5", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH LE R1, R0, +4", "MUL R2, R2, R1", "SUB R1, R1, #1", "JUMP 6", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [120], "status": -1}}, {"title": "Counted loop (for)", "desc": "Sum 1..10. C uses a C-style for with i++; BASIC uses FOR/TO/NEXT.", "c": {"src": "int s = 0;\nfor (i = 1; i <= 10; i++) {\n    s += i;\n}\nprint(s);", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "a2030005", "41110002", "40200000", "82000000", "90000006", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R2, R0, +5", "ADD R1, R1, R2", "ADD R0, R2, #0", "INC R2", "JUMP 6", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [55], "status": -1}, "basic": {"src": "DIM S = 0\nFOR I = 1 TO 10\n    S += I\nNEXT\nPRINT S", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "43000000", "a2330004", "41110002", "82000000", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R3, R0, #0", "BRANCH GT R2, R3, +4", "ADD R1, R1, R2", "INC R2", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [55], "status": -1}, "python": {"src": "s = 0\nfor i in range(1, 11):\n    s += i\nprint(s)", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "43000000", "a2330004", "41110002", "82000000", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R3, R0, #0", "BRANCH GT R2, R3, +4", "ADD R1, R1, R2", "INC R2", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [55], "status": -1}, "english": {"src": "Set s to 0.\nFor each i from 1 to 10:\n    Increase s by i.\nPrint s.", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "43000000", "a2330004", "41110002", "82000000", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R3, R0, #0", "BRANCH GT R2, R3, +4", "ADD R1, R1, R2", "INC R2", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [55], "status": -1}}, {"title": "Index iteration (foreach)", "desc": "Iterate an index 0..N-1. C expresses it as a for loop; BASIC has FOREACH.", "c": {"src": "int a = 0;\nfor (j = 0; j < 5; j++) {\n    a += j;\n}\nprint(a);", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "50010000", "40000005", "a2050005", "41110002", "40200000", "82000000", "90000006", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH GE R2, R0, +5", "ADD R1, R1, R2", "ADD R0, R2, #0", "INC R2", "JUMP 6", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [10], "status": -1}, "basic": {"src": "DIM A = 0\nFOREACH J IN 5\n    A += J\nENDFOREACH\nPRINT A", "words": ["50010000", "40000000", "41000000", "50010000", "40000005", "43000000", "52210002", "42200000", "a2350004", "41110002", "82000000", "90000008", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "ADD R3, R0, #0", "SUB R2, R2, R2", "ADD R2, R2, #0", "BRANCH GE R2, R3, +4", "ADD R1, R1, R2", "INC R2", "JUMP 8", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [10], "status": -1}, "python": {"src": "a = 0\nfor j in range(5):\n    a += j\nprint(a)", "words": ["50010000", "40000000", "41000000", "50010000", "40000005", "43000000", "52210002", "42200000", "a2350004", "41110002", "82000000", "90000008", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "ADD R3, R0, #0", "SUB R2, R2, R2", "ADD R2, R2, #0", "BRANCH GE R2, R3, +4", "ADD R1, R1, R2", "INC R2", "JUMP 8", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [10], "status": -1}, "english": {"src": "Set a to 0.\nRepeat 5 times with j:\n    Increase a by j.\nPrint a.", "words": ["50010000", "40000000", "41000000", "50010000", "40000005", "43000000", "52210002", "42200000", "a2350004", "41110002", "82000000", "90000008", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "ADD R3, R0, #0", "SUB R2, R2, R2", "ADD R2, R2, #0", "BRANCH GE R2, R3, +4", "ADD R1, R1, R2", "INC R2", "JUMP 8", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [10], "status": -1}}, {"title": "Operators (++ -- ?: && % )", "desc": "Increment/decrement, the ternary ?: (IIF in BASIC), short-circuit AND/OR, real modulo (% / MOD) and compound assignment.", "c": {"src": "int x = 10;\nx++;\nx += 5;\nint y = x % 7;\nint z = (y == 2 && x > 10) ? 100 : 0;\nprint(x); print(y); print(z);", "words": ["50010000", "4000000a", "41000000", "40100000", "81000000", "41100005", "50010000", "40000007", "74110000", "65410000", "50110005", "42000000", "50010000", "40000002", "a2000004", "50010000", "40000000", "90000014", "50010000", "40000001", "a006000d", "50010000", "4000000a", "a1030004", "50010000", "40000000", "9000001d", "50010000", "40000001", "a0060004", "50010000", "40000001", "90000023", "50010000", "40000000", "a0060005", "50010000", "40000064", "44000000", "9000002b", "50010000", "40000000", "44000000", "43400000", "2010fffe", "3010fffe", "2020fffe", "3020fffe", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R1, R0, #0", "ADD R0, R1, #0", "INC R1", "ADD R1, R1, #5", "SUB R0, R0, R0", "ADD R0, R0, #7", "DIV R4, R1, R0", "MUL R5, R4, R0", "SUB R0, R1, R5", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH EQ R2, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 20", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +13", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R1, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 29", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #1", "JUMP 35", "SUB R0, R0, R0", "ADD R0, R0, #0", "BRANCH Z R0, R0, +5", "SUB R0, R0, R0", "ADD R0, R0, #100", "ADD R4, R0, #0", "JUMP 43", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R4, R0, #0", "ADD R3, R4, #0", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [16, 2, 100], "status": -1}, "basic": {"src": "DIM X = 10\nINC X\nX += 5\nDIM Y = X MOD 7\nDIM Z = IIF(Y = 2 AND X > 10, 100, 0)\nPRINT X\nPRINT Y\nPRINT Z", "words": ["50010000", "4000000a", "41000000", "81000000", "41100005", "50010000", "40000007", "74110000", "65410000", "50110005", "42000000", "50010000", "40000002", "a2000004", "50010000", "40000000", "90000013", "50010000", "40000001", "a006000d", "50010000", "4000000a", "a1030004", "50010000", "40000000", "9000001c", "50010000", "40000001", "a0060004", "50010000", "40000001", "90000022", "50010000", "40000000", "a0060005", "50010000", "40000064", "44000000", "9000002a", "50010000", "40000000", "44000000", "43400000", "2010fffe", "3010fffe", "2020fffe", "3020fffe", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R1, R0, #0", "INC R1", "ADD R1, R1, #5", "SUB R0, R0, R0", "ADD R0, R0, #7", "DIV R4, R1, R0", "MUL R5, R4, R0", "SUB R0, R1, R5", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH EQ R2, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 19", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +13", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R1, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 28", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #1", "JUMP 34", "SUB R0, R0, R0", "ADD R0, R0, #0", "BRANCH Z R0, R0, +5", "SUB R0, R0, R0", "ADD R0, R0, #100", "ADD R4, R0, #0", "JUMP 42", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R4, R0, #0", "ADD R3, R4, #0", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [16, 2, 100], "status": -1}, "python": {"src": "x = 10\nx += 1\nx += 5\ny = x % 7\nz = 100 if y == 2 and x > 10 else 0\nprint(x)\nprint(y)\nprint(z)", "words": ["50010000", "4000000a", "41000000", "81000000", "41100005", "50010000", "40000007", "74110000", "65410000", "50110005", "42000000", "50010000", "40000002", "a2000004", "50010000", "40000000", "90000013", "50010000", "40000001", "a006000d", "50010000", "4000000a", "a1030004", "50010000", "40000000", "9000001c", "50010000", "40000001", "a0060004", "50010000", "40000001", "90000022", "50010000", "40000000", "a0060005", "50010000", "40000064", "44000000", "9000002a", "50010000", "40000000", "44000000", "43400000", "2010fffe", "3010fffe", "2020fffe", "3020fffe", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R1, R0, #0", "INC R1", "ADD R1, R1, #5", "SUB R0, R0, R0", "ADD R0, R0, #7", "DIV R4, R1, R0", "MUL R5, R4, R0", "SUB R0, R1, R5", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH EQ R2, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 19", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +13", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R1, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 28", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #1", "JUMP 34", "SUB R0, R0, R0", "ADD R0, R0, #0", "BRANCH Z R0, R0, +5", "SUB R0, R0, R0", "ADD R0, R0, #100", "ADD R4, R0, #0", "JUMP 42", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R4, R0, #0", "ADD R3, R4, #0", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [16, 2, 100], "status": -1}, "english": {"src": "Set x to 10.\nIncrease x by 1.\nIncrease x by 5.\nSet y to x modulo 7.\nSet z to 100 if y is 2 and x is greater than 10 otherwise 0.\nPrint x.\nPrint y.\nPrint z.", "words": ["50010000", "4000000a", "41000000", "81000000", "41100005", "50010000", "40000007", "74110000", "65410000", "50110005", "42000000", "50010000", "40000002", "a2000004", "50010000", "40000000", "90000013", "50010000", "40000001", "a006000d", "50010000", "4000000a", "a1030004", "50010000", "40000000", "9000001c", "50010000", "40000001", "a0060004", "50010000", "40000001", "90000022", "50010000", "40000000", "a0060005", "50010000", "40000064", "44000000", "9000002a", "50010000", "40000000", "44000000", "43400000", "2010fffe", "3010fffe", "2020fffe", "3020fffe", "2030fffe", "3030fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R1, R0, #0", "INC R1", "ADD R1, R1, #5", "SUB R0, R0, R0", "ADD R0, R0, #7", "DIV R4, R1, R0", "MUL R5, R4, R0", "SUB R0, R1, R5", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH EQ R2, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 19", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +13", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R1, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #0", "JUMP 28", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH Z R0, R0, +4", "SUB R0, R0, R0", "ADD R0, R0, #1", "JUMP 34", "SUB R0, R0, R0", "ADD R0, R0, #0", "BRANCH Z R0, R0, +5", "SUB R0, R0, R0", "ADD R0, R0, #100", "ADD R4, R0, #0", "JUMP 42", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R4, R0, #0", "ADD R3, R4, #0", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "SAVE R3, [0xfffe]", "PIPE R3, [0xfffe]", "RETURN"], "out": [16, 2, 100], "status": -1}}, {"title": "Multi-way branch (switch)", "desc": "Pick a branch by value &mdash; a first-class switch in every style.", "c": {"src": "int code = 2;\nswitch (code) {\n    case 1: print(10); break;\n    case 2: print(20); break;\n    default: print(0);\n}", "words": ["50010000", "40000002", "41000000", "50010000", "40000001", "a1010006", "50010000", "4000000a", "2000fffe", "3000fffe", "90000017", "50010000", "40000002", "a1010006", "50010000", "40000014", "2000fffe", "3000fffe", "90000017", "50010000", "40000000", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #2", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH NE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #10", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 23", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH NE R1, R0, +6", "SUB R0, R0, R0", "ADD R0, R0, #20", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 23", "SUB R0, R0, R0", "ADD R0, R0, #0", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [20], "status": -1}, "basic": {"src": "DIM CODE = 2\nSWITCH CODE\n    CASE 1\n        PRINT 10\n    CASE 2\n        PRINT 20\n    DEFAULT\n        PRINT 0\nENDSWITCH", "words": ["50010000", "40000002", "41000000", "50010000", "40000001", "a1000005", "50010000", "40000002", "a1000007", "90000014", "50010000", "4000000a", "2000fffe", "3000fffe", "90000018", "50010000", "40000014", "2000fffe", "3000fffe", "90000018", "50010000", "40000000", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #2", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH EQ R1, R0, +5", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH EQ R1, R0, +7", "JUMP 20", "SUB R0, R0, R0", "ADD R0, R0, #10", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 24", "SUB R0, R0, R0", "ADD R0, R0, #20", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 24", "SUB R0, R0, R0", "ADD R0, R0, #0", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [20], "status": -1}, "python": {"src": "code = 2\nmatch code:\n    case 1:\n        print(10)\n    case 2:\n        print(20)\n    case _:\n        print(0)", "words": ["50010000", "40000002", "41000000", "50010000", "40000001", "a1000005", "50010000", "40000002", "a1000007", "90000014", "50010000", "4000000a", "2000fffe", "3000fffe", "90000018", "50010000", "40000014", "2000fffe", "3000fffe", "90000018", "50010000", "40000000", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #2", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH EQ R1, R0, +5", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH EQ R1, R0, +7", "JUMP 20", "SUB R0, R0, R0", "ADD R0, R0, #10", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 24", "SUB R0, R0, R0", "ADD R0, R0, #20", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 24", "SUB R0, R0, R0", "ADD R0, R0, #0", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [20], "status": -1}, "english": {"src": "Set code to 2.\nChoose code:\n    When 1:\n        Print 10.\n    When 2:\n        Print 20.\n    Otherwise:\n        Print 0.", "words": ["50010000", "40000002", "41000000", "50010000", "40000001", "a1000005", "50010000", "40000002", "a1000007", "90000014", "50010000", "4000000a", "2000fffe", "3000fffe", "90000018", "50010000", "40000014", "2000fffe", "3000fffe", "90000018", "50010000", "40000000", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #2", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "BRANCH EQ R1, R0, +5", "SUB R0, R0, R0", "ADD R0, R0, #2", "BRANCH EQ R1, R0, +7", "JUMP 20", "SUB R0, R0, R0", "ADD R0, R0, #10", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 24", "SUB R0, R0, R0", "ADD R0, R0, #20", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "JUMP 24", "SUB R0, R0, R0", "ADD R0, R0, #0", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [20], "status": -1}}, {"title": "Jump-table dispatch (state machine)", "desc": "<code>dispatch</code> is a switch that compiles to a real <b>jump table</b> (an indexed jump) instead of a compare chain &mdash; O(1) dispatch on a dense integer selector. It is the primitive under switch / match / event / hook / interrupt / protocol dispatch, so you can write a state machine (or a protocol parser) directly in PicoScript. Here a 3-state ring advances 5 steps (0&rarr;1&rarr;2&rarr;0&rarr;1&rarr;2). Out-of-range selectors fall through a bounds guard to the default.", "c": {"src": "int st = 0;\nint k = 0;\nwhile (k < 5) {\n    dispatch (st) {\n        case 0: st = 1; break;\n        case 1: st = 2; break;\n        case 2: st = 0; break;\n    }\n    k++;\n}\nprint(st);", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "50010000", "40000005", "a205001a", "50010000", "40000003", "a1050014", "50010000", "40000000", "a1020011", "90130010", "90000013", "90000017", "9000001b", "50010000", "40000001", "41000000", "9000001f", "50010000", "40000002", "41000000", "9000001f", "50010000", "40000000", "41000000", "9000001f", "40200000", "82000000", "90000006", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH GE R2, R0, +26", "SUB R0, R0, R0", "ADD R0, R0, #3", "BRANCH GE R1, R0, +20", "SUB R0, R0, R0", "ADD R0, R0, #0", "BRANCH LT R1, R0, +17", "JUMP 16", "JUMP 19", "JUMP 23", "JUMP 27", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R1, R0, #0", "JUMP 31", "SUB R0, R0, R0", "ADD R0, R0, #2", "ADD R1, R0, #0", "JUMP 31", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "JUMP 31", "ADD R0, R2, #0", "INC R2", "JUMP 6", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [2], "status": -1}, "basic": {"src": "DIM ST = 0\nDIM K = 0\nWHILE K < 5\n    DISPATCH ST\n        CASE 0\n            ST = 1\n        CASE 1\n            ST = 2\n        CASE 2\n            ST = 0\n    ENDDISPATCH\n    INC K\nENDWHILE\nPRINT ST", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "50010000", "40000005", "a2050019", "50010000", "40000003", "a1050014", "50010000", "40000000", "a1020011", "90130010", "90000013", "90000017", "9000001b", "50010000", "40000001", "41000000", "9000001f", "50010000", "40000002", "41000000", "9000001f", "50010000", "40000000", "41000000", "9000001f", "82000000", "90000006", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH GE R2, R0, +25", "SUB R0, R0, R0", "ADD R0, R0, #3", "BRANCH GE R1, R0, +20", "SUB R0, R0, R0", "ADD R0, R0, #0", "BRANCH LT R1, R0, +17", "JUMP 16", "JUMP 19", "JUMP 23", "JUMP 27", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R1, R0, #0", "JUMP 31", "SUB R0, R0, R0", "ADD R0, R0, #2", "ADD R1, R0, #0", "JUMP 31", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "JUMP 31", "INC R2", "JUMP 6", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [2], "status": -1}, "python": {"src": "st = 0\nk = 0\nwhile k < 5:\n    dispatch st:\n        case 0:\n            st = 1\n        case 1:\n            st = 2\n        case 2:\n            st = 0\n    k += 1\nprint(st)", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "50010000", "40000005", "a2050019", "50010000", "40000003", "a1050014", "50010000", "40000000", "a1020011", "90130010", "90000013", "90000017", "9000001b", "50010000", "40000001", "41000000", "9000001f", "50010000", "40000002", "41000000", "9000001f", "50010000", "40000000", "41000000", "9000001f", "82000000", "90000006", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH GE R2, R0, +25", "SUB R0, R0, R0", "ADD R0, R0, #3", "BRANCH GE R1, R0, +20", "SUB R0, R0, R0", "ADD R0, R0, #0", "BRANCH LT R1, R0, +17", "JUMP 16", "JUMP 19", "JUMP 23", "JUMP 27", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R1, R0, #0", "JUMP 31", "SUB R0, R0, R0", "ADD R0, R0, #2", "ADD R1, R0, #0", "JUMP 31", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "JUMP 31", "INC R2", "JUMP 6", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [2], "status": -1}, "english": {"src": "Set st to 0.\nSet k to 0.\nWhile k is less than 5:\n    Dispatch on st:\n        When 0:\n            Set st to 1.\n        When 1:\n            Set st to 2.\n        When 2:\n            Set st to 0.\n    Increase k by 1.\nPrint st.", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "50010000", "40000005", "a2050019", "50010000", "40000003", "a1050014", "50010000", "40000000", "a1020011", "90130010", "90000013", "90000017", "9000001b", "50010000", "40000001", "41000000", "9000001f", "50010000", "40000002", "41000000", "9000001f", "50010000", "40000000", "41000000", "9000001f", "82000000", "90000006", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH GE R2, R0, +25", "SUB R0, R0, R0", "ADD R0, R0, #3", "BRANCH GE R1, R0, +20", "SUB R0, R0, R0", "ADD R0, R0, #0", "BRANCH LT R1, R0, +17", "JUMP 16", "JUMP 19", "JUMP 23", "JUMP 27", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R1, R0, #0", "JUMP 31", "SUB R0, R0, R0", "ADD R0, R0, #2", "ADD R1, R0, #0", "JUMP 31", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "JUMP 31", "INC R2", "JUMP 6", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [2], "status": -1}}, {"title": "Subroutine (call / gosub)", "desc": "Factor shared logic. Variables are global, so the routine sees ACC.", "c": {"src": "void dbl() {\n    acc = acc + acc;\n}\nint acc = 21;\ndbl();\nprint(acc);", "words": ["50010000", "40000015", "41000000", "b0000007", "2010fffe", "3010fffe", "c0000000", "41110001", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #21", "ADD R1, R0, #0", "CALL 7", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN", "ADD R1, R1, R1", "RETURN"], "out": [42], "status": -1}, "basic": {"src": "DIM ACC = 21\nGOSUB DBL\nPRINT ACC\nRETURN\nSUB DBL\n    ACC = ACC + ACC\nENDSUB", "words": ["50010000", "40000015", "41000000", "b0000008", "2010fffe", "3010fffe", "c0000000", "c0000000", "41110001", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #21", "ADD R1, R0, #0", "CALL 8", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN", "RETURN", "ADD R1, R1, R1", "RETURN"], "out": [42], "status": -1}, "python": {"src": "def dbl():\n    acc = acc + acc\nacc = 21\ndbl()\nprint(acc)", "words": ["50010000", "40000015", "41000000", "b0000007", "2010fffe", "3010fffe", "c0000000", "41110001", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #21", "ADD R1, R0, #0", "CALL 7", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN", "ADD R1, R1, R1", "RETURN"], "out": [42], "status": -1}, "english": {"src": "Define dbl:\n    Set acc to acc plus acc.\nSet acc to 21.\nDo dbl.\nPrint acc.", "words": ["50010000", "40000015", "41000000", "b0000007", "2010fffe", "3010fffe", "c0000000", "41110001", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #21", "ADD R1, R0, #0", "CALL 7", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN", "ADD R1, R1, R1", "RETURN"], "out": [42], "status": -1}}, {"title": "Unconditional jump (goto)", "desc": "A back-jump loop with a label and goto &mdash; now first-class in every style.", "c": {"src": "int n = 0;\ntop:\nn++;\nif (n < 4) { goto top; }\nprint(n);", "words": ["50010000", "40000000", "41000000", "40100000", "81000000", "50010000", "40000004", "a1050002", "90000003", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "ADD R0, R1, #0", "INC R1", "SUB R0, R0, R0", "ADD R0, R0, #4", "BRANCH GE R1, R0, +2", "JUMP 3", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [4], "status": -1}, "basic": {"src": "DIM N = 0\nTOP:\nINC N\nIF N < 4 THEN\n    GOTO TOP\nENDIF\nPRINT N", "words": ["50010000", "40000000", "41000000", "81000000", "50010000", "40000004", "a1050003", "90000003", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "INC R1", "SUB R0, R0, R0", "ADD R0, R0, #4", "BRANCH GE R1, R0, +3", "JUMP 3", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [4], "status": -1}, "python": {"src": "n = 0\nlabel top\nn += 1\nif n < 4:\n    goto top\nprint(n)", "words": ["50010000", "40000000", "41000000", "81000000", "50010000", "40000004", "a1050003", "90000003", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "INC R1", "SUB R0, R0, R0", "ADD R0, R0, #4", "BRANCH GE R1, R0, +3", "JUMP 3", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [4], "status": -1}, "english": {"src": "Set n to 0.\nLabel top.\nIncrease n by 1.\nIf n is less than 4:\n    Go to top.\nPrint n.", "words": ["50010000", "40000000", "41000000", "81000000", "50010000", "40000004", "a1050003", "90000003", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "INC R1", "SUB R0, R0, R0", "ADD R0, R0, #4", "BRANCH GE R1, R0, +3", "JUMP 3", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [4], "status": -1}}, {"title": "Post-test loop (do)", "desc": "A loop whose body always runs at least once (condition checked at the bottom).", "c": {"src": "int i = 0;\nint s = 0;\ndo {\n    i++;\n    s += i;\n} while (i < 5);\nprint(s);", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "40100000", "81000000", "42210001", "50010000", "40000005", "a1050002", "90000006", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "ADD R0, R1, #0", "INC R1", "ADD R2, R2, R1", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH GE R1, R0, +2", "JUMP 6", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [15], "status": -1}, "basic": {"src": "DIM I = 0\nDIM S = 0\nDO\n    INC I\n    S += I\nLOOP UNTIL I >= 5\nPRINT S", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "81000000", "42210001", "50010000", "40000005", "a102fffc", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "INC R1", "ADD R2, R2, R1", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LT R1, R0, -4", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [15], "status": -1}, "python": {"src": "i = 0\ns = 0\ndo:\n    i += 1\n    s += i\nuntil i >= 5\nprint(s)", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "81000000", "42210001", "50010000", "40000005", "a102fffc", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "INC R1", "ADD R2, R2, R1", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LT R1, R0, -4", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [15], "status": -1}, "english": {"src": "Set i to 0.\nSet s to 0.\nRepeat:\n    Increase i by 1.\n    Increase s by i.\nUntil i is at least 5.\nPrint s.", "words": ["50010000", "40000000", "41000000", "50010000", "40000000", "42000000", "81000000", "42210001", "50010000", "40000005", "a102fffc", "2020fffe", "3020fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R2, R0, #0", "INC R1", "ADD R2, R2, R1", "SUB R0, R0, R0", "ADD R0, R0, #5", "BRANCH LT R1, R0, -4", "SAVE R2, [0xfffe]", "PIPE R2, [0xfffe]", "RETURN"], "out": [15], "status": -1}}, {"title": "Early exit &amp; skip (break / skip)", "desc": "Sum 1..10 but skip multiples of 3 and stop once the sum passes 20.", "c": {"src": "int s = 0;\nfor (i = 1; i <= 10; i++) {\n    if (i % 3 == 0) { continue; }\n    s += i;\n    if (s > 20) { break; }\n}\nprint(s);", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "a2030012", "50010000", "40000003", "73210000", "64310000", "50210004", "53310003", "43300000", "a0310002", "90000017", "41110002", "50010000", "40000014", "a1040002", "9000001a", "40200000", "82000000", "90000006", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "BRANCH GT R2, R0, +18", "SUB R0, R0, R0", "ADD R0, R0, #3", "DIV R3, R2, R0", "MUL R4, R3, R0", "SUB R0, R2, R4", "SUB R3, R3, R3", "ADD R3, R3, #0", "BRANCH NE R0, R3, +2", "JUMP 23", "ADD R1, R1, R2", "SUB R0, R0, R0", "ADD R0, R0, #20", "BRANCH LE R1, R0, +2", "JUMP 26", "ADD R0, R2, #0", "INC R2", "JUMP 6", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [27], "status": -1}, "basic": {"src": "DIM S = 0\nFOR I = 1 TO 10\n    IF I MOD 3 = 0 THEN\n        SKIP\n    ENDIF\n    S += I\n    IF S > 20 THEN\n        BREAK\n    ENDIF\nNEXT\nPRINT S", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "43000000", "a2330013", "50010000", "40000003", "74210000", "65410000", "50210005", "54410004", "44400000", "a0410003", "9000001a", "90000014", "41110002", "50010000", "40000014", "a1040003", "9000001c", "9000001a", "82000000", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R3, R0, #0", "BRANCH GT R2, R3, +19", "SUB R0, R0, R0", "ADD R0, R0, #3", "DIV R4, R2, R0", "MUL R5, R4, R0", "SUB R0, R2, R5", "SUB R4, R4, R4", "ADD R4, R4, #0", "BRANCH NE R0, R4, +3", "JUMP 26", "JUMP 20", "ADD R1, R1, R2", "SUB R0, R0, R0", "ADD R0, R0, #20", "BRANCH LE R1, R0, +3", "JUMP 28", "JUMP 26", "INC R2", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [27], "status": -1}, "python": {"src": "s = 0\nfor i in range(1, 11):\n    if i % 3 == 0:\n        continue\n    s += i\n    if s > 20:\n        break\nprint(s)", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "43000000", "a2330013", "50010000", "40000003", "74210000", "65410000", "50210005", "54410004", "44400000", "a0410003", "9000001a", "90000014", "41110002", "50010000", "40000014", "a1040003", "9000001c", "9000001a", "82000000", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R3, R0, #0", "BRANCH GT R2, R3, +19", "SUB R0, R0, R0", "ADD R0, R0, #3", "DIV R4, R2, R0", "MUL R5, R4, R0", "SUB R0, R2, R5", "SUB R4, R4, R4", "ADD R4, R4, #0", "BRANCH NE R0, R4, +3", "JUMP 26", "JUMP 20", "ADD R1, R1, R2", "SUB R0, R0, R0", "ADD R0, R0, #20", "BRANCH LE R1, R0, +3", "JUMP 28", "JUMP 26", "INC R2", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [27], "status": -1}, "english": {"src": "Set s to 0.\nFor each i from 1 to 10:\n    If i modulo 3 is 0:\n        Skip.\n    Increase s by i.\n    If s is greater than 20:\n        Stop.\nPrint s.", "words": ["50010000", "40000000", "41000000", "50010000", "40000001", "42000000", "50010000", "4000000a", "43000000", "a2330013", "50010000", "40000003", "74210000", "65410000", "50210005", "54410004", "44400000", "a0410003", "9000001a", "90000014", "41110002", "50010000", "40000014", "a1040003", "9000001c", "9000001a", "82000000", "90000009", "2010fffe", "3010fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #0", "ADD R1, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "ADD R2, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #10", "ADD R3, R0, #0", "BRANCH GT R2, R3, +19", "SUB R0, R0, R0", "ADD R0, R0, #3", "DIV R4, R2, R0", "MUL R5, R4, R0", "SUB R0, R2, R5", "SUB R4, R4, R4", "ADD R4, R4, #0", "BRANCH NE R0, R4, +3", "JUMP 26", "JUMP 20", "ADD R1, R1, R2", "SUB R0, R0, R0", "ADD R0, R0, #20", "BRANCH LE R1, R0, +3", "JUMP 28", "JUMP 26", "INC R2", "JUMP 9", "SAVE R1, [0xfffe]", "PIPE R1, [0xfffe]", "RETURN"], "out": [27], "status": -1}}, {"title": "HTTP response (Net.*)", "desc": "Set an HTTP status/type and emit a value. Namespaces are case-insensitive too.", "c": {"src": "Net.Status(200);\nNet.Type(\"application/json\");\nprint(42);", "words": ["000080c8", "0000a002", "50010000", "4000002a", "2000fffe", "3000fffe", "c0000000"], "disasm": ["NET.STATUS 200", "NET.TYPE #0xa002", "SUB R0, R0, R0", "ADD R0, R0, #42", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [42], "status": 200}, "basic": {"src": "NET.STATUS(200)\nNET.TYPE(\"application/json\")\nPRINT 42", "words": ["000080c8", "0000a002", "50010000", "4000002a", "2000fffe", "3000fffe", "c0000000"], "disasm": ["NET.STATUS 200", "NET.TYPE #0xa002", "SUB R0, R0, R0", "ADD R0, R0, #42", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [42], "status": 200}, "python": {"src": "Net.Status(200)\nNet.Type(\"application/json\")\nprint(42)", "words": ["000080c8", "0000a002", "50010000", "4000002a", "2000fffe", "3000fffe", "c0000000"], "disasm": ["NET.STATUS 200", "NET.TYPE #0xa002", "SUB R0, R0, R0", "ADD R0, R0, #42", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [42], "status": 200}, "english": {"src": "Net.Status(200).\nNet.Type(\"application/json\").\nPrint 42.", "words": ["000080c8", "0000a002", "50010000", "4000002a", "2000fffe", "3000fffe", "c0000000"], "disasm": ["NET.STATUS 200", "NET.TYPE #0xa002", "SUB R0, R0, R0", "ADD R0, R0, #42", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [42], "status": 200}}, {"title": "Cards: CRUD &amp; query (Storage.*)", "desc": "Program-level card store. Field names and queries are UTF-8 byte-spans built in arena memory (Memory.Set + Span.Make); cards are serialized with the PicoBinarySerializer into a PicoStore. UsePack selects a pack, AddCard/EditCard select the current card, then SetField/GetField/QueryCard operate on it. This creates 3 cards, reads (7) and updates (50) one, queries qty&gt;40 (3 ids), then deletes one and re-queries (2).", "c": {"src": "Memory.Set(200,113); Memory.Set(201,116); Memory.Set(202,121);\nint qty = Span.Make(200, 3);\nMemory.Set(210,113); Memory.Set(211,116); Memory.Set(212,121); Memory.Set(213,32);\nMemory.Set(214,62); Memory.Set(215,32); Memory.Set(216,52); Memory.Set(217,48);\nint qry = Span.Make(210, 8);\nStorage.UsePack(1);\nint a = Storage.AddCard(); Storage.SetField(qty, 42);\nint b = Storage.AddCard(); Storage.SetField(qty, 7);\nint c = Storage.AddCard(); Storage.SetField(qty, 99);\nStorage.EditCard(b); print(Storage.GetField(qty));\nStorage.SetField(qty, 50); print(Storage.GetField(qty));\nint n = Storage.QueryCard(qry); print(n);\nprint(Storage.QueryResult(0)); print(Storage.QueryResult(1)); print(Storage.QueryResult(2));\nStorage.DeleteCard(1); print(Storage.QueryCard(qry));", "words": ["50010000", "400000c8", "57710007", "47700071", "00077036", "50010000", "400000c9", "57710007", "47700074", "00077036", "50010000", "400000ca", "57710007", "47700079", "00077036", "50010000", "400000c8", "57710007", "47700003", "08077040", "41800000", "50010000", "400000d2", "57710007", "47700071", "00077036", "50010000", "400000d3", "57710007", "47700074", "00077036", "50010000", "400000d4", "57710007", "47700079", "00077036", "50010000", "400000d5", "57710007", "47700020", "00077036", "50010000", "400000d6", "57710007", "4770003e", "00077036", "50010000", "400000d7", "57710007", "47700020", "00077036", "50010000", "400000d8", "57710007", "47700034", "00077036", "50010000", "400000d9", "57710007", "47700030", "00077036", "50010000", "400000d2", "57710007", "47700008", "08077040", "42800000", "50010000", "40000001", "00007068", "00007062", "43000000", "50010000", "4000002a", "0010706b", "00007062", "44000000", "50010000", "40000007", "0010706b", "00007062", "45000000", "50010000", "40000063", "0010706b", "00407069", "0010706a", "2000fffe", "3000fffe", "50010000", "40000032", "0010706b", "0010706a", "2000fffe", "3000fffe", "00207067", "46000000", "2060fffe", "3060fffe", "50010000", "40000000", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "0700706e", "2070fffe", "3070fffe", "50010000", "40000002", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "00007064", "00207067", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #201", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #202", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #3", "HOSTCALL #0x40", "ADD R1, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #211", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #212", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #213", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #214", "SUB R7, R7, R7", "ADD R7, R7, #62", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #215", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #216", "SUB R7, R7, R7", "ADD R7, R7, #52", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #217", "SUB R7, R7, R7", "ADD R7, R7, #48", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #8", "HOSTCALL #0x40", "ADD R2, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x68", "HOSTCALL #0x62", "ADD R3, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #42", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R4, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R5, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #99", "HOSTCALL #0x6b", "HOSTCALL #0x69", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #50", "HOSTCALL #0x6b", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "HOSTCALL #0x67", "ADD R6, R0, #0", "SAVE R6, [0xfffe]", "PIPE R6, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #0", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #2", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x64", "HOSTCALL #0x67", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [7, 50, 3, 1, 2, 3, 2], "status": -1}, "basic": {"src": "Memory.Set(200, 113)\nMemory.Set(201, 116)\nMemory.Set(202, 121)\nDIM QTY = Span.Make(200, 3)\nMemory.Set(210, 113)\nMemory.Set(211, 116)\nMemory.Set(212, 121)\nMemory.Set(213, 32)\nMemory.Set(214, 62)\nMemory.Set(215, 32)\nMemory.Set(216, 52)\nMemory.Set(217, 48)\nDIM QRY = Span.Make(210, 8)\nStorage.UsePack(1)\nDIM A = Storage.AddCard()\nStorage.SetField(QTY, 42)\nDIM B = Storage.AddCard()\nStorage.SetField(QTY, 7)\nDIM C = Storage.AddCard()\nStorage.SetField(QTY, 99)\nStorage.EditCard(B)\nPRINT Storage.GetField(QTY)\nStorage.SetField(QTY, 50)\nPRINT Storage.GetField(QTY)\nDIM N = Storage.QueryCard(QRY)\nPRINT N\nPRINT Storage.QueryResult(0)\nPRINT Storage.QueryResult(1)\nPRINT Storage.QueryResult(2)\nStorage.DeleteCard(1)\nPRINT Storage.QueryCard(QRY)", "words": ["50010000", "400000c8", "57710007", "47700071", "00077036", "50010000", "400000c9", "57710007", "47700074", "00077036", "50010000", "400000ca", "57710007", "47700079", "00077036", "50010000", "400000c8", "57710007", "47700003", "08077040", "41800000", "50010000", "400000d2", "57710007", "47700071", "00077036", "50010000", "400000d3", "57710007", "47700074", "00077036", "50010000", "400000d4", "57710007", "47700079", "00077036", "50010000", "400000d5", "57710007", "47700020", "00077036", "50010000", "400000d6", "57710007", "4770003e", "00077036", "50010000", "400000d7", "57710007", "47700020", "00077036", "50010000", "400000d8", "57710007", "47700034", "00077036", "50010000", "400000d9", "57710007", "47700030", "00077036", "50010000", "400000d2", "57710007", "47700008", "08077040", "42800000", "50010000", "40000001", "00007068", "00007062", "43000000", "50010000", "4000002a", "0010706b", "00007062", "44000000", "50010000", "40000007", "0010706b", "00007062", "45000000", "50010000", "40000063", "0010706b", "00407069", "0010706a", "2000fffe", "3000fffe", "50010000", "40000032", "0010706b", "0010706a", "2000fffe", "3000fffe", "00207067", "46000000", "2060fffe", "3060fffe", "50010000", "40000000", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "0700706e", "2070fffe", "3070fffe", "50010000", "40000002", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "00007064", "00207067", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #201", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #202", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #3", "HOSTCALL #0x40", "ADD R1, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #211", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #212", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #213", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #214", "SUB R7, R7, R7", "ADD R7, R7, #62", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #215", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #216", "SUB R7, R7, R7", "ADD R7, R7, #52", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #217", "SUB R7, R7, R7", "ADD R7, R7, #48", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #8", "HOSTCALL #0x40", "ADD R2, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x68", "HOSTCALL #0x62", "ADD R3, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #42", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R4, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R5, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #99", "HOSTCALL #0x6b", "HOSTCALL #0x69", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #50", "HOSTCALL #0x6b", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "HOSTCALL #0x67", "ADD R6, R0, #0", "SAVE R6, [0xfffe]", "PIPE R6, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #0", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #2", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x64", "HOSTCALL #0x67", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [7, 50, 3, 1, 2, 3, 2], "status": -1}, "python": {"src": "Memory.Set(200, 113)\nMemory.Set(201, 116)\nMemory.Set(202, 121)\nqty = Span.Make(200, 3)\nMemory.Set(210, 113)\nMemory.Set(211, 116)\nMemory.Set(212, 121)\nMemory.Set(213, 32)\nMemory.Set(214, 62)\nMemory.Set(215, 32)\nMemory.Set(216, 52)\nMemory.Set(217, 48)\nqry = Span.Make(210, 8)\nStorage.UsePack(1)\na = Storage.AddCard()\nStorage.SetField(qty, 42)\nb = Storage.AddCard()\nStorage.SetField(qty, 7)\nc = Storage.AddCard()\nStorage.SetField(qty, 99)\nStorage.EditCard(b)\nprint(Storage.GetField(qty))\nStorage.SetField(qty, 50)\nprint(Storage.GetField(qty))\nn = Storage.QueryCard(qry)\nprint(n)\nprint(Storage.QueryResult(0))\nprint(Storage.QueryResult(1))\nprint(Storage.QueryResult(2))\nStorage.DeleteCard(1)\nprint(Storage.QueryCard(qry))", "words": ["50010000", "400000c8", "57710007", "47700071", "00077036", "50010000", "400000c9", "57710007", "47700074", "00077036", "50010000", "400000ca", "57710007", "47700079", "00077036", "50010000", "400000c8", "57710007", "47700003", "08077040", "41800000", "50010000", "400000d2", "57710007", "47700071", "00077036", "50010000", "400000d3", "57710007", "47700074", "00077036", "50010000", "400000d4", "57710007", "47700079", "00077036", "50010000", "400000d5", "57710007", "47700020", "00077036", "50010000", "400000d6", "57710007", "4770003e", "00077036", "50010000", "400000d7", "57710007", "47700020", "00077036", "50010000", "400000d8", "57710007", "47700034", "00077036", "50010000", "400000d9", "57710007", "47700030", "00077036", "50010000", "400000d2", "57710007", "47700008", "08077040", "42800000", "50010000", "40000001", "00007068", "00007062", "43000000", "50010000", "4000002a", "0010706b", "00007062", "44000000", "50010000", "40000007", "0010706b", "00007062", "45000000", "50010000", "40000063", "0010706b", "00407069", "0010706a", "2000fffe", "3000fffe", "50010000", "40000032", "0010706b", "0010706a", "2000fffe", "3000fffe", "00207067", "46000000", "2060fffe", "3060fffe", "50010000", "40000000", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "0700706e", "2070fffe", "3070fffe", "50010000", "40000002", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "00007064", "00207067", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #201", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #202", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #3", "HOSTCALL #0x40", "ADD R1, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #211", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #212", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #213", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #214", "SUB R7, R7, R7", "ADD R7, R7, #62", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #215", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #216", "SUB R7, R7, R7", "ADD R7, R7, #52", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #217", "SUB R7, R7, R7", "ADD R7, R7, #48", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #8", "HOSTCALL #0x40", "ADD R2, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x68", "HOSTCALL #0x62", "ADD R3, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #42", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R4, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R5, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #99", "HOSTCALL #0x6b", "HOSTCALL #0x69", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #50", "HOSTCALL #0x6b", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "HOSTCALL #0x67", "ADD R6, R0, #0", "SAVE R6, [0xfffe]", "PIPE R6, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #0", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #2", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x64", "HOSTCALL #0x67", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [7, 50, 3, 1, 2, 3, 2], "status": -1}, "english": {"src": "Memory.Set(200, 113).\nMemory.Set(201, 116).\nMemory.Set(202, 121).\nSet qty to Span.Make(200, 3).\nMemory.Set(210, 113).\nMemory.Set(211, 116).\nMemory.Set(212, 121).\nMemory.Set(213, 32).\nMemory.Set(214, 62).\nMemory.Set(215, 32).\nMemory.Set(216, 52).\nMemory.Set(217, 48).\nSet qry to Span.Make(210, 8).\nStorage.UsePack(1).\nSet a to Storage.AddCard().\nStorage.SetField(qty, 42).\nSet b to Storage.AddCard().\nStorage.SetField(qty, 7).\nSet c to Storage.AddCard().\nStorage.SetField(qty, 99).\nStorage.EditCard(b).\nPrint Storage.GetField(qty).\nStorage.SetField(qty, 50).\nPrint Storage.GetField(qty).\nSet n to Storage.QueryCard(qry).\nPrint n.\nPrint Storage.QueryResult(0).\nPrint Storage.QueryResult(1).\nPrint Storage.QueryResult(2).\nStorage.DeleteCard(1).\nPrint Storage.QueryCard(qry).", "words": ["50010000", "400000c8", "57710007", "47700071", "00077036", "50010000", "400000c9", "57710007", "47700074", "00077036", "50010000", "400000ca", "57710007", "47700079", "00077036", "50010000", "400000c8", "57710007", "47700003", "08077040", "41800000", "50010000", "400000d2", "57710007", "47700071", "00077036", "50010000", "400000d3", "57710007", "47700074", "00077036", "50010000", "400000d4", "57710007", "47700079", "00077036", "50010000", "400000d5", "57710007", "47700020", "00077036", "50010000", "400000d6", "57710007", "4770003e", "00077036", "50010000", "400000d7", "57710007", "47700020", "00077036", "50010000", "400000d8", "57710007", "47700034", "00077036", "50010000", "400000d9", "57710007", "47700030", "00077036", "50010000", "400000d2", "57710007", "47700008", "08077040", "42800000", "50010000", "40000001", "00007068", "00007062", "43000000", "50010000", "4000002a", "0010706b", "00007062", "44000000", "50010000", "40000007", "0010706b", "00007062", "45000000", "50010000", "40000063", "0010706b", "00407069", "0010706a", "2000fffe", "3000fffe", "50010000", "40000032", "0010706b", "0010706a", "2000fffe", "3000fffe", "00207067", "46000000", "2060fffe", "3060fffe", "50010000", "40000000", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "0700706e", "2070fffe", "3070fffe", "50010000", "40000002", "0700706e", "2070fffe", "3070fffe", "50010000", "40000001", "00007064", "00207067", "2000fffe", "3000fffe", "c0000000"], "disasm": ["SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #201", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #202", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #200", "SUB R7, R7, R7", "ADD R7, R7, #3", "HOSTCALL #0x40", "ADD R1, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #113", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #211", "SUB R7, R7, R7", "ADD R7, R7, #116", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #212", "SUB R7, R7, R7", "ADD R7, R7, #121", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #213", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #214", "SUB R7, R7, R7", "ADD R7, R7, #62", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #215", "SUB R7, R7, R7", "ADD R7, R7, #32", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #216", "SUB R7, R7, R7", "ADD R7, R7, #52", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #217", "SUB R7, R7, R7", "ADD R7, R7, #48", "HOSTCALL #0x36", "SUB R0, R0, R0", "ADD R0, R0, #210", "SUB R7, R7, R7", "ADD R7, R7, #8", "HOSTCALL #0x40", "ADD R2, R8, #0", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x68", "HOSTCALL #0x62", "ADD R3, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #42", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R4, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #7", "HOSTCALL #0x6b", "HOSTCALL #0x62", "ADD R5, R0, #0", "SUB R0, R0, R0", "ADD R0, R0, #99", "HOSTCALL #0x6b", "HOSTCALL #0x69", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #50", "HOSTCALL #0x6b", "HOSTCALL #0x6a", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "HOSTCALL #0x67", "ADD R6, R0, #0", "SAVE R6, [0xfffe]", "PIPE R6, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #0", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #2", "HOSTCALL #0x6e", "SAVE R7, [0xfffe]", "PIPE R7, [0xfffe]", "SUB R0, R0, R0", "ADD R0, R0, #1", "HOSTCALL #0x64", "HOSTCALL #0x67", "SAVE R0, [0xfffe]", "PIPE R0, [0xfffe]", "RETURN"], "out": [7, 50, 3, 1, 2, 3, 2], "status": -1}}];
-var NSDATA={"Kernel": [{"method": "WaitIRQ", "code": "0x01", "impl": false}, {"method": "WaitSWIRQ", "code": "0x02", "impl": false}, {"method": "FireSWIRQ", "code": "0x03", "impl": false}, {"method": "ProfileStart", "code": "0x04", "impl": false}, {"method": "ProfileEnd", "code": "0x05", "impl": false}, {"method": "TracePoint", "code": "0x06", "impl": false}], "Req": [{"method": "Seq", "code": "0x07", "impl": true}, {"method": "Principal", "code": "0x08", "impl": true}, {"method": "Method", "code": "0x09", "impl": true}, {"method": "Path", "code": "0x0A", "impl": true}, {"method": "Header", "code": "0x0B", "impl": true}, {"method": "BodyMode", "code": "0x0C", "impl": true}, {"method": "BodyCount", "code": "0x0D", "impl": true}, {"method": "BodySpan", "code": "0x0E", "impl": true}], "Queue": [{"method": "Dequeue", "code": "0x10", "impl": true}, {"method": "Enqueue", "code": "0x11", "impl": true}, {"method": "Depth", "code": "0x12", "impl": true}, {"method": "DequeueBatch", "code": "0x13", "impl": false}, {"method": "EnqueueBatch", "code": "0x14", "impl": false}], "Resp": [{"method": "Status", "code": "0x15", "impl": true}, {"method": "Header", "code": "0x16", "impl": true}, {"method": "Write", "code": "0x17", "impl": true}, {"method": "Trailer", "code": "0x18", "impl": true}, {"method": "Seal", "code": "0x19", "impl": true}, {"method": "End", "code": "0x1A", "impl": true}, {"method": "Respond", "code": "0x1B", "impl": true}, {"method": "Flush", "code": "0x1C", "impl": true}, {"method": "Continue", "code": "0x1D", "impl": true}, {"method": "EndStream", "code": "0x1E", "impl": true}, {"method": "Upgrade", "code": "0x1F", "impl": true}, {"method": "Abort", "code": "0x38", "impl": true}, {"method": "EarlyHints", "code": "0x39", "impl": true}], "Random": [{"method": "U32", "code": "0x20", "impl": true}], "Utf8Writer": [{"method": "New", "code": "0x21", "impl": true}, {"method": "Byte", "code": "0x22", "impl": true}, {"method": "Int", "code": "0x23", "impl": true}, {"method": "Span", "code": "0x24", "impl": true}, {"method": "ToSpan", "code": "0x25", "impl": true}, {"method": "Len", "code": "0x26", "impl": true}, {"method": "Reset", "code": "0x27", "impl": true}], "Utf8Reader": [{"method": "New", "code": "0x28", "impl": true}, {"method": "Peek", "code": "0x29", "impl": true}, {"method": "Next", "code": "0x2A", "impl": true}, {"method": "Int", "code": "0x2B", "impl": true}, {"method": "SkipWs", "code": "0x2C", "impl": true}, {"method": "Eof", "code": "0x2D", "impl": true}, {"method": "Pos", "code": "0x2E", "impl": true}, {"method": "Match", "code": "0x2F", "impl": true}], "Memory": [{"method": "ArenaInit", "code": "0x30", "impl": false}, {"method": "ArenaAlloc", "code": "0x31", "impl": false}, {"method": "ArenaReset", "code": "0x32", "impl": false}, {"method": "ArenaStats", "code": "0x33", "impl": false}, {"method": "Peek", "code": "0x34", "impl": false}, {"method": "Poke", "code": "0x35", "impl": false}, {"method": "Set", "code": "0x36", "impl": true}, {"method": "Get", "code": "0x37", "impl": true}], "Bits": [{"method": "And", "code": "0x3A", "impl": true}, {"method": "Or", "code": "0x3B", "impl": true}, {"method": "Xor", "code": "0x3C", "impl": true}, {"method": "Shl", "code": "0x3D", "impl": true}, {"method": "Shr", "code": "0x3E", "impl": true}, {"method": "Sar", "code": "0x3F", "impl": true}, {"method": "Not", "code": "0x4F", "impl": true}], "Span": [{"method": "Make", "code": "0x40", "impl": true}, {"method": "Slice", "code": "0x41", "impl": true}, {"method": "Materialize", "code": "0x42", "impl": true}, {"method": "Len", "code": "0x43", "impl": true}, {"method": "Get", "code": "0x44", "impl": true}], "Json": [{"method": "BeginObject", "code": "0x45", "impl": true}, {"method": "EndObject", "code": "0x46", "impl": true}, {"method": "BeginArray", "code": "0x47", "impl": true}, {"method": "EndArray", "code": "0x48", "impl": true}, {"method": "Key", "code": "0x49", "impl": true}, {"method": "Str", "code": "0x4A", "impl": true}, {"method": "Int", "code": "0x4B", "impl": true}, {"method": "Bool", "code": "0x4C", "impl": true}, {"method": "Null", "code": "0x4D", "impl": true}, {"method": "Raw", "code": "0x4E", "impl": true}], "Descriptor": [{"method": "Make", "code": "0x50", "impl": false}, {"method": "SetFlags", "code": "0x51", "impl": false}, {"method": "GetPtr", "code": "0x52", "impl": false}, {"method": "GetLen", "code": "0x53", "impl": false}, {"method": "GetFlags", "code": "0x54", "impl": false}, {"method": "CopyBatch", "code": "0x55", "impl": false}], "Dot8": [{"method": "Len", "code": "0x56", "impl": true}, {"method": "Of", "code": "0x57", "impl": true}], "Lease": [{"method": "Acquire", "code": "0x58", "impl": false}, {"method": "Release", "code": "0x59", "impl": false}, {"method": "Validate", "code": "0x5A", "impl": false}, {"method": "CachedValidate", "code": "0x5B", "impl": false}, {"method": "GetSpan", "code": "0x5C", "impl": false}, {"method": "GetTypeHint", "code": "0x5D", "impl": false}], "Storage": [{"method": "GetSchemaForPack", "code": "0x60", "impl": false}, {"method": "SetSchemaForPack", "code": "0x61", "impl": false}, {"method": "AddCard", "code": "0x62", "impl": true}, {"method": "UpdateCard", "code": "0x63", "impl": false}, {"method": "DeleteCard", "code": "0x64", "impl": true}, {"method": "PatchCard", "code": "0x65", "impl": false}, {"method": "ReadCard", "code": "0x66", "impl": false}, {"method": "QueryCard", "code": "0x67", "impl": true}, {"method": "UsePack", "code": "0x68", "impl": true}, {"method": "EditCard", "code": "0x69", "impl": true}, {"method": "GetField", "code": "0x6A", "impl": true}, {"method": "SetField", "code": "0x6B", "impl": true}, {"method": "SetFieldStr", "code": "0x6C", "impl": true}, {"method": "GetFieldStr", "code": "0x6D", "impl": true}, {"method": "QueryResult", "code": "0x6E", "impl": true}], "Thread": [{"method": "YieldCounted", "code": "0x70", "impl": false}], "Io": [{"method": "Write", "code": "0x71", "impl": true}, {"method": "WriteByte", "code": "0x72", "impl": true}], "Xml": [{"method": "Open", "code": "0x73", "impl": true}, {"method": "AttrName", "code": "0x74", "impl": true}, {"method": "AttrValue", "code": "0x75", "impl": true}, {"method": "OpenEnd", "code": "0x76", "impl": true}, {"method": "Text", "code": "0x77", "impl": true}, {"method": "Close", "code": "0x78", "impl": true}, {"method": "Empty", "code": "0x79", "impl": true}], "Template": [{"method": "Compile", "code": "0x7A", "impl": true}, {"method": "Render", "code": "0x7B", "impl": true}], "Arena": [{"method": "Mark", "code": "0x7C", "impl": true}, {"method": "Rewind", "code": "0x7D", "impl": true}, {"method": "Reset", "code": "0x7E", "impl": true}], "String": [{"method": "Concat", "code": "0x80", "impl": true}, {"method": "Length", "code": "0x81", "impl": true}, {"method": "Substring", "code": "0x82", "impl": true}, {"method": "IndexOf", "code": "0x83", "impl": true}, {"method": "Replace", "code": "0x84", "impl": true}, {"method": "ToUpper", "code": "0x85", "impl": true}, {"method": "ToLower", "code": "0x86", "impl": true}, {"method": "Trim", "code": "0x87", "impl": true}, {"method": "Split", "code": "0x88", "impl": false}, {"method": "Join", "code": "0x89", "impl": false}, {"method": "StartsWith", "code": "0x8A", "impl": true}, {"method": "EndsWith", "code": "0x8B", "impl": true}, {"method": "SetReplace", "code": "0x8C", "impl": true}], "Number": [{"method": "Parse", "code": "0x90", "impl": true}, {"method": "ToString", "code": "0x91", "impl": true}, {"method": "ToHex", "code": "0x92", "impl": true}, {"method": "ToOctal", "code": "0x93", "impl": true}, {"method": "ToBinary", "code": "0x94", "impl": true}, {"method": "Abs", "code": "0x95", "impl": true}, {"method": "Floor", "code": "0x96", "impl": true}, {"method": "Ceiling", "code": "0x97", "impl": true}, {"method": "Round", "code": "0x98", "impl": true}, {"method": "Min", "code": "0x99", "impl": true}, {"method": "Max", "code": "0x9A", "impl": true}], "Maths": [{"method": "Sin", "code": "0xA0", "impl": false}, {"method": "Cos", "code": "0xA1", "impl": false}, {"method": "Tan", "code": "0xA2", "impl": false}, {"method": "Sqrt", "code": "0xA3", "impl": true}, {"method": "Power", "code": "0xA4", "impl": true}, {"method": "Log", "code": "0xA5", "impl": false}, {"method": "Log10", "code": "0xA6", "impl": false}, {"method": "Exp", "code": "0xA7", "impl": false}, {"method": "Random", "code": "0xA8", "impl": false}, {"method": "RandomRange", "code": "0xA9", "impl": false}, {"method": "Clamp", "code": "0xAA", "impl": false}, {"method": "Lerp", "code": "0xAB", "impl": false}], "DateTime": [{"method": "Now", "code": "0xB0", "impl": false}, {"method": "UtcNow", "code": "0xB1", "impl": false}, {"method": "Parse", "code": "0xB2", "impl": false}, {"method": "Format", "code": "0xB3", "impl": false}, {"method": "AddSeconds", "code": "0xB4", "impl": false}, {"method": "AddMinutes", "code": "0xB5", "impl": false}, {"method": "AddHours", "code": "0xB6", "impl": false}, {"method": "AddDays", "code": "0xB7", "impl": false}, {"method": "GetDayOfWeek", "code": "0xB8", "impl": false}, {"method": "GetDayOfYear", "code": "0xB9", "impl": false}, {"method": "UnixTimestamp", "code": "0xBA", "impl": false}], "Locale": [{"method": "GetCurrentLocale", "code": "0xC0", "impl": false}, {"method": "SetLocale", "code": "0xC1", "impl": false}, {"method": "FormatCurrency", "code": "0xC2", "impl": false}, {"method": "FormatNumber", "code": "0xC3", "impl": false}, {"method": "FormatDate", "code": "0xC4", "impl": false}, {"method": "FormatTime", "code": "0xC5", "impl": false}, {"method": "Translate", "code": "0xC6", "impl": false}], "Environment": [{"method": "GetOsVersion", "code": "0xD0", "impl": false}, {"method": "GetCpuCount", "code": "0xD1", "impl": false}, {"method": "GetMemoryTotal", "code": "0xD2", "impl": false}, {"method": "GetMemoryFree", "code": "0xD3", "impl": false}, {"method": "GetHostname", "code": "0xD4", "impl": false}, {"method": "GetTimeZone", "code": "0xD5", "impl": false}, {"method": "GetProcessId", "code": "0xD6", "impl": false}, {"method": "GetThreadId", "code": "0xD7", "impl": false}, {"method": "GetElapsedTime", "code": "0xD8", "impl": false}], "Context": [{"method": "GetVerb", "code": "0xE0", "impl": false}, {"method": "GetPath", "code": "0xE1", "impl": false}, {"method": "GetHost", "code": "0xE2", "impl": false}, {"method": "GetPort", "code": "0xE3", "impl": false}, {"method": "GetRemoteAddr", "code": "0xE4", "impl": false}, {"method": "GetUser", "code": "0xE5", "impl": false}, {"method": "GetPermissions", "code": "0xE6", "impl": false}, {"method": "GetHeaders", "code": "0xE7", "impl": false}, {"method": "GetQueryString", "code": "0xE8", "impl": false}, {"method": "GetBody", "code": "0xE9", "impl": false}, {"method": "SetScratchValue", "code": "0xEA", "impl": false}, {"method": "GetScratchValue", "code": "0xEB", "impl": false}, {"method": "GetRequestId", "code": "0xEC", "impl": false}, {"method": "GetClientCert", "code": "0xED", "impl": false}, {"method": "GetTraceId", "code": "0xEE", "impl": false}], "Crypto": [{"method": "Sha256", "code": "0xF0", "impl": true}, {"method": "Sha512", "code": "0xF1", "impl": false}, {"method": "Blake2b", "code": "0xF2", "impl": false}, {"method": "Blake3", "code": "0xF3", "impl": false}, {"method": "HmacSha256", "code": "0xF4", "impl": false}, {"method": "HmacSha512", "code": "0xF5", "impl": false}, {"method": "Sign", "code": "0xF6", "impl": false}, {"method": "Verify", "code": "0xF7", "impl": false}, {"method": "Encrypt", "code": "0xF8", "impl": false}, {"method": "Decrypt", "code": "0xF9", "impl": false}, {"method": "GenerateKeyPair", "code": "0xFA", "impl": false}, {"method": "DeriveKey", "code": "0xFB", "impl": false}, {"method": "RandomBytes", "code": "0xFC", "impl": false}, {"method": "Md5", "code": "0xFD", "impl": false}, {"method": "Sha1", "code": "0xFE", "impl": false}], "Compress": [{"method": "BrotliCompress", "code": "0x100", "impl": false}, {"method": "BrotliDecompress", "code": "0x101", "impl": false}, {"method": "PicoCompress", "code": "0x102", "impl": true}, {"method": "PicoDecompress", "code": "0x103", "impl": true}, {"method": "GzipCompress", "code": "0x104", "impl": false}, {"method": "GzipDecompress", "code": "0x105", "impl": false}, {"method": "DeflateCompress", "code": "0x106", "impl": false}, {"method": "DeflateDecompress", "code": "0x107", "impl": false}], "X509": [{"method": "FetchCertificate", "code": "0x110", "impl": false}, {"method": "StoreCertificate", "code": "0x111", "impl": false}, {"method": "GenerateCSR", "code": "0x112", "impl": false}, {"method": "GenerateKeyPair", "code": "0x113", "impl": false}, {"method": "VerifyCertChain", "code": "0x114", "impl": false}, {"method": "GetCertInfo", "code": "0x115", "impl": false}, {"method": "IsCertValid", "code": "0x116", "impl": false}, {"method": "GetKeyHandle", "code": "0x117", "impl": false}], "Auth": [{"method": "GetUserCredentials", "code": "0x120", "impl": false}, {"method": "ValidateCredentials", "code": "0x121", "impl": false}, {"method": "SwitchUserContext", "code": "0x122", "impl": false}, {"method": "GetUserPermissions", "code": "0x123", "impl": false}, {"method": "RequestToken", "code": "0x124", "impl": false}, {"method": "GetToken", "code": "0x125", "impl": false}, {"method": "ValidateToken", "code": "0x126", "impl": false}, {"method": "SwitchTokenContext", "code": "0x127", "impl": false}, {"method": "RefreshToken", "code": "0x128", "impl": false}, {"method": "RevokeToken", "code": "0x129", "impl": false}], "Http": [{"method": "ReadHeader", "code": "0x130", "impl": false}, {"method": "ReadBody", "code": "0x131", "impl": false}, {"method": "GenerateHeaders", "code": "0x132", "impl": false}, {"method": "GenerateResponse", "code": "0x133", "impl": false}, {"method": "ParseQuery", "code": "0x134", "impl": true}, {"method": "ParseForm", "code": "0x135", "impl": true}, {"method": "ParseJson", "code": "0x136", "impl": true}, {"method": "EncodeJson", "code": "0x137", "impl": true}], "Html": [{"method": "CreateNode", "code": "0x140", "impl": false}, {"method": "AddChildNode", "code": "0x141", "impl": false}, {"method": "RemoveChildNode", "code": "0x142", "impl": false}, {"method": "SetAttribute", "code": "0x143", "impl": false}, {"method": "GetAttribute", "code": "0x144", "impl": false}, {"method": "ParseTree", "code": "0x145", "impl": false}, {"method": "Encode", "code": "0x146", "impl": true}, {"method": "Decode", "code": "0x147", "impl": true}, {"method": "Serialize", "code": "0x148", "impl": false}, {"method": "QuerySelector", "code": "0x149", "impl": false}]};
+var NSDATA={"Kernel": [{"method": "WaitIRQ", "code": "0x01", "impl": false}, {"method": "WaitSWIRQ", "code": "0x02", "impl": false}, {"method": "FireSWIRQ", "code": "0x03", "impl": false}, {"method": "ProfileStart", "code": "0x04", "impl": false}, {"method": "ProfileEnd", "code": "0x05", "impl": false}, {"method": "TracePoint", "code": "0x06", "impl": false}], "Req": [{"method": "Seq", "code": "0x07", "impl": true}, {"method": "Principal", "code": "0x08", "impl": true}, {"method": "Method", "code": "0x09", "impl": true}, {"method": "Path", "code": "0x0A", "impl": true}, {"method": "Header", "code": "0x0B", "impl": true}, {"method": "BodyMode", "code": "0x0C", "impl": true}, {"method": "BodyCount", "code": "0x0D", "impl": true}, {"method": "BodySpan", "code": "0x0E", "impl": true}], "Queue": [{"method": "Dequeue", "code": "0x10", "impl": true}, {"method": "Enqueue", "code": "0x11", "impl": true}, {"method": "Depth", "code": "0x12", "impl": true}, {"method": "DequeueBatch", "code": "0x13", "impl": false}, {"method": "EnqueueBatch", "code": "0x14", "impl": false}], "Resp": [{"method": "Status", "code": "0x15", "impl": true}, {"method": "Header", "code": "0x16", "impl": true}, {"method": "Write", "code": "0x17", "impl": true}, {"method": "Trailer", "code": "0x18", "impl": true}, {"method": "Seal", "code": "0x19", "impl": true}, {"method": "End", "code": "0x1A", "impl": true}, {"method": "Respond", "code": "0x1B", "impl": true}, {"method": "Flush", "code": "0x1C", "impl": true}, {"method": "Continue", "code": "0x1D", "impl": true}, {"method": "EndStream", "code": "0x1E", "impl": true}, {"method": "Upgrade", "code": "0x1F", "impl": true}, {"method": "Abort", "code": "0x38", "impl": true}, {"method": "EarlyHints", "code": "0x39", "impl": true}], "Random": [{"method": "U32", "code": "0x20", "impl": true}], "Utf8Writer": [{"method": "New", "code": "0x21", "impl": true}, {"method": "Byte", "code": "0x22", "impl": true}, {"method": "Int", "code": "0x23", "impl": true}, {"method": "Span", "code": "0x24", "impl": true}, {"method": "ToSpan", "code": "0x25", "impl": true}, {"method": "Len", "code": "0x26", "impl": true}, {"method": "Reset", "code": "0x27", "impl": true}], "Utf8Reader": [{"method": "New", "code": "0x28", "impl": true}, {"method": "Peek", "code": "0x29", "impl": true}, {"method": "Next", "code": "0x2A", "impl": true}, {"method": "Int", "code": "0x2B", "impl": true}, {"method": "SkipWs", "code": "0x2C", "impl": true}, {"method": "Eof", "code": "0x2D", "impl": true}, {"method": "Pos", "code": "0x2E", "impl": true}, {"method": "Match", "code": "0x2F", "impl": true}], "Memory": [{"method": "ArenaInit", "code": "0x30", "impl": false}, {"method": "ArenaAlloc", "code": "0x31", "impl": false}, {"method": "ArenaReset", "code": "0x32", "impl": false}, {"method": "ArenaStats", "code": "0x33", "impl": false}, {"method": "Peek", "code": "0x34", "impl": false}, {"method": "Poke", "code": "0x35", "impl": false}, {"method": "Set", "code": "0x36", "impl": true}, {"method": "Get", "code": "0x37", "impl": true}, {"method": "SetConst", "code": "0x5F", "impl": true}], "Bits": [{"method": "And", "code": "0x3A", "impl": true}, {"method": "Or", "code": "0x3B", "impl": true}, {"method": "Xor", "code": "0x3C", "impl": true}, {"method": "Shl", "code": "0x3D", "impl": true}, {"method": "Shr", "code": "0x3E", "impl": true}, {"method": "Sar", "code": "0x3F", "impl": true}, {"method": "Not", "code": "0x4F", "impl": true}], "Span": [{"method": "Make", "code": "0x40", "impl": true}, {"method": "Slice", "code": "0x41", "impl": true}, {"method": "Materialize", "code": "0x42", "impl": true}, {"method": "Len", "code": "0x43", "impl": true}, {"method": "Get", "code": "0x44", "impl": true}], "Json": [{"method": "BeginObject", "code": "0x45", "impl": true}, {"method": "EndObject", "code": "0x46", "impl": true}, {"method": "BeginArray", "code": "0x47", "impl": true}, {"method": "EndArray", "code": "0x48", "impl": true}, {"method": "Key", "code": "0x49", "impl": true}, {"method": "Str", "code": "0x4A", "impl": true}, {"method": "Int", "code": "0x4B", "impl": true}, {"method": "Bool", "code": "0x4C", "impl": true}, {"method": "Null", "code": "0x4D", "impl": true}, {"method": "Raw", "code": "0x4E", "impl": true}], "Descriptor": [{"method": "Make", "code": "0x50", "impl": false}, {"method": "SetFlags", "code": "0x51", "impl": false}, {"method": "GetPtr", "code": "0x52", "impl": false}, {"method": "GetLen", "code": "0x53", "impl": false}, {"method": "GetFlags", "code": "0x54", "impl": false}, {"method": "CopyBatch", "code": "0x55", "impl": false}], "Dot8": [{"method": "Len", "code": "0x56", "impl": true}, {"method": "Of", "code": "0x57", "impl": true}], "Lease": [{"method": "Acquire", "code": "0x58", "impl": false}, {"method": "Release", "code": "0x59", "impl": false}, {"method": "Validate", "code": "0x5A", "impl": false}, {"method": "CachedValidate", "code": "0x5B", "impl": false}, {"method": "GetSpan", "code": "0x5C", "impl": false}, {"method": "GetTypeHint", "code": "0x5D", "impl": false}], "Status": [{"method": "Last", "code": "0x5E", "impl": true}], "Storage": [{"method": "GetSchemaForPack", "code": "0x60", "impl": true}, {"method": "SetSchemaForPack", "code": "0x61", "impl": true}, {"method": "AddCard", "code": "0x62", "impl": true}, {"method": "UpdateCard", "code": "0x63", "impl": false}, {"method": "DeleteCard", "code": "0x64", "impl": true}, {"method": "PatchCard", "code": "0x65", "impl": false}, {"method": "ReadCard", "code": "0x66", "impl": false}, {"method": "QueryCard", "code": "0x67", "impl": true}, {"method": "UsePack", "code": "0x68", "impl": true}, {"method": "EditCard", "code": "0x69", "impl": true}, {"method": "GetField", "code": "0x6A", "impl": true}, {"method": "SetField", "code": "0x6B", "impl": true}, {"method": "SetFieldStr", "code": "0x6C", "impl": true}, {"method": "GetFieldStr", "code": "0x6D", "impl": true}, {"method": "QueryResult", "code": "0x6E", "impl": true}], "Thread": [{"method": "YieldCounted", "code": "0x70", "impl": false}], "Io": [{"method": "Write", "code": "0x71", "impl": true}, {"method": "WriteByte", "code": "0x72", "impl": true}], "Xml": [{"method": "Open", "code": "0x73", "impl": true}, {"method": "AttrName", "code": "0x74", "impl": true}, {"method": "AttrValue", "code": "0x75", "impl": true}, {"method": "OpenEnd", "code": "0x76", "impl": true}, {"method": "Text", "code": "0x77", "impl": true}, {"method": "Close", "code": "0x78", "impl": true}, {"method": "Empty", "code": "0x79", "impl": true}], "Template": [{"method": "Compile", "code": "0x7A", "impl": true}, {"method": "Render", "code": "0x7B", "impl": true}], "Arena": [{"method": "Mark", "code": "0x7C", "impl": true}, {"method": "Rewind", "code": "0x7D", "impl": true}, {"method": "Reset", "code": "0x7E", "impl": true}], "String": [{"method": "Concat", "code": "0x80", "impl": true}, {"method": "Length", "code": "0x81", "impl": true}, {"method": "Substring", "code": "0x82", "impl": true}, {"method": "IndexOf", "code": "0x83", "impl": true}, {"method": "Replace", "code": "0x84", "impl": true}, {"method": "ToUpper", "code": "0x85", "impl": true}, {"method": "ToLower", "code": "0x86", "impl": true}, {"method": "Trim", "code": "0x87", "impl": true}, {"method": "Split", "code": "0x88", "impl": false}, {"method": "Join", "code": "0x89", "impl": false}, {"method": "StartsWith", "code": "0x8A", "impl": true}, {"method": "EndsWith", "code": "0x8B", "impl": true}, {"method": "SetReplace", "code": "0x8C", "impl": true}], "Number": [{"method": "Parse", "code": "0x90", "impl": true}, {"method": "ToString", "code": "0x91", "impl": true}, {"method": "ToHex", "code": "0x92", "impl": true}, {"method": "ToOctal", "code": "0x93", "impl": true}, {"method": "ToBinary", "code": "0x94", "impl": true}, {"method": "Abs", "code": "0x95", "impl": true}, {"method": "Floor", "code": "0x96", "impl": true}, {"method": "Ceiling", "code": "0x97", "impl": true}, {"method": "Round", "code": "0x98", "impl": true}, {"method": "Min", "code": "0x99", "impl": true}, {"method": "Max", "code": "0x9A", "impl": true}], "Maths": [{"method": "Sin", "code": "0xA0", "impl": true}, {"method": "Cos", "code": "0xA1", "impl": true}, {"method": "Tan", "code": "0xA2", "impl": true}, {"method": "Sqrt", "code": "0xA3", "impl": true}, {"method": "Power", "code": "0xA4", "impl": true}, {"method": "Log", "code": "0xA5", "impl": true}, {"method": "Log10", "code": "0xA6", "impl": true}, {"method": "Exp", "code": "0xA7", "impl": true}, {"method": "Random", "code": "0xA8", "impl": false}, {"method": "RandomRange", "code": "0xA9", "impl": false}, {"method": "Clamp", "code": "0xAA", "impl": false}, {"method": "Lerp", "code": "0xAB", "impl": false}], "DateTime": [{"method": "Now", "code": "0xB0", "impl": false}, {"method": "UtcNow", "code": "0xB1", "impl": false}, {"method": "Parse", "code": "0xB2", "impl": false}, {"method": "Format", "code": "0xB3", "impl": false}, {"method": "AddSeconds", "code": "0xB4", "impl": false}, {"method": "AddMinutes", "code": "0xB5", "impl": false}, {"method": "AddHours", "code": "0xB6", "impl": false}, {"method": "AddDays", "code": "0xB7", "impl": false}, {"method": "GetDayOfWeek", "code": "0xB8", "impl": false}, {"method": "GetDayOfYear", "code": "0xB9", "impl": false}, {"method": "UnixTimestamp", "code": "0xBA", "impl": false}], "Locale": [{"method": "GetCurrentLocale", "code": "0xC0", "impl": false}, {"method": "SetLocale", "code": "0xC1", "impl": false}, {"method": "FormatCurrency", "code": "0xC2", "impl": false}, {"method": "FormatNumber", "code": "0xC3", "impl": false}, {"method": "FormatDate", "code": "0xC4", "impl": false}, {"method": "FormatTime", "code": "0xC5", "impl": false}, {"method": "Translate", "code": "0xC6", "impl": false}], "Environment": [{"method": "GetOsVersion", "code": "0xD0", "impl": false}, {"method": "GetCpuCount", "code": "0xD1", "impl": false}, {"method": "GetMemoryTotal", "code": "0xD2", "impl": false}, {"method": "GetMemoryFree", "code": "0xD3", "impl": false}, {"method": "GetHostname", "code": "0xD4", "impl": false}, {"method": "GetTimeZone", "code": "0xD5", "impl": false}, {"method": "GetProcessId", "code": "0xD6", "impl": false}, {"method": "GetThreadId", "code": "0xD7", "impl": false}, {"method": "GetElapsedTime", "code": "0xD8", "impl": false}], "Context": [{"method": "GetVerb", "code": "0xE0", "impl": false}, {"method": "GetPath", "code": "0xE1", "impl": false}, {"method": "GetHost", "code": "0xE2", "impl": false}, {"method": "GetPort", "code": "0xE3", "impl": false}, {"method": "GetRemoteAddr", "code": "0xE4", "impl": false}, {"method": "GetUser", "code": "0xE5", "impl": false}, {"method": "GetPermissions", "code": "0xE6", "impl": false}, {"method": "GetHeaders", "code": "0xE7", "impl": false}, {"method": "GetQueryString", "code": "0xE8", "impl": false}, {"method": "GetBody", "code": "0xE9", "impl": false}, {"method": "SetScratchValue", "code": "0xEA", "impl": false}, {"method": "GetScratchValue", "code": "0xEB", "impl": false}, {"method": "GetRequestId", "code": "0xEC", "impl": false}, {"method": "GetClientCert", "code": "0xED", "impl": false}, {"method": "GetTraceId", "code": "0xEE", "impl": false}], "Crypto": [{"method": "Sha256", "code": "0xF0", "impl": true}, {"method": "Sha512", "code": "0xF1", "impl": false}, {"method": "Blake2b", "code": "0xF2", "impl": false}, {"method": "Blake3", "code": "0xF3", "impl": false}, {"method": "HmacSha256", "code": "0xF4", "impl": true}, {"method": "HmacSha512", "code": "0xF5", "impl": false}, {"method": "Sign", "code": "0xF6", "impl": false}, {"method": "Verify", "code": "0xF7", "impl": false}, {"method": "Encrypt", "code": "0xF8", "impl": true}, {"method": "Decrypt", "code": "0xF9", "impl": true}, {"method": "GenerateKeyPair", "code": "0xFA", "impl": false}, {"method": "DeriveKey", "code": "0xFB", "impl": false}, {"method": "RandomBytes", "code": "0xFC", "impl": false}, {"method": "Md5", "code": "0xFD", "impl": false}, {"method": "Sha1", "code": "0xFE", "impl": false}], "Compress": [{"method": "BrotliCompress", "code": "0x100", "impl": false}, {"method": "BrotliDecompress", "code": "0x101", "impl": false}, {"method": "PicoCompress", "code": "0x102", "impl": true}, {"method": "PicoDecompress", "code": "0x103", "impl": true}, {"method": "GzipCompress", "code": "0x104", "impl": false}, {"method": "GzipDecompress", "code": "0x105", "impl": false}, {"method": "DeflateCompress", "code": "0x106", "impl": false}, {"method": "DeflateDecompress", "code": "0x107", "impl": false}], "X509": [{"method": "FetchCertificate", "code": "0x110", "impl": false}, {"method": "StoreCertificate", "code": "0x111", "impl": false}, {"method": "GenerateCSR", "code": "0x112", "impl": false}, {"method": "GenerateKeyPair", "code": "0x113", "impl": false}, {"method": "VerifyCertChain", "code": "0x114", "impl": false}, {"method": "GetCertInfo", "code": "0x115", "impl": false}, {"method": "IsCertValid", "code": "0x116", "impl": false}, {"method": "GetKeyHandle", "code": "0x117", "impl": false}], "Auth": [{"method": "GetUserCredentials", "code": "0x120", "impl": false}, {"method": "ValidateCredentials", "code": "0x121", "impl": false}, {"method": "SwitchUserContext", "code": "0x122", "impl": false}, {"method": "GetUserPermissions", "code": "0x123", "impl": false}, {"method": "RequestToken", "code": "0x124", "impl": false}, {"method": "GetToken", "code": "0x125", "impl": false}, {"method": "ValidateToken", "code": "0x126", "impl": false}, {"method": "SwitchTokenContext", "code": "0x127", "impl": false}, {"method": "RefreshToken", "code": "0x128", "impl": false}, {"method": "RevokeToken", "code": "0x129", "impl": false}], "Http": [{"method": "ReadHeader", "code": "0x130", "impl": false}, {"method": "ReadBody", "code": "0x131", "impl": false}, {"method": "GenerateHeaders", "code": "0x132", "impl": false}, {"method": "GenerateResponse", "code": "0x133", "impl": false}, {"method": "ParseQuery", "code": "0x134", "impl": true}, {"method": "ParseForm", "code": "0x135", "impl": true}, {"method": "ParseJson", "code": "0x136", "impl": true}, {"method": "EncodeJson", "code": "0x137", "impl": true}], "Html": [{"method": "CreateNode", "code": "0x140", "impl": false}, {"method": "AddChildNode", "code": "0x141", "impl": false}, {"method": "RemoveChildNode", "code": "0x142", "impl": false}, {"method": "SetAttribute", "code": "0x143", "impl": false}, {"method": "GetAttribute", "code": "0x144", "impl": false}, {"method": "ParseTree", "code": "0x145", "impl": false}, {"method": "Encode", "code": "0x146", "impl": true}, {"method": "Decode", "code": "0x147", "impl": true}, {"method": "Serialize", "code": "0x148", "impl": false}, {"method": "QuerySelector", "code": "0x149", "impl": false}], "Gpio": [{"method": "Count", "code": "0x150", "impl": true}, {"method": "SetDir", "code": "0x151", "impl": true}, {"method": "GetDir", "code": "0x152", "impl": true}, {"method": "SetPull", "code": "0x153", "impl": true}, {"method": "GetPull", "code": "0x154", "impl": true}, {"method": "Write", "code": "0x155", "impl": true}, {"method": "Read", "code": "0x156", "impl": true}], "Pack": [{"method": "Use", "code": "0x160", "impl": false}], "Card": [{"method": "Read", "code": "0x161", "impl": false}, {"method": "Write", "code": "0x162", "impl": false}, {"method": "Address", "code": "0x163", "impl": false}], "Fifo": [{"method": "Open", "code": "0x164", "impl": false}, {"method": "Send", "code": "0x165", "impl": false}, {"method": "Recv", "code": "0x166", "impl": false}, {"method": "Poll", "code": "0x167", "impl": false}]};
 var RESPONDER="' HTTP responder -- reads the request descriptor from PicoWAL and replies.\n' The simulator writes these cards before running the program:\n'   (0,0,0)=request length  (0,0,1)=method  (0,0,2)=body length  (0,0,3)=checksum\nLET LEN = 0\nStorage.Load(0, 0, 0, LEN)\nLET METHOD = 0\nStorage.Load(0, 0, 1, METHOD)\nLET BODYLEN = 0\nStorage.Load(0, 0, 2, BODYLEN)\nLET SUM = 0\nStorage.Load(0, 0, 3, SUM)\nIF METHOD EQ 2 THEN\n    NET.STATUS(201)\nELSEIF LEN EQ 0 THEN\n    NET.STATUS(400)\nELSE\n    NET.STATUS(200)\nENDIF\nNET.TYPE(\"application/json\")\nPRINT LEN\nPRINT BODYLEN\nPRINT SUM\nRETURN\n";
 var WAL_PREFIX='picowal:';
 var CUR_LANG='c';

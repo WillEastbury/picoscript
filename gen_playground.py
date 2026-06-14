@@ -467,7 +467,7 @@ PAGE = r"""<!DOCTYPE html>
   </div>
   <span class="pill">case-insensitive</span>
   <span class="pill">same bytecode</span>
-  <a href="PICOSCRIPT_REFERENCE.html" style="margin-left:auto;font-size:11px;color:var(--accent);text-decoration:none">&#128214; Full language guide &amp; reference &#8599;</a>
+  <a href="index.html" style="margin-left:auto;font-size:11px;color:var(--accent);text-decoration:none">&#128214; Full language guide &amp; reference &#8599;</a>
 </div>
 
 <div class="main">
@@ -608,7 +608,7 @@ function showCard(idx){
     (d[lang] ? '<pre class="'+STYLE_CLASS[lang]+'">'+esc(d[lang].src)+'</pre>' : '<pre style="color:var(--muted)">(not available in this dialect)</pre>')+
     '<div class="run-area">'+
       '<button class="act" onclick="loadCard('+idx+')">Load into editor &#9654;</button>'+
-      '<a class="ghost" href="PICOSCRIPT_REFERENCE.html" style="text-decoration:none;padding:6px 10px">Full guide &#8599;</a>'+
+      '<a class="ghost" href="index.html" style="text-decoration:none;padding:6px 10px">Full guide &#8599;</a>'+
       '<span class="out" id="cardout'+idx+'"></span>'+
     '</div>';
   document.querySelectorAll('.tree-item').forEach(function(el){
