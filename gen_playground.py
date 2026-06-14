@@ -467,7 +467,7 @@ PAGE = r"""<!DOCTYPE html>
   </div>
   <span class="pill">case-insensitive</span>
   <span class="pill">same bytecode</span>
-  <span style="margin-left:auto;font-size:11px;color:var(--muted)">Playground &amp; Guide</span>
+  <a href="PICOSCRIPT_REFERENCE.html" style="margin-left:auto;font-size:11px;color:var(--accent);text-decoration:none">&#128214; Full language guide &amp; reference &#8599;</a>
 </div>
 
 <div class="main">
@@ -607,15 +607,24 @@ function showCard(idx){
     '<div class="card-desc">'+d.desc+'</div>'+
     (d[lang] ? '<pre class="'+STYLE_CLASS[lang]+'">'+esc(d[lang].src)+'</pre>' : '<pre style="color:var(--muted)">(not available in this dialect)</pre>')+
     '<div class="run-area">'+
-      '<button class="act" onclick="runCard('+idx+')">Run &#9654;</button>'+
-      '<button class="ghost" onclick="stepCard('+idx+')">Step</button>'+
-      '<button class="ghost" onclick="debugCard('+idx+')">Debug in editor</button>'+
+      '<button class="act" onclick="loadCard('+idx+')">Load into editor &#9654;</button>'+
+      '<a class="ghost" href="PICOSCRIPT_REFERENCE.html" style="text-decoration:none;padding:6px 10px">Full guide &#8599;</a>'+
       '<span class="out" id="cardout'+idx+'"></span>'+
     '</div>';
   document.querySelectorAll('.tree-item').forEach(function(el){
     el.classList.toggle('active', parseInt(el.getAttribute('data-idx'))===idx);
   });
   cv.scrollTop = 0;
+}
+
+// Import a guide example into the editor and run it locally (samples live in the
+// full language guide; the editor screen is for writing + running your own code).
+function loadCard(i){
+  var d=DATA[i], lang=CUR_LANG; if(!d[lang]) lang='basic';
+  document.getElementById('lang').value=lang; if(typeof onLangChange==='function') onLangChange();
+  setSrc(d[lang].src);
+  document.querySelectorAll('.dbg-bar button').forEach(function(b){ b.classList.toggle('active', /Source Editor/.test(b.textContent)); });
+  showDbgPanel('dbg-src'); expandDbg(); compileSrc(true);
 }
 
 // ---- run / step ------------------------------------------------------------
@@ -745,6 +754,23 @@ function expandDbg(){
 function getSrc(){return document.getElementById('src').value;}
 function setSrc(v){document.getElementById('src').value=v;if(typeof filesRender==='function')filesRender();}
 function onLangChange(){if(typeof filesRender==='function')filesRender();}
+
+// editor language switch (PIOS feedback): if the current source is a known guide
+// sample, swap to that sample's syntax in the new language and compile; otherwise
+// leave the user's own text untouched and do NOT auto-compile incompatible syntax.
+function sampleMatch(src){
+  if(!src) return null;
+  for(var i=0;i<DATA.length;i++){ var d=DATA[i];
+    var langs=['c','basic','python','english'];
+    for(var k=0;k<langs.length;k++){ var L=langs[k]; if(d[L]&&d[L].src===src) return {idx:i}; }
+  }
+  return null;
+}
+function editorLangChange(){
+  var newLang=document.getElementById('lang').value, m=sampleMatch(getSrc());
+  if(m && DATA[m.idx][newLang]){ setSrc(DATA[m.idx][newLang].src); compileSrc(true); }
+  else { onLangChange(); }
+}
 
 // ---- localStorage-backed playground files ----------------------------------
 var PS_FILES_KEY='picoscript.files.v1';
@@ -877,7 +903,7 @@ showCard(0);
 document.getElementById('lang').value='basic';
 setSrc(DATA[3] && DATA[3].basic ? DATA[3].basic.src : '');
 document.getElementById('src').addEventListener('input',filesRender);
-document.getElementById('lang').addEventListener('change',function(){onLangChange();});
+document.getElementById('lang').addEventListener('change',function(){editorLangChange();});
 (function(){var ls=filesSafeLocalStorage(),active='';try{active=ls?ls.getItem(PS_ACTIVE_FILE_KEY)||'':'';}catch(e){} if(active&&filesRead()[active]) psFilesOpen(active); else filesRender();})();
 compileSrc(false);
 renderGpio();
