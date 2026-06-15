@@ -454,7 +454,9 @@ def _inflate(data: bytes) -> bytes:
     def take(n):
         nonlocal pos, bitbuf, bitcnt
         while bitcnt < n:
-            b = data[pos] if pos < len(data) else 0
+            if pos >= len(data):
+                raise ValueError("truncated compressed data")
+            b = data[pos]
             pos += 1
             bitbuf |= b << bitcnt
             bitcnt += 8

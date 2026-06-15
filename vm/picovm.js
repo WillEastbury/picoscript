@@ -661,7 +661,7 @@
   function zInflate(data) {
     var pos = 0, bitbuf = 0, bitcnt = 0, out = [];
     var fLit = zTree(zFixedLit()), fDist = zTree((function () { var a = [], i; for (i = 0; i < 30; i++) a.push(5); return a; })());
-    function take(n) { while (bitcnt < n) { var b = pos < data.length ? data[pos] : 0; pos++; bitbuf |= b << bitcnt; bitcnt += 8; } var v = bitbuf & ((1 << n) - 1); bitbuf >>>= n; bitcnt -= n; return v; }
+    function take(n) { while (bitcnt < n) { if (pos >= data.length) throw new Error("truncated compressed data"); var b = data[pos]; pos++; bitbuf |= b << bitcnt; bitcnt += 8; } var v = bitbuf & ((1 << n) - 1); bitbuf >>>= n; bitcnt -= n; return v; }
     function sym(tree) { var code = 0, length = 0; while (true) { code = (code << 1) | take(1); length++; var s = tree[code + "_" + length]; if (s !== undefined) return s; if (length > 15) throw new Error("bad compressed data"); } }
     while (true) {
       var bfinal = take(1), btype = take(2);
