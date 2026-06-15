@@ -75,7 +75,7 @@ KEYWORDS = {
     "BREAK", "SKIP", "INC", "DEC", "IIF",
     "EQ", "NE", "LT", "GT", "LE", "GE", "MOD",
     "STORE", "GPIO", "LOAD", "SERVER", "ENDSERVER", "ASSERT",
-    "PACK", "CARD", "FIFO", "DEVICE", "STREAM",
+    "PACK", "CARD", "FIFO", "DEVICE", "STREAM", "UI", "EVENT",
 }
 CMP_WORDS = {"EQ": "EQ", "NE": "NE", "LT": "LT", "GT": "GT", "LE": "LE", "GE": "GE"}
 
@@ -395,6 +395,10 @@ class Parser:
                 self.next()
                 call = self._parse_caps_body(kw, False)
                 self.end_line(); return CallStmt(call)
+            if kw in ("UI", "EVENT"):
+                self.next()
+                call = self._parse_uievt_body(kw, False)
+                self.end_line(); return CallStmt(call)
             raise SyntaxError(f"line {t.line}: unexpected keyword {kw}")
         # assignment: id = expr / id += expr   OR bare call: Ns.Method(...) / NAME(...)
         if t.kind == "id":
@@ -615,6 +619,60 @@ class Parser:
         if want_value:
             raise SyntaxError(f"line {self.peek().line}: {what} is a statement, not a value")
 
+    # ── UI / Event DSL (BASIC-idiomatic; lowers to the canonical Ui.*/Event.*
+    #    hooks). Build a window + controls and pump events without dotted calls. ──
+    def _parse_uievt_body(self, head: str, want_value: bool) -> Call:
+        if head == "EVENT":
+            verb = self._eat_word()
+            if verb == "POST":
+                ty = self.parse_atom(); tg = self.parse_atom()
+                return Call("Event", "Post", [ty, tg])
+            if verb == "NEXT":
+                return Call("Event", "Next", [])
+            if verb == "TYPE":
+                return Call("Event", "Type", [self.parse_atom()])
+            if verb == "TARGET":
+                return Call("Event", "Target", [self.parse_atom()])
+            if verb == "DATA":
+                return Call("Event", "Data", [self.parse_atom()])
+            if verb == "COUNT":
+                return Call("Event", "Count", [])
+            if verb == "SETDATA":
+                self._need_stmt(want_value, "EVENT SETDATA")
+                ev = self.parse_atom(); self.eat_op("="); sp = self.parse_expr()
+                return Call("Event", "SetData", [ev, sp])
+            raise SyntaxError(f"line {self.peek().line}: unknown EVENT verb {verb!r}")
+        if head == "UI":
+            verb = self._eat_word()
+            if verb == "WINDOW":
+                return Call("Ui", "Window", [self.parse_atom()])
+            if verb == "PANEL":
+                return Call("Ui", "Panel", [self.parse_atom()])
+            if verb in ("LABEL", "BUTTON", "TEXTBOX", "CHECKBOX"):
+                parent = self.parse_atom(); text = self.parse_atom()
+                method = {"LABEL": "Label", "BUTTON": "Button",
+                          "TEXTBOX": "TextBox", "CHECKBOX": "Checkbox"}[verb]
+                return Call("Ui", method, [parent, text])
+            if verb in ("POS", "SIZE"):
+                self._need_stmt(want_value, f"UI {verb}")
+                node = self.parse_atom(); self.eat_op("=")
+                x = self.parse_expr()
+                if self.peek().kind == "op" and self.peek().value == ",":
+                    self.next(); y = self.parse_expr()
+                    val = Bin("+", Bin("*", x, Num(65536)), y)   # UI POS n = x, y -> (x<<16)|y
+                else:
+                    val = x
+                return Call("Ui", "Pos" if verb == "POS" else "Size", [node, val])
+            if verb in ("SETTEXT", "SETID", "SETVALUE"):
+                self._need_stmt(want_value, f"UI {verb}")
+                node = self.parse_atom(); self.eat_op("="); v = self.parse_expr()
+                method = {"SETTEXT": "SetText", "SETID": "SetId", "SETVALUE": "SetValue"}[verb]
+                return Call("Ui", method, [node, v])
+            if verb == "SERIALIZE":
+                return Call("Ui", "Serialize", [self.parse_atom()])
+            raise SyntaxError(f"line {self.peek().line}: unknown UI verb {verb!r}")
+        raise SyntaxError(f"line {self.peek().line}: unknown DSL head {head!r}")
+
     def _parse_pull_value(self) -> object:
         t = self.peek()
         if t.kind == "id":
@@ -834,6 +892,8 @@ class Parser:
             return self.parse_gpio_body(True)
         if t.kind == "kw" and t.value in ("PACK", "CARD", "FIFO", "DEVICE", "STREAM"):
             return self._parse_caps_body(t.value, True)
+        if t.kind == "kw" and t.value in ("UI", "EVENT"):
+            return self._parse_uievt_body(t.value, True)
         if t.kind == "kw" and t.value == "IIF":
             self.eat_op("(")
             cond = self.parse_expr(); self.eat_op(",")

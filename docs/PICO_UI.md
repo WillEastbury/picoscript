@@ -69,8 +69,26 @@ Ui.Pos(go, 70 * 65536 + 86); Ui.SetId(go, 3);
 int wire = Ui.Serialize(win);          // hand `wire` to the transport
 ```
 
-In BASIC the `Ui.*`/`Event.*` namespaces are plain dotted calls (they are not
-keywords); a BASIC-idiomatic UI DSL may be layered later.
+In BASIC the `UI` and `EVENT` keywords give an idiomatic DSL (they shadow the
+dotted `Ui.*`/`Event.*` forms, like `GPIO` shadows `Gpio.*`):
+
+```basic
+DIM WIN = UI WINDOW "Login"
+UI SIZE WIN = 220, 130          ' (w << 16) | h
+DIM GO = UI BUTTON WIN "Sign in"
+UI POS GO = 70, 86              ' (x << 16) | y
+UI SETID GO = 3
+DIM WIRE = UI SERIALIZE WIN
+
+DIM E = EVENT NEXT
+IF EVENT TYPE E = 1 THEN
+    DIM ID = EVENT TARGET E     ' which control was clicked
+ENDIF
+```
+
+`UI POS`/`UI SIZE` accept either a packed value or a readable `x, y` pair (lowered
+to `(x<<16)|y`). Other forms: `UI PANEL/LABEL/TEXTBOX/CHECKBOX`, `UI SETTEXT/SETVALUE`,
+`EVENT POST type target`, `EVENT DATA/SETDATA/COUNT`.
 
 ## PicoWire wire format
 

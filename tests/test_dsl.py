@@ -233,11 +233,68 @@ def test_capsule_dsl_py_equals_js_frontend():
     assert bc(CAPSULE_DSL) == js_compile(CAPSULE_DSL, "basic")
 
 
+# UI / Event BASIC DSL (UI/EVENT keywords; shadow the dotted Ui.*/Event.* forms).
+UI_DSL = (
+    'DIM WIN = UI WINDOW "Login"\n'
+    'UI SIZE WIN = 220, 130\n'
+    'DIM NAME = UI LABEL WIN "Name:"\n'
+    'UI POS NAME = 12, 16\n'
+    'DIM BOX = UI TEXTBOX WIN "guest"\n'
+    'UI POS BOX = 70, 12\n'
+    'UI SETID BOX = 1\n'
+    'DIM GO = UI BUTTON WIN "Sign in"\n'
+    'UI POS GO = 70, 86\n'
+    'UI SETID GO = 3\n'
+    'Io.Write(UI SERIALIZE WIN)\n'
+)
+UI_CANON_PY = (
+    'win = Ui.Window("Login")\n'
+    'Ui.Size(win, 220 * 65536 + 130)\n'
+    'name = Ui.Label(win, "Name:")\n'
+    'Ui.Pos(name, 12 * 65536 + 16)\n'
+    'box = Ui.TextBox(win, "guest")\n'
+    'Ui.Pos(box, 70 * 65536 + 12)\n'
+    'Ui.SetId(box, 1)\n'
+    'go = Ui.Button(win, "Sign in")\n'
+    'Ui.Pos(go, 70 * 65536 + 86)\n'
+    'Ui.SetId(go, 3)\n'
+    'Io.Write(Ui.Serialize(win))\n'
+)
+EVENT_DSL = (
+    'DIM E1 = EVENT POST 10 100\n'
+    'DIM E2 = EVENT POST 20 200\n'
+    'DIM N = EVENT COUNT\n'
+    'DIM A = EVENT NEXT\n'
+    'EVENT SETDATA A = "x"\n'
+    'PRINT N\n'
+    'PRINT EVENT TYPE A\n'
+    'PRINT EVENT TARGET A\n'
+)
+
+
+def test_ui_dsl_equals_canonical_and_runs():
+    # The UI DSL lowers to the same bytecode as the canonical dotted Ui.* spelling
+    # (Python frontend shares the BASIC lowerer) -- identical bytecode == identical
+    # output. Also confirm it produces a non-empty serialized wire.
+    assert bc(UI_DSL) == lower_to_bytecode_safe(compile_python(UI_CANON_PY))
+    host = HostApi(); vm = PicoVM(host=host); vm.load(bc(UI_DSL)); vm.run()
+    assert len(b"".join(vm.output)) == 300
+
+
+def test_ui_dsl_py_equals_js_frontend():
+    assert bc(UI_DSL) == js_compile(UI_DSL, "basic")
+
+
+def test_event_dsl_runs_and_py_equals_js_frontend():
+    assert run_basic(EVENT_DSL) == [2, 10, 100]
+    assert bc(EVENT_DSL) == js_compile(EVENT_DSL, "basic")
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
             fn()
-    print("PASS storage/GPIO/capsule/device/stream DSL: runs, == canonical, Python==JS frontend, ext-hook encoding")
+    print("PASS storage/GPIO/capsule/device/stream/ui/event DSL: runs, == canonical, Python==JS frontend, ext-hook encoding")
 
 
 if __name__ == "__main__":

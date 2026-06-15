@@ -896,7 +896,7 @@
   // ========================================================================
   // BASIC-LIKE FRONTEND (port of picoscript_basic.py)
   // ========================================================================
-  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","DISPATCH","ENDDISPATCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD","STORE","GPIO","LOAD","SERVER","ENDSERVER","ASSERT","PACK","CARD","FIFO","DEVICE","STREAM"].forEach(function (k) { B_KW[k] = 1; });
+  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","DISPATCH","ENDDISPATCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD","STORE","GPIO","LOAD","SERVER","ENDSERVER","ASSERT","PACK","CARD","FIFO","DEVICE","STREAM","UI","EVENT"].forEach(function (k) { B_KW[k] = 1; });
   var B_CMPW = { EQ:"EQ", NE:"NE", LT:"LT", GT:"GT", LE:"LE", GE:"GE" };
   var B_CMPS = { "==":"EQ", "!=":"NE", "<>":"NE", "=":"EQ", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
   var B_COMPARATORS = {}; for (var _k in B_CMPW) B_COMPARATORS[_k] = B_CMPW[_k]; for (var _k2 in B_CMPS) B_COMPARATORS[_k2] = B_CMPS[_k2];
@@ -980,6 +980,7 @@
         if (kw === "GPIO") { this.next(); var gc = this.parseGpioBody(false); this.endLine(); return { t: "CallStmt", call: gc }; }
         if (kw === "ASSERT") { this.next(); var ac = this.parseExpr(); this.endLine(); return { t: "CallStmt", call: { t: "Call", ns: "Assert", method: "True", args: [ac] } }; }
         if (kw === "PACK" || kw === "CARD" || kw === "FIFO" || kw === "DEVICE" || kw === "STREAM") { this.next(); var dc = this.parseCapsBody(kw, false); this.endLine(); return { t: "CallStmt", call: dc }; }
+        if (kw === "UI" || kw === "EVENT") { this.next(); var uc = this.parseUiEvtBody(kw, false); this.endLine(); return { t: "CallStmt", call: uc }; }
         throw new Error("BASIC: unexpected keyword " + kw);
       }
       if (t.kind === "id") {
@@ -1093,6 +1094,48 @@
       }
       throw new Error("BASIC: unknown DSL head " + head);
     },
+    parseUiEvtBody: function (head, wantValue) {
+      var verb;
+      if (head === "EVENT") {
+        verb = this.eatWord();
+        if (verb === "POST") { var ty = this.parseAtom(), tg = this.parseAtom(); return { t: "Call", ns: "Event", method: "Post", args: [ty, tg] }; }
+        if (verb === "NEXT") return { t: "Call", ns: "Event", method: "Next", args: [] };
+        if (verb === "TYPE") return { t: "Call", ns: "Event", method: "Type", args: [this.parseAtom()] };
+        if (verb === "TARGET") return { t: "Call", ns: "Event", method: "Target", args: [this.parseAtom()] };
+        if (verb === "DATA") return { t: "Call", ns: "Event", method: "Data", args: [this.parseAtom()] };
+        if (verb === "COUNT") return { t: "Call", ns: "Event", method: "Count", args: [] };
+        if (verb === "SETDATA") { this.needStmt(wantValue, "EVENT SETDATA"); var ev = this.parseAtom(); this.eatOp("="); var sp = this.parseExpr(); return { t: "Call", ns: "Event", method: "SetData", args: [ev, sp] }; }
+        throw new Error("BASIC: unknown EVENT verb " + verb);
+      }
+      if (head === "UI") {
+        verb = this.eatWord();
+        if (verb === "WINDOW") return { t: "Call", ns: "Ui", method: "Window", args: [this.parseAtom()] };
+        if (verb === "PANEL") return { t: "Call", ns: "Ui", method: "Panel", args: [this.parseAtom()] };
+        if (verb === "LABEL" || verb === "BUTTON" || verb === "TEXTBOX" || verb === "CHECKBOX") {
+          var parent = this.parseAtom(), text = this.parseAtom();
+          var m = { LABEL: "Label", BUTTON: "Button", TEXTBOX: "TextBox", CHECKBOX: "Checkbox" }[verb];
+          return { t: "Call", ns: "Ui", method: m, args: [parent, text] };
+        }
+        if (verb === "POS" || verb === "SIZE") {
+          this.needStmt(wantValue, "UI " + verb);
+          var node = this.parseAtom(); this.eatOp("="); var x = this.parseExpr(), val;
+          if (this.peek().kind === "op" && this.peek().value === ",") {
+            this.next(); var y = this.parseExpr();
+            val = { t: "Bin", op: "+", lhs: { t: "Bin", op: "*", lhs: x, rhs: { t: "Num", value: 65536 } }, rhs: y };
+          } else { val = x; }
+          return { t: "Call", ns: "Ui", method: (verb === "POS" ? "Pos" : "Size"), args: [node, val] };
+        }
+        if (verb === "SETTEXT" || verb === "SETID" || verb === "SETVALUE") {
+          this.needStmt(wantValue, "UI " + verb);
+          var n2 = this.parseAtom(); this.eatOp("="); var v2 = this.parseExpr();
+          var m2 = { SETTEXT: "SetText", SETID: "SetId", SETVALUE: "SetValue" }[verb];
+          return { t: "Call", ns: "Ui", method: m2, args: [n2, v2] };
+        }
+        if (verb === "SERIALIZE") return { t: "Call", ns: "Ui", method: "Serialize", args: [this.parseAtom()] };
+        throw new Error("BASIC: unknown UI verb " + verb);
+      }
+      throw new Error("BASIC: unknown DSL head " + head);
+    },
     parseDirValue: function () {
       var t = this.peek();
       if (t.kind === "kw" && t.value === "IN") { this.next(); return { t: "Num", value: 0 }; }
@@ -1180,6 +1223,7 @@
       if (t.kind === "kw" && t.value === "LOAD") return this.parseLoadBody(true);
       if (t.kind === "kw" && t.value === "GPIO") return this.parseGpioBody(true);
       if (t.kind === "kw" && (t.value === "PACK" || t.value === "CARD" || t.value === "FIFO" || t.value === "DEVICE" || t.value === "STREAM")) return this.parseCapsBody(t.value, true);
+      if (t.kind === "kw" && (t.value === "UI" || t.value === "EVENT")) return this.parseUiEvtBody(t.value, true);
       if (t.kind === "kw" && t.value === "IIF") {
         this.eatOp("("); var c = this.parseExpr(); this.eatOp(",");
         var th = this.parseExpr(); this.eatOp(","); var el = this.parseExpr(); this.eatOp(")");
