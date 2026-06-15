@@ -22,6 +22,7 @@ from typing import Callable, Dict, List, Optional
 
 import picoscript as isa
 import picocompress
+import picobrotli
 from picoscript_lang import (
     HOST_HOOK_BASE,
     EXT_HOST_HOOK_BASE,
@@ -1053,6 +1054,17 @@ class HostApi:
         if method == "PicoDecompress":
             try:
                 res = picocompress.decompress(src); self.host_status = 0
+            except Exception:
+                res = b""; self.host_status = 2
+            vm.regs[rd] = self._new_span_bytes(vm, res); return True
+        # Brotli: the real micro-brotli codec (vendored picobrotli.py from picoweb),
+        # byte-identical with vm/picobrotli.c and vm/picobrotli.js. Output is valid
+        # RFC 7932 decodable by any browser / zlib / Node.
+        if method == "BrotliCompress":
+            vm.regs[rd] = self._new_span_bytes(vm, picobrotli.encode(src)); return True
+        if method == "BrotliDecompress":
+            try:
+                res = picobrotli.decode(src); self.host_status = 0
             except Exception:
                 res = b""; self.host_status = 2
             vm.regs[rd] = self._new_span_bytes(vm, res); return True

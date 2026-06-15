@@ -13,10 +13,11 @@
   var node = (typeof module !== "undefined" && module.exports);
   var hooks = node ? require("./pico_hooks.js") : root.PV_HOOKS;
   var pcz = node ? require("./picocompress.js") : root.PicoCompress;
-  var PicoVM = factory(hooks, pcz);
+  var pbz = node ? require("./picobrotli.js") : root.PicoBrotli;
+  var PicoVM = factory(hooks, pcz, pbz);
   if (node) module.exports = PicoVM;
   else root.PicoVM = PicoVM;
-})(typeof globalThis !== "undefined" ? globalThis : this, function (PV_HOOKS, PicoCompress) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function (PV_HOOKS, PicoCompress, PicoBrotli) {
   "use strict";
 
   var OP = {
@@ -722,6 +723,14 @@
     }
     if (method === "PicoDecompress") {
       try { this.regs[rd] = this._newSpanBytes(Array.from(PicoCompress.decompress(Uint8Array.from(src)))); this.host_status = 0; }
+      catch (e) { this.host_status = 2; this.regs[rd] = this._newSpanBytes([]); }
+      return true;
+    }
+    if (method === "BrotliCompress") {
+      this.regs[rd] = this._newSpanBytes(Array.from(PicoBrotli.encode(Uint8Array.from(src)))); return true;
+    }
+    if (method === "BrotliDecompress") {
+      try { this.regs[rd] = this._newSpanBytes(Array.from(PicoBrotli.decode(Uint8Array.from(src)))); this.host_status = 0; }
       catch (e) { this.host_status = 2; this.regs[rd] = this._newSpanBytes([]); }
       return true;
     }

@@ -108,7 +108,7 @@ def main():
     if os.path.exists(BUILD):
         shutil.rmtree(BUILD)
     os.makedirs(BUILD)
-    for dep in ("picovm.js", "pico_hooks.js", "picostore.js", "picocompress.js"):
+    for dep in ("picovm.js", "pico_hooks.js", "picostore.js", "picocompress.js", "picobrotli.js"):
         s = os.path.join(VM_DIR, dep)
         if os.path.exists(s):
             shutil.copy(s, os.path.join(BUILD, dep))

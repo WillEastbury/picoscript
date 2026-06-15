@@ -3,21 +3,23 @@
 `Compress.*` provides compression built into the runtime — no host `zlib`. The
 recommended in-runtime codec is **PicoCompress** (the real, vendored
 [`picocompress`](https://github.com/WillEastbury/picocompress) library — byte-identical
-on all 5 runtimes); DEFLATE/gzip are kept for outside-world **interop**; Brotli is
-host-supplied.
+on all 5 runtimes); **Brotli** is a real in-runtime codec too (vendored from picoweb)
+whose output any browser/zlib can read; DEFLATE/gzip are kept for outside-world
+**interop**.
 
 | Hook | Code | Effect |
 |------|------|--------|
+| `Compress.BrotliCompress(span)`   | `0x0100` | **real Brotli** (RFC 7932) — byte-identical on every runtime, browser-decodable |
+| `Compress.BrotliDecompress(span)` | `0x0101` | inverse of BrotliCompress (reads the subset we emit + uncompressed meta-blocks) |
 | `Compress.PicoCompress(span)`   | `0x0102` | **real deterministic LZ77** — byte-identical on every runtime |
 | `Compress.PicoDecompress(span)` | `0x0103` | inverse of PicoCompress |
 | `Compress.DeflateCompress(span)`   | `0x0106` | raw DEFLATE (RFC 1951) — for zlib interop |
 | `Compress.DeflateDecompress(span)` | `0x0107` | raw INFLATE |
 | `Compress.GzipCompress(span)`      | `0x0104` | gzip (RFC 1952): header + deflate + CRC-32 + ISIZE |
 | `Compress.GzipDecompress(span)`    | `0x0105` | parse gzip header + inflate |
-| `Compress.Brotli*` | `0x0100/0x0101` | **host-supplied** (PIOS libbrotli); unimplemented in-runtime |
 
 Malformed/truncated input never hangs the VM (the inflater raises; PicoDecompress
-guards bad back-distances).
+guards bad back-distances; BrotliDecompress validates Kraft sums and back-distances).
 
 ## PicoCompress — the byte-identical compressor (preferred)
 
@@ -74,9 +76,30 @@ is Python/JS only (a byte-identical C deflate compressor would need a 64 MiB tab
 a bounded-hash rework — and PicoCompress is already byte-identical on C), so prefer
 PicoCompress in-runtime and gzip for interop.
 
-## Brotli
+## Brotli — real, in-runtime, browser-decodable
 
-A real, byte-identical hand-written Brotli (RFC 7932: a 122 KiB static dictionary,
-context modelling and complex prefix codes) is not feasible across three VMs.
-`Compress.Brotli*` is therefore **host-supplied** — PIOS binds a real libbrotli — and
-remains an unimplemented host-fillable stub in the runtime.
+`Compress.Brotli*` is the **picobrotli** codec (vendored from picoweb as
+`picobrotli.py` / `vm/picobrotli.c` / `vm/picobrotli.js`), byte-identical on all five
+paths. It is a minimal but real RFC 7932 encoder — LZ77 + canonical Huffman, a single
+meta-block (WBITS=16, **no** static dictionary, **no** context modeling), with an
+uncompressed meta-block fallback for incompressible data — plus a matching decoder for
+the subset it emits (and uncompressed meta-blocks).
+
+We deliberately do **not** chase byte-identity with Google's encoder (that would mean
+re-cloning its quality levels, block-splitting search, context-map clustering and the
+122 KiB static dictionary — tens of thousands of lines chasing a moving target). Instead
+we ship **one** deterministic encoder ported to Py/JS/C, so the compressed bytes are
+identical everywhere *by construction*. The output is valid Brotli: `tests/test_picobrotli.py`
+round-trips on every runtime **and** verifies a real decoder (Node's `zlib.brotliDecompressSync`)
+accepts our bytes, so browsers reading `Content-Encoding: br` decode them fine. Ratio is
+lower than Google's brotli, but there is zero host dependency.
+
+> The C codec (`vm/picobrotli.c`) needs `<string.h>`/`<stdlib.h>`, so like PicoCompress it
+> is compiled into the C VM only on hosted targets (`#if __STDC_HOSTED__`); freestanding
+> builds fall through to the host-fillable hook.
+>
+> **Upstream note.** While vendoring we found and fixed a latent out-of-bounds write in the
+> picoweb `brotli.c`: in `write_prefix`, an uninitialized `int used[4]` was indexed when an
+> alphabet had **zero** used symbols (e.g. all-literal input with no distances), crashing on
+> some inputs. The vendored copy zero-inits `used[]` and skips the `n==0` case; the upstream
+> picoweb codec should be synced.

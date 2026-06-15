@@ -150,10 +150,12 @@ def main():
     ser_js = open(os.path.join(ROOT, "vm", "picoserializer.js"), encoding="utf-8").read()
     store_js = open(os.path.join(ROOT, "vm", "picostore.js"), encoding="utf-8").read()
     pcz_js = open(os.path.join(ROOT, "vm", "picocompress.js"), encoding="utf-8").read()
+    pbz_js = open(os.path.join(ROOT, "vm", "picobrotli.js"), encoding="utf-8").read()
 
     html = PAGE
     html = html.replace("/*__HOOKS__*/", hooks_js)
     html = html.replace("/*__PCZ__*/", pcz_js)
+    html = html.replace("/*__PBZ__*/", pbz_js)
     html = html.replace("/*__VM__*/", vm_js)
     html = html.replace("/*__PICOC__*/", picoc_js)
     html = html.replace("/*__SER__*/", ser_js)
@@ -513,6 +515,7 @@ PAGE = r"""<!DOCTYPE html>
 
 <script>/*__HOOKS__*/</script>
 <script>/*__PCZ__*/</script>
+<script>/*__PBZ__*/</script>
 <script>/*__VM__*/</script>
 <script>/*__PICOC__*/</script>
 <script>/*__SER__*/</script>

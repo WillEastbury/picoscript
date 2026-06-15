@@ -6,6 +6,7 @@
 #include "picovm.h"
 #include "pico_hooks.h"
 #include "picocompress.h"
+#include "picobrotli.h"
 
 #if defined(__ARM_FEATURE_DOTPROD) && defined(__aarch64__)
 #include <arm_neon.h>        /* AArch64 NEON SDOT (Armv8.2 dotprod) */
@@ -1867,6 +1868,23 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         ctx->regs[rd] = pv_arena_finish(ctx, (uint32_t)out_len);
         return;
     }
+    /* ---- Compress.BrotliCompress / BrotliDecompress: the real micro-brotli codec
+     * (vm/picobrotli.c), byte-identical with picobrotli.py / .js. Output is valid
+     * RFC 7932 decodable by any browser. Written into the bump arena free region. */
+    if (hook == PV_HOOK_COMPRESS_BROTLICOMPRESS || hook == PV_HOOK_COMPRESS_BROTLIDECOMPRESS) {
+        int hh = ctx->regs[rs1];
+        uint32_t p = pv_span_p(ctx, hh);
+        int32_t l = pv_span_n(ctx, hh);
+        uint8_t *outp = ctx->mem + ctx->arena_top;
+        size_t cap = (ctx->arena_top < (uint32_t)ctx->mem_size)
+                         ? (size_t)((uint32_t)ctx->mem_size - ctx->arena_top) : 0u;
+        int wrote = (hook == PV_HOOK_COMPRESS_BROTLICOMPRESS)
+            ? brotli_encode(ctx->mem + p, (size_t)l, outp, cap)
+            : brotli_decode(ctx->mem + p, (size_t)l, outp, cap);
+        ctx->regs[rd] = pv_arena_finish(ctx, wrote < 0 ? 0u : (uint32_t)wrote);
+        if (hook == PV_HOOK_COMPRESS_BROTLIDECOMPRESS) ctx->host_status = (wrote < 0) ? 2 : 0;
+        return;
+    }
 #endif
     /* ---- Compress.DeflateDecompress / GzipDecompress: real INFLATE (RFC 1951)
      *      built into the runtime. Compression stays in the reference runtime +
@@ -2176,4 +2194,12 @@ long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len)
    it (the Compress.PicoCompress hooks are #if'd out to match). */
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__
 #include "picocompress.c"
+#endif
+
+/* PicoBrotli codec (vm/picobrotli.c) compiled into this translation unit so every
+   build that compiles picovm.c links brotli_encode/brotli_decode. Hosted targets
+   only -- picobrotli.c needs <string.h>/<stdlib.h>; freestanding builds skip it
+   (the Compress.Brotli* hooks are #if'd out to match). */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__
+#include "picobrotli.c"
 #endif

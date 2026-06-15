@@ -184,15 +184,14 @@ METHOD_DOCS = {
     },
     "Compress": {
         "BrotliCompress": {
-            "desc": "Compress data using Brotli algorithm",
-            "sig": "BrotliCompress(data: descriptor, level: u8) -> compressed",
+            "desc": "Compress a span with the real in-runtime Brotli codec (RFC 7932, byte-identical on every runtime, browser-decodable)",
+            "sig": "BrotliCompress(span) -> span",
             "params": [
-                ("data", "descriptor", "Input data descriptor"),
-                ("level", "u8", "Compression level (0-11; 6 is default)"),
+                ("span", "descriptor", "Input data span"),
             ],
-            "returns": "Compressed data as descriptor",
+            "returns": "Brotli-compressed data as a span",
             "conformance": "L4",
-            "example": "Compress.BrotliCompress(input, 6);  // Brotli level 6",
+            "example": "Compress.BrotliCompress(input);  // valid Brotli any browser can read",
         },
         "BrotliDecompress": {
             "desc": "Decompress Brotli-compressed data",
