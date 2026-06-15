@@ -310,7 +310,9 @@ CAP_ENV     = 1 << 8
 CAP_CRYPTO  = 1 << 9
 CAP_GPIO    = 1 << 10           # Gpio.* (device pins; OS/emulator-backed)
 CAP_CAPSULE = 1 << 11           # Pack/Card/Fifo (capsule store + intra-capsule IPC)
-CAP_ALL     = 0xFFF             # default grant: every binding (host restricts to gate)
+CAP_DEVICE  = 1 << 12           # Device.* (enumerate/open a streaming device)
+CAP_DMA     = 1 << 13           # Stream.* (DMA-ring buffers)
+CAP_ALL     = 0x3FFF            # default grant: every binding (host restricts to gate)
 
 _CAP_BY_NS = {
     "Kernel": CAP_KERNEL, "Queue": CAP_QUEUE, "Random": CAP_RANDOM,
@@ -319,6 +321,7 @@ _CAP_BY_NS = {
     "Auth": CAP_AUTH, "X509": CAP_AUTH, "Environment": CAP_ENV, "Locale": CAP_ENV,
     "Gpio": CAP_GPIO,
     "Pack": CAP_CAPSULE, "Card": CAP_CAPSULE, "Fifo": CAP_CAPSULE,
+    "Device": CAP_DEVICE, "Stream": CAP_DMA,
 }
 
 
@@ -361,6 +364,13 @@ class HostApi:
         self.query_results: List[int] = []
         self.gpio: Dict[int, dict] = {}   # reference GPIO emulator: pin -> {dir,pull,value}
         self.schemas: Dict[int, bytes] = {}   # per-pack typed-field schema span bytes (0x60/0x61)
+        # Reference DMA-ring emulator (Device.*/Stream.*): deterministic fake ring.
+        self.devices: Dict[int, dict] = {}
+        self.streams: Dict[int, dict] = {}
+        self.leases: Dict[int, dict] = {}
+        self._dev_seq = 0
+        self._stream_seq = 0
+        self._lease_seq = 0
         # Text/binary I/O: arena-backed writer + reader handle tables.
         self.writers: Dict[int, dict] = {}
         self.readers: Dict[int, dict] = {}
@@ -541,6 +551,12 @@ class HostApi:
                 return
         if ns == "Gpio":
             if self._gpio(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Device":
+            if self._device(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Stream":
+            if self._stream(vm, method, rd, rs1, rs2):
                 return
         # String.* arena string library.
         if ns == "String":
@@ -1592,6 +1608,97 @@ class HostApi:
             return True
         if method == "Read":
             vm.regs[rd] = st["value"]
+            return True
+        return False
+
+    # -- Device.*/Stream.* reference DMA-ring emulator ----------------------
+    # Streaming hardware modelled as a deterministic ring so capsules are
+    # authorable/testable off-device; PIOS injects the real DMA driver. RX frame
+    # n byte i = (n+i)&0xFF. ringCfg packs dir(bit0:0=RX/1=TX) | bufSize<<1 |
+    # frames<<16. All within the 2-in/1-out host ABI; Python == JS byte-identical.
+    @staticmethod
+    def _ring_frame(idx: int, buf: int) -> bytes:
+        return bytes((idx + i) & 0xFF for i in range(buf))
+
+    def _device(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "Open":
+            self._dev_seq += 1
+            self.devices[self._dev_seq] = {"id": self._span_str(vm, vm.regs[rs1]), "open": True}
+            vm.regs[rd] = self._dev_seq
+            return True
+        h = vm.regs[rs1] & MASK32
+        dev = self.devices.get(h)
+        if method == "Caps":
+            vm.regs[rd] = 0x3 if (dev and dev["open"]) else 0   # stream|duplex bits
+            return True
+        if method == "Status":
+            vm.regs[rd] = 0 if (dev and dev["open"]) else 1     # 0=OK
+            return True
+        if method == "Close":
+            if dev:
+                dev["open"] = False
+            vm.regs[rd] = 1 if dev else 0
+            return True
+        return False
+
+    def _stream(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "Open":
+            dev = self.devices.get(vm.regs[rs1] & MASK32)
+            if not dev or not dev["open"]:
+                self.host_status = 1                            # NOT_FOUND
+                vm.regs[rd] = 0
+                return True
+            cfg = vm.regs[rs2] & MASK32
+            self._stream_seq += 1
+            self.streams[self._stream_seq] = {
+                "dir": cfg & 1, "buf": (cfg >> 1) & 0x7FFF,
+                "frames": (cfg >> 16) & 0xFFFF, "next": 0, "tx": [],
+            }
+            vm.regs[rd] = self._stream_seq
+            return True
+        if method == "Next":
+            st = self.streams.get(vm.regs[rs1] & MASK32)
+            if not st or st["next"] >= st["frames"]:
+                self.host_status = 3                            # EOF/EMPTY
+                vm.regs[rd] = 0
+                return True
+            idx = st["next"]; st["next"] += 1
+            self._lease_seq += 1
+            data = self._ring_frame(idx, st["buf"]) if st["dir"] == 0 else bytes(st["buf"])
+            self.leases[self._lease_seq] = {"stream": vm.regs[rs1] & MASK32,
+                                            "idx": idx, "data": data, "span": 0, "released": False}
+            vm.regs[rd] = self._lease_seq
+            return True
+        if method == "Span":
+            le = self.leases.get(vm.regs[rs1] & MASK32)
+            if not le or le["released"]:
+                self.host_status = 1
+                vm.regs[rd] = 0
+                return True
+            if not le["span"]:
+                le["span"] = self._new_span_bytes(vm, le["data"])
+            vm.regs[rd] = le["span"]
+            return True
+        if method == "Submit":                                  # TX: hand filled buffer to device
+            st = self.streams.get(vm.regs[rs1] & MASK32)
+            le = self.leases.get(vm.regs[rs2] & MASK32)
+            if st is not None and le is not None and not le["released"]:
+                st["tx"].append(self._span_raw(vm, le["span"]) if le["span"] else le["data"])
+                le["released"] = True
+                vm.regs[rd] = 1
+            else:
+                vm.regs[rd] = 0
+            return True
+        if method == "Release":                                 # RX: return buffer to ring
+            le = self.leases.get(vm.regs[rs1] & MASK32)
+            if le is not None:
+                le["released"] = True
+                vm.regs[rd] = 1
+            else:
+                vm.regs[rd] = 0
+            return True
+        if method == "Close":
+            vm.regs[rd] = 1 if self.streams.get(vm.regs[rs1] & MASK32) else 0
             return True
         return False
 

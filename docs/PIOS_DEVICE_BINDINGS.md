@@ -192,26 +192,25 @@ three VMs, parity-tested) is the work — see §11.
 
 ---
 
-## 4. Hook codes & capability classes (proposed reservations)
+## 4. Hook codes & capability classes (AS BUILT)
 
-- **Hook range:** the **GPIO baseline needs no new hook codes** (pins are `Storage.*`
-  cards). For the future streaming class, `0x130–0x16F` is free (current table tops out at
-  Auth `0x129`; the byte range is dense) — suballocate e.g. `Device 0x130–0x137`,
-  `Stream 0x138–0x147`, optional `Gpio` sugar `0x148–0x14B`, `0x14C–0x16F` reserved for
-  growth. *Confirm against the live table + `EXT_HOST_HOOK_BASE` at reservation time;
-  adding hooks bumps
-  `PV_HOOK_TABLE_VERSION` (INV-23), which the module check adapts to automatically.*
-- **Capability classes** (continue from `CAP_CRYPTO = 1<<9`; security-first ⇒ fine-grained):
-  - `CAP_DEVICE = 1<<10` — enumerate/open a streaming device (coarse gate, future).
-  - `CAP_DMA    = 1<<11` — `Stream.*` (DMA-ring buffers, future).
-  - `CAP_GPIO   = 1<<12` — access the hardware-backed GPIO pack (the only control gate;
-    **no `CAP_MMIO`** — there is no register-level access).
-  - **Per-instance gating** is a **per-pin allow-list** in the capsule's grant table,
-    checked by the kernel on each `ReadCard`/`UpdateCard` against the pin key — instance-
-    level security with no capability-bit exhaustion and no address windows. The same
-    per-`idSpan` allow-list gates streaming devices at `Device.Open`.
-  - `CAP_ALL` widens accordingly (e.g. `0x3FF -> 0x1FFF`); default grant stays "all" so
-    existing programs are unaffected, and the harness/`PICOVM_CAPS` restricts to gate.
+- **Hook range (as built):** the GPIO baseline + capsule + streaming hooks are now
+  allocated in genuinely-free space (the original `0x130–0x16F` proposal was stale —
+  `0x130–0x137` is `Http`, `0x140–0x149` is `Html`). Live allocation:
+  `Gpio 0x150–0x156`, `Pack/Card/Fifo 0x160–0x167`, **`Device 0x168–0x16B`**,
+  **`Stream 0x170–0x175`**; `0x157–0x15F`, `0x16C–0x16F`, `0x176+` reserved for growth.
+  Adding hooks bumps `PV_HOOK_TABLE_VERSION` (INV-23), which the module check adapts to.
+- **Capability classes (as built;** continue from `CAP_CRYPTO = 1<<9`):
+  - `CAP_GPIO   = 1<<10` — the hardware-backed GPIO pack (only control gate; **no
+    `CAP_MMIO`** — no register-level access).
+  - `CAP_CAPSULE = 1<<11` — `Pack/Card/Fifo` (capsule store + intra-capsule IPC).
+  - `CAP_DEVICE = 1<<12` — `Device.*` enumerate/open a streaming device.
+  - `CAP_DMA    = 1<<13` — `Stream.*` (DMA-ring buffers).
+  - **Per-instance gating** is a **per-pin / per-`idSpan` allow-list** in the capsule's
+    grant table, checked by the kernel on each access against the pin/device key —
+    instance-level security with no capability-bit exhaustion and no address windows.
+  - `CAP_ALL` is now `0x3FFF` (bits 0–13); default grant stays "all" so existing
+    programs are unaffected, and the harness/`PICOVM_CAPS` restricts to gate.
   - For the **GPIO-card baseline**, gating can also reuse the existing storage capability +
     the per-pin allow-list (since pins are cards) — a dedicated `CAP_GPIO` is recommended
     for a clear audit boundary but is not strictly required.

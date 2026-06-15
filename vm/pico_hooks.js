@@ -294,6 +294,16 @@
       0x165: "Fifo.Send",
       0x166: "Fifo.Recv",
       0x167: "Fifo.Poll",
+      0x168: "Device.Open",
+      0x169: "Device.Caps",
+      0x16A: "Device.Close",
+      0x16B: "Device.Status",
+      0x170: "Stream.Open",
+      0x171: "Stream.Next",
+      0x172: "Stream.Span",
+      0x173: "Stream.Submit",
+      0x174: "Stream.Release",
+      0x175: "Stream.Close",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }

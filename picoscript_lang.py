@@ -777,6 +777,21 @@ HOST_HOOK_CODES = {
     ("Fifo", "Send"):           0x0165,   # rs1=handle rs2=span           rd=ok
     ("Fifo", "Recv"):           0x0166,   # rs1=handle                    rd=span
     ("Fifo", "Poll"):           0x0167,   # rs1=handle                    rd=count
+    # Device enumeration/lifecycle (0x0168-0x016B) + Stream DMA-ring (0x0170-0x0175).
+    # Streaming hardware is structurally identical to Req/Resp but over a DMA ring:
+    # Device.* opens a named device, Stream.* is thin sugar over Lease+Descriptor+
+    # WaitIRQ. Provider-backed: the browser ships a deterministic ring emulator
+    # (vm/picovm.js + HostApi), PIOS the real DMA driver. See PIOS_DEVICE_BINDINGS.md.
+    ("Device", "Open"):         0x0168,   # rs1=id-span rs2=cfg           rd=devHandle
+    ("Device", "Caps"):         0x0169,   # rs1=devHandle                 rd=capsBits
+    ("Device", "Close"):        0x016A,   # rs1=devHandle                 rd=ok
+    ("Device", "Status"):       0x016B,   # rs1=devHandle                 rd=status
+    ("Stream", "Open"):         0x0170,   # rs1=devHandle rs2=ringCfg     rd=streamHandle
+    ("Stream", "Next"):         0x0171,   # rs1=streamHandle              rd=leaseHandle (0=EOF)
+    ("Stream", "Span"):         0x0172,   # rs1=leaseHandle               rd=span (zero-copy)
+    ("Stream", "Submit"):       0x0173,   # rs1=streamHandle rs2=lease    rd=ok (TX)
+    ("Stream", "Release"):      0x0174,   # rs1=leaseHandle               rd=ok (RX return-to-ring)
+    ("Stream", "Close"):        0x0175,   # rs1=streamHandle              rd=ok
 }
 HOST_HOOK_NAMES = {v: k for k, v in HOST_HOOK_CODES.items()}
 

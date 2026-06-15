@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0x42427AEB
+#define PV_HOOK_TABLE_VERSION 0xD383D8AB
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -290,5 +290,15 @@
 #define PV_HOOK_FIFO_SEND                        0x165
 #define PV_HOOK_FIFO_RECV                        0x166
 #define PV_HOOK_FIFO_POLL                        0x167
+#define PV_HOOK_DEVICE_OPEN                      0x168
+#define PV_HOOK_DEVICE_CAPS                      0x169
+#define PV_HOOK_DEVICE_CLOSE                     0x16A
+#define PV_HOOK_DEVICE_STATUS                    0x16B
+#define PV_HOOK_STREAM_OPEN                      0x170
+#define PV_HOOK_STREAM_NEXT                      0x171
+#define PV_HOOK_STREAM_SPAN                      0x172
+#define PV_HOOK_STREAM_SUBMIT                    0x173
+#define PV_HOOK_STREAM_RELEASE                   0x174
+#define PV_HOOK_STREAM_CLOSE                     0x175
 
 #endif

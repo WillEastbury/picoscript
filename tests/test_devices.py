@@ -106,11 +106,53 @@ def test_schema_hooks_roundtrip_py_equals_js():
     assert py == b"id:int;qty:int"
 
 
+# RX DMA ring: device "csi0", buf=4, frames=3 -> cfg=(4<<1)|(3<<16)=196616.
+# Frame n byte i=(n+i)&0xFF, so sums 6+10+14 = 30 over the three frames.
+STREAM_PROG = (
+    'int dev = Device.Open("csi0", 0);\n'
+    'int s = Stream.Open(dev, 196616);\n'
+    'int total = 0;\n'
+    'int l = Stream.Next(s);\n'
+    'while (l != 0) {\n'
+    '  int sp = Stream.Span(l);\n'
+    '  int n = Span.Len(sp);\n'
+    '  for (i = 0; i < n; i = i + 1) { total = total + Span.Get(sp, i); }\n'
+    '  Stream.Release(l);\n'
+    '  l = Stream.Next(s);\n'
+    '}\n'
+    'Stream.Close(s);\n'
+    'Device.Close(dev);\n'
+    'print(total);\n'
+)
+
+
+def test_stream_ring_emulator_py_matches_expected():
+    words = lower_to_bytecode_safe(compile_c(STREAM_PROG))
+    assert out_py(words) == [30]
+
+
+def test_stream_ring_emulator_py_equals_js():
+    words = lower_to_bytecode_safe(compile_c(STREAM_PROG))
+    assert out_py(words) == out_js(words)
+
+
+def test_stream_capability_gated():
+    # Stream.* needs CAP_DMA; deny it and the hook must fault (INV-17), not run.
+    from picoscript_vm import CAP_ALL, CAP_DMA, PicoFault
+    words = lower_to_bytecode_safe(compile_c(STREAM_PROG))
+    host = HostApi(); vm = PicoVM(host=host, caps=CAP_ALL & ~CAP_DMA); vm.load(words)
+    try:
+        vm.run()
+        assert False, "expected a capability fault for Stream.* without CAP_DMA"
+    except PicoFault as e:
+        assert e.code == 8, f"expected CAPABILITY fault (8), got {e.code}"
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
             fn()
-    print("PASS GPIO emulator: Python VM == JS VM, values/clamping/defaults as expected")
+    print("PASS devices: GPIO emulator + schema hooks + Stream DMA-ring (Python VM == JS VM, cap-gated)")
 
 
 if __name__ == "__main__":

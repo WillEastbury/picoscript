@@ -41,12 +41,12 @@
 
   // Binding capability classes (INV-17). Bit values match vm/picovm.h PV_CAP_* and
   // picoscript_vm.CAP_*; pure computation needs none (class 0, always allowed).
-  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024, CAPSULE: 2048 };
-  var CAP_ALL = 0xFFF;
+  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024, CAPSULE: 2048, DEVICE: 4096, DMA: 8192 };
+  var CAP_ALL = 0x3FFF;
   var CAP_BY_NS = { Kernel: CAP.KERNEL, Queue: CAP.QUEUE, Random: CAP.RANDOM,
     Req: CAP.NET, Resp: CAP.NET, Net: CAP.NET, Storage: CAP.STORAGE, DateTime: CAP.TIME,
     Context: CAP.CONTEXT, Auth: CAP.AUTH, X509: CAP.AUTH, Environment: CAP.ENV, Locale: CAP.ENV, Gpio: CAP.GPIO,
-    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE };
+    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Stream: CAP.DMA };
   function hookCap(name) {   // "Ns.Method" -> required capability class (0 = pure)
     var dot = name.indexOf("."), ns = name.slice(0, dot), m = name.slice(dot + 1);
     if (ns === "Maths" && (m === "Random" || m === "RandomRange")) return CAP.RANDOM;
@@ -361,6 +361,13 @@
     // ---- program-level GPIO emulator: Gpio.* (reference; PIOS injects real driver)
     if (name.indexOf("Gpio.") === 0) {
       if (this._gpio(name.slice(5), rd, rs1, rs2)) return;
+    }
+    // ---- Device.*/Stream.* reference DMA-ring emulator ---------------------
+    if (name.indexOf("Device.") === 0) {
+      if (this._device(name.slice(7), rd, rs1, rs2)) return;
+    }
+    if (name.indexOf("Stream.") === 0) {
+      if (this._stream(name.slice(7), rd, rs1, rs2)) return;
     }
     // ---- String.* arena string library -------------------------------------
     if (name.indexOf("String.") === 0) {
@@ -1320,6 +1327,63 @@
     if (method === "GetPull") { this.regs[rd] = st.pull; return true; }
     if (method === "Write") { var v = this.regs[rs2] | 0; st.value = v < 0 ? 0 : (v > 1024 ? 1024 : v); this.regs[rd] = 1; return true; }
     if (method === "Read") { this.regs[rd] = st.value; return true; }
+    return false;
+  };
+
+  // Reference DMA-ring emulator (Device.*/Stream.*). Mirrors picoscript_vm:
+  // deterministic fake ring, RX frame n byte i = (n+i)&0xFF; ringCfg packs
+  // dir(bit0:0=RX/1=TX) | bufSize<<1 | frames<<16. Python VM == JS VM.
+  PicoVM.prototype._ringState = function () {
+    if (!this._dev) this._dev = { devices: {}, streams: {}, leases: {}, ds: 0, ss: 0, ls: 0 };
+    return this._dev;
+  };
+  PicoVM.prototype._ringFrame = function (idx, buf) {
+    var a = []; for (var i = 0; i < buf; i++) a.push((idx + i) & 0xFF); return a;
+  };
+  PicoVM.prototype._device = function (method, rd, rs1, rs2) {
+    var d = this._ringState();
+    if (method === "Open") { d.ds++; d.devices[d.ds] = { id: this._spanStr(this.regs[rs1]), open: true }; this.regs[rd] = d.ds; return true; }
+    var dev = d.devices[this.regs[rs1] | 0];
+    if (method === "Caps") { this.regs[rd] = (dev && dev.open) ? 0x3 : 0; return true; }
+    if (method === "Status") { this.regs[rd] = (dev && dev.open) ? 0 : 1; return true; }
+    if (method === "Close") { if (dev) dev.open = false; this.regs[rd] = dev ? 1 : 0; return true; }
+    return false;
+  };
+  PicoVM.prototype._stream = function (method, rd, rs1, rs2) {
+    var d = this._ringState();
+    if (method === "Open") {
+      var dev = d.devices[this.regs[rs1] | 0];
+      if (!dev || !dev.open) { this.hostStatus = 1; this.regs[rd] = 0; return true; }
+      var cfg = this.regs[rs2] >>> 0;
+      d.ss++; d.streams[d.ss] = { dir: cfg & 1, buf: (cfg >>> 1) & 0x7FFF, frames: (cfg >>> 16) & 0xFFFF, next: 0, tx: [] };
+      this.regs[rd] = d.ss; return true;
+    }
+    if (method === "Next") {
+      var st = d.streams[this.regs[rs1] | 0];
+      if (!st || st.next >= st.frames) { this.hostStatus = 3; this.regs[rd] = 0; return true; }
+      var idx = st.next++; d.ls++;
+      var data = (st.dir === 0) ? this._ringFrame(idx, st.buf) : new Array(st.buf).fill(0);
+      d.leases[d.ls] = { stream: this.regs[rs1] | 0, idx: idx, data: data, span: 0, released: false };
+      this.regs[rd] = d.ls; return true;
+    }
+    if (method === "Span") {
+      var le = d.leases[this.regs[rs1] | 0];
+      if (!le || le.released) { this.hostStatus = 1; this.regs[rd] = 0; return true; }
+      if (!le.span) le.span = this._newSpanBytes(le.data);
+      this.regs[rd] = le.span; return true;
+    }
+    if (method === "Submit") {
+      var sst = d.streams[this.regs[rs1] | 0], sle = d.leases[this.regs[rs2] | 0];
+      if (sst && sle && !sle.released) { sst.tx.push(sle.span ? this._spanBytes(sle.span) : sle.data); sle.released = true; this.regs[rd] = 1; }
+      else this.regs[rd] = 0;
+      return true;
+    }
+    if (method === "Release") {
+      var rle = d.leases[this.regs[rs1] | 0];
+      if (rle) { rle.released = true; this.regs[rd] = 1; } else this.regs[rd] = 0;
+      return true;
+    }
+    if (method === "Close") { this.regs[rd] = d.streams[this.regs[rs1] | 0] ? 1 : 0; return true; }
     return false;
   };
 

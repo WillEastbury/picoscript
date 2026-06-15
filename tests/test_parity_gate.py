@@ -42,6 +42,8 @@ ALLOWLISTED_NAMESPACES = {
     "Pack",         # Capsule pack selector -- provider-backed (PiosCapsuleStore).
     "Card",         # Capsule card read/write/address -- provider-backed.
     "Fifo",         # Intra-capsule IPC FIFOs -- provider-backed.
+    "Device",       # Streaming device enumerate/open -- provider-backed (DMA driver).
+    "Stream",       # DMA-ring streaming -- provider-backed (ring emulator / real DMA).
 }
 
 

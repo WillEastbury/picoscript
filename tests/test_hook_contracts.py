@@ -15,7 +15,7 @@ HOOK_RE = re.compile(r'0x([0-9A-Fa-f]+):\s*"([^"]+)"')
 BY_CODE_RE = re.compile(r'BY_CODE:\s*\{(?P<body>.*?)\n\s*\}', re.S)
 VALID_CAPABILITIES = {
     "KERNEL", "QUEUE", "RANDOM", "STORAGE", "TIME", "NET",
-    "CONTEXT", "AUTH", "ENV", "GPIO", "CAPSULE", "pure",
+    "CONTEXT", "AUTH", "ENV", "GPIO", "CAPSULE", "DEVICE", "DMA", "pure",
 }
 
 
