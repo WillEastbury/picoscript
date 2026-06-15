@@ -1125,6 +1125,200 @@ static void pv_aes256_encrypt_block(const uint8_t in[16], const uint8_t rk[240],
     for (i = 0; i < 16; i++) out[i] = t[i] ^ rk[14 * 16 + i];
 }
 
+/* ---- DEFLATE inflate (RFC 1951) + gunzip: decompression is canonical, so the
+ *      output is byte-identical to the Python/JS runtime. (Compression stays in
+ *      the reference runtime + host -- see docs/COMPRESS.md.) Adapted from Mark
+ *      Adler's public-domain puff.c; reads the input span, writes the output via
+ *      the bump arena (back-references read already-written bytes). --------- */
+#define PV_MAXBITS   15
+#define PV_MAXLCODES 286
+#define PV_MAXDCODES 30
+#define PV_MAXCODES  (PV_MAXLCODES + PV_MAXDCODES)
+#define PV_FIXLCODES 288
+
+typedef struct {
+    pv_ctx  *ctx;
+    uint32_t in;        /* input arena pointer */
+    int32_t  inlen;     /* input length (excludes any gzip trailer) */
+    int32_t  incnt;     /* input bytes consumed */
+    int      bitbuf;
+    int      bitcnt;
+    uint32_t *outk;     /* offset into the output span being built */
+    int      err;       /* set when input is exhausted (truncated) */
+} pv_puff;
+
+typedef struct { short *count; short *symbol; } pv_huff;
+
+static int pv_pbits(pv_puff *s, int need)
+{
+    long val = s->bitbuf;
+    while (s->bitcnt < need) {
+        if (s->incnt >= s->inlen) { s->err = 1; return 0; }
+        val |= (long)pv_arena_get(s->ctx, s->in + (uint32_t)s->incnt++) << s->bitcnt;
+        s->bitcnt += 8;
+    }
+    s->bitbuf = (int)(val >> need);
+    s->bitcnt -= need;
+    return (int)(val & ((1L << need) - 1));
+}
+
+static int pv_construct(pv_huff *h, const short *length, int n)
+{
+    int symbol, len, left;
+    short offs[PV_MAXBITS + 1];
+    for (len = 0; len <= PV_MAXBITS; len++) h->count[len] = 0;
+    for (symbol = 0; symbol < n; symbol++) h->count[length[symbol]]++;
+    if (h->count[0] == n) return 0;
+    left = 1;
+    for (len = 1; len <= PV_MAXBITS; len++) {
+        left <<= 1;
+        left -= h->count[len];
+        if (left < 0) return left;          /* over-subscribed */
+    }
+    offs[1] = 0;
+    for (len = 1; len < PV_MAXBITS; len++) offs[len + 1] = offs[len] + h->count[len];
+    for (symbol = 0; symbol < n; symbol++)
+        if (length[symbol] != 0) h->symbol[offs[length[symbol]]++] = (short)symbol;
+    return left;
+}
+
+static int pv_decode(pv_puff *s, const pv_huff *h)
+{
+    int len, code = 0, first = 0, count, index = 0;
+    for (len = 1; len <= PV_MAXBITS; len++) {
+        code |= pv_pbits(s, 1);
+        if (s->err) return -99;
+        count = h->count[len];
+        if (code - first < count) return h->symbol[index + (code - first)];
+        index += count;
+        first += count;
+        first <<= 1;
+        code <<= 1;
+    }
+    return -10;
+}
+
+static const short PV_LENS[29] = {3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258};
+static const short PV_LEXT[29] = {0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0};
+static const short PV_DISTS[30] = {1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577};
+static const short PV_DEXT[30] = {0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13};
+static const short PV_CLCIDX[19] = {16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15};
+
+static int pv_pcodes(pv_puff *s, const pv_huff *lencode, const pv_huff *distcode)
+{
+    int symbol, len, i;
+    unsigned dist;
+    do {
+        symbol = pv_decode(s, lencode);
+        if (symbol < 0) return symbol;
+        if (symbol < 256) {
+            pv_arena_put(s->ctx, s->outk, (uint8_t)symbol);
+        } else if (symbol > 256) {
+            symbol -= 257;
+            if (symbol >= 29) return -10;
+            len = PV_LENS[symbol] + pv_pbits(s, PV_LEXT[symbol]);
+            if (s->err) return -99;
+            symbol = pv_decode(s, distcode);
+            if (symbol < 0) return symbol;
+            dist = (unsigned)(PV_DISTS[symbol] + pv_pbits(s, PV_DEXT[symbol]));
+            if (s->err) return -99;
+            for (i = 0; i < len; i++) {
+                uint8_t b = pv_arena_get(s->ctx, s->ctx->arena_top + (*s->outk - dist));
+                pv_arena_put(s->ctx, s->outk, b);
+            }
+        }
+    } while (symbol != 256);
+    return 0;
+}
+
+static int pv_pstored(pv_puff *s)
+{
+    unsigned len;
+    s->bitbuf = 0; s->bitcnt = 0;            /* discard to byte boundary */
+    if (s->incnt + 4 > s->inlen) return -2;
+    len = (unsigned)pv_arena_get(s->ctx, s->in + (uint32_t)s->incnt)
+        | ((unsigned)pv_arena_get(s->ctx, s->in + (uint32_t)s->incnt + 1) << 8);
+    s->incnt += 4;
+    if (s->incnt + (int32_t)len > s->inlen) return -2;
+    while (len--) pv_arena_put(s->ctx, s->outk, pv_arena_get(s->ctx, s->in + (uint32_t)s->incnt++));
+    return 0;
+}
+
+static int pv_pfixed(pv_puff *s)
+{
+    static short lcnt[PV_MAXBITS + 1], lsym[PV_FIXLCODES];
+    static short dcnt[PV_MAXBITS + 1], dsym[PV_MAXDCODES];
+    static pv_huff lencode = {lcnt, lsym};
+    static pv_huff distcode = {dcnt, dsym};
+    static int built = 0;
+    if (!built) {
+        short lengths[PV_FIXLCODES];
+        int i;
+        for (i = 0; i < 144; i++) lengths[i] = 8;
+        for (; i < 256; i++) lengths[i] = 9;
+        for (; i < 280; i++) lengths[i] = 7;
+        for (; i < 288; i++) lengths[i] = 8;
+        pv_construct(&lencode, lengths, PV_FIXLCODES);
+        for (i = 0; i < PV_MAXDCODES; i++) lengths[i] = 5;
+        pv_construct(&distcode, lengths, PV_MAXDCODES);
+        built = 1;
+    }
+    return pv_pcodes(s, &lencode, &distcode);
+}
+
+static int pv_pdynamic(pv_puff *s)
+{
+    int nlen, ndist, ncode, index, symbol, len_rep;
+    short lengths[PV_MAXCODES];
+    short lcnt[PV_MAXBITS + 1], lsym[PV_MAXLCODES];
+    short dcnt[PV_MAXBITS + 1], dsym[PV_MAXDCODES];
+    short ccnt[PV_MAXBITS + 1], csym[19];
+    pv_huff lencode = {lcnt, lsym};
+    pv_huff distcode = {dcnt, dsym};
+    pv_huff clcode = {ccnt, csym};
+    nlen = pv_pbits(s, 5) + 257;
+    ndist = pv_pbits(s, 5) + 1;
+    ncode = pv_pbits(s, 4) + 4;
+    if (s->err) return -99;
+    if (nlen > PV_MAXLCODES || ndist > PV_MAXDCODES) return -3;
+    for (index = 0; index < ncode; index++) lengths[PV_CLCIDX[index]] = (short)pv_pbits(s, 3);
+    for (; index < 19; index++) lengths[PV_CLCIDX[index]] = 0;
+    if (s->err) return -99;
+    if (pv_construct(&clcode, lengths, 19) != 0) return -4;
+    index = 0;
+    while (index < nlen + ndist) {
+        symbol = pv_decode(s, &clcode);
+        if (symbol < 0) return symbol;
+        if (symbol < 16) {
+            lengths[index++] = (short)symbol;
+        } else {
+            len_rep = 0;
+            if (symbol == 16) { if (index == 0) return -5; len_rep = lengths[index - 1]; symbol = 3 + pv_pbits(s, 2); }
+            else if (symbol == 17) { symbol = 3 + pv_pbits(s, 3); }
+            else { symbol = 11 + pv_pbits(s, 7); }
+            if (s->err) return -99;
+            if (index + symbol > nlen + ndist) return -6;
+            while (symbol--) lengths[index++] = (short)len_rep;
+        }
+    }
+    pv_construct(&lencode, lengths, nlen);
+    pv_construct(&distcode, lengths + nlen, ndist);
+    return pv_pcodes(s, &lencode, &distcode);
+}
+
+static int pv_inflate(pv_puff *s)
+{
+    int last, type, err;
+    do {
+        last = pv_pbits(s, 1);
+        type = pv_pbits(s, 2);
+        if (s->err) return -99;
+        err = (type == 0) ? pv_pstored(s) : (type == 1) ? pv_pfixed(s) : (type == 2) ? pv_pdynamic(s) : -1;
+        if (err != 0) return err;
+    } while (!last);
+    return 0;
+}
+
 void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
 {
     (void)imm16;
@@ -1679,6 +1873,37 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
             for (uint8_t t = 0; t < cnt; t++) pv_arena_put(ctx, &k, b0);
             i += 2;
         }
+        ctx->regs[rd] = pv_arena_finish(ctx, k);
+        return;
+    }
+    /* ---- Compress.DeflateDecompress / GzipDecompress: real INFLATE (RFC 1951)
+     *      built into the runtime. Compression stays in the reference runtime +
+     *      host (docs/COMPRESS.md). Malformed input -> empty span. ---- */
+    if (hook == PV_HOOK_COMPRESS_DEFLATEDECOMPRESS || hook == PV_HOOK_COMPRESS_GZIPDECOMPRESS) {
+        int h = ctx->regs[rs1];
+        uint32_t p = pv_span_p(ctx, h);
+        int32_t l = pv_span_n(ctx, h);
+        uint32_t k = 0;
+        pv_puff s;
+        int err;
+        s.ctx = ctx; s.in = p; s.inlen = l; s.incnt = 0;
+        s.bitbuf = 0; s.bitcnt = 0; s.outk = &k; s.err = 0;
+        if (hook == PV_HOOK_COMPRESS_GZIPDECOMPRESS) {
+            if (l < 18 || pv_arena_get(ctx, p) != 0x1F || pv_arena_get(ctx, p + 1) != 0x8B) {
+                ctx->regs[rd] = pv_arena_finish(ctx, 0);
+                return;
+            }
+            uint8_t flg = pv_arena_get(ctx, p + 3);
+            int32_t pos = 10;
+            if (flg & 4) { int xlen = pv_arena_get(ctx, p + (uint32_t)pos) | (pv_arena_get(ctx, p + (uint32_t)pos + 1) << 8); pos += 2 + xlen; }
+            if (flg & 8) { while (pos < l && pv_arena_get(ctx, p + (uint32_t)pos) != 0) pos++; pos++; }
+            if (flg & 16) { while (pos < l && pv_arena_get(ctx, p + (uint32_t)pos) != 0) pos++; pos++; }
+            if (flg & 2) pos += 2;
+            s.incnt = pos;
+            s.inlen = l - 8;                 /* exclude the 8-byte CRC32 + ISIZE trailer */
+        }
+        err = pv_inflate(&s);
+        if (s.err || err != 0) k = 0;        /* truncated/corrupt -> empty span */
         ctx->regs[rd] = pv_arena_finish(ctx, k);
         return;
     }

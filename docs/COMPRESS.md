@@ -32,19 +32,23 @@ bytes).
 ## Decision record: the C VM
 
 The Python and JS VMs (the reference runtime + the browser) ship the full codec.
-The **native C VM (`vm/picovm.c`) does not yet implement compress/decompress**, a
-deliberate tradeoff:
+The native **C VM (`vm/picovm.c`) implements `inflate`/`gunzip`** (real
+`Compress.DeflateDecompress` / `GzipDecompress`, adapted from the public-domain
+puff.c), so **decompression runs on all three VMs** — verified against real stdlib
+gzip (dynamic Huffman), raw zlib deflate, and our own output in
+`tests/test_compress.py::test_c_vm_inflate_canonical`. Compression on the native
+path is **not** implemented, a deliberate tradeoff:
 
-- **Decompression output is canonical** — any spec-correct inflater produces identical
-  bytes — so a C `inflate`/`gunzip` is straightforward to add later with no
-  byte-identity risk. *(Recommended next step for on-device asset/firmware decompression.)*
+- **Decompression output is canonical** — any spec-correct inflater produces
+  identical bytes — so the C inflater needs no byte-identity machinery and reads
+  any valid stream. *(Done.)*
 - **Compression bytes are not canonical** — byte-identity requires the *same* match
   finder. Matching the Python/JS exact-3-byte-prefix chains needs either a 64 MiB
   direct-mapped table (embedded-hostile) or a shared bounded-hash rework across all
   three VMs. Rather than ship a 64 MiB array or a subtly-divergent compressor, the
   canonical compressor stays in the reference runtime + the PIOS host.
 
-Net: programs run real gzip/deflate on the Python and JS VMs today; on the native path
-the codec is host/PIOS-supplied (or a future canonical C port). No 5-path example uses
-`Compress.Deflate*`/`Gzip*`, so this asymmetry doesn't affect the parity suite. If you
-want the C port (inflate first, or a bounded-hash compressor across all three VMs), say so.
+Net: **decompress anywhere** (all 3 VMs, in-runtime); compress on the Python/JS
+runtime + the PIOS host. No 5-path example uses `Compress.Deflate*`/`Gzip*`, so the
+asymmetry doesn't affect the parity suite. A byte-identical C compressor (bounded-hash
+across all three VMs) remains available on request.

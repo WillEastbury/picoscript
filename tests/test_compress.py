@@ -101,6 +101,55 @@ def test_vm_compressed_bytes_py_equals_js_and_real_gzip():
     assert _gzip.decompress(py) == b"compress me compress me compress me compress me"
 
 
+# -- Native C VM: real INFLATE/gunzip (decompression is canonical) -------------
+VM_EXE = os.path.join(VM_DIR, "picovm_run.exe")
+
+
+def _ensure_c_vm():
+    if os.path.exists(VM_EXE):
+        return True
+    cmd = [sys.executable, "-m", "ziglang", "cc", "-std=c99", "-O2",
+           os.path.join(VM_DIR, "picovm.c"), os.path.join(VM_DIR, "picovm_run.c"), "-o", VM_EXE]
+    return subprocess.run(cmd, capture_output=True, text=True).returncode == 0
+
+
+def _span_prog(blob, method):
+    # Build the compressed bytes into the low arena (below const_floor/0x8000, so
+    # they never collide with the decompressed output which grows from 0x8000),
+    # then decompress and write the result.
+    lines = [f"Memory.Set({i}, {b});" for i, b in enumerate(blob)]
+    lines += [f"int z = Span.Make(0, {len(blob)});",
+              f"int out = Compress.{method}(z);", "Io.Write(out);"]
+    return "\n".join(lines) + "\n"
+
+
+def _c_vm_out(words):
+    inp = f"{len(words)}\n" + "\n".join(f"{w:08x}" for w in words) + "\n"
+    r = subprocess.run([VM_EXE], input=inp, capture_output=True, text=True)
+    for line in r.stdout.splitlines():
+        p = line.split()
+        if p and p[0] == "OUT":
+            return bytes(int(x, 16) for x in p[1:])
+    return b""
+
+
+def test_c_vm_inflate_canonical():
+    # The native C VM decompresses real stdlib gzip, raw zlib deflate, and our own
+    # runtime's output -- byte-identical to the original (decompression is canonical).
+    if not _ensure_c_vm():
+        return
+    s = b"hello hello hello world world INFLATE me on the native C VM too! " * 3
+    cases = [
+        (_gzip.compress(s), "GzipDecompress"),       # real stdlib gzip (dynamic Huffman)
+        (zlib.compress(s, 6)[2:-4], "DeflateDecompress"),  # raw zlib deflate
+        (P._deflate(s), "DeflateDecompress"),        # our runtime's deflate
+        (P._gzip_compress(s), "GzipDecompress"),     # our runtime's gzip
+    ]
+    for blob, method in cases:
+        words = lower_to_bytecode_safe(compile_c(_span_prog(blob, method)))
+        assert _c_vm_out(words) == s, f"C VM {method} mismatch (blob {len(blob)} B)"
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
