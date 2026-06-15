@@ -76,6 +76,7 @@
     // the built-in reference store + emulator, so VM parity is unchanged.
     this._cardStore = opts.cardStore || null;
     this._gpioProvider = opts.gpioProvider || null;
+    this._streamProvider = opts.streamProvider || null;
     this.reset();
   }
 
@@ -1334,6 +1335,7 @@
   // deterministic fake ring, RX frame n byte i = (n+i)&0xFF; ringCfg packs
   // dir(bit0:0=RX/1=TX) | bufSize<<1 | frames<<16. Python VM == JS VM.
   PicoVM.prototype._ringState = function () {
+    if (this._streamProvider) return this._streamProvider;
     if (!this._dev) this._dev = { devices: {}, streams: {}, leases: {}, ds: 0, ss: 0, ls: 0 };
     return this._dev;
   };

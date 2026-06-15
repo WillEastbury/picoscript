@@ -198,6 +198,69 @@ CONSTRUCTS = [
      "Set n to Storage.QueryCard(qry).\nPrint n.\n"
      "Print Storage.QueryResult(0).\nPrint Storage.QueryResult(1).\nPrint Storage.QueryResult(2).\n"
      "Storage.DeleteCard(1).\nPrint Storage.QueryCard(qry)."),
+
+    ("Streaming: DMA ring (Device.* / Stream.*)",
+     "Streaming hardware is a producer/consumer ring of DMA buffers, structurally "
+     "like Req/Resp but over hardware. Device.Open names a device; Stream.Open starts "
+     "a ring (here RX, buf=4, frames=3 -&gt; cfg 196616); then loop Next/Span/Release. "
+     "Each Stream.Span is a zero-copy view into the leased buffer. The reference "
+     "emulator generates frame n as bytes (n+i)&amp;255, so the three frames sum to "
+     "6+10+14 = 30. PIOS injects the real DMA driver under the same hooks; the editor "
+     "Stream panel renders the ring live.",
+     "int dev = Device.Open(\"csi0\", 0);\n"
+     "int s = Stream.Open(dev, 196616);\n"
+     "int total = 0;\n"
+     "int l = Stream.Next(s);\n"
+     "while (l != 0) {\n"
+     "  int sp = Stream.Span(l);\n"
+     "  int n = Span.Len(sp);\n"
+     "  for (i = 0; i < n; i = i + 1) { total = total + Span.Get(sp, i); }\n"
+     "  Stream.Release(l);\n"
+     "  l = Stream.Next(s);\n"
+     "}\n"
+     "Stream.Close(s); Device.Close(dev);\n"
+     "print(total);",
+     "DIM DEV = Device.Open(\"csi0\", 0)\n"
+     "DIM S = Stream.Open(DEV, 196616)\n"
+     "DIM TOTAL = 0\n"
+     "DIM L = Stream.Next(S)\n"
+     "WHILE L <> 0\n"
+     "  DIM SP = Stream.Span(L)\n"
+     "  DIM N = Span.Len(SP)\n"
+     "  FOR I = 0 TO N - 1\n"
+     "    LET TOTAL = TOTAL + Span.Get(SP, I)\n"
+     "  NEXT\n"
+     "  Stream.Release(L)\n"
+     "  LET L = Stream.Next(S)\n"
+     "ENDWHILE\n"
+     "Stream.Close(S)\nDevice.Close(DEV)\n"
+     "PRINT TOTAL",
+     "dev = Device.Open(\"csi0\", 0)\n"
+     "s = Stream.Open(dev, 196616)\n"
+     "total = 0\n"
+     "l = Stream.Next(s)\n"
+     "while l != 0:\n"
+     "    sp = Stream.Span(l)\n"
+     "    n = Span.Len(sp)\n"
+     "    for i in range(0, n):\n"
+     "        total = total + Span.Get(sp, i)\n"
+     "    Stream.Release(l)\n"
+     "    l = Stream.Next(s)\n"
+     "Stream.Close(s)\nDevice.Close(dev)\n"
+     "print(total)",
+     "Set dev to Device.Open(\"csi0\", 0).\n"
+     "Set s to Stream.Open(dev, 196616).\n"
+     "Set total to 0.\n"
+     "Set l to Stream.Next(s).\n"
+     "While l is not 0:\n"
+     "    Set sp to Stream.Span(l).\n"
+     "    Set n to Span.Len(sp).\n"
+     "    For each i from 0 to n minus 1:\n"
+     "        Increase total by Span.Get(sp, i).\n"
+     "    Stream.Release(l).\n"
+     "    Set l to Stream.Next(s).\n"
+     "Stream.Close(s).\nDevice.Close(dev).\n"
+     "Print total."),
 ]
 
 
@@ -449,6 +512,19 @@ PAGE = r"""<!DOCTYPE html>
   .sd-fld label { width:96px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .sd-fld input { flex:1; padding:3px 6px; font-size:11px; }
   .sd-empty { color:var(--muted); font-size:11px; }
+  /* Stream DMA-ring visual */
+  .stream-tools { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; font-size:11px; }
+  .stream-tools .muted { color:var(--muted); }
+  .stream-dev { border:1px solid #2c313f; border-radius:6px; padding:6px 8px; margin-bottom:6px; background:#0c0e14; }
+  .stream-dev .dh { display:flex; align-items:center; gap:8px; font-size:11px; margin-bottom:5px; }
+  .stream-dev .dh b { color:var(--text); } .stream-dev .dh .st { font-size:9px; font-weight:700; border-radius:8px; padding:1px 6px; }
+  .stream-dev .dh .st.open { background:#7ee787; color:#0f1117; } .stream-dev .dh .st.closed { background:#2c313f; color:var(--muted); }
+  .stream-dev .dh .dir { font-size:9px; font-weight:700; background:var(--accent); color:#0f1117; border-radius:8px; padding:1px 6px; }
+  .frame-row { display:flex; align-items:center; gap:6px; font-size:11px; margin:2px 0; }
+  .frame-row .fi { color:var(--muted); font-family:"SF Mono",monospace; width:54px; }
+  .frame-row .fb { flex:1; font-family:"SF Mono",monospace; color:#cde9c8; background:#1b2030; border-radius:4px; padding:2px 6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .frame-row .fs { font-size:9px; font-weight:700; border-radius:8px; padding:1px 5px; }
+  .frame-row .fs.rel { background:#2c313f; color:var(--muted); } .frame-row .fs.live { background:var(--warn); color:#0f1117; }
   @media (max-width:800px){
     .sidebar { width:180px; }
     .regs { grid-template-columns:repeat(2,1fr); }
@@ -501,6 +577,7 @@ PAGE = r"""<!DOCTYPE html>
       <button onclick="toggleDbg(this,'dbg-src')">Source Editor</button>
       <button onclick="toggleDbg(this,'dbg-gpio')">GPIO</button>
       <button onclick="toggleDbg(this,'dbg-cards')">Cards</button>
+      <button onclick="toggleDbg(this,'dbg-stream')">Stream</button>
       <button style="margin-left:auto" onclick="collapseDbg()">&#9660; Collapse</button>
     </div>
     <div class="dbg-panels" id="dbgPanels" style="max-height:220px">
@@ -543,6 +620,12 @@ PAGE = r"""<!DOCTYPE html>
         </div>
         <div class="schema-wrap" id="cardsView"></div>
       </div>
+      <div class="dbg-panel" id="dbg-stream">
+        <div class="stream-tools">
+          <span class="muted">Run a program that uses <b>Device.*</b> / <b>Stream.*</b>. The reference DMA ring renders each device, its stream, and the frames read (RX) or submitted (TX) &mdash; bytes shown live, <span style="color:var(--warn)">live</span> until <b>Stream.Release</b>.</span>
+        </div>
+        <div id="streamView"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -564,7 +647,8 @@ var GROUPS = [
   {name:'Operators', items:[5]},
   {name:'Dispatch & State', items:[6,7]},
   {name:'Subroutines', items:[8,9]},
-  {name:'I/O & Cards', items:[12,13]}
+  {name:'I/O & Cards', items:[12,13]},
+  {name:'Devices', items:[14]}
 ];
 
 function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -687,6 +771,39 @@ function renderGpio(){
       '<span class="bar"><i style="width:'+w+'%"></i></span>'+
       '<span class="val">'+st.value+'</span></div>';
   }
+  host.innerHTML=html;
+}
+
+// ---- device panel: Stream DMA-ring visual (observes the streamProvider) -----
+var SP = { devices:{}, streams:{}, leases:{}, ds:0, ss:0, ls:0 };
+function streamReset(){ SP = { devices:{}, streams:{}, leases:{}, ds:0, ss:0, ls:0 }; }
+function hexBytes(a){ return (a||[]).map(function(b){return ('0'+(b&255).toString(16)).slice(-2);}).join(' '); }
+function renderStream(){
+  var host=document.getElementById('streamView'); if(!host) return;
+  var devIds=Object.keys(SP.devices);
+  if(!devIds.length){ host.innerHTML='<div class="sd-empty">no devices opened</div>'; return; }
+  var html='';
+  devIds.forEach(function(dh){
+    var dev=SP.devices[dh];
+    // streams + their leases (frames)
+    var streamRows='';
+    Object.keys(SP.streams).forEach(function(sh){
+      var st=SP.streams[sh], dir=st.dir===1?'TX':'RX';
+      var frames='';
+      Object.keys(SP.leases).forEach(function(lh){
+        var le=SP.leases[lh]; if(String(le.stream)!==String(sh)) return;
+        frames+='<div class="frame-row"><span class="fi">frame '+le.idx+'</span>'+
+          '<span class="fb">'+hexBytes(le.data)+'</span>'+
+          '<span class="fs '+(le.released?'rel':'live')+'">'+(le.released?'released':'live')+'</span></div>';
+      });
+      streamRows+='<div style="margin-top:4px"><span class="dir">'+dir+'</span> '+
+        '<span style="color:var(--muted);font-size:11px">buf='+st.buf+' frames='+st.frames+' consumed='+st.next+
+        (st.tx&&st.tx.length?(' submitted='+st.tx.length):'')+'</span>'+(frames||'<div class="sd-empty">no frames yet</div>')+'</div>';
+    });
+    html+='<div class="stream-dev"><div class="dh"><b>'+esc(dev.id||('dev'+dh))+'</b>'+
+      '<span class="st '+(dev.open?'open':'closed')+'">'+(dev.open?'open':'closed')+'</span></div>'+
+      (streamRows||'<div class="sd-empty">no streams opened</div>')+'</div>';
+  });
   host.innerHTML=html;
 }
 
@@ -861,7 +978,7 @@ function compileSrc(run){
     dbgReset(); if(run) dbgRun();
   } catch(e){ err.textContent=String(e.message||e); err.style.color='#ff7b72'; }
 }
-function dbgReset(){ DBG.vm=new PicoVM({gpioProvider:GP, cardStore:CARDSTORE}); DBG.vm.load(DBG.words); render(); }
+function dbgReset(){ streamReset(); DBG.vm=new PicoVM({gpioProvider:GP, cardStore:CARDSTORE, streamProvider:SP}); DBG.vm.load(DBG.words); render(); }
 function dbgStep(){ if(DBG.vm){ DBG.vm.step(); render(); } }
 function dbgRun(){ if(!DBG.vm) dbgReset(); var g=0; while(DBG.vm.step()&&g++<200000){} render(); }
 
@@ -878,6 +995,7 @@ function render(){
   document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']';
   renderGpio();
   renderCards();
+  renderStream();
 }
 
 function jsDisasm(w){
@@ -908,6 +1026,7 @@ document.getElementById('lang').addEventListener('change',function(){editorLangC
 compileSrc(false);
 renderGpio();
 renderCards();
+renderStream();
 </script>
 </body>
 </html>"""
