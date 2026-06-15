@@ -206,10 +206,12 @@ three VMs, parity-tested) is the work — see §11.
   - `CAP_CAPSULE = 1<<11` — `Pack/Card/Fifo` (capsule store + intra-capsule IPC).
   - `CAP_DEVICE = 1<<12` — `Device.*` enumerate/open a streaming device.
   - `CAP_DMA    = 1<<13` — `Stream.*` (DMA-ring buffers).
+  - `CAP_EVENT  = 1<<14` — `Event.*` (reactive event queue; UI/async dispatch). See docs/PICO_UI.md.
+  - `CAP_UI     = 1<<15` — `Ui.*` (retained scene tree / PicoWire remote windowing). See docs/PICO_UI.md.
   - **Per-instance gating** is a **per-pin / per-`idSpan` allow-list** in the capsule's
     grant table, checked by the kernel on each access against the pin/device key —
     instance-level security with no capability-bit exhaustion and no address windows.
-  - `CAP_ALL` is now `0x3FFF` (bits 0–13); default grant stays "all" so existing
+  - `CAP_ALL` is now `0xFFFF` (bits 0–15); default grant stays "all" so existing
     programs are unaffected, and the harness/`PICOVM_CAPS` restricts to gate.
   - For the **GPIO-card baseline**, gating can also reuse the existing storage capability +
     the per-pin allow-list (since pins are cards) — a dedicated `CAP_GPIO` is recommended
