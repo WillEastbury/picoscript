@@ -284,6 +284,69 @@ CONSTRUCTS = [
      "Assert.Eq(a * b, 42).\n"
      "Assert.True(a < b).\n"
      "Print a times b."),
+
+    ("Remote UI: a window (Ui.* / Event.*)",
+     "Build a window + controls as a retained scene tree, then Ui.Serialize emits "
+     "a compact wire (reusing the PicoSerializer/PSC1 record format) that a thin "
+     "remote client renders -- see the Remote UI tab. Pos/Size pack x,y / w,h as "
+     "(x<<16)|y. User input (button click, checkbox) comes back as Event.* records "
+     "keyed by control id. The program prints the wire length.",
+     "int win = Ui.Window(\"Login\");\n"
+     "Ui.Size(win, 220 * 65536 + 130);\n"
+     "int name = Ui.Label(win, \"Name:\");\n"
+     "Ui.Pos(name, 12 * 65536 + 16);\n"
+     "int box = Ui.TextBox(win, \"guest\");\n"
+     "Ui.Pos(box, 70 * 65536 + 12); Ui.SetId(box, 1);\n"
+     "int rem = Ui.Checkbox(win, \"Remember me\");\n"
+     "Ui.Pos(rem, 12 * 65536 + 52); Ui.SetId(rem, 2); Ui.SetValue(rem, 1);\n"
+     "int go = Ui.Button(win, \"Sign in\");\n"
+     "Ui.Pos(go, 70 * 65536 + 86); Ui.SetId(go, 3);\n"
+     "print(Span.Len(Ui.Serialize(win)));",
+     "DIM WIN = Ui.Window(\"Login\")\n"
+     "Ui.Size(WIN, 220 * 65536 + 130)\n"
+     "DIM NAME = Ui.Label(WIN, \"Name:\")\n"
+     "Ui.Pos(NAME, 12 * 65536 + 16)\n"
+     "DIM BOX = Ui.TextBox(WIN, \"guest\")\n"
+     "Ui.Pos(BOX, 70 * 65536 + 12)\n"
+     "Ui.SetId(BOX, 1)\n"
+     "DIM REM = Ui.Checkbox(WIN, \"Remember me\")\n"
+     "Ui.Pos(REM, 12 * 65536 + 52)\n"
+     "Ui.SetId(REM, 2)\n"
+     "Ui.SetValue(REM, 1)\n"
+     "DIM GO = Ui.Button(WIN, \"Sign in\")\n"
+     "Ui.Pos(GO, 70 * 65536 + 86)\n"
+     "Ui.SetId(GO, 3)\n"
+     "PRINT Span.Len(Ui.Serialize(WIN))",
+     "win = Ui.Window(\"Login\")\n"
+     "Ui.Size(win, 220 * 65536 + 130)\n"
+     "name = Ui.Label(win, \"Name:\")\n"
+     "Ui.Pos(name, 12 * 65536 + 16)\n"
+     "box = Ui.TextBox(win, \"guest\")\n"
+     "Ui.Pos(box, 70 * 65536 + 12)\n"
+     "Ui.SetId(box, 1)\n"
+     "rem = Ui.Checkbox(win, \"Remember me\")\n"
+     "Ui.Pos(rem, 12 * 65536 + 52)\n"
+     "Ui.SetId(rem, 2)\n"
+     "Ui.SetValue(rem, 1)\n"
+     "go = Ui.Button(win, \"Sign in\")\n"
+     "Ui.Pos(go, 70 * 65536 + 86)\n"
+     "Ui.SetId(go, 3)\n"
+     "print(Span.Len(Ui.Serialize(win)))",
+     "Set win to Ui.Window(\"Login\").\n"
+     "Ui.Size(win, 220 * 65536 + 130).\n"
+     "Set name to Ui.Label(win, \"Name:\").\n"
+     "Ui.Pos(name, 12 * 65536 + 16).\n"
+     "Set box to Ui.TextBox(win, \"guest\").\n"
+     "Ui.Pos(box, 70 * 65536 + 12).\n"
+     "Ui.SetId(box, 1).\n"
+     "Set rem to Ui.Checkbox(win, \"Remember me\").\n"
+     "Ui.Pos(rem, 12 * 65536 + 52).\n"
+     "Ui.SetId(rem, 2).\n"
+     "Ui.SetValue(rem, 1).\n"
+     "Set go to Ui.Button(win, \"Sign in\").\n"
+     "Ui.Pos(go, 70 * 65536 + 86).\n"
+     "Ui.SetId(go, 3).\n"
+     "Print Span.Len(Ui.Serialize(win))."),
 ]
 
 
@@ -466,6 +529,20 @@ PAGE = r"""<!DOCTYPE html>
   .dbg-panels.collapsed { max-height:0 !important; }
   .dbg-panel { display:none; padding:10px 16px; overflow:auto; }
   .dbg-panel.active { display:block; }
+  .ui-window { background:#1b1f2a; border:1px solid #3a4150; border-radius:7px; box-shadow:0 6px 18px rgba(0,0,0,.4); overflow:hidden; }
+  .ui-titlebar { background:linear-gradient(#2b3242,#222836); color:#e6edf3; font-size:12px; font-weight:600;
+    padding:5px 9px; border-bottom:1px solid #3a4150; display:flex; align-items:center; }
+  .ui-titlebar:before { content:''; width:9px; height:9px; border-radius:50%; background:#ff5f57; box-shadow:14px 0 #febc2e,28px 0 #28c840; margin-right:34px; }
+  .ui-canvas { position:relative; background:#10131b; }
+  .ui-ctl { position:absolute; font-size:12px; color:#cdd6e0; white-space:nowrap; }
+  .ui-label { color:#9aa4b2; }
+  .ui-button { background:#2f6feb; color:#fff; border-radius:5px; padding:4px 12px; cursor:pointer; border:1px solid #2b62cf; }
+  .ui-button:hover { background:#3b7bf5; }
+  .ui-textbox { background:#0c0e14; border:1px solid #3a4150; border-radius:4px; padding:3px 7px; min-width:80px; color:#e6edf3; }
+  .ui-check { cursor:pointer; display:flex; align-items:center; gap:6px; }
+  .ui-check .box { display:inline-block; width:14px; height:14px; line-height:13px; text-align:center;
+    border:1px solid #3a4150; border-radius:3px; background:#0c0e14; color:#28c840; font-size:11px; }
+  .ui-panel { border:1px dashed #3a4150; border-radius:5px; background:rgba(255,255,255,.02); }
   .listing { background:#0c0e14; border:1px solid #2c313f; border-radius:6px; max-height:180px;
     overflow:auto; font-family:"SF Mono",Consolas,monospace; font-size:11.5px; }
   .listing .row { padding:2px 10px; white-space:pre; color:var(--muted); }
@@ -601,6 +678,7 @@ PAGE = r"""<!DOCTYPE html>
       <button onclick="toggleDbg(this,'dbg-gpio')">GPIO</button>
       <button onclick="toggleDbg(this,'dbg-cards')">Cards</button>
       <button onclick="toggleDbg(this,'dbg-stream')">Stream</button>
+      <button onclick="toggleDbg(this,'dbg-ui')">Remote UI</button>
       <button style="margin-left:auto" onclick="collapseDbg()">&#9660; Collapse</button>
     </div>
     <div class="dbg-panels" id="dbgPanels" style="max-height:220px">
@@ -650,6 +728,13 @@ PAGE = r"""<!DOCTYPE html>
         </div>
         <div id="streamView"></div>
       </div>
+      <div class="dbg-panel" id="dbg-ui">
+        <div class="stream-tools">
+          <span class="muted">Run a program that builds a window with <b>Ui.*</b>. This panel is a reference <b>remote client</b>: it renders the <b>Ui.Serialize</b> wire (decoded as PicoSerializer/PSC1 records) as window chrome + controls. Click a <b>button</b> or <b>checkbox</b> to post an <b>Event.*</b> back to the program.</span>
+        </div>
+        <div id="uiView" style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start"></div>
+        <div id="uiEvents" class="out" style="font-size:12px;margin-top:8px"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -673,7 +758,8 @@ var GROUPS = [
   {name:'Subroutines', items:[8,9]},
   {name:'I/O & Cards', items:[12,13]},
   {name:'Devices', items:[14]},
-  {name:'Testing', items:[15]}
+  {name:'Testing', items:[15]},
+  {name:'GUI', items:[16]}
 ];
 
 function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -832,7 +918,75 @@ function renderStream(){
   host.innerHTML=html;
 }
 
-// ---- device panel: cards + schema designer (shared cardStore) --------------
+// ---- remote-UI panel: render the Ui.Serialize PicoWire as a window ----------
+// This is a reference *remote client*: it takes the serialized wire (not the live
+// tree), decodes each node as a PicoSerializer/PSC1 record, rebuilds the tree and
+// renders window chrome + controls. Clicking a control posts an Event.* back.
+var UI_LOG = [];
+function picoWireDecode(bytes){
+  if(!bytes||bytes.length<2) return null;
+  var count=(bytes[0]<<8)|bytes[1], pos=2, flat=[];
+  for(var i=0;i<count;i++){
+    var nfields=(bytes[pos+4]<<8)|bytes[pos+5], p=pos+6;
+    for(var f=0;f<nfields;f++){
+      var nlen=bytes[p]; p+=1+nlen;
+      var t=bytes[p]; p+=1;
+      if(t===1){ p+=4; } else if(t===2){ var vlen=(bytes[p]<<8)|bytes[p+1]; p+=2+vlen; }
+    }
+    flat.push(PicoSerializer.deserializeCard(bytes.slice(pos,p))); pos=p;
+  }
+  var idx={i:0};
+  function build(){ var nd=flat[idx.i++]; nd.children=[]; for(var c=0;c<nd.ch;c++) nd.children.push(build()); return nd; }
+  return flat.length?build():null;
+}
+function uiControl(nd){
+  var el=document.createElement('div'); el.className='ui-ctl';
+  if(nd.c===2){ el.className+=' ui-panel'; el.style.width=Math.max(0,nd.w)+'px'; el.style.height=Math.max(0,nd.h)+'px'; }
+  else if(nd.c===3){ el.className+=' ui-label'; el.textContent=nd.t||''; }
+  else if(nd.c===4){ el.className+=' ui-button'; el.textContent=nd.t||''; el.onclick=function(){ onUiEvent(nd.id,1,nd.t); }; }
+  else if(nd.c===5){ el.className+=' ui-textbox'; el.textContent=nd.t||''; }
+  else if(nd.c===6){ el.className+=' ui-check'; el.innerHTML='<span class="box">'+(nd.v?'\u2713':'')+'</span>'+esc(nd.t||''); el.onclick=function(){ onUiEvent(nd.id,2,nd.t); }; }
+  else { el.textContent=nd.t||''; }
+  return el;
+}
+function renderUiWindow(win){
+  var W=Math.max(120,win.w||220), H=Math.max(70,win.h||140);
+  var wrap=document.createElement('div'); wrap.className='ui-window'; wrap.style.width=W+'px';
+  var bar=document.createElement('div'); bar.className='ui-titlebar'; bar.textContent=win.t||'Window';
+  var canvas=document.createElement('div'); canvas.className='ui-canvas'; canvas.style.height=H+'px';
+  (function place(nodes){
+    (nodes||[]).forEach(function(nd){
+      var el=uiControl(nd); el.style.left=Math.max(0,nd.x)+'px'; el.style.top=Math.max(0,nd.y)+'px';
+      canvas.appendChild(el);
+      if(nd.children&&nd.children.length) place(nd.children);
+    });
+  })(win.children);
+  wrap.appendChild(bar); wrap.appendChild(canvas); return wrap;
+}
+function renderUi(){
+  var host=document.getElementById('uiView'); if(!host) return;
+  var vm=DBG.vm, st=vm&&vm._uiState; host.innerHTML='';
+  if(!st||!st.seq){ host.innerHTML='<span class="muted">no window built &mdash; run a program that calls <b>Ui.Window</b> + controls, then <b>Ui.Serialize</b></span>'; renderUiEvents(); return; }
+  Object.keys(st.nodes).forEach(function(k){
+    if(st.nodes[k].kind!==1) return;
+    var tree=picoWireDecode(vm._uiWire(parseInt(k,10)));
+    if(tree) host.appendChild(renderUiWindow(tree));
+  });
+  renderUiEvents();
+}
+function onUiEvent(id,type,label){
+  if(!DBG.vm) return;
+  var e=DBG.vm._ev||(DBG.vm._ev={recs:{},queue:[],seq:0});
+  e.seq++; e.recs[e.seq]={type:type,target:(id>>>0),data:null,span:0}; e.queue.push(e.seq);
+  UI_LOG.unshift('Event type='+type+' target='+id+(label?(' \u00ab'+label+'\u00bb'):'')); if(UI_LOG.length>6) UI_LOG.pop();
+  renderUiEvents();
+}
+function renderUiEvents(){
+  var host=document.getElementById('uiEvents'); if(!host) return;
+  var pending=(DBG.vm&&DBG.vm._ev)?DBG.vm._ev.queue.length:0;
+  host.innerHTML='<b>Event queue:</b> '+pending+' pending'+(UI_LOG.length?(' &mdash; '+UI_LOG.map(esc).join(' &middot; ')):'')+
+    '<div class="muted" style="margin-top:3px">A program consumes these with <b>Event.Next()</b> / <b>Event.Target</b> / <b>Event.Type</b>.</div>';
+}
 var CARDSTORE = (typeof PicoStore!=='undefined') ? new PicoStore.PicoStore() : null;
 var SD_TYPES = ['int','str','bool','uint8','int16','int32','uint16','uint32','utf8','latin1','blob'];
 var SD_SCHEMA_KEY='picoscript.schemas.v1';
@@ -1003,7 +1157,7 @@ function compileSrc(run){
     dbgReset(); if(run) dbgRun();
   } catch(e){ err.textContent=String(e.message||e); err.style.color='#ff7b72'; }
 }
-function dbgReset(){ streamReset(); DBG.vm=new PicoVM({gpioProvider:GP, cardStore:CARDSTORE, streamProvider:SP}); DBG.vm.load(DBG.words); render(); }
+function dbgReset(){ streamReset(); UI_LOG=[]; DBG.vm=new PicoVM({gpioProvider:GP, cardStore:CARDSTORE, streamProvider:SP}); DBG.vm.load(DBG.words); render(); }
 function dbgStep(){ if(DBG.vm){ DBG.vm.step(); render(); } }
 function dbgRun(){ if(!DBG.vm) dbgReset(); var g=0; while(DBG.vm.step()&&g++<200000){} render(); }
 
@@ -1028,6 +1182,7 @@ function render(){
   renderGpio();
   renderCards();
   renderStream();
+  renderUi();
 }
 
 function jsDisasm(w){
@@ -1059,6 +1214,7 @@ compileSrc(false);
 renderGpio();
 renderCards();
 renderStream();
+renderUi();
 </script>
 </body>
 </html>"""
