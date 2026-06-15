@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0x4BCDD9C5
+#define PV_HOOK_TABLE_VERSION 0x90E9EFB2
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -312,5 +312,17 @@
 #define PV_HOOK_EVENT_DATA                       0x184
 #define PV_HOOK_EVENT_SETDATA                    0x185
 #define PV_HOOK_EVENT_COUNT                      0x186
+#define PV_HOOK_UI_WINDOW                        0x188
+#define PV_HOOK_UI_PANEL                         0x189
+#define PV_HOOK_UI_LABEL                         0x18A
+#define PV_HOOK_UI_BUTTON                        0x18B
+#define PV_HOOK_UI_TEXTBOX                       0x18C
+#define PV_HOOK_UI_CHECKBOX                      0x18D
+#define PV_HOOK_UI_POS                           0x18E
+#define PV_HOOK_UI_SIZE                          0x18F
+#define PV_HOOK_UI_SETTEXT                       0x190
+#define PV_HOOK_UI_SETID                         0x191
+#define PV_HOOK_UI_SETVALUE                      0x192
+#define PV_HOOK_UI_SERIALIZE                     0x193
 
 #endif

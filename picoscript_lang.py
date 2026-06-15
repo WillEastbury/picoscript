@@ -813,6 +813,25 @@ HOST_HOOK_CODES = {
     ("Event", "Data"):          0x0184,   # rs1=eventId                   rd=span (0=none)
     ("Event", "SetData"):       0x0185,   # rs1=eventId rs2=span          rd=ok
     ("Event", "Count"):         0x0186,   #                               rd=pending count
+    # Ui (0x0188-0x0193): a retained scene tree for a clean, minimal remote
+    # windowing protocol (RDP/X spirit, but tiny). Build a window + boxes/text/
+    # controls, then Ui.Serialize emits the compact deterministic PicoWire binary
+    # (a thin client renders it and posts user events back through Event.*). The
+    # tree + serializer live in the runtime (Python VM == JS VM byte-identical);
+    # CAP_UI-gated. Control kinds: 1=window 2=panel 3=label 4=button 5=textbox
+    # 6=checkbox. See docs/PICO_UI.md.
+    ("Ui", "Window"):           0x0188,   # rs1=title-span                rd=node (root)
+    ("Ui", "Panel"):            0x0189,   # rs1=parent                    rd=node
+    ("Ui", "Label"):            0x018A,   # rs1=parent rs2=text-span      rd=node
+    ("Ui", "Button"):           0x018B,   # rs1=parent rs2=text-span      rd=node
+    ("Ui", "TextBox"):          0x018C,   # rs1=parent rs2=text-span      rd=node
+    ("Ui", "Checkbox"):         0x018D,   # rs1=parent rs2=text-span      rd=node
+    ("Ui", "Pos"):              0x018E,   # rs1=node rs2=(x<<16|y)        rd=ok
+    ("Ui", "Size"):             0x018F,   # rs1=node rs2=(w<<16|h)        rd=ok
+    ("Ui", "SetText"):          0x0190,   # rs1=node rs2=text-span        rd=ok
+    ("Ui", "SetId"):            0x0191,   # rs1=node rs2=controlId        rd=ok
+    ("Ui", "SetValue"):         0x0192,   # rs1=node rs2=value            rd=ok
+    ("Ui", "Serialize"):        0x0193,   # rs1=root                      rd=span (PicoWire bytes)
 }
 HOST_HOOK_NAMES = {v: k for k, v in HOST_HOOK_CODES.items()}
 

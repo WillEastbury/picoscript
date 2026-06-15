@@ -316,6 +316,18 @@
       0x184: "Event.Data",
       0x185: "Event.SetData",
       0x186: "Event.Count",
+      0x188: "Ui.Window",
+      0x189: "Ui.Panel",
+      0x18A: "Ui.Label",
+      0x18B: "Ui.Button",
+      0x18C: "Ui.TextBox",
+      0x18D: "Ui.Checkbox",
+      0x18E: "Ui.Pos",
+      0x18F: "Ui.Size",
+      0x190: "Ui.SetText",
+      0x191: "Ui.SetId",
+      0x192: "Ui.SetValue",
+      0x193: "Ui.Serialize",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }

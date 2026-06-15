@@ -313,7 +313,8 @@ CAP_CAPSULE = 1 << 11           # Pack/Card/Fifo (capsule store + intra-capsule 
 CAP_DEVICE  = 1 << 12           # Device.* (enumerate/open a streaming device)
 CAP_DMA     = 1 << 13           # Stream.* (DMA-ring buffers)
 CAP_EVENT   = 1 << 14           # Event.* (reactive event queue; UI/async dispatch)
-CAP_ALL     = 0x7FFF            # default grant: every binding (host restricts to gate)
+CAP_UI      = 1 << 15           # Ui.* (retained scene tree / remote windowing)
+CAP_ALL     = 0xFFFF            # default grant: every binding (host restricts to gate)
 
 _CAP_BY_NS = {
     "Kernel": CAP_KERNEL, "Queue": CAP_QUEUE, "Random": CAP_RANDOM,
@@ -323,7 +324,7 @@ _CAP_BY_NS = {
     "Gpio": CAP_GPIO,
     "Pack": CAP_CAPSULE, "Card": CAP_CAPSULE, "Fifo": CAP_CAPSULE,
     "Device": CAP_DEVICE, "Stream": CAP_DMA,
-    "Event": CAP_EVENT,
+    "Event": CAP_EVENT, "Ui": CAP_UI,
 }
 
 
@@ -380,6 +381,9 @@ class HostApi:
         self.events: Dict[int, dict] = {}     # eventId -> {type, target, data(bytes|None), span}
         self.event_queue: List[int] = []      # pending eventIds (FIFO)
         self._event_seq = 0
+        # Ui.* retained scene tree: nodeId -> {kind,id,x,y,w,h,value,text,children}.
+        self.ui_nodes: Dict[int, dict] = {}
+        self._ui_seq = 0
         # Text/binary I/O: arena-backed writer + reader handle tables.
         self.writers: Dict[int, dict] = {}
         self.readers: Dict[int, dict] = {}
@@ -572,6 +576,9 @@ class HostApi:
                 return
         if ns == "Event":
             if self._event(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Ui":
+            if self._ui(vm, method, rd, rs1, rs2):
                 return
         # String.* arena string library.
         if ns == "String":
@@ -1796,6 +1803,120 @@ class HostApi:
                 vm.regs[rd] = 0
             return True
         return False
+
+    # -- Ui.* retained scene tree + PicoWire serialize ----------------------
+    # A clean, minimal remote-windowing model (RDP/X spirit, tiny): build a
+    # window + boxes/text/controls as a retained tree, then Ui.Serialize emits a
+    # compact, deterministic binary (PicoWire) a thin client renders; user input
+    # comes back as Event.* records (target = control id). Tree + serializer live
+    # in the runtime so Python VM == JS VM byte-identical. See docs/PICO_UI.md.
+    _UI_KIND = {"Window": 1, "Panel": 2, "Label": 3, "Button": 4, "TextBox": 5, "Checkbox": 6}
+
+    def _ui(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method in self._UI_KIND:
+            self._ui_seq += 1
+            node = self._ui_seq
+            text = b""
+            if method == "Window":
+                parent = 0
+                text = self._span_raw(vm, vm.regs[rs1])     # window title in rs1
+            else:
+                parent = vm.regs[rs1] & MASK32
+                if method != "Panel":
+                    text = self._span_raw(vm, vm.regs[rs2])  # caption/text in rs2
+            self.ui_nodes[node] = {"kind": self._UI_KIND[method], "id": 0,
+                                   "x": 0, "y": 0, "w": 0, "h": 0, "value": 0,
+                                   "text": text, "children": []}
+            p = self.ui_nodes.get(parent)
+            if p is not None:
+                p["children"].append(node)
+            vm.regs[rd] = node
+            return True
+        nd = self.ui_nodes.get(vm.regs[rs1] & MASK32)
+        if method == "Pos":
+            v = vm.regs[rs2] & MASK32
+            if nd:
+                nd["x"] = (v >> 16) & 0xFFFF; nd["y"] = v & 0xFFFF
+            vm.regs[rd] = 1 if nd else 0
+            return True
+        if method == "Size":
+            v = vm.regs[rs2] & MASK32
+            if nd:
+                nd["w"] = (v >> 16) & 0xFFFF; nd["h"] = v & 0xFFFF
+            vm.regs[rd] = 1 if nd else 0
+            return True
+        if method == "SetText":
+            if nd:
+                nd["text"] = self._span_raw(vm, vm.regs[rs2])
+            vm.regs[rd] = 1 if nd else 0
+            return True
+        if method == "SetId":
+            if nd:
+                nd["id"] = vm.regs[rs2] & 0xFFFF
+            vm.regs[rd] = 1 if nd else 0
+            return True
+        if method == "SetValue":
+            if nd:
+                nd["value"] = vm.regs[rs2] & 0xFFFF
+            vm.regs[rd] = 1 if nd else 0
+            return True
+        if method == "Serialize":
+            vm.regs[rd] = self._new_span_bytes(vm, self._ui_wire(vm.regs[rs1] & MASK32))
+            return True
+        return False
+
+    @staticmethod
+    def _u16(out: bytearray, v: int) -> None:
+        out.append((v >> 8) & 0xFF); out.append(v & 0xFF)
+
+    @staticmethod
+    def _psc1_int(out: bytearray, key: bytes, v: int) -> None:
+        out.append(len(key)); out += key
+        out.append(1)                                   # T_INT (picoserializer)
+        out += (v & 0xFFFFFFFF).to_bytes(4, "big")
+
+    @staticmethod
+    def _psc1_str(out: bytearray, key: bytes, vb: bytes) -> None:
+        vb = vb[:0xFFFF]
+        out.append(len(key)); out += key
+        out.append(2)                                   # T_STR (picoserializer)
+        out += len(vb).to_bytes(2, "big"); out += vb
+
+    def _ui_wire(self, root: int) -> bytes:
+        """PicoWire document: a u16 node count then a pre-order DFS of nodes, each
+        encoded as a canonical PicoSerializer (PSC1) record -- so the windowing
+        wire reuses the same byte format as the card data plane (picoserializer.py,
+        MAGIC 'PSC1', T_INT/T_STR, sorted keys), not a private format. Per-node
+        fields: c=kind ch=childCount h id t=text v=value w x y (sorted). Big-endian
+        and deterministic -> Python VM == JS VM, and every node is PSC1-decodable."""
+        order: List[int] = []
+
+        def walk(nid: int) -> None:
+            nd = self.ui_nodes.get(nid)
+            if nd is None:
+                return
+            order.append(nid)
+            for c in nd["children"]:
+                walk(c)
+
+        if root in self.ui_nodes:
+            walk(root)
+        out = bytearray()
+        self._u16(out, len(order))
+        for nid in order:
+            nd = self.ui_nodes[nid]
+            out += b"PSC1"
+            self._u16(out, 9)                           # 9 fields per node record
+            self._psc1_int(out, b"c", nd["kind"])
+            self._psc1_int(out, b"ch", len(nd["children"]))
+            self._psc1_int(out, b"h", nd["h"])
+            self._psc1_int(out, b"id", nd["id"])
+            self._psc1_str(out, b"t", nd["text"])
+            self._psc1_int(out, b"v", nd["value"])
+            self._psc1_int(out, b"w", nd["w"])
+            self._psc1_int(out, b"x", nd["x"])
+            self._psc1_int(out, b"y", nd["y"])
+        return bytes(out)
 
 
 class Halt(Exception):

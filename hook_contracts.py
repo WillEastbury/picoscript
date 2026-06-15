@@ -28,7 +28,7 @@ _CAP_BY_NS = {
     "Gpio": "GPIO",
     "Pack": "CAPSULE", "Card": "CAPSULE", "Fifo": "CAPSULE",
     "Device": "DEVICE", "Stream": "DMA",
-    "Event": "EVENT",
+    "Event": "EVENT", "Ui": "UI",
 }
 
 _HOOK_RE = re.compile(r'0x([0-9A-Fa-f]+):\s*"([^"]+)"')
@@ -125,7 +125,7 @@ _ALLOCATING_HOOKS = frozenset({
 _ALLOCATING_NAMESPACES = frozenset({"Compress", "Json", "Xml"})
 _VALID_CAPABILITIES = frozenset({
     "KERNEL", "QUEUE", "RANDOM", "STORAGE", "TIME", "NET",
-    "CONTEXT", "AUTH", "ENV", "GPIO", "CAPSULE", "DEVICE", "DMA", "EVENT", "pure",
+    "CONTEXT", "AUTH", "ENV", "GPIO", "CAPSULE", "DEVICE", "DMA", "EVENT", "UI", "pure",
 })
 
 

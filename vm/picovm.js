@@ -41,12 +41,12 @@
 
   // Binding capability classes (INV-17). Bit values match vm/picovm.h PV_CAP_* and
   // picoscript_vm.CAP_*; pure computation needs none (class 0, always allowed).
-  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024, CAPSULE: 2048, DEVICE: 4096, DMA: 8192, EVENT: 16384 };
-  var CAP_ALL = 0x7FFF;
+  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024, CAPSULE: 2048, DEVICE: 4096, DMA: 8192, EVENT: 16384, UI: 32768 };
+  var CAP_ALL = 0xFFFF;
   var CAP_BY_NS = { Kernel: CAP.KERNEL, Queue: CAP.QUEUE, Random: CAP.RANDOM,
     Req: CAP.NET, Resp: CAP.NET, Net: CAP.NET, Storage: CAP.STORAGE, DateTime: CAP.TIME,
     Context: CAP.CONTEXT, Auth: CAP.AUTH, X509: CAP.AUTH, Environment: CAP.ENV, Locale: CAP.ENV, Gpio: CAP.GPIO,
-    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Stream: CAP.DMA, Event: CAP.EVENT };
+    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Stream: CAP.DMA, Event: CAP.EVENT, Ui: CAP.UI };
   function hookCap(name) {   // "Ns.Method" -> required capability class (0 = pure)
     var dot = name.indexOf("."), ns = name.slice(0, dot), m = name.slice(dot + 1);
     if (ns === "Maths" && (m === "Random" || m === "RandomRange")) return CAP.RANDOM;
@@ -377,6 +377,10 @@
     // ---- Event.* reactive event queue --------------------------------------
     if (name.indexOf("Event.") === 0) {
       if (this._event(name.slice(6), rd, rs1, rs2)) return;
+    }
+    // ---- Ui.* retained scene tree / remote windowing -----------------------
+    if (name.indexOf("Ui.") === 0) {
+      if (this._ui(name.slice(3), rd, rs1, rs2)) return;
     }
     // ---- String.* arena string library -------------------------------------
     if (name.indexOf("String.") === 0) {
@@ -1448,6 +1452,75 @@
       return true;
     }
     return false;
+  };
+
+  // -- Ui.* retained scene tree + PicoWire serialize (mirrors HostApi._ui) -----
+  // Minimal remote windowing: build a retained tree, Ui.Serialize emits the
+  // deterministic PicoWire binary. Byte-identical to the Python VM.
+  var UI_KIND = { Window: 1, Panel: 2, Label: 3, Button: 4, TextBox: 5, Checkbox: 6 };
+  PicoVM.prototype._ui = function (method, rd, rs1, rs2) {
+    if (!this._uiState) this._uiState = { nodes: {}, seq: 0 };
+    var u = this._uiState;
+    if (UI_KIND[method] !== undefined) {
+      u.seq++;
+      var nid = u.seq, parent = 0, text = [];
+      if (method === "Window") { text = this._spanBytes(this.regs[rs1]); }
+      else { parent = this.regs[rs1] >>> 0; if (method !== "Panel") text = this._spanBytes(this.regs[rs2]); }
+      u.nodes[nid] = { kind: UI_KIND[method], id: 0, x: 0, y: 0, w: 0, h: 0, value: 0, text: text, children: [] };
+      var p = u.nodes[parent];
+      if (p) p.children.push(nid);
+      this.regs[rd] = nid; return true;
+    }
+    var nd = u.nodes[this.regs[rs1] >>> 0];
+    if (method === "Pos") { var pv = this.regs[rs2] >>> 0; if (nd) { nd.x = (pv >>> 16) & 0xFFFF; nd.y = pv & 0xFFFF; } this.regs[rd] = nd ? 1 : 0; return true; }
+    if (method === "Size") { var sv = this.regs[rs2] >>> 0; if (nd) { nd.w = (sv >>> 16) & 0xFFFF; nd.h = sv & 0xFFFF; } this.regs[rd] = nd ? 1 : 0; return true; }
+    if (method === "SetText") { if (nd) nd.text = this._spanBytes(this.regs[rs2]); this.regs[rd] = nd ? 1 : 0; return true; }
+    if (method === "SetId") { if (nd) nd.id = this.regs[rs2] & 0xFFFF; this.regs[rd] = nd ? 1 : 0; return true; }
+    if (method === "SetValue") { if (nd) nd.value = this.regs[rs2] & 0xFFFF; this.regs[rd] = nd ? 1 : 0; return true; }
+    if (method === "Serialize") { this.regs[rd] = this._newSpanBytes(this._uiWire(this.regs[rs1] >>> 0)); return true; }
+    return false;
+  };
+
+  PicoVM.prototype._uiWire = function (root) {
+    var u = this._uiState || { nodes: {} };
+    var order = [];
+    function walk(nid) {
+      var nd = u.nodes[nid];
+      if (!nd) return;
+      order.push(nid);
+      for (var i = 0; i < nd.children.length; i++) walk(nd.children[i]);
+    }
+    if (u.nodes[root]) walk(root);
+    var out = [];
+    function u16(v) { out.push((v >>> 8) & 0xFF); out.push(v & 0xFF); }
+    function psInt(key, v) {            // PSC1 T_INT field
+      out.push(key.length);
+      for (var j = 0; j < key.length; j++) out.push(key.charCodeAt(j));
+      out.push(1); out.push((v >>> 24) & 0xFF, (v >>> 16) & 0xFF, (v >>> 8) & 0xFF, v & 0xFF);
+    }
+    function psStr(key, vb) {           // PSC1 T_STR field (raw bytes)
+      vb = vb.slice(0, 0xFFFF);
+      out.push(key.length);
+      for (var j = 0; j < key.length; j++) out.push(key.charCodeAt(j));
+      out.push(2); out.push((vb.length >>> 8) & 0xFF, vb.length & 0xFF);
+      for (var t = 0; t < vb.length; t++) out.push(vb[t] & 0xFF);
+    }
+    u16(order.length);
+    for (var k = 0; k < order.length; k++) {
+      var nd = u.nodes[order[k]];
+      out.push(80, 83, 67, 49);        // 'PSC1' magic
+      u16(9);                          // 9 fields per node record
+      psInt("c", nd.kind);
+      psInt("ch", nd.children.length);
+      psInt("h", nd.h);
+      psInt("id", nd.id);
+      psStr("t", nd.text);
+      psInt("v", nd.value);
+      psInt("w", nd.w);
+      psInt("x", nd.x);
+      psInt("y", nd.y);
+    }
+    return out;
   };
 
   PicoVM.prototype._dsp = function (rd, rs1, rs2, imm) {
