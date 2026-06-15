@@ -161,11 +161,83 @@ def test_server_entry_transparent_and_parity():
     assert bc(bwrap) == js_compile(bwrap, "basic")
 
 
+# Capsule / device / stream BASIC DSL (PACK/CARD/FIFO/DEVICE/STREAM keywords).
+STREAM_DSL = (
+    'DIM DEV = DEVICE OPEN "csi0"\n'
+    'DIM S = STREAM OPEN DEV 196616\n'
+    'DIM TOTAL = 0\n'
+    'DIM L = STREAM NEXT S\n'
+    'WHILE L <> 0\n'
+    '  DIM SP = STREAM SPAN L\n'
+    '  DIM N = Span.Len(SP)\n'
+    '  FOR I = 0 TO N - 1\n'
+    '    TOTAL = TOTAL + Span.Get(SP, I)\n'
+    '  NEXT\n'
+    '  STREAM RELEASE L\n'
+    '  L = STREAM NEXT S\n'
+    'ENDWHILE\n'
+    'STREAM CLOSE S\n'
+    'DEVICE CLOSE DEV\n'
+    'PRINT TOTAL\n'
+)
+
+# Canonical Device.*/Stream.* via the Python frontend (dotted calls -- in BASIC
+# DEVICE/STREAM keywords intentionally shadow the C-style Device.*/Stream.* form).
+STREAM_CANON_PY = (
+    'dev = Device.Open("csi0", 0)\n'
+    's = Stream.Open(dev, 196616)\n'
+    'total = 0\n'
+    'l = Stream.Next(s)\n'
+    'while l != 0:\n'
+    '    sp = Stream.Span(l)\n'
+    '    n = Span.Len(sp)\n'
+    '    for i in range(0, n):\n'
+    '        total = total + Span.Get(sp, i)\n'
+    '    Stream.Release(l)\n'
+    '    l = Stream.Next(s)\n'
+    'Stream.Close(s)\n'
+    'Device.Close(dev)\n'
+    'print(total)\n'
+)
+
+CAPSULE_DSL = (
+    'PACK USE 1024\n'
+    'DIM QTY = "qty"\n'
+    'CARD WRITE 5 = QTY\n'
+    'DIM G = CARD READ 5\n'
+    'DIM ADDR = CARD ADDRESS 1024 5\n'
+    'DIM F = FIFO OPEN "ipc"\n'
+    'FIFO SEND F = QTY\n'
+    'PRINT FIFO POLL F\n'
+)
+
+
+def test_stream_dsl_runs():
+    # RX ring csi0 buf=4 frames=3 (cfg 196616), frame n byte i=(n+i)&255 -> 6+10+14=30.
+    assert run_basic(STREAM_DSL) == [30]
+
+
+def test_stream_dsl_equals_canonical():
+    # The BASIC DSL lowers to the same bytecode as the canonical dotted spelling
+    # in the (lowerer-sharing) Python frontend.
+    assert bc(STREAM_DSL) == lower_to_bytecode_safe(compile_python(STREAM_CANON_PY))
+
+
+def test_stream_dsl_py_equals_js_frontend():
+    assert bc(STREAM_DSL) == js_compile(STREAM_DSL, "basic")
+
+
+def test_capsule_dsl_py_equals_js_frontend():
+    # Pack/Card/Fifo are provider-backed (NOOP in the bare VM) but the DSL must
+    # lower + mirror byte-identically across the Python and JS frontends.
+    assert bc(CAPSULE_DSL) == js_compile(CAPSULE_DSL, "basic")
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
             fn()
-    print("PASS storage/GPIO DSL: runs, == canonical, Python==JS frontend, ext-hook encoding")
+    print("PASS storage/GPIO/capsule/device/stream DSL: runs, == canonical, Python==JS frontend, ext-hook encoding")
 
 
 if __name__ == "__main__":

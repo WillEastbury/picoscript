@@ -75,6 +75,7 @@ KEYWORDS = {
     "BREAK", "SKIP", "INC", "DEC", "IIF",
     "EQ", "NE", "LT", "GT", "LE", "GE", "MOD",
     "STORE", "GPIO", "LOAD", "SERVER", "ENDSERVER", "ASSERT",
+    "PACK", "CARD", "FIFO", "DEVICE", "STREAM",
 }
 CMP_WORDS = {"EQ": "EQ", "NE": "NE", "LT": "LT", "GT": "GT", "LE": "LE", "GE": "GE"}
 
@@ -390,6 +391,10 @@ class Parser:
                 # AND/OR), evaluated to 0/1 then recorded by the Assert.True hook.
                 self.next(); cond = self.parse_expr(); self.end_line()
                 return CallStmt(Call("Assert", "True", [cond]))
+            if kw in ("PACK", "CARD", "FIFO", "DEVICE", "STREAM"):
+                self.next()
+                call = self._parse_caps_body(kw, False)
+                self.end_line(); return CallStmt(call)
             raise SyntaxError(f"line {t.line}: unexpected keyword {kw}")
         # assignment: id = expr / id += expr   OR bare call: Ns.Method(...) / NAME(...)
         if t.kind == "id":
@@ -535,6 +540,80 @@ class Parser:
         if t.kind == "id" and t.value.upper() == "INPUT":
             self.next(); return Num(0)
         return self.parse_expr()
+
+    # ── capsule / device / stream DSL (BASIC-idiomatic; lowers to the canonical
+    #    Pack.*/Card.*/Fifo.*/Device.*/Stream.* hooks). Verb-first like STORE/GPIO;
+    #    sub-words (USE/READ/WRITE/OPEN/SEND/RECV/NEXT/...) stay contextual ids. ──
+    def _parse_caps_body(self, head: str, want_value: bool) -> Call:
+        if head == "PACK":
+            self._expect_word("USE")
+            return Call("Pack", "Use", [self.parse_atom()])
+        if head == "CARD":
+            verb = self._eat_word()
+            if verb == "READ":
+                return Call("Card", "Read", [self.parse_atom()])
+            if verb == "ADDRESS":
+                pk = self.parse_atom(); cd = self.parse_atom()
+                return Call("Card", "Address", [pk, cd])
+            if verb == "WRITE":
+                self._need_stmt(want_value, "CARD WRITE")
+                cd = self.parse_atom(); self.eat_op("="); val = self.parse_expr()
+                return Call("Card", "Write", [cd, val])
+            raise SyntaxError(f"line {self.peek().line}: unknown CARD verb {verb!r}")
+        if head == "FIFO":
+            verb = self._eat_word()
+            if verb == "OPEN":
+                return Call("Fifo", "Open", [self.parse_atom()])
+            if verb == "RECV":
+                return Call("Fifo", "Recv", [self.parse_atom()])
+            if verb == "POLL":
+                return Call("Fifo", "Poll", [self.parse_atom()])
+            if verb == "SEND":
+                self._need_stmt(want_value, "FIFO SEND")
+                fh = self.parse_atom(); self.eat_op("="); val = self.parse_expr()
+                return Call("Fifo", "Send", [fh, val])
+            raise SyntaxError(f"line {self.peek().line}: unknown FIFO verb {verb!r}")
+        if head == "DEVICE":
+            verb = self._eat_word()
+            if verb == "OPEN":
+                ident = self.parse_atom()
+                cfg = Num(0)
+                if self._peek_word() == "CONFIG":
+                    self._eat_word(); cfg = self.parse_atom()
+                return Call("Device", "Open", [ident, cfg])
+            if verb == "CAPS":
+                return Call("Device", "Caps", [self.parse_atom()])
+            if verb == "STATUS":
+                return Call("Device", "Status", [self.parse_atom()])
+            if verb == "CLOSE":
+                self._need_stmt(want_value, "DEVICE CLOSE")
+                return Call("Device", "Close", [self.parse_atom()])
+            raise SyntaxError(f"line {self.peek().line}: unknown DEVICE verb {verb!r}")
+        if head == "STREAM":
+            verb = self._eat_word()
+            if verb == "OPEN":
+                dev = self.parse_atom(); cfg = self.parse_atom()
+                return Call("Stream", "Open", [dev, cfg])
+            if verb == "NEXT":
+                return Call("Stream", "Next", [self.parse_atom()])
+            if verb == "SPAN":
+                return Call("Stream", "Span", [self.parse_atom()])
+            if verb == "SUBMIT":
+                self._need_stmt(want_value, "STREAM SUBMIT")
+                st = self.parse_atom(); self.eat_op("="); le = self.parse_expr()
+                return Call("Stream", "Submit", [st, le])
+            if verb == "RELEASE":
+                self._need_stmt(want_value, "STREAM RELEASE")
+                return Call("Stream", "Release", [self.parse_atom()])
+            if verb == "CLOSE":
+                self._need_stmt(want_value, "STREAM CLOSE")
+                return Call("Stream", "Close", [self.parse_atom()])
+            raise SyntaxError(f"line {self.peek().line}: unknown STREAM verb {verb!r}")
+        raise SyntaxError(f"line {self.peek().line}: unknown DSL head {head!r}")
+
+    def _need_stmt(self, want_value: bool, what: str) -> None:
+        if want_value:
+            raise SyntaxError(f"line {self.peek().line}: {what} is a statement, not a value")
 
     def _parse_pull_value(self) -> object:
         t = self.peek()
@@ -753,6 +832,8 @@ class Parser:
             return self.parse_load_body(True)
         if t.kind == "kw" and t.value == "GPIO":
             return self.parse_gpio_body(True)
+        if t.kind == "kw" and t.value in ("PACK", "CARD", "FIFO", "DEVICE", "STREAM"):
+            return self._parse_caps_body(t.value, True)
         if t.kind == "kw" and t.value == "IIF":
             self.eat_op("(")
             cond = self.parse_expr(); self.eat_op(",")
