@@ -295,6 +295,280 @@ def _aes256_ctr(key: bytes, iv: bytes, data: bytes) -> bytes:
     return bytes(out)
 
 
+# ── DEFLATE (RFC 1951) + gzip (RFC 1952), built into the runtime ────────────
+# A canonical compressor so the bytes are identical on every path: one final
+# fixed-Huffman block, greedy LZ77 with a deterministic hash-chain match finder.
+# inflate is spec-deterministic (decompresses real zlib/gzip output too). Mirror
+# in vm/picovm.js + vm/picovm.c must stay byte-for-byte identical.
+_LEN_BASE = (3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51,
+             59, 67, 83, 99, 115, 131, 163, 195, 227, 258)
+_LEN_EXTRA = (0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4,
+              4, 4, 5, 5, 5, 5, 0)
+_DIST_BASE = (1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385,
+              513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577)
+_DIST_EXTRA = (0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9,
+               10, 10, 11, 11, 12, 12, 13, 13)
+_CLEN_ORDER = (16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15)
+
+_CRC32_TABLE = []
+for _n in range(256):
+    _c = _n
+    for _k in range(8):
+        _c = (0xEDB88320 ^ (_c >> 1)) if (_c & 1) else (_c >> 1)
+    _CRC32_TABLE.append(_c & 0xFFFFFFFF)
+
+
+def _crc32(data: bytes) -> int:
+    crc = 0xFFFFFFFF
+    for b in data:
+        crc = _CRC32_TABLE[(crc ^ b) & 0xFF] ^ (crc >> 8)
+    return crc ^ 0xFFFFFFFF
+
+
+def _fixed_lit_lengths():
+    return [8] * 144 + [9] * 112 + [7] * 24 + [8] * 8
+
+
+def _codes_from_lengths(lengths):
+    maxbits = max(lengths) if lengths else 0
+    bl_count = [0] * (maxbits + 1)
+    for L in lengths:
+        if L:
+            bl_count[L] += 1
+    code = 0
+    next_code = [0] * (maxbits + 1)
+    for bits in range(1, maxbits + 1):
+        code = (code + bl_count[bits - 1]) << 1
+        next_code[bits] = code
+    out = {}
+    for sym, L in enumerate(lengths):
+        if L:
+            out[sym] = (next_code[L], L)
+            next_code[L] += 1
+    return out
+
+
+def _tree_from_lengths(lengths):
+    return {(c, L): sym for sym, (c, L) in _codes_from_lengths(lengths).items()}
+
+
+def _deflate(data: bytes) -> bytes:
+    lit = _codes_from_lengths(_fixed_lit_lengths())
+    out = bytearray()
+    bitbuf = 0
+    bitcnt = 0
+
+    def put(value, n):
+        nonlocal bitbuf, bitcnt
+        bitbuf |= (value & ((1 << n) - 1)) << bitcnt
+        bitcnt += n
+        while bitcnt >= 8:
+            out.append(bitbuf & 0xFF)
+            bitbuf >>= 8
+            bitcnt -= 8
+
+    def huff(code, n):
+        r = 0
+        for _ in range(n):
+            r = (r << 1) | (code & 1)
+            code >>= 1
+        put(r, n)
+
+    put(1, 1)        # BFINAL
+    put(1, 2)        # BTYPE = fixed Huffman
+    n = len(data)
+    head = {}
+    prev = [0] * (n + 1)
+    i = 0
+    while i < n:
+        match_len = 0
+        match_dist = 0
+        if i + 3 <= n:
+            h = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2]
+            j = head.get(h, 0) - 1
+            chain = 0
+            maxlen = min(258, n - i)
+            while j >= 0 and i - j <= 32768 and chain < 256:
+                length = 0
+                while length < maxlen and data[j + length] == data[i + length]:
+                    length += 1
+                if length > match_len:
+                    match_len = length
+                    match_dist = i - j
+                    if length >= maxlen:
+                        break
+                j = prev[j] - 1
+                chain += 1
+        if match_len >= 3:
+            ls = _len_sym(match_len)
+            code, clen = lit[ls]
+            huff(code, clen)
+            put(match_len - _LEN_BASE[ls - 257], _LEN_EXTRA[ls - 257])
+            ds = _dist_sym(match_dist)
+            huff(ds, 5)
+            put(match_dist - _DIST_BASE[ds], _DIST_EXTRA[ds])
+            end = i + match_len
+            while i < end:
+                if i + 3 <= n:
+                    h = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2]
+                    prev[i] = head.get(h, 0)
+                    head[h] = i + 1
+                i += 1
+        else:
+            code, clen = lit[data[i]]
+            huff(code, clen)
+            if i + 3 <= n:
+                h = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2]
+                prev[i] = head.get(h, 0)
+                head[h] = i + 1
+            i += 1
+    code, clen = lit[256]
+    huff(code, clen)
+    if bitcnt > 0:
+        out.append(bitbuf & 0xFF)
+    return bytes(out)
+
+
+def _len_sym(length):
+    for i in range(len(_LEN_BASE) - 1, -1, -1):
+        if length >= _LEN_BASE[i]:
+            return 257 + i
+    return 257
+
+
+def _dist_sym(dist):
+    for i in range(len(_DIST_BASE) - 1, -1, -1):
+        if dist >= _DIST_BASE[i]:
+            return i
+    return 0
+
+
+def _inflate(data: bytes) -> bytes:
+    pos = 0
+    bitbuf = 0
+    bitcnt = 0
+    out = bytearray()
+    fixed_lit = _tree_from_lengths(_fixed_lit_lengths())
+    fixed_dist = _tree_from_lengths([5] * 30)
+
+    def take(n):
+        nonlocal pos, bitbuf, bitcnt
+        while bitcnt < n:
+            b = data[pos] if pos < len(data) else 0
+            pos += 1
+            bitbuf |= b << bitcnt
+            bitcnt += 8
+        v = bitbuf & ((1 << n) - 1)
+        bitbuf >>= n
+        bitcnt -= n
+        return v
+
+    def sym(tree):
+        code = 0
+        length = 0
+        while True:
+            code = (code << 1) | take(1)
+            length += 1
+            s = tree.get((code, length))
+            if s is not None:
+                return s
+            if length > 15:
+                raise ValueError("bad compressed data")
+
+    while True:
+        bfinal = take(1)
+        btype = take(2)
+        if btype == 0:
+            take(bitcnt & 7)               # skip to the next byte boundary
+            ln = take(16); take(16)
+            for _ in range(ln):
+                out.append(take(8))
+        else:
+            if btype == 1:
+                lit_tree, dist_tree = fixed_lit, fixed_dist
+            else:
+                lit_tree, dist_tree = _read_dynamic(take)
+            while True:
+                s = sym(lit_tree)
+                if s == 256:
+                    break
+                if s < 256:
+                    out.append(s)
+                else:
+                    li = s - 257
+                    length = _LEN_BASE[li] + take(_LEN_EXTRA[li])
+                    dsym = sym(dist_tree)
+                    dist = _DIST_BASE[dsym] + take(_DIST_EXTRA[dsym])
+                    start = len(out) - dist
+                    for k in range(length):
+                        out.append(out[start + k])
+        if bfinal:
+            break
+    return bytes(out)
+
+
+def _read_dynamic(take):
+    hlit = take(5) + 257
+    hdist = take(5) + 1
+    hclen = take(4) + 4
+    clen_lengths = [0] * 19
+    for i in range(hclen):
+        clen_lengths[_CLEN_ORDER[i]] = take(3)
+    clen_tree = _tree_from_lengths(clen_lengths)
+
+    def csym():
+        code = 0
+        length = 0
+        while True:
+            code = (code << 1) | take(1)
+            length += 1
+            s = clen_tree.get((code, length))
+            if s is not None:
+                return s
+            if length > 15:
+                raise ValueError("bad compressed data")
+
+    lengths = []
+    while len(lengths) < hlit + hdist:
+        s = csym()
+        if s < 16:
+            lengths.append(s)
+        elif s == 16:
+            lengths.extend([lengths[-1]] * (take(2) + 3))
+        elif s == 17:
+            lengths.extend([0] * (take(3) + 3))
+        else:
+            lengths.extend([0] * (take(7) + 11))
+    return _tree_from_lengths(lengths[:hlit]), _tree_from_lengths(lengths[hlit:hlit + hdist])
+
+
+def _gzip_compress(data: bytes) -> bytes:
+    hdr = bytes([0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 0xFF])
+    tail = (_crc32(data) & 0xFFFFFFFF).to_bytes(4, "little") + \
+           (len(data) & 0xFFFFFFFF).to_bytes(4, "little")
+    return hdr + _deflate(data) + tail
+
+
+def _gzip_decompress(data: bytes) -> bytes:
+    if len(data) < 18 or data[0] != 0x1F or data[1] != 0x8B:
+        raise ValueError("bad compressed data")
+    flg = data[3]
+    pos = 10
+    if flg & 4:                              # FEXTRA
+        xlen = data[pos] | (data[pos + 1] << 8); pos += 2 + xlen
+    if flg & 8:                              # FNAME
+        while data[pos] != 0:
+            pos += 1
+        pos += 1
+    if flg & 16:                             # FCOMMENT
+        while data[pos] != 0:
+            pos += 1
+        pos += 1
+    if flg & 2:                              # FHCRC
+        pos += 2
+    return _inflate(data[pos:-8])
+
+
 # Binding capability classes (INV-17: "bindings are not ambient"). Bit values are shared
 # verbatim with vm/picovm.h (PV_CAP_*) and vm/picovm.js so a denied hook faults identically
 # on every path. Pure computation needs no capability (class 0, always allowed).
@@ -782,6 +1056,22 @@ class HostApi:
             while i + 1 < len(src):
                 out.extend(bytes([src[i + 1]]) * src[i]); i += 2
             vm.regs[rd] = self._new_span_bytes(vm, bytes(out)); return True
+        # Real DEFLATE (RFC 1951) + gzip (RFC 1952), built into the runtime.
+        if method in ("DeflateCompress", "DeflateDecompress", "GzipCompress", "GzipDecompress"):
+            try:
+                if method == "DeflateCompress":
+                    res = _deflate(src)
+                elif method == "DeflateDecompress":
+                    res = _inflate(src)
+                elif method == "GzipCompress":
+                    res = _gzip_compress(src)
+                else:
+                    res = _gzip_decompress(src)
+                self.host_status = 0
+            except (ValueError, IndexError):
+                self.host_status = 2                 # malformed input
+                res = b""
+            vm.regs[rd] = self._new_span_bytes(vm, res); return True
         return False
 
     def _cryptolib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:

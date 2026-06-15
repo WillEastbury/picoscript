@@ -601,6 +601,120 @@
     return false;
   };
 
+  // ── DEFLATE (RFC 1951) + gzip (RFC 1952): byte-identical with picoscript_vm.py.
+  // One final fixed-Huffman block, greedy LZ77 with a deterministic hash-chain
+  // match finder. inflate is spec-deterministic (reads real zlib/gzip output).
+  var Z_LEN_BASE = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+  var Z_LEN_EXTRA = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+  var Z_DIST_BASE = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+  var Z_DIST_EXTRA = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+  var Z_CLEN_ORDER = [16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
+  var Z_CRC = (function () { var t = []; for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t.push(c >>> 0); } return t; })();
+  function zCrc32(data) { var crc = 0xFFFFFFFF; for (var i = 0; i < data.length; i++) crc = (Z_CRC[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8)) >>> 0; return (crc ^ 0xFFFFFFFF) >>> 0; }
+  function zFixedLit() { var L = [], i; for (i = 0; i < 144; i++) L.push(8); for (i = 0; i < 112; i++) L.push(9); for (i = 0; i < 24; i++) L.push(7); for (i = 0; i < 8; i++) L.push(8); return L; }
+  function zCodes(lengths) {
+    var maxbits = 0, i; for (i = 0; i < lengths.length; i++) if (lengths[i] > maxbits) maxbits = lengths[i];
+    var blc = []; for (i = 0; i <= maxbits; i++) blc.push(0);
+    for (i = 0; i < lengths.length; i++) if (lengths[i]) blc[lengths[i]]++;
+    var code = 0, nc = [0]; for (i = 1; i <= maxbits; i++) { code = (code + blc[i - 1]) << 1; nc[i] = code; }
+    var out = {}; for (i = 0; i < lengths.length; i++) { var L = lengths[i]; if (L) { out[i] = [nc[L], L]; nc[L]++; } }
+    return out;
+  }
+  function zTree(lengths) { var c = zCodes(lengths), t = {}; for (var s in c) t[c[s][0] + "_" + c[s][1]] = parseInt(s, 10); return t; }
+  function zLenSym(length) { for (var i = Z_LEN_BASE.length - 1; i >= 0; i--) if (length >= Z_LEN_BASE[i]) return 257 + i; return 257; }
+  function zDistSym(dist) { for (var i = Z_DIST_BASE.length - 1; i >= 0; i--) if (dist >= Z_DIST_BASE[i]) return i; return 0; }
+  function zDeflate(data) {
+    var lit = zCodes(zFixedLit()), out = [], bitbuf = 0, bitcnt = 0;
+    function put(value, n) { bitbuf |= (value & ((1 << n) - 1)) << bitcnt; bitcnt += n; while (bitcnt >= 8) { out.push(bitbuf & 0xFF); bitbuf >>>= 8; bitcnt -= 8; } }
+    function huff(code, n) { var r = 0; for (var k = 0; k < n; k++) { r = (r << 1) | (code & 1); code >>= 1; } put(r, n); }
+    put(1, 1); put(1, 2);
+    var n = data.length, head = {}, prev = new Array(n + 1), i; for (i = 0; i <= n; i++) prev[i] = 0;
+    i = 0;
+    while (i < n) {
+      var matchLen = 0, matchDist = 0;
+      if (i + 3 <= n) {
+        var h = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
+        var j = (head[h] || 0) - 1, chain = 0, maxlen = Math.min(258, n - i);
+        while (j >= 0 && i - j <= 32768 && chain < 256) {
+          var length = 0;
+          while (length < maxlen && data[j + length] === data[i + length]) length++;
+          if (length > matchLen) { matchLen = length; matchDist = i - j; if (length >= maxlen) break; }
+          j = prev[j] - 1; chain++;
+        }
+      }
+      if (matchLen >= 3) {
+        var ls = zLenSym(matchLen), lc = lit[ls];
+        huff(lc[0], lc[1]); put(matchLen - Z_LEN_BASE[ls - 257], Z_LEN_EXTRA[ls - 257]);
+        var ds = zDistSym(matchDist); huff(ds, 5); put(matchDist - Z_DIST_BASE[ds], Z_DIST_EXTRA[ds]);
+        var end = i + matchLen;
+        while (i < end) { if (i + 3 <= n) { var hh = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2]; prev[i] = head[hh] || 0; head[hh] = i + 1; } i++; }
+      } else {
+        var c0 = lit[data[i]]; huff(c0[0], c0[1]);
+        if (i + 3 <= n) { var hl = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2]; prev[i] = head[hl] || 0; head[hl] = i + 1; }
+        i++;
+      }
+    }
+    var ce = lit[256]; huff(ce[0], ce[1]);
+    if (bitcnt > 0) out.push(bitbuf & 0xFF);
+    return out;
+  }
+  function zInflate(data) {
+    var pos = 0, bitbuf = 0, bitcnt = 0, out = [];
+    var fLit = zTree(zFixedLit()), fDist = zTree((function () { var a = [], i; for (i = 0; i < 30; i++) a.push(5); return a; })());
+    function take(n) { while (bitcnt < n) { var b = pos < data.length ? data[pos] : 0; pos++; bitbuf |= b << bitcnt; bitcnt += 8; } var v = bitbuf & ((1 << n) - 1); bitbuf >>>= n; bitcnt -= n; return v; }
+    function sym(tree) { var code = 0, length = 0; while (true) { code = (code << 1) | take(1); length++; var s = tree[code + "_" + length]; if (s !== undefined) return s; if (length > 15) throw new Error("bad compressed data"); } }
+    while (true) {
+      var bfinal = take(1), btype = take(2);
+      if (btype === 0) { take(bitcnt & 7); var ln = take(16); take(16); for (var q = 0; q < ln; q++) out.push(take(8)); }
+      else {
+        var litTree, distTree;
+        if (btype === 1) { litTree = fLit; distTree = fDist; }
+        else { var dyn = zReadDynamic(take); litTree = dyn[0]; distTree = dyn[1]; }
+        while (true) {
+          var s = sym(litTree);
+          if (s === 256) break;
+          if (s < 256) out.push(s);
+          else { var li = s - 257, length2 = Z_LEN_BASE[li] + take(Z_LEN_EXTRA[li]); var dsy = sym(distTree); var dist = Z_DIST_BASE[dsy] + take(Z_DIST_EXTRA[dsy]); var start = out.length - dist; for (var k = 0; k < length2; k++) out.push(out[start + k]); }
+        }
+      }
+      if (bfinal) break;
+    }
+    return out;
+  }
+  function zReadDynamic(take) {
+    var hlit = take(5) + 257, hdist = take(5) + 1, hclen = take(4) + 4;
+    var cl = [], i; for (i = 0; i < 19; i++) cl.push(0);
+    for (i = 0; i < hclen; i++) cl[Z_CLEN_ORDER[i]] = take(3);
+    var ct = zTree(cl);
+    function csym() { var code = 0, length = 0; while (true) { code = (code << 1) | take(1); length++; var s = ct[code + "_" + length]; if (s !== undefined) return s; if (length > 15) throw new Error("bad compressed data"); } }
+    var lengths = [];
+    while (lengths.length < hlit + hdist) {
+      var s = csym();
+      if (s < 16) lengths.push(s);
+      else if (s === 16) { var r = take(2) + 3, last = lengths[lengths.length - 1], t; for (t = 0; t < r; t++) lengths.push(last); }
+      else if (s === 17) { var r2 = take(3) + 3, t2; for (t2 = 0; t2 < r2; t2++) lengths.push(0); }
+      else { var r3 = take(7) + 11, t3; for (t3 = 0; t3 < r3; t3++) lengths.push(0); }
+    }
+    return [zTree(lengths.slice(0, hlit)), zTree(lengths.slice(hlit, hlit + hdist))];
+  }
+  function zGzip(data) {
+    var body = zDeflate(data), c = zCrc32(data), n = data.length >>> 0;
+    var out = [0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 0xFF], i;
+    for (i = 0; i < body.length; i++) out.push(body[i]);
+    out.push(c & 0xFF, (c >>> 8) & 0xFF, (c >>> 16) & 0xFF, (c >>> 24) & 0xFF);
+    out.push(n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF, (n >>> 24) & 0xFF);
+    return out;
+  }
+  function zGunzip(data) {
+    if (data.length < 18 || data[0] !== 0x1F || data[1] !== 0x8B) throw new Error("bad compressed data");
+    var flg = data[3], pos = 10;
+    if (flg & 4) { var xlen = data[pos] | (data[pos + 1] << 8); pos += 2 + xlen; }
+    if (flg & 8) { while (data[pos] !== 0) pos++; pos++; }
+    if (flg & 16) { while (data[pos] !== 0) pos++; pos++; }
+    if (flg & 2) { pos += 2; }
+    return zInflate(data.slice(pos, data.length - 8));
+  }
+
   PicoVM.prototype._compresslib = function (method, rd, rs1, rs2) {
     var src = this._spanBytes(this.regs[rs1]);
     if (method === "PicoCompress") {
@@ -616,6 +730,17 @@
       var out = [], i = 0;
       while (i + 1 < src.length) { var cnt = src[i], b = src[i + 1]; i += 2; for (var t = 0; t < cnt; t++) out.push(b); }
       this.regs[rd] = this._newSpanBytes(out); return true;
+    }
+    if (method === "DeflateCompress" || method === "DeflateDecompress" || method === "GzipCompress" || method === "GzipDecompress") {
+      var res;
+      try {
+        if (method === "DeflateCompress") res = zDeflate(src);
+        else if (method === "DeflateDecompress") res = zInflate(src);
+        else if (method === "GzipCompress") res = zGzip(src);
+        else res = zGunzip(src);
+        this.host_status = 0;
+      } catch (e) { this.host_status = 2; res = []; }
+      this.regs[rd] = this._newSpanBytes(res); return true;
     }
     return false;
   };
