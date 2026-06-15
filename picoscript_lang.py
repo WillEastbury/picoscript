@@ -801,6 +801,18 @@ HOST_HOOK_CODES = {
     ("Assert", "Count"):        0x017A,   #                               rd=total assertions
     ("Assert", "Failed"):       0x017B,   #                               rd=failed assertions
     ("Assert", "Reset"):        0x017C,   #                               rd=0 (clears counters)
+    # Event (0x0180-0x0186): an in-runtime event queue -- the reactive core for GUIs
+    # and async I/O. A program loops on Event.Next() (mirrors Stream.Next leases),
+    # dispatching on Type/Target and reading the Data span. Post enqueues; the host
+    # (browser/PIOS) injects external events (clicks, keys, timers) through the same
+    # queue. Deterministic reference queue so Python VM == JS VM; CAP_EVENT-gated.
+    ("Event", "Post"):          0x0180,   # rs1=type rs2=target           rd=eventId
+    ("Event", "Next"):          0x0181,   #                               rd=eventId (0=queue empty)
+    ("Event", "Type"):          0x0182,   # rs1=eventId                   rd=type
+    ("Event", "Target"):        0x0183,   # rs1=eventId                   rd=target
+    ("Event", "Data"):          0x0184,   # rs1=eventId                   rd=span (0=none)
+    ("Event", "SetData"):       0x0185,   # rs1=eventId rs2=span          rd=ok
+    ("Event", "Count"):         0x0186,   #                               rd=pending count
 }
 HOST_HOOK_NAMES = {v: k for k, v in HOST_HOOK_CODES.items()}
 

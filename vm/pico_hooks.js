@@ -309,6 +309,13 @@
       0x17A: "Assert.Count",
       0x17B: "Assert.Failed",
       0x17C: "Assert.Reset",
+      0x180: "Event.Post",
+      0x181: "Event.Next",
+      0x182: "Event.Type",
+      0x183: "Event.Target",
+      0x184: "Event.Data",
+      0x185: "Event.SetData",
+      0x186: "Event.Count",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }

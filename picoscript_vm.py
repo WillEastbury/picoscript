@@ -312,7 +312,8 @@ CAP_GPIO    = 1 << 10           # Gpio.* (device pins; OS/emulator-backed)
 CAP_CAPSULE = 1 << 11           # Pack/Card/Fifo (capsule store + intra-capsule IPC)
 CAP_DEVICE  = 1 << 12           # Device.* (enumerate/open a streaming device)
 CAP_DMA     = 1 << 13           # Stream.* (DMA-ring buffers)
-CAP_ALL     = 0x3FFF            # default grant: every binding (host restricts to gate)
+CAP_EVENT   = 1 << 14           # Event.* (reactive event queue; UI/async dispatch)
+CAP_ALL     = 0x7FFF            # default grant: every binding (host restricts to gate)
 
 _CAP_BY_NS = {
     "Kernel": CAP_KERNEL, "Queue": CAP_QUEUE, "Random": CAP_RANDOM,
@@ -322,6 +323,7 @@ _CAP_BY_NS = {
     "Gpio": CAP_GPIO,
     "Pack": CAP_CAPSULE, "Card": CAP_CAPSULE, "Fifo": CAP_CAPSULE,
     "Device": CAP_DEVICE, "Stream": CAP_DMA,
+    "Event": CAP_EVENT,
 }
 
 
@@ -374,6 +376,10 @@ class HostApi:
         # PSUnit assertion counters (Assert.*): the test-harness facility.
         self.assert_total = 0
         self.assert_failed = 0
+        # Event.* reactive queue: pending FIFO of event ids + a record table.
+        self.events: Dict[int, dict] = {}     # eventId -> {type, target, data(bytes|None), span}
+        self.event_queue: List[int] = []      # pending eventIds (FIFO)
+        self._event_seq = 0
         # Text/binary I/O: arena-backed writer + reader handle tables.
         self.writers: Dict[int, dict] = {}
         self.readers: Dict[int, dict] = {}
@@ -563,6 +569,9 @@ class HostApi:
                 return
         if ns == "Assert":
             if self._assert(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Event":
+            if self._event(vm, method, rd, rs1, rs2):
                 return
         # String.* arena string library.
         if ns == "String":
@@ -1737,6 +1746,54 @@ class HostApi:
             self.assert_total = 0
             self.assert_failed = 0
             vm.regs[rd] = 0
+            return True
+        return False
+
+    # -- Event.* reactive event queue ---------------------------------------
+    # The reactive core: a deterministic in-runtime FIFO of events, each a
+    # (type, target, data-span) record. Post enqueues; Next dequeues the oldest
+    # (0 = empty), mirroring the Stream.Next lease pattern. External event
+    # sources (browser UI, PIOS timers/IRQs) inject via the same Post path, so a
+    # program's event loop is identical in the sim and on hardware. Pure integer
+    # + arena logic -> Python VM == JS VM byte-identical.
+    def _event(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "Post":
+            self._event_seq += 1
+            ev = self._event_seq
+            self.events[ev] = {"type": vm.regs[rs1] & MASK32,
+                               "target": vm.regs[rs2] & MASK32,
+                               "data": None, "span": 0}
+            self.event_queue.append(ev)
+            vm.regs[rd] = ev
+            return True
+        if method == "Next":
+            vm.regs[rd] = self.event_queue.pop(0) if self.event_queue else 0
+            return True
+        if method == "Count":
+            vm.regs[rd] = len(self.event_queue)
+            return True
+        ev = self.events.get(vm.regs[rs1] & MASK32)
+        if method == "Type":
+            vm.regs[rd] = ev["type"] if ev else 0
+            return True
+        if method == "Target":
+            vm.regs[rd] = ev["target"] if ev else 0
+            return True
+        if method == "Data":
+            if not ev or ev["data"] is None:
+                vm.regs[rd] = 0
+                return True
+            if not ev["span"]:
+                ev["span"] = self._new_span_bytes(vm, ev["data"])
+            vm.regs[rd] = ev["span"]
+            return True
+        if method == "SetData":
+            if ev is not None:
+                ev["data"] = self._span_raw(vm, vm.regs[rs2])
+                ev["span"] = 0
+                vm.regs[rd] = 1
+            else:
+                vm.regs[rd] = 0
             return True
         return False
 

@@ -45,6 +45,7 @@ ALLOWLISTED_NAMESPACES = {
     "Device",       # Streaming device enumerate/open -- provider-backed (DMA driver).
     "Stream",       # DMA-ring streaming -- provider-backed (ring emulator / real DMA).
     "Assert",       # PSUnit assertion counters -- host-injected test-harness state.
+    "Event",        # Reactive event queue -- host-injected (UI/timer/IRQ sources).
 }
 
 

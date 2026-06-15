@@ -950,6 +950,7 @@ uint32_t pv_hook_cap(int hook)
     if (hook >= 0x160 && hook <= 0x167) return PV_CAP_CAPSULE; /* Pack/Card/Fifo */
     if (hook >= 0x168 && hook <= 0x16B) return PV_CAP_DEVICE;  /* Device.* */
     if (hook >= 0x170 && hook <= 0x175) return PV_CAP_DMA;     /* Stream.* */
+    if (hook >= 0x180 && hook <= 0x186) return PV_CAP_EVENT;   /* Event.* */
     return 0;                                                /* pure: String/Number/Maths/Span/... */
 }
 

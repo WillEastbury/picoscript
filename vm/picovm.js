@@ -41,12 +41,12 @@
 
   // Binding capability classes (INV-17). Bit values match vm/picovm.h PV_CAP_* and
   // picoscript_vm.CAP_*; pure computation needs none (class 0, always allowed).
-  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024, CAPSULE: 2048, DEVICE: 4096, DMA: 8192 };
-  var CAP_ALL = 0x3FFF;
+  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024, CAPSULE: 2048, DEVICE: 4096, DMA: 8192, EVENT: 16384 };
+  var CAP_ALL = 0x7FFF;
   var CAP_BY_NS = { Kernel: CAP.KERNEL, Queue: CAP.QUEUE, Random: CAP.RANDOM,
     Req: CAP.NET, Resp: CAP.NET, Net: CAP.NET, Storage: CAP.STORAGE, DateTime: CAP.TIME,
     Context: CAP.CONTEXT, Auth: CAP.AUTH, X509: CAP.AUTH, Environment: CAP.ENV, Locale: CAP.ENV, Gpio: CAP.GPIO,
-    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Stream: CAP.DMA };
+    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Stream: CAP.DMA, Event: CAP.EVENT };
   function hookCap(name) {   // "Ns.Method" -> required capability class (0 = pure)
     var dot = name.indexOf("."), ns = name.slice(0, dot), m = name.slice(dot + 1);
     if (ns === "Maths" && (m === "Random" || m === "RandomRange")) return CAP.RANDOM;
@@ -373,6 +373,10 @@
     // ---- Assert.* PSUnit assertion counters --------------------------------
     if (name.indexOf("Assert.") === 0) {
       if (this._assert(name.slice(7), rd, rs1, rs2)) return;
+    }
+    // ---- Event.* reactive event queue --------------------------------------
+    if (name.indexOf("Event.") === 0) {
+      if (this._event(name.slice(6), rd, rs1, rs2)) return;
     }
     // ---- String.* arena string library -------------------------------------
     if (name.indexOf("String.") === 0) {
@@ -1412,6 +1416,37 @@
     if (method === "Count") { this.regs[rd] = this._asTotal >>> 0; return true; }
     if (method === "Failed") { this.regs[rd] = this._asFailed >>> 0; return true; }
     if (method === "Reset") { this._asTotal = 0; this._asFailed = 0; this.regs[rd] = 0; return true; }
+    return false;
+  };
+
+  // -- Event.* reactive event queue (mirrors picoscript_vm HostApi._event) ----
+  // Deterministic in-runtime FIFO of (type, target, data-span) records. Post
+  // enqueues; Next dequeues the oldest (0 = empty). External UI/timer events are
+  // injected through the same Post path -> byte-identical to the Python VM.
+  PicoVM.prototype._event = function (method, rd, rs1, rs2) {
+    if (!this._ev) this._ev = { recs: {}, queue: [], seq: 0 };
+    var e = this._ev;
+    if (method === "Post") {
+      e.seq++;
+      e.recs[e.seq] = { type: this.regs[rs1] >>> 0, target: this.regs[rs2] >>> 0, data: null, span: 0 };
+      e.queue.push(e.seq);
+      this.regs[rd] = e.seq; return true;
+    }
+    if (method === "Next") { this.regs[rd] = e.queue.length ? e.queue.shift() : 0; return true; }
+    if (method === "Count") { this.regs[rd] = e.queue.length; return true; }
+    var rec = e.recs[this.regs[rs1] >>> 0];
+    if (method === "Type") { this.regs[rd] = rec ? rec.type : 0; return true; }
+    if (method === "Target") { this.regs[rd] = rec ? rec.target : 0; return true; }
+    if (method === "Data") {
+      if (!rec || rec.data === null) { this.regs[rd] = 0; return true; }
+      if (!rec.span) rec.span = this._newSpanBytes(rec.data);
+      this.regs[rd] = rec.span; return true;
+    }
+    if (method === "SetData") {
+      if (rec) { rec.data = this._spanBytes(this.regs[rs2]); rec.span = 0; this.regs[rd] = 1; }
+      else this.regs[rd] = 0;
+      return true;
+    }
     return false;
   };
 

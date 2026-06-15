@@ -74,9 +74,10 @@ enum {
     PV_CAP_GPIO    = 1 << 10,  /* Gpio.* (device pins; OS/emulator-backed) */
     PV_CAP_CAPSULE = 1 << 11,  /* Pack/Card/Fifo (capsule store + intra-capsule IPC) */
     PV_CAP_DEVICE  = 1 << 12,  /* Device.* (enumerate/open a streaming device) */
-    PV_CAP_DMA     = 1 << 13   /* Stream.* (DMA-ring buffers) */
+    PV_CAP_DMA     = 1 << 13,  /* Stream.* (DMA-ring buffers) */
+    PV_CAP_EVENT   = 1 << 14   /* Event.* (reactive event queue; UI/async dispatch) */
 };
-#define PV_CAP_ALL  0x3FFFu    /* default grant: every binding (host restricts to gate) */
+#define PV_CAP_ALL  0x7FFFu    /* default grant: every binding (host restricts to gate) */
 
 typedef struct pv_ctx pv_ctx;
 
