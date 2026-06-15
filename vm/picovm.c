@@ -1847,31 +1847,96 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
 
     /* ---- Compress.* (reversible byte-run RLE -> (count,byte) pairs) ---- */
     if (hook == PV_HOOK_COMPRESS_PICOCOMPRESS) {
-        int h = ctx->regs[rs1];
-        uint32_t p = pv_span_p(ctx, h);
-        int32_t l = pv_span_n(ctx, h), i = 0;
+        /* PicoCompress: real deterministic LZ77, byte-identical with the Python/JS
+         * runtime. Head-only match finder (4096-bucket hash) -> embedded-friendly. */
+        static int head[4096];
+        int hh = ctx->regs[rs1];
+        uint32_t p = pv_span_p(ctx, hh);
+        int32_t n = pv_span_n(ctx, hh), i, lit_start = 0, j, t;
         uint32_t k = 0;
-        while (i < l) {
-            uint8_t b0 = pv_arena_get(ctx, p + (uint32_t)i);
-            int32_t c = 1;
-            while (i + c < l && pv_arena_get(ctx, p + (uint32_t)(i + c)) == b0 && c < 255) c++;
-            pv_arena_put(ctx, &k, (uint8_t)c);
-            pv_arena_put(ctx, &k, b0);
-            i += c;
+        for (i = 0; i < 4096; i++) head[i] = 0;
+        i = 0;
+        while (i < n) {
+            int32_t match_len = 0, match_dist = 0;
+            if (i + 3 <= n) {
+                int a = pv_arena_get(ctx, p + (uint32_t)i);
+                int b = pv_arena_get(ctx, p + (uint32_t)(i + 1));
+                int c = pv_arena_get(ctx, p + (uint32_t)(i + 2));
+                j = head[(a * 65599 + b * 257 + c) & 0xFFF] - 1;
+                if (j >= 0 && i - j <= 65535) {
+                    int32_t maxlen = (n - i > 130) ? 130 : (n - i), length = 0;
+                    while (length < maxlen &&
+                           pv_arena_get(ctx, p + (uint32_t)(j + length)) == pv_arena_get(ctx, p + (uint32_t)(i + length)))
+                        length++;
+                    if (length >= 3) { match_len = length; match_dist = i - j; }
+                }
+            }
+            if (match_len >= 3) {
+                int32_t s = lit_start, end;
+                while (s < i) {
+                    int32_t run = (i - s > 128) ? 128 : (i - s);
+                    pv_arena_put(ctx, &k, (uint8_t)(run - 1));
+                    for (t = 0; t < run; t++) pv_arena_put(ctx, &k, pv_arena_get(ctx, p + (uint32_t)(s + t)));
+                    s += run;
+                }
+                pv_arena_put(ctx, &k, (uint8_t)(0x80 | (match_len - 3)));
+                pv_arena_put(ctx, &k, (uint8_t)(match_dist & 0xFF));
+                pv_arena_put(ctx, &k, (uint8_t)((match_dist >> 8) & 0xFF));
+                end = i + match_len;
+                while (i < end) {
+                    if (i + 3 <= n) {
+                        int a = pv_arena_get(ctx, p + (uint32_t)i);
+                        int b = pv_arena_get(ctx, p + (uint32_t)(i + 1));
+                        int c = pv_arena_get(ctx, p + (uint32_t)(i + 2));
+                        head[(a * 65599 + b * 257 + c) & 0xFFF] = i + 1;
+                    }
+                    i++;
+                }
+                lit_start = i;
+            } else {
+                if (i + 3 <= n) {
+                    int a = pv_arena_get(ctx, p + (uint32_t)i);
+                    int b = pv_arena_get(ctx, p + (uint32_t)(i + 1));
+                    int c = pv_arena_get(ctx, p + (uint32_t)(i + 2));
+                    head[(a * 65599 + b * 257 + c) & 0xFFF] = i + 1;
+                }
+                i++;
+            }
+        }
+        {
+            int32_t s = lit_start;
+            while (s < n) {
+                int32_t run = (n - s > 128) ? 128 : (n - s);
+                pv_arena_put(ctx, &k, (uint8_t)(run - 1));
+                for (t = 0; t < run; t++) pv_arena_put(ctx, &k, pv_arena_get(ctx, p + (uint32_t)(s + t)));
+                s += run;
+            }
         }
         ctx->regs[rd] = pv_arena_finish(ctx, k);
         return;
     }
     if (hook == PV_HOOK_COMPRESS_PICODECOMPRESS) {
-        int h = ctx->regs[rs1];
-        uint32_t p = pv_span_p(ctx, h);
-        int32_t l = pv_span_n(ctx, h), i = 0;
+        int hh = ctx->regs[rs1];
+        uint32_t p = pv_span_p(ctx, hh);
+        int32_t n = pv_span_n(ctx, hh), i = 0, t;
         uint32_t k = 0;
-        while (i + 1 < l) {
-            uint8_t cnt = pv_arena_get(ctx, p + (uint32_t)i);
-            uint8_t b0 = pv_arena_get(ctx, p + (uint32_t)(i + 1));
-            for (uint8_t t = 0; t < cnt; t++) pv_arena_put(ctx, &k, b0);
-            i += 2;
+        while (i < n) {
+            uint8_t tag = pv_arena_get(ctx, p + (uint32_t)i); i++;
+            if (tag < 0x80) {
+                int32_t run = tag + 1;
+                for (t = 0; t < run; t++) pv_arena_put(ctx, &k, pv_arena_get(ctx, p + (uint32_t)(i + t)));
+                i += run;
+            } else {
+                int32_t length = (tag - 0x80) + 3, dist;
+                if (i + 1 >= n) break;
+                dist = pv_arena_get(ctx, p + (uint32_t)i) | (pv_arena_get(ctx, p + (uint32_t)(i + 1)) << 8);
+                i += 2;
+                if ((int32_t)k < dist) break;
+                for (t = 0; t < length; t++) {
+                    uint8_t bb = pv_arena_get(ctx, ctx->arena_top + ((uint32_t)k - (uint32_t)dist));
+                    pv_arena_put(ctx, &k, bb);
+                }
+            }
         }
         ctx->regs[rd] = pv_arena_finish(ctx, k);
         return;

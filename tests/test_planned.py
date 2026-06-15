@@ -43,13 +43,14 @@ def setbytes(base, data):
 
 
 def main():
-    # Compress: RLE round-trip + compressed length. "aaabbbbc" -> (3,a)(4,b)(1,c)=6 bytes.
+    # Compress: PicoCompress LZ77 round-trip + compressed length.
+    # "aaabbbbc" -> [lit "aaab"][match len3 dist1][lit "c"] = 10 bytes.
     comp = (setbytes(1000, b"aaabbbbc") +
             "int s = Span.Make(1000, 8);"
             "int c = Compress.PicoCompress(s);"
             "int b = Compress.PicoDecompress(c);"
             "Io.Write(b); Io.WriteByte(124); Io.WriteByte(String.Length(c));")
-    assert run_both(comp) == b"aaabbbbc|\x06", "compress round-trip"
+    assert run_both(comp) == b"aaabbbbc|\x0a", "compress round-trip"
 
     # Crypto.Sha256("abc") == known digest.
     sha = (setbytes(1000, b"abc") +

@@ -715,21 +715,75 @@
     return zInflate(data.slice(pos, data.length - 8));
   }
 
+  // ── PicoCompress: real deterministic LZ77 (byte-identical with picoscript_vm.py
+  //    and vm/picovm.c). Byte-oriented tokens; head-only match finder (4096-bucket
+  //    hash, 64 KiB window) -> embedded-friendly, output identical by construction.
+  function plzHash(a, b, c) { return (a * 65599 + b * 257 + c) & 0xFFF; }
+  function picolzCompress(data) {
+    var n = data.length, out = [], head = new Array(4096), i;
+    for (i = 0; i < 4096; i++) head[i] = 0;
+    var litStart = 0;
+    function flush(end) {
+      var j = litStart, t;
+      while (j < end) {
+        var run = end - j; if (run > 128) run = 128;
+        out.push(run - 1);
+        for (t = 0; t < run; t++) out.push(data[j + t]);
+        j += run;
+      }
+      litStart = end;
+    }
+    i = 0;
+    while (i < n) {
+      var matchLen = 0, matchDist = 0;
+      if (i + 3 <= n) {
+        var h = plzHash(data[i], data[i + 1], data[i + 2]);
+        var j = head[h] - 1;
+        if (j >= 0 && i - j <= 65535) {
+          var maxlen = (n - i > 130) ? 130 : (n - i), length = 0;
+          while (length < maxlen && data[j + length] === data[i + length]) length++;
+          if (length >= 3) { matchLen = length; matchDist = i - j; }
+        }
+      }
+      if (matchLen >= 3) {
+        flush(i);
+        out.push(0x80 | (matchLen - 3));
+        out.push(matchDist & 0xFF); out.push((matchDist >> 8) & 0xFF);
+        var end = i + matchLen;
+        while (i < end) { if (i + 3 <= n) head[plzHash(data[i], data[i + 1], data[i + 2])] = i + 1; i++; }
+        litStart = i;
+      } else {
+        if (i + 3 <= n) head[plzHash(data[i], data[i + 1], data[i + 2])] = i + 1;
+        i++;
+      }
+    }
+    flush(n);
+    return out;
+  }
+  function picolzDecompress(data) {
+    var out = [], i = 0, n = data.length, t;
+    while (i < n) {
+      var tag = data[i]; i++;
+      if (tag < 0x80) { var run = tag + 1; for (t = 0; t < run; t++) out.push(data[i + t]); i += run; }
+      else {
+        var length = (tag - 0x80) + 3;
+        if (i + 1 >= n) break;
+        var dist = data[i] | (data[i + 1] << 8); i += 2;
+        var start = out.length - dist;
+        if (start < 0) break;
+        for (var k = 0; k < length; k++) out.push(out[start + k]);
+      }
+    }
+    return out;
+  }
+
   PicoVM.prototype._compresslib = function (method, rd, rs1, rs2) {
     var src = this._spanBytes(this.regs[rs1]);
     if (method === "PicoCompress") {
-      var out = [], i = 0;
-      while (i < src.length) {
-        var c = 1;
-        while (i + c < src.length && src[i + c] === src[i] && c < 255) c++;
-        out.push(c, src[i]); i += c;
-      }
-      this.regs[rd] = this._newSpanBytes(out); return true;
+      this.regs[rd] = this._newSpanBytes(picolzCompress(src)); return true;
     }
     if (method === "PicoDecompress") {
-      var out = [], i = 0;
-      while (i + 1 < src.length) { var cnt = src[i], b = src[i + 1]; i += 2; for (var t = 0; t < cnt; t++) out.push(b); }
-      this.regs[rd] = this._newSpanBytes(out); return true;
+      this.regs[rd] = this._newSpanBytes(picolzDecompress(src)); return true;
     }
     if (method === "DeflateCompress" || method === "DeflateDecompress" || method === "GzipCompress" || method === "GzipDecompress") {
       var res;

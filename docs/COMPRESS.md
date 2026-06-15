@@ -1,54 +1,55 @@
-# Compression — real DEFLATE / gzip in the runtime
+# Compression — codecs built into the runtime
 
-`Compress.*` provides real, standards-compliant compression built into the runtime —
-no host `zlib`. It interoperates both ways with the outside world (stdlib `zlib`/`gzip`
-read our output; we decompress theirs).
+`Compress.*` provides compression built into the runtime — no host `zlib`. The
+recommended in-runtime codec is **PicoCompress** (a real, byte-identical LZ77 on all
+5 runtimes); DEFLATE/gzip are kept for outside-world **interop**; Brotli is
+host-supplied.
 
 | Hook | Code | Effect |
 |------|------|--------|
-| `Compress.DeflateCompress(span)`   | `0x0106` | raw DEFLATE (RFC 1951) |
+| `Compress.PicoCompress(span)`   | `0x0102` | **real deterministic LZ77** — byte-identical on every runtime |
+| `Compress.PicoDecompress(span)` | `0x0103` | inverse of PicoCompress |
+| `Compress.DeflateCompress(span)`   | `0x0106` | raw DEFLATE (RFC 1951) — for zlib interop |
 | `Compress.DeflateDecompress(span)` | `0x0107` | raw INFLATE |
 | `Compress.GzipCompress(span)`      | `0x0104` | gzip (RFC 1952): header + deflate + CRC-32 + ISIZE |
-| `Compress.GzipDecompress(span)`    | `0x0105` | parse gzip header (incl. FEXTRA/FNAME/FCOMMENT/FHCRC) + inflate |
-| `Compress.PicoCompress` / `PicoDecompress` | `0x0102/0x0103` | the simple byte-run RLE (unchanged) |
-| `Compress.Brotli*` | `0x0100/0x0101` | **unimplemented** host-fillable stub |
+| `Compress.GzipDecompress(span)`    | `0x0105` | parse gzip header + inflate |
+| `Compress.Brotli*` | `0x0100/0x0101` | **host-supplied** (PIOS libbrotli); unimplemented in-runtime |
 
-Malformed/truncated input never hangs the VM: the inflater raises and the hook returns
-an empty span with `host_status = 2`.
+Malformed/truncated input never hangs the VM (the inflater raises; PicoDecompress
+guards bad back-distances).
 
-## Canonical, byte-identical strategy
+## PicoCompress — the byte-identical compressor (preferred)
 
-To make compressed bytes **byte-identical across VMs**, the compressor uses one fixed
-strategy: a single final **fixed-Huffman block** with **greedy LZ77** over a 32 KiB
-window and a deterministic hash-chain match finder (chains keyed by the exact 3-byte
-prefix; up to 256 probes). Inflate is spec-complete (stored + fixed + dynamic Huffman),
-so it reads any valid DEFLATE/gzip stream. Typical ratios ~0.03–0.46.
+PicoCompress is a real LZ77, **byte-oriented** (no bit packing) with a **head-only**
+bounded-hash match finder (4096 buckets, 64 KiB window) — so the compressed *bytes*
+are identical on the Python, JS and C VMs **by construction**, with no 64 MiB table
+(embedded-friendly: just a 4096-entry hash). Token stream:
 
-Implemented in `picoscript_vm.py` (`_deflate`/`_inflate`/`_crc32`/`_gzip_*`) and mirrored
-byte-for-byte in `vm/picovm.js`. `tests/test_compress.py` checks round-trip, **two-way
-interop** with stdlib `zlib`/`gzip`, and `Python VM == JS VM` (including the compressed
-bytes).
+```
+tag 0x00..0x7F  -> literal run of (tag+1) bytes, then those bytes
+tag 0x80..0xFF  -> match: length (tag-0x80)+3, then a 2-byte LE back-distance
+```
 
-## Decision record: the C VM
+It is the recommended in-runtime codec and runs byte-identically on all **five**
+paths (Python/JS/C VMs + the two transpilers) — see `examples/hashing.pc` in
+`tests/test_examples_parity.py`, and the cross-VM byte-identity check in
+`tests/test_compress.py::test_picolz_compressed_bytes_py_equals_js_equals_c`.
 
-The Python and JS VMs (the reference runtime + the browser) ship the full codec.
-The native **C VM (`vm/picovm.c`) implements `inflate`/`gunzip`** (real
-`Compress.DeflateDecompress` / `GzipDecompress`, adapted from the public-domain
-puff.c), so **decompression runs on all three VMs** — verified against real stdlib
-gzip (dynamic Huffman), raw zlib deflate, and our own output in
-`tests/test_compress.py::test_c_vm_inflate_canonical`. Compression on the native
-path is **not** implemented, a deliberate tradeoff:
+## DEFLATE / gzip — for interop
 
-- **Decompression output is canonical** — any spec-correct inflater produces
-  identical bytes — so the C inflater needs no byte-identity machinery and reads
-  any valid stream. *(Done.)*
-- **Compression bytes are not canonical** — byte-identity requires the *same* match
-  finder. Matching the Python/JS exact-3-byte-prefix chains needs either a 64 MiB
-  direct-mapped table (embedded-hostile) or a shared bounded-hash rework across all
-  three VMs. Rather than ship a 64 MiB array or a subtly-divergent compressor, the
-  canonical compressor stays in the reference runtime + the PIOS host.
+Real DEFLATE (RFC 1951) + gzip (RFC 1952), kept for interoperating with the outside
+world (stdlib `zlib`/`gzip` read our output; we decompress theirs). The compressor is
+canonical (one fixed-Huffman block, greedy LZ77, deterministic hash-chain finder) so
+its bytes are identical on the Python and JS VMs. **Decompression runs on all 3 VMs**
+(Python/JS + native C `inflate`/`gunzip`, puff.c-adapted), verified against real
+stdlib gzip with dynamic-Huffman blocks. The exact-3-byte-prefix DEFLATE *compressor*
+is Python/JS only (a byte-identical C deflate compressor would need a 64 MiB table or
+a bounded-hash rework — and PicoCompress already covers the byte-identical-everywhere
+need), so prefer PicoCompress in-runtime and gzip for interop.
 
-Net: **decompress anywhere** (all 3 VMs, in-runtime); compress on the Python/JS
-runtime + the PIOS host. No 5-path example uses `Compress.Deflate*`/`Gzip*`, so the
-asymmetry doesn't affect the parity suite. A byte-identical C compressor (bounded-hash
-across all three VMs) remains available on request.
+## Brotli
+
+A real, byte-identical hand-written Brotli (RFC 7932: a 122 KiB static dictionary,
+context modelling and complex prefix codes) is not feasible across three VMs.
+`Compress.Brotli*` is therefore **host-supplied** — PIOS binds a real libbrotli — and
+remains an unimplemented host-fillable stub in the runtime.
