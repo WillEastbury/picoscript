@@ -1,0 +1,13 @@
+' PSUnit: BASIC frontend -- idiomatic ASSERT keyword + GPIO DSL provider seam.
+DIM a = 6
+DIM b = 7
+ASSERT a * b = 42
+ASSERT a < b
+ASSERT a <> b
+
+' Drive a GPIO pin through the BASIC DSL and assert the read-back value.
+GPIO DIR 2 = OUT
+GPIO WRITE 2 = 5000
+DIM v = GPIO READ 2
+ASSERT v = 1024
+ASSERT GPIO COUNT = 40

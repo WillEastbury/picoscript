@@ -261,6 +261,29 @@ CONSTRUCTS = [
      "    Set l to Stream.Next(s).\n"
      "Stream.Close(s).\nDevice.Close(dev).\n"
      "Print total."),
+
+    ("Testing: PSUnit assertions (Assert.*)",
+     "PSUnit is a PicoScript-authored test harness. A test makes assertions with "
+     "Assert.Eq(actual, expected) and Assert.True(cond); the runtime tallies them, "
+     "and the runner (psunit.py) or this editor reports pass/fail from "
+     "Assert.Count()/Assert.Failed() -- so a test body is just assertions. In BASIC "
+     "the idiomatic ASSERT keyword takes any condition (no dotted call).",
+     "int a = 6;\nint b = 7;\n"
+     "Assert.Eq(a * b, 42);\n"
+     "Assert.True(a < b);\n"
+     "print(a * b);",
+     "DIM A = 6\nDIM B = 7\n"
+     "ASSERT A * B = 42\n"
+     "ASSERT A < B\n"
+     "PRINT A * B",
+     "a = 6\nb = 7\n"
+     "Assert.Eq(a * b, 42)\n"
+     "Assert.True(a < b)\n"
+     "print(a * b)",
+     "Set a to 6.\nSet b to 7.\n"
+     "Assert.Eq(a * b, 42).\n"
+     "Assert.True(a < b).\n"
+     "Print a times b."),
 ]
 
 
@@ -590,6 +613,7 @@ PAGE = r"""<!DOCTYPE html>
       </div>
       <div class="dbg-panel" id="dbg-output">
         <div class="out" id="out" style="font-size:13px"></div>
+        <div class="out" id="psunit" style="font-size:13px;margin-top:6px"></div>
       </div>
       <div class="dbg-panel" id="dbg-src">
         <select id="lang" style="width:auto;margin-bottom:6px">
@@ -648,7 +672,8 @@ var GROUPS = [
   {name:'Dispatch & State', items:[6,7]},
   {name:'Subroutines', items:[8,9]},
   {name:'I/O & Cards', items:[12,13]},
-  {name:'Devices', items:[14]}
+  {name:'Devices', items:[14]},
+  {name:'Testing', items:[15]}
 ];
 
 function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -993,6 +1018,13 @@ function render(){
     return '<div class="r">R'+idx+' <b>'+v+'</b></div>';}).join('');
   document.getElementById('state').textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;
   document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']';
+  var ps=document.getElementById('psunit');
+  if(ps){
+    var tot=(vm._asTotal||0)>>>0, fail=(vm._asFailed||0)>>>0;
+    if(tot===0){ ps.textContent=''; }
+    else if(fail===0){ ps.textContent='PSUnit: \u2713 '+tot+'/'+tot+' assertions passed'; ps.style.color='#7ee787'; }
+    else { ps.textContent='PSUnit: \u2717 '+fail+'/'+tot+' assertions FAILED'; ps.style.color='#ff7b72'; }
+  }
   renderGpio();
   renderCards();
   renderStream();

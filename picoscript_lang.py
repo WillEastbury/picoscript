@@ -792,6 +792,15 @@ HOST_HOOK_CODES = {
     ("Stream", "Submit"):       0x0173,   # rs1=streamHandle rs2=lease    rd=ok (TX)
     ("Stream", "Release"):      0x0174,   # rs1=leaseHandle               rd=ok (RX return-to-ring)
     ("Stream", "Close"):        0x0175,   # rs1=streamHandle              rd=ok
+    # Assert/PSUnit (0x0178-0x017C): a PicoScript-authored unit/smoke test harness.
+    # Host-injected (counters in the host), like Gpio/Stream; deterministic integer
+    # logic so Python VM == JS VM. Tests call Assert.Eq/True; the runner reads
+    # Assert.Failed()/Count(). See psunit.py + tests/psunit/.
+    ("Assert", "Eq"):           0x0178,   # rs1=actual rs2=expected       rd=1 if equal else 0
+    ("Assert", "True"):         0x0179,   # rs1=cond                      rd=1 if cond!=0 else 0
+    ("Assert", "Count"):        0x017A,   #                               rd=total assertions
+    ("Assert", "Failed"):       0x017B,   #                               rd=failed assertions
+    ("Assert", "Reset"):        0x017C,   #                               rd=0 (clears counters)
 }
 HOST_HOOK_NAMES = {v: k for k, v in HOST_HOOK_CODES.items()}
 

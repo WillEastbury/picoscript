@@ -1,0 +1,4 @@
+Set a to 20.
+Set b to 22.
+Assert.Eq(a + b, 42).
+Assert.True(b > a).

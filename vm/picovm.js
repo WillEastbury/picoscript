@@ -370,6 +370,10 @@
     if (name.indexOf("Stream.") === 0) {
       if (this._stream(name.slice(7), rd, rs1, rs2)) return;
     }
+    // ---- Assert.* PSUnit assertion counters --------------------------------
+    if (name.indexOf("Assert.") === 0) {
+      if (this._assert(name.slice(7), rd, rs1, rs2)) return;
+    }
     // ---- String.* arena string library -------------------------------------
     if (name.indexOf("String.") === 0) {
       if (this._stringlib(name.slice(7), rd, rs1, rs2)) return;
@@ -1386,6 +1390,28 @@
       return true;
     }
     if (method === "Close") { this.regs[rd] = d.streams[this.regs[rs1] | 0] ? 1 : 0; return true; }
+    return false;
+  };
+
+  // -- Assert.* PSUnit assertion counters (mirrors picoscript_vm HostApi._assert)
+  // A PicoScript-authored test harness: tests call Assert.Eq/True; the runner
+  // reads Assert.Failed()/Count() after a run. Pure integer logic -> byte-identical
+  // to the Python VM.
+  PicoVM.prototype._assert = function (method, rd, rs1, rs2) {
+    if (this._asTotal === undefined) { this._asTotal = 0; this._asFailed = 0; }
+    if (method === "Eq") {
+      var ok = ((this.regs[rs1] >>> 0) === (this.regs[rs2] >>> 0)) ? 1 : 0;
+      this._asTotal++; if (!ok) this._asFailed++;
+      this.regs[rd] = ok; return true;
+    }
+    if (method === "True") {
+      var t = ((this.regs[rs1] >>> 0) !== 0) ? 1 : 0;
+      this._asTotal++; if (!t) this._asFailed++;
+      this.regs[rd] = t; return true;
+    }
+    if (method === "Count") { this.regs[rd] = this._asTotal >>> 0; return true; }
+    if (method === "Failed") { this.regs[rd] = this._asFailed >>> 0; return true; }
+    if (method === "Reset") { this._asTotal = 0; this._asFailed = 0; this.regs[rd] = 0; return true; }
     return false;
   };
 

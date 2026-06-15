@@ -1,0 +1,23 @@
+// PSUnit: seed the Storage card store (the cardStore provider seam) then assert.
+// Three cards in pack 1024 with qty 42 / 7 / 99; query qty > 40 -> {42, 99}.
+int qty = "qty";
+int filter = "qty > 40";
+
+Storage.UsePack(1024);
+int a = Storage.AddCard();
+Storage.SetField(qty, 42);
+int b = Storage.AddCard();
+Storage.SetField(qty, 7);
+int c = Storage.AddCard();
+Storage.SetField(qty, 99);
+
+Storage.EditCard(b);
+Assert.Eq(Storage.GetField(qty), 7);
+
+Storage.EditCard(a);
+Assert.Eq(Storage.GetField(qty), 42);
+
+int hits = Storage.QueryCard(filter);
+Assert.Eq(hits, 2);
+Assert.Eq(Storage.QueryResult(0), a);
+Assert.Eq(Storage.QueryResult(1), c);

@@ -44,6 +44,7 @@ ALLOWLISTED_NAMESPACES = {
     "Fifo",         # Intra-capsule IPC FIFOs -- provider-backed.
     "Device",       # Streaming device enumerate/open -- provider-backed (DMA driver).
     "Stream",       # DMA-ring streaming -- provider-backed (ring emulator / real DMA).
+    "Assert",       # PSUnit assertion counters -- host-injected test-harness state.
 }
 
 

@@ -1,0 +1,14 @@
+// PSUnit: String.* arena string library (C frontend).
+int s = "hello";
+Assert.Eq(String.Length(s), 5);
+
+int up = String.ToUpper(s);
+Assert.Eq(String.Length(up), 5);
+
+int hi = "hi";
+int there = " there";
+int greet = String.Concat(hi, there);
+Assert.Eq(String.Length(greet), 8);
+
+Assert.True(String.StartsWith(greet, hi));
+Assert.Eq(String.IndexOf(s, "ll"), 2);

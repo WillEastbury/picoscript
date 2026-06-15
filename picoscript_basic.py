@@ -74,7 +74,7 @@ KEYWORDS = {
     "DO", "LOOP", "UNTIL",
     "BREAK", "SKIP", "INC", "DEC", "IIF",
     "EQ", "NE", "LT", "GT", "LE", "GE", "MOD",
-    "STORE", "GPIO", "LOAD", "SERVER", "ENDSERVER",
+    "STORE", "GPIO", "LOAD", "SERVER", "ENDSERVER", "ASSERT",
 }
 CMP_WORDS = {"EQ": "EQ", "NE": "NE", "LT": "LT", "GT": "GT", "LE": "LE", "GE": "GE"}
 
@@ -384,6 +384,12 @@ class Parser:
                 self.next(); call = self.parse_load_body(False); self.end_line(); return CallStmt(call)
             if kw == "GPIO":
                 self.next(); call = self.parse_gpio_body(False); self.end_line(); return CallStmt(call)
+            if kw == "ASSERT":
+                # ASSERT <condition> -- PSUnit assertion, BASIC-idiomatic (no dotted
+                # Assert.True call). The condition is any BASIC expression (=, <, >,
+                # AND/OR), evaluated to 0/1 then recorded by the Assert.True hook.
+                self.next(); cond = self.parse_expr(); self.end_line()
+                return CallStmt(Call("Assert", "True", [cond]))
             raise SyntaxError(f"line {t.line}: unexpected keyword {kw}")
         # assignment: id = expr / id += expr   OR bare call: Ns.Method(...) / NAME(...)
         if t.kind == "id":

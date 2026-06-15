@@ -17,6 +17,13 @@ native JS).
 These are exercised by `tests/test_examples_parity.py`, which runs each on all five
 runtimes and asserts identical output.
 
+## Testing
+
+Write tests **in PicoScript** with the `Assert.*` namespace and run them with the
+PSUnit harness (`python psunit.py [--parity]`). Tests live in `tests/psunit/` (one per
+frontend) and can seed the `Storage.*`/`Gpio.*`/`Stream.*` provider seams before
+asserting. See [`docs/PSUNIT.md`](../docs/PSUNIT.md).
+
 ## Language / compute demos
 
 | File | Frontend | Shows |

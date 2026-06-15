@@ -1,0 +1,11 @@
+# PSUnit: smoke test authored in the Python-style frontend.
+a = 6
+b = 7
+Assert.Eq(a * b, 42)
+Assert.True(a < b)
+
+# GPIO provider seam: drive a pin and read it back (saturates to [0, 1024]).
+Gpio.SetDir(2, 1)
+Gpio.Write(2, 5000)
+Assert.Eq(Gpio.Read(2), 1024)
+Assert.Eq(Gpio.Count(), 40)

@@ -371,6 +371,9 @@ class HostApi:
         self._dev_seq = 0
         self._stream_seq = 0
         self._lease_seq = 0
+        # PSUnit assertion counters (Assert.*): the test-harness facility.
+        self.assert_total = 0
+        self.assert_failed = 0
         # Text/binary I/O: arena-backed writer + reader handle tables.
         self.writers: Dict[int, dict] = {}
         self.readers: Dict[int, dict] = {}
@@ -557,6 +560,9 @@ class HostApi:
                 return
         if ns == "Stream":
             if self._stream(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Assert":
+            if self._assert(vm, method, rd, rs1, rs2):
                 return
         # String.* arena string library.
         if ns == "String":
@@ -1699,6 +1705,38 @@ class HostApi:
             return True
         if method == "Close":
             vm.regs[rd] = 1 if self.streams.get(vm.regs[rs1] & MASK32) else 0
+            return True
+        return False
+
+    # -- Assert.* PSUnit assertion counters ---------------------------------
+    # A PicoScript-authored test harness: tests call Assert.Eq/True; the runner
+    # (psunit.py / the editor Tests panel) reads Assert.Failed()/Count() after a
+    # run. Pure integer logic so the Python VM and the JS VM stay byte-identical.
+    def _assert(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "Eq":
+            ok = 1 if (vm.regs[rs1] & MASK32) == (vm.regs[rs2] & MASK32) else 0
+            self.assert_total += 1
+            if not ok:
+                self.assert_failed += 1
+            vm.regs[rd] = ok
+            return True
+        if method == "True":
+            ok = 1 if (vm.regs[rs1] & MASK32) != 0 else 0
+            self.assert_total += 1
+            if not ok:
+                self.assert_failed += 1
+            vm.regs[rd] = ok
+            return True
+        if method == "Count":
+            vm.regs[rd] = self.assert_total & MASK32
+            return True
+        if method == "Failed":
+            vm.regs[rd] = self.assert_failed & MASK32
+            return True
+        if method == "Reset":
+            self.assert_total = 0
+            self.assert_failed = 0
+            vm.regs[rd] = 0
             return True
         return False
 

@@ -40,6 +40,7 @@ process.stdin.on("end", () => {
   console.log("STEPS " + vm.steps);
   console.log("FAULT " + fault + " " + faultPc + " " + faultDetail);
   console.log("STATUS " + vm.httpStatus);
+  console.log("ASSERT " + ((vm._asTotal || 0) >>> 0) + " " + ((vm._asFailed || 0) >>> 0));
   console.log("REGS " + Array.from(vm.regs).join(" "));
   console.log("OUT " + vm.output.map((b) => b.toString(16).padStart(2, "0")).join(" "));
 });

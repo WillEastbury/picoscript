@@ -304,6 +304,11 @@
       0x173: "Stream.Submit",
       0x174: "Stream.Release",
       0x175: "Stream.Close",
+      0x178: "Assert.Eq",
+      0x179: "Assert.True",
+      0x17A: "Assert.Count",
+      0x17B: "Assert.Failed",
+      0x17C: "Assert.Reset",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }
