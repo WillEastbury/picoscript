@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Callable, Dict, List, Optional
 
 import picoscript as isa
+import picocompress
 from picoscript_lang import (
     HOST_HOOK_BASE,
     EXT_HOST_HOOK_BASE,
@@ -571,95 +572,6 @@ def _gzip_decompress(data: bytes) -> bytes:
     return _inflate(data[pos:-8])
 
 
-# ── PicoCompress: a real, deterministic LZ77 built into the runtime ──────────
-# Byte-oriented (no bit packing) so the compressed bytes are trivially identical
-# on the Python, JS and C VMs; a fixed bounded hash-chain match finder (4096
-# buckets, <=64 probes, 64 KiB window) makes the *output* byte-identical by
-# construction (no 64 MiB table, embedded-friendly). Token stream:
-#   tag 0x00..0x7F  -> literal run of (tag+1) bytes, then those bytes
-#   tag 0x80..0xFF  -> match: length (tag-0x80)+3, then a 2-byte LE back-distance
-_PLZ_MINMATCH = 3
-_PLZ_MAXMATCH = 130
-_PLZ_MAXDIST = 65535
-
-
-def _plz_hash(a, b, c):
-    return (a * 65599 + b * 257 + c) & 0xFFF
-
-
-def _picolz_compress(data: bytes) -> bytes:
-    n = len(data)
-    out = bytearray()
-    head = [0] * 4096                 # hash -> most-recent position + 1 (0 = none)
-    i = 0
-    lit_start = 0
-
-    def flush(end):
-        nonlocal lit_start
-        j = lit_start
-        while j < end:
-            run = end - j
-            if run > 128:
-                run = 128
-            out.append(run - 1)
-            out.extend(data[j:j + run])
-            j += run
-        lit_start = end
-
-    while i < n:
-        match_len = 0
-        match_dist = 0
-        if i + _PLZ_MINMATCH <= n:
-            h = _plz_hash(data[i], data[i + 1], data[i + 2])
-            j = head[h] - 1           # single most-recent candidate (no per-pos chain)
-            if 0 <= j and i - j <= _PLZ_MAXDIST:
-                maxlen = _PLZ_MAXMATCH if n - i > _PLZ_MAXMATCH else n - i
-                length = 0
-                while length < maxlen and data[j + length] == data[i + length]:
-                    length += 1
-                if length >= _PLZ_MINMATCH:
-                    match_len = length
-                    match_dist = i - j
-        if match_len >= _PLZ_MINMATCH:
-            flush(i)
-            out.append(0x80 | (match_len - _PLZ_MINMATCH))
-            out.append(match_dist & 0xFF)
-            out.append((match_dist >> 8) & 0xFF)
-            end = i + match_len
-            while i < end:
-                if i + _PLZ_MINMATCH <= n:
-                    head[_plz_hash(data[i], data[i + 1], data[i + 2])] = i + 1
-                i += 1
-            lit_start = i
-        else:
-            if i + _PLZ_MINMATCH <= n:
-                head[_plz_hash(data[i], data[i + 1], data[i + 2])] = i + 1
-            i += 1
-    flush(n)
-    return bytes(out)
-
-
-def _picolz_decompress(data: bytes) -> bytes:
-    out = bytearray()
-    i = 0
-    n = len(data)
-    while i < n:
-        tag = data[i]; i += 1
-        if tag < 0x80:
-            run = tag + 1
-            out.extend(data[i:i + run]); i += run
-        else:
-            length = (tag - 0x80) + _PLZ_MINMATCH
-            if i + 1 >= n:
-                break
-            dist = data[i] | (data[i + 1] << 8); i += 2
-            start = len(out) - dist
-            if start < 0:
-                break
-            for k in range(length):
-                out.append(out[start + k])
-    return bytes(out)
-
 
 # Binding capability classes (INV-17: "bindings are not ambient"). Bit values are shared
 # verbatim with vm/picovm.h (PV_CAP_*) and vm/picovm.js so a denied hook faults identically
@@ -1133,12 +1045,17 @@ class HostApi:
         return False
 
     def _compresslib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
-        # PicoCompress: a real deterministic LZ77 (byte-identical across all VMs).
+        # PicoCompress: the real picocompress codec (vendored picocompress.py),
+        # byte-identical with the C/JS/Arduino/... ports of the same library.
         src = self._span_raw(vm, vm.regs[rs1])
         if method == "PicoCompress":
-            vm.regs[rd] = self._new_span_bytes(vm, _picolz_compress(src)); return True
+            vm.regs[rd] = self._new_span_bytes(vm, picocompress.compress(src)); return True
         if method == "PicoDecompress":
-            vm.regs[rd] = self._new_span_bytes(vm, _picolz_decompress(src)); return True
+            try:
+                res = picocompress.decompress(src); self.host_status = 0
+            except Exception:
+                res = b""; self.host_status = 2
+            vm.regs[rd] = self._new_span_bytes(vm, res); return True
         # Real DEFLATE (RFC 1951) + gzip (RFC 1952), built into the runtime.
         if method in ("DeflateCompress", "DeflateDecompress", "GzipCompress", "GzipDecompress"):
             try:

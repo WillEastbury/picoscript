@@ -443,9 +443,11 @@ def main():
     picoc_js = open(os.path.join(ROOT, "vm", "picoc.js"), encoding="utf-8").read()
     ser_js = open(os.path.join(ROOT, "vm", "picoserializer.js"), encoding="utf-8").read()
     store_js = open(os.path.join(ROOT, "vm", "picostore.js"), encoding="utf-8").read()
+    pcz_js = open(os.path.join(ROOT, "vm", "picocompress.js"), encoding="utf-8").read()
     payload = json.dumps(data)
 
     html = PAGE.replace("/*__HOOKS__*/", hooks_js) \
+               .replace("/*__PCZ__*/", pcz_js) \
                .replace("/*__VM__*/", vm_js) \
                .replace("/*__PICOC__*/", picoc_js) \
                .replace("/*__SER__*/", ser_js) \
@@ -740,6 +742,7 @@ PAGE = r"""<!DOCTYPE html>
 </div>
 
 <script>/*__HOOKS__*/</script>
+<script>/*__PCZ__*/</script>
 <script>/*__VM__*/</script>
 <script>/*__PICOC__*/</script>
 <script>/*__SER__*/</script>

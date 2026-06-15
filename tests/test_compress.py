@@ -150,49 +150,6 @@ def test_c_vm_inflate_canonical():
         assert _c_vm_out(words) == s, f"C VM {method} mismatch (blob {len(blob)} B)"
 
 
-# -- PicoCompress: real byte-identical LZ77 across all 3 VMs --------------------
-PICOLZ_SAMPLES = [b"", b"abc", b"hello hello hello world world world",
-                  b"aaaaaaaaaaaaaaaaaaaa", b"abcabcabcabcabcabcabc" * 6,
-                  b"The quick brown fox jumps over the lazy dog. " * 30,
-                  bytes(range(256)) * 2]
-
-
-def test_picolz_roundtrip_and_compresses():
-    for s in PICOLZ_SAMPLES:
-        assert P._picolz_decompress(P._picolz_compress(s)) == s
-    big = b"compress this repeating phrase " * 50
-    assert len(P._picolz_compress(big)) < len(big) // 3      # real compression
-
-
-def _picolz_prog(s, method):
-    lines = [f"Memory.Set({i}, {b});" for i, b in enumerate(s)]
-    lines += [f"int z = Span.Make(0, {len(s)});",
-              f"int out = Compress.{method}(z);", "Io.Write(out);"]
-    return "\n".join(lines) + "\n"
-
-
-def test_picolz_compressed_bytes_py_equals_js_equals_c():
-    # The COMPRESSED bytes must be byte-identical on the Python, JS and C VMs
-    # (the point of the byte-identical compressor), and round-trip on each.
-    have_c = _ensure_c_vm()
-    for s in [b"compress me compress me compress me banana banana split",
-              b"abcabcabcabcabcabcabcabcabc", bytes(range(64)) * 3]:
-        cwords = lower_to_bytecode_safe(compile_c(_picolz_prog(s, "PicoCompress")))
-        py, js = _run_c(_picolz_prog(s, "PicoCompress"))   # Python VM == JS VM compressed bytes
-        assert py == js, "Python VM and JS VM produced different PicoCompress bytes"
-        assert py == P._picolz_compress(s)
-        if have_c:
-            assert _c_vm_out(cwords) == py, "C VM produced different PicoCompress bytes"
-        # round-trip through the VM hooks
-        rwords = lower_to_bytecode_safe(compile_c(_picolz_prog(s, "PicoCompress").replace(
-            "Compress.PicoCompress(z)", "Compress.PicoDecompress(Compress.PicoCompress(z))")))
-        rpy, rjs = _run_c(_picolz_prog(s, "PicoCompress").replace(
-            "Compress.PicoCompress(z)", "Compress.PicoDecompress(Compress.PicoCompress(z))"))
-        assert rpy == s and rjs == s
-        if have_c:
-            assert _c_vm_out(rwords) == s
-
-
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

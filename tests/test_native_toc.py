@@ -114,7 +114,7 @@ def main():
     if os.path.exists(BUILD):
         shutil.rmtree(BUILD)
     os.makedirs(BUILD)
-    for dep in ("picovm.js", "pico_hooks.js", "picostore.js"):
+    for dep in ("picovm.js", "pico_hooks.js", "picostore.js", "picocompress.js"):
         src = os.path.join(VM_DIR, dep)
         if os.path.exists(src):
             shutil.copy(src, os.path.join(BUILD, dep))
@@ -160,12 +160,12 @@ def main():
         # 2^10 = 1024 -> ToString "1024"; sqrt(144)=12
         check(ma, bytes([0, 12]) + b"1024", "maths")
 
-        # Compress (PicoCompress LZ77 round-trip) + Html (entities, incl. tricky &amp;lt;).
+        # Compress (real picocompress codec round-trip) + Html (entities, incl. tricky &amp;lt;).
         cz = (setbytes(1000, b"aaabbbbc") +
               "int s = Span.Make(1000, 8);"
               "int c = Compress.PicoCompress(s); Io.WriteByte(String.Length(c));"
               "int d = Compress.PicoDecompress(c); Io.Write(d);")
-        check(cz, bytes([10]) + b"aaabbbbc", "compress")
+        check(cz, bytes([12]) + b"aaabbbbc", "compress")
 
         hz = (setbytes(1000, b"<b>&'\"") + setbytes(1100, b"&amp;lt;") +
               "int s = Span.Make(1000, 6);"

@@ -1,8 +1,9 @@
 # Compression — codecs built into the runtime
 
 `Compress.*` provides compression built into the runtime — no host `zlib`. The
-recommended in-runtime codec is **PicoCompress** (a real, byte-identical LZ77 on all
-5 runtimes); DEFLATE/gzip are kept for outside-world **interop**; Brotli is
+recommended in-runtime codec is **PicoCompress** (the real, vendored
+[`picocompress`](https://github.com/WillEastbury/picocompress) library — byte-identical
+on all 5 runtimes); DEFLATE/gzip are kept for outside-world **interop**; Brotli is
 host-supplied.
 
 | Hook | Code | Effect |
@@ -20,20 +21,46 @@ guards bad back-distances).
 
 ## PicoCompress — the byte-identical compressor (preferred)
 
-PicoCompress is a real LZ77, **byte-oriented** (no bit packing) with a **head-only**
-bounded-hash match finder (4096 buckets, 64 KiB window) — so the compressed *bytes*
-are identical on the Python, JS and C VMs **by construction**, with no 64 MiB table
-(embedded-friendly: just a 4096-entry hash). Token stream:
+PicoCompress is the real **`picocompress` library** ([`WillEastbury/picocompress`](https://github.com/WillEastbury/picocompress)),
+vendored into this repo so the runtime carries no host dependency. The three ports
+used by the VMs are byte-for-byte the library's own ports:
+
+| Runtime | Vendored file | Upstream |
+|---------|---------------|----------|
+| Python VM      | `picocompress.py`     | `ports/python/picocompress.py` |
+| JS VM          | `vm/picocompress.js`  | `ports/javascript/picocompress.mjs` (UMD-wrapped) |
+| C VM (hosted)  | `vm/picocompress.c` / `.h` | `src/picocompress.c` |
+
+The codec is a real LZ with a **block layout** (508-byte payload blocks, a 4-byte
+header per block) over these tokens:
 
 ```
-tag 0x00..0x7F  -> literal run of (tag+1) bytes, then those bytes
-tag 0x80..0xFF  -> match: length (tag-0x80)+3, then a 2-byte LE back-distance
+0x00..0x3F  literal run, (tag+1) bytes follow
+0x40..0x7F  static-dictionary word, index 0..63
+0x80..0xBF  short LZ match: 5-bit length + 9-bit back-distance
+0xC0..0xCF  repeat-offset match (reuse a recent distance)
+0xD0..0xDF  static-dictionary word, index 80..95
+0xE0..0xEF  static-dictionary word, index 64..79
+0xF0..0xFF  long LZ match: length + 2-byte back-distance
 ```
 
-It is the recommended in-runtime codec and runs byte-identically on all **five**
-paths (Python/JS/C VMs + the two transpilers) — see `examples/hashing.pc` in
-`tests/test_examples_parity.py`, and the cross-VM byte-identity check in
-`tests/test_compress.py::test_picolz_compressed_bytes_py_equals_js_equals_c`.
+The encoder pipeline is **repeat-offset cache → 96-word static dictionary → LZ
+hash-chain finder** (hash3 `*251 + *11 + *3`, chain depth 2, one lazy step, 9 hash
+bits). Because the algorithm is fully specified, the compressed *bytes* are identical
+on the Python, JS and C VMs **by construction** — verified in
+`tests/test_picocompress.py` (Python VM == JS VM == C VM == the library, plus
+round-trip on each). It runs byte-identically on all **five** paths (Python/JS/C VMs
++ the two transpilers); see also `examples/hashing.pc` in `tests/test_examples_parity.py`.
+
+> **Hosted vs freestanding.** `vm/picocompress.c` needs `<string.h>`, so it is compiled
+> into the C VM only on hosted targets (`#if __STDC_HOSTED__`). On freestanding/embedded
+> builds (the Cortex-M33 / AArch64 cross-compiles, PIOS) `Compress.PicoCompress` falls
+> through to the host-fillable hook and is supplied by the platform.
+>
+> **Upstream note.** While vendoring we found a transposed byte in the library's Python
+> port: `STATIC_DICT[13]` was `b'","'` but the canonical C/JS reference is `b',",'`
+> (`[0x2c,0x22,0x2c]`). The vendored copy here is fixed; the upstream
+> `picocompress/ports/python/picocompress.py` should be synced.
 
 ## DEFLATE / gzip — for interop
 
@@ -44,8 +71,8 @@ its bytes are identical on the Python and JS VMs. **Decompression runs on all 3 
 (Python/JS + native C `inflate`/`gunzip`, puff.c-adapted), verified against real
 stdlib gzip with dynamic-Huffman blocks. The exact-3-byte-prefix DEFLATE *compressor*
 is Python/JS only (a byte-identical C deflate compressor would need a 64 MiB table or
-a bounded-hash rework — and PicoCompress already covers the byte-identical-everywhere
-need), so prefer PicoCompress in-runtime and gzip for interop.
+a bounded-hash rework — and PicoCompress is already byte-identical on C), so prefer
+PicoCompress in-runtime and gzip for interop.
 
 ## Brotli
 
