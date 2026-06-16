@@ -533,6 +533,14 @@
       }
       if (t.value === "{") { return { t: "If", cond: { t: "Num", value: 1 }, then: this.parseBlock(), els: null }; }
       if (t.kind === "id" && this.toks[this.i + 1].value === ":") { var lab = this.next().value; this.next(); return { t: "Label", name: lab }; }
+      if (t.kind === "id" && this.toks[this.i + 1].kind === "id") { this.next(); return this.parseDeclAfterType(); }
+      if (t.kind === "id" && this.toks[this.i + 1].value === "." && this.toks[this.i + 2].kind === "id" && ["=","++","--","+=","-=","*=","/=","%="].indexOf(this.toks[this.i + 3].value) >= 0) {
+        var fo = this.next().value; this.expect("."); var ff = this.next().value; var fop = this.next().value, fv;
+        if (fop === "=") fv = this.parseExpr();
+        else if (fop === "++" || fop === "--") fv = { t: "Bin", op: fop === "++" ? "+" : "-", lhs: { t: "FieldRef", obj: fo, field: ff }, rhs: { t: "Num", value: 1 } };
+        else fv = { t: "Bin", op: C_COMPOUND[fop], lhs: { t: "FieldRef", obj: fo, field: ff }, rhs: this.parseExpr() };
+        this.expect(";"); return { t: "FieldAssign", obj: fo, field: ff, value: fv };
+      }
       if (t.kind === "id" && this.toks[this.i + 1].value === "=") {
         var name = this.next().value; this.expect("="); var val = this.parseExpr(); this.expect(";"); return { t: "Assign", name: name, value: val };
       }
@@ -542,7 +550,8 @@
       }
       var e = this.parseExpr(); this.expect(";"); return { t: "ExprStmt", expr: e };
     },
-    parseDecl: function () { this.next(); var name = this.next().value; var init = null; if (this.accept("=")) init = this.parseExpr(); this.expect(";"); return { t: "Decl", name: name, init: init }; },
+    parseDecl: function () { this.next(); return this.parseDeclAfterType(); },
+    parseDeclAfterType: function () { var name = this.next().value; var init = null; if (this.accept("=")) init = this.parseExpr(); this.expect(";"); return { t: "Decl", name: name, init: init }; },
     parseDeclNoSemi: function () { this.next(); var name = this.next().value; var init = null; if (this.accept("=")) init = this.parseExpr(); this.expect(";"); return { t: "Decl", name: name, init: init }; },
     parseIf: function () {
       this.next(); this.expect("("); var cond = this.parseExpr(); this.expect(")"); var then = this.parseBlock(); var els = null;
@@ -635,7 +644,7 @@
       if (t.kind === "str") return { t: "Str", value: t.value };
       if (t.value === "(") { var e = this.parseExpr(); this.expect(")"); return e; }
       if (t.kind === "id") {
-        if (this.peek().value === ".") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; }
+        if (this.peek().value === ".") { this.next(); var m = this.next().value; if (this.peek().value === "(") return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; return { t: "FieldRef", obj: t.value, field: m }; }
         if (this.peek().value === "(") return { t: "Call", ns: null, method: t.value, args: this.parseArgs() };
         return { t: "Var", name: t.value };
       }
@@ -693,6 +702,7 @@
       if (typeof s.pos === "number" && s.pos >= 0) this.b.curPos = s.pos;   // INV-25
       if (s.t === "Decl") { var v = this.varOf(s.name); if (s.init != null) this.assignTo(v, s.init); else this.b.const_(v, 0); }
       else if (s.t === "Assign") this.assignTo(this.varOf(s.name), s.value);
+      else if (s.t === "FieldAssign") this.assignField(s.obj, s.field, s.value);
       else if (s.t === "If") this.lowerIf(s);
       else if (s.t === "While") this.lowerWhile(s);
       else if (s.t === "For") this.lowerFor(s);
@@ -715,6 +725,13 @@
         var bb = this.eval(e.rhs); this.b.arith(COP[e.op], dst, a, bb); return;
       }
       this.b.mov(dst, this.eval(e));
+    },
+    assignField: function (obj, field, expr) {
+      var card = this.varOf(obj);
+      this.b.host("Storage", "EditCard", [card], null);
+      var name = emitStrSpan(this, field);
+      if (expr.t === "Str") this.b.host("Storage", "SetFieldStr", [name, emitStrSpan(this, expr.value)], null);
+      else this.b.host("Storage", "SetField", [name, this.eval(expr)], null);
     },
     lowerIf: function (s) {
       var elseL = this.b.newLabel("else"), endL = this.b.newLabel("endif");
@@ -810,6 +827,7 @@
       }
       if (e.t === "Call") return this.lowerCall(e, want);
       if (e.t === "Str") return emitStrSpan(this, e.value);
+      if (e.t === "FieldRef") { var card = this.varOf(e.obj); this.b.host("Storage", "EditCard", [card], null); var name = emitStrSpan(this, e.field); var fd = this.b.vreg(); this.b.host("Storage", "GetField", [name], fd); return fd; }
       throw new Error("C: cannot evaluate " + e.t);
     },
     evalBool: function (e) {
@@ -883,6 +901,9 @@
         if (MM === "LOAD") this.b.load(reg, addr); else if (MM === "SAVE") this.b.save(reg, addr); else this.b.pipe(reg, addr);
         return reg;
       }
+      if (ns.toUpperCase() === "STORAGE" && m.toUpperCase() === "GETCARD") { var gp = this.eval(c.args[0]), gc = this.eval(c.args[1]); this.b.host("Storage", "UsePack", [gp], null); var gd = want ? this.b.vreg() : null; this.b.host("Storage", "EditCard", [gc], gd); return gd; }
+      if (ns.toUpperCase() === "STORAGE" && m.toUpperCase() === "SAVECARD") { var sc = this.eval(c.args[0]); this.b.host("Storage", "EditCard", [sc], null); var sd = want ? this.b.vreg() : null; if (sd) this.b.const_(sd, 1); return sd; }
+      if (ns.toUpperCase() === "STORAGE" && m.toUpperCase() === "QUERYCARDS") { var qp = this.eval(c.args[0]), qq = this.eval(c.args[1]); this.b.host("Storage", "UsePack", [qp], null); var qd = want ? this.b.vreg() : null; this.b.host("Storage", "QueryCard", [qq], qd); return qd; }
       var cn = canonHost(ns, m); var self = this;
       var argregs = c.args.slice(0, 2).map(function (a) { return self.eval(a); });
       var dst = want ? this.b.vreg() : null;

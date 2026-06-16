@@ -142,6 +142,9 @@ class Str: value: str
 @dataclass
 class Var: name: str
 @dataclass
+class FieldRef:
+    obj: str; field: str
+@dataclass
 class Bin:
     op: str; lhs: object; rhs: object
 @dataclass
@@ -162,6 +165,9 @@ class Decl:
 @dataclass
 class Assign:
     name: str; value: object
+@dataclass
+class FieldAssign:
+    obj: str; field: str; value: object
 @dataclass
 class If:
     cond: object; then: list; els: Optional[list]
@@ -317,6 +323,28 @@ class Parser:
             name = self.next().value
             self.next()  # ':'
             return Label(name)
+        # typed active-record declaration: Order ord = Storage.GetCard(...);
+        # Type name is documentation/schema identity for now; the variable stores
+        # the current card id/handle returned by Storage.GetCard/QueryResult.
+        if t.kind == "id" and self.toks[self.i + 1].kind == "id":
+            self.next()  # type name
+            return self.parse_decl_after_type()
+        # active-record field assignment: ord.qty = 42; / ord.qty-- / ord.qty += 2
+        if (t.kind == "id" and self.toks[self.i + 1].value == "."
+                and self.toks[self.i + 2].kind == "id"
+                and self.toks[self.i + 3].value in ("=", "++", "--", "+=", "-=", "*=", "/=", "%=")):
+            obj = self.next().value
+            self.expect(".")
+            field = self.next().value
+            op = self.next().value
+            if op == "=":
+                v = self.parse_expr()
+            elif op in ("++", "--"):
+                v = Bin("+" if op == "++" else "-", FieldRef(obj, field), Num(1))
+            else:
+                v = Bin(_COMPOUND[op], FieldRef(obj, field), self.parse_expr())
+            self.expect(";")
+            return FieldAssign(obj, field, v)
         # assignment or expression statement
         if t.kind == "id" and self.toks[self.i + 1].value == "=":
             name = self.next().value
@@ -340,6 +368,9 @@ class Parser:
 
     def parse_decl(self) -> Decl:
         self.next()  # int / var
+        return self.parse_decl_after_type()
+
+    def parse_decl_after_type(self) -> Decl:
         name = self.next().value
         init = None
         if self.accept("="):
@@ -517,8 +548,10 @@ class Parser:
             if self.peek().value == ".":
                 self.next()
                 method = self.next().value
-                args = self.parse_args()
-                return Call(t.value, method, args)
+                if self.peek().value == "(":
+                    args = self.parse_args()
+                    return Call(t.value, method, args)
+                return FieldRef(t.value, method)
             if self.peek().value == "(":
                 args = self.parse_args()
                 return Call(None, t.value, args)
@@ -590,6 +623,8 @@ class Lowerer:
                 self.b.const(v, 0)
         elif isinstance(s, Assign):
             self.assign_to(self.var(s.name), s.value)
+        elif isinstance(s, FieldAssign):
+            self.assign_field(s.obj, s.field, s.value)
         elif isinstance(s, If):
             self.lower_if(s)
         elif isinstance(s, While):
@@ -642,6 +677,17 @@ class Lowerer:
             return
         val = self.eval(expr)
         self.b.mov(dst, val)
+
+    def assign_field(self, obj: str, field: str, expr):
+        card = self.var(obj)
+        self.b.host("Storage", "EditCard", (card,), None)
+        name = self.emit_str_span(field)
+        if isinstance(expr, Str):
+            val = self.emit_str_span(expr.value)
+            self.b.host("Storage", "SetFieldStr", (name, val), None)
+        else:
+            val = self.eval(expr)
+            self.b.host("Storage", "SetField", (name, val), None)
 
     def lower_if(self, s: If):
         else_l = self.b.new_label("else")
@@ -810,6 +856,13 @@ class Lowerer:
             return self.lower_call(e, want_value)
         if isinstance(e, Str):
             return self.emit_str_span(e.value)
+        if isinstance(e, FieldRef):
+            card = self.var(e.obj)
+            self.b.host("Storage", "EditCard", (card,), None)
+            name = self.emit_str_span(e.field)
+            dst = self.b.vreg()
+            self.b.host("Storage", "GetField", (name,), dst)
+            return dst
         if isinstance(e, _RawVReg):
             return e.v
         raise SyntaxError(f"cannot evaluate {e}")
@@ -931,6 +984,29 @@ class Lowerer:
             else:
                 self.b.pipe(reg, addr)
             return reg
+        # Active-record storage sugar. These do not add VM hooks; they lower to
+        # the existing UsePack/EditCard/SetField/GetField/QueryCard primitives.
+        if ns.upper() == "STORAGE" and method.upper() == "GETCARD":
+            pack = self.eval(c.args[0])
+            card = self.eval(c.args[1])
+            self.b.host("Storage", "UsePack", (pack,), None)
+            dst = self.b.vreg() if want_value else None
+            self.b.host("Storage", "EditCard", (card,), dst)
+            return dst
+        if ns.upper() == "STORAGE" and method.upper() == "SAVECARD":
+            card = self.eval(c.args[0])
+            self.b.host("Storage", "EditCard", (card,), None)
+            dst = self.b.vreg() if want_value else None
+            if dst is not None:
+                self.b.const(dst, 1)
+            return dst
+        if ns.upper() == "STORAGE" and method.upper() == "QUERYCARDS":
+            pack = self.eval(c.args[0])
+            query = self.eval(c.args[1])
+            self.b.host("Storage", "UsePack", (pack,), None)
+            dst = self.b.vreg() if want_value else None
+            self.b.host("Storage", "QueryCard", (query,), dst)
+            return dst
         # generic host hook: resolve to canonical ABI spelling (case-insensitive)
         ns, method = canon_host(ns, method)
         argregs = [self.eval(a) for a in c.args[:2]]

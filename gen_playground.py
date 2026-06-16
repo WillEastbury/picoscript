@@ -234,6 +234,47 @@ CONSTRUCTS = [
      "STORE DELETE CARD A\n"
      "PRINT LOAD QUERY Q"),
 
+    ("Cards: active-record style",
+     "Schema-backed card handles can be written as typed active records in C-style: "
+     "<code>Order ord = Storage.GetCard(pack, id)</code>, <code>ord.qty = 42</code>, "
+     "<code>Storage.SaveCard(ord)</code>. Today this lowers to the existing eager "
+     "Storage hooks; the source model is ready for buffered records later.",
+     "Storage.UsePack(1);\n"
+     "int a = Storage.AddCard();\n"
+     "Order ord = Storage.GetCard(1, a);\n"
+     "ord.qty = 42;\n"
+     "Storage.SaveCard(ord);\n"
+     "int b = Storage.AddCard();\n"
+     "Order other = Storage.GetCard(1, b);\n"
+     "other.qty = 7;\n"
+     "Storage.SaveCard(other);\n"
+     "print(ord.qty);\n"
+     "int n = Storage.QueryCards(1, \"qty > 40\");\n"
+     "print(n);\n"
+     "for (i = 0; i < n; i++) {\n"
+     "    Order hit = Storage.GetCard(1, Storage.QueryResult(i));\n"
+     "    hit.qty--;\n"
+     "    Storage.SaveCard(hit);\n"
+     "    print(hit.qty);\n"
+     "}",
+     "DIM QTY = \"qty\"\n"
+     "DIM Q = \"qty > 40\"\n"
+     "STORE USE PACK 1\n"
+     "DIM A NEW CARD\n"
+     "STORE SET QTY = 42\n"
+     "DIM B NEW CARD\n"
+     "STORE SET QTY = 7\n"
+     "LOAD CARD A\n"
+     "PRINT LOAD QTY\n"
+     "DIM N = LOAD QUERY Q\n"
+     "PRINT N\n"
+     "DIM HIT = LOAD RESULT 0\n"
+     "LOAD CARD HIT\n"
+     "DIM V = LOAD QTY\n"
+     "DEC V\n"
+     "STORE SET QTY = V\n"
+     "PRINT LOAD QTY"),
+
     ("HTTP request: parse query + body",
      "The portal's HTTP simulator writes request metadata into PicoWAL cards: method "
      "at card 1, body length at 2, query length at 5, query bytes mirrored at 10+, "

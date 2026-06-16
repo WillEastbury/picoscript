@@ -217,6 +217,46 @@ uses:
 
 ## 11. Large cards: slice, don't load
 
+Before the large-card API, it helps to separate two storage shapes:
+
+- **Small structured cards**: schema-backed records, good for active-record dot
+  access.
+- **Large blob/dataset cards**: byte ranges, good for slice/row APIs.
+
+For small schema-backed records, C-style PicoScript now supports active-record
+authoring over the existing `Storage.*` hooks:
+
+```c
+Storage.UsePack(1);
+int id = Storage.AddCard();
+
+Order ord = Storage.GetCard(1, id);
+ord.qty = 42;
+Storage.SaveCard(ord);
+
+print(ord.qty);
+```
+
+`Order` is a source-level schema/type name. The compiler lowers the handle and
+dot field operations to `Storage.UsePack`, `Storage.EditCard`,
+`Storage.SetField`, and `Storage.GetField`. `Storage.SaveCard(ord)` is currently
+a flush/no-op because `SetField` is eager; it keeps the source shape ready for a
+future dirty-buffered record implementation.
+
+Query materialization can start simple:
+
+```c
+int n = Storage.QueryCards(1, "qty > 40");
+for (i = 0; i < n; i++) {
+    Order ord = Storage.GetCard(1, Storage.QueryResult(i));
+    ord.qty--;
+    Storage.SaveCard(ord);
+}
+```
+
+The lower-level `Storage.SetField(...)` and BASIC `STORE`/`LOAD` forms remain the
+escape hatch for schema-less cards and ordinal fields.
+
 Small schema-backed cards can be treated like records. Big cards (datasets,
 weights, logs, media) should be treated as byte-addressable blobs. Use the slice
 API so a program reads only the bytes it needs:
