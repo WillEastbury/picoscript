@@ -302,6 +302,43 @@ CONSTRUCTS = [
      "NET.STATUS(200)\n"
      "Io.Write(MODEL)"),
 
+    ("Large cards: partial slice reads",
+     "Large cards should be processed as byte ranges, not materialized whole. "
+     "<code>Storage.SetSlice(offset,len)</code> selects a window; "
+     "<code>ReadSlice(card)</code> returns that window as a span; "
+     "<code>WriteSlice(card, span)</code> patches bytes at the current offset. The "
+     "browser/Python simulator uses a small blob backend; PIOS can back the same "
+     "hooks with SD/WALFS range I/O for 400MB+ dataset cards.",
+     "int data = \"abcdefghijklmnopqrstuvwxyz\";\n"
+     "Storage.UsePack(1);\n"
+     "Storage.SetSlice(0, Span.Len(data));\n"
+     "Storage.WriteSlice(7, data);\n"
+     "print(Storage.CardLen(7));\n"
+     "Storage.SetSlice(10, 5);\n"
+     "int mid = Storage.ReadSlice(7);\n"
+     "Io.Write(mid); Io.WriteByte(124);\n"
+     "int patch = \"XYZ\";\n"
+     "Storage.SetSlice(5, Span.Len(patch));\n"
+     "Storage.WriteSlice(7, patch);\n"
+     "Storage.SetSlice(0, Storage.CardLen(7));\n"
+     "int all = Storage.ReadSlice(7);\n"
+     "Io.Write(all);",
+     "DIM DATA = \"abcdefghijklmnopqrstuvwxyz\"\n"
+     "Storage.UsePack(1)\n"
+     "Storage.SetSlice(0, Span.Len(DATA))\n"
+     "Storage.WriteSlice(7, DATA)\n"
+     "PRINT Storage.CardLen(7)\n"
+     "Storage.SetSlice(10, 5)\n"
+     "DIM MID = Storage.ReadSlice(7)\n"
+     "Io.Write(MID)\n"
+     "Io.WriteByte(124)\n"
+     "DIM PATCH = \"XYZ\"\n"
+     "Storage.SetSlice(5, Span.Len(PATCH))\n"
+     "Storage.WriteSlice(7, PATCH)\n"
+     "Storage.SetSlice(0, Storage.CardLen(7))\n"
+     "DIM ALL = Storage.ReadSlice(7)\n"
+     "Io.Write(ALL)"),
+
     ("Streaming: DMA ring (Device.* / Stream.*)",
      "Streaming hardware is a producer/consumer ring of DMA buffers, structurally "
      "like Req/Resp but over hardware. Device.Open names a device; Stream.Open starts "

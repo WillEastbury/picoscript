@@ -127,6 +127,10 @@ NAMESPACE_MAP = {
         "SetFieldStr":      OP_NOOP,
         "GetFieldStr":      OP_NOOP,
         "QueryResult":      OP_NOOP,
+        "SetSlice":         OP_NOOP,
+        "CardLen":          OP_NOOP,
+        "ReadSlice":        OP_NOOP,
+        "WriteSlice":       OP_NOOP,
     },
     "Thread": {
         "Skip":  OP_NOOP,
@@ -546,6 +550,12 @@ HOST_HOOK_CODES = {
     ("Storage", "SetFieldStr"): 0x6C,
     ("Storage", "GetFieldStr"): 0x6D,
     ("Storage", "QueryResult"): 0x6E,
+    # Large-card slice hooks (0x01A0-0x01A3): SetSlice(offset,len), CardLen(card),
+    # ReadSlice(card)->span, WriteSlice(card,span)->ok. Extended hostcall page.
+    ("Storage", "SetSlice"):    0x01A0,
+    ("Storage", "CardLen"):     0x01A1,
+    ("Storage", "ReadSlice"):   0x01A2,
+    ("Storage", "WriteSlice"):  0x01A3,
     # Thread hints (0x70)
     ("Thread", "YieldCounted"): 0x70,
     # Io / output (0x71-0x72)

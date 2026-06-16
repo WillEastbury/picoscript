@@ -215,6 +215,40 @@ uses:
 4. Parse with `Http.ParseQuery` or `Http.ParseForm`.
 5. Respond with `Net.Status` and `Io.Write`.
 
+## 11. Large cards: slice, don't load
+
+Small schema-backed cards can be treated like records. Big cards (datasets,
+weights, logs, media) should be treated as byte-addressable blobs. Use the slice
+API so a program reads only the bytes it needs:
+
+```c
+int card = 7;
+int off = 1048576;       // byte offset into a large card
+int len = 4096;          // window size
+
+Storage.UsePack(1);
+Storage.SetSlice(off, len);
+int chunk = Storage.ReadSlice(card);
+Io.Write(chunk);
+```
+
+The low-level primitives are:
+
+| Method | Meaning |
+|--------|---------|
+| `Storage.SetSlice(offset, len)` | set the current byte window |
+| `Storage.CardLen(card)` | return the blob card length |
+| `Storage.ReadSlice(card)` | return the current window as a span |
+| `Storage.WriteSlice(card, span)` | patch bytes at the current offset |
+
+The playground simulator keeps a small in-memory blob-card backend so examples
+can run locally. PIOS should bind the same hooks to WALFS/SD range I/O, so a
+400MB dataset card can be scanned in fixed windows without ever becoming a
+400MB VM span.
+
+Typed active-record cards should use dot fields for small structured records;
+blob and dataset cards should use slice/row APIs under the hood.
+
 ## 9. Where to go next
 
 - **Guide tab:** copy and edit examples for loops, branches, HTTP, storage, UI,

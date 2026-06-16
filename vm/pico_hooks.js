@@ -328,6 +328,10 @@
       0x191: "Ui.SetId",
       0x192: "Ui.SetValue",
       0x193: "Ui.Serialize",
+      0x1A0: "Storage.SetSlice",
+      0x1A1: "Storage.CardLen",
+      0x1A2: "Storage.ReadSlice",
+      0x1A3: "Storage.WriteSlice",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }

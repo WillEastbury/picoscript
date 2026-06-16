@@ -1405,7 +1405,7 @@
   PicoVM.prototype._storage = function (method, rd, rs1, rs2) {
     if (!this._st) {
       var ST = storeLib();
-      this._st = { store: this._cardStore || new ST.PicoStore(), pack: 0, card: 0, results: [], schemas: {} };
+      this._st = { store: this._cardStore || new ST.PicoStore(), pack: 0, card: 0, results: [], schemas: {}, blobs: {}, sliceOffset: 0, sliceLen: 0 };
     }
     var st = this._st;
     var pack = String(st.pack);
@@ -1456,6 +1456,27 @@
     if (method === "QueryResult") {
       var qi = this.regs[rs1] | 0;
       this.regs[rd] = (qi >= 0 && qi < st.results.length) ? st.results[qi] : 0; return true;
+    }
+    if (method === "SetSlice") {
+      st.sliceOffset = Math.max(0, this.regs[rs1] | 0);
+      st.sliceLen = Math.max(0, this.regs[rs2] | 0);
+      this.regs[rd] = 1; return true;
+    }
+    if (method === "CardLen") {
+      var clid = this.regs[rs1] | 0, ckey = pack + ":" + clid, cblob = st.blobs[ckey] || [];
+      this.regs[rd] = cblob.length | 0; return true;
+    }
+    if (method === "ReadSlice") {
+      var rid = this.regs[rs1] | 0, rkey = pack + ":" + rid, rblob = st.blobs[rkey] || [];
+      var roff = Math.min(st.sliceOffset, rblob.length), rend = Math.min(roff + st.sliceLen, rblob.length);
+      this.regs[rd] = this._newSpanBytes(rblob.slice(roff, rend)); return true;
+    }
+    if (method === "WriteSlice") {
+      var wid = this.regs[rs1] | 0, wkey = pack + ":" + wid, wblob = st.blobs[wkey] || [];
+      var wdata = this._spanBytes(this.regs[rs2]), woff = st.sliceOffset;
+      while (wblob.length < woff) wblob.push(0);
+      for (var wi = 0; wi < wdata.length; wi++) wblob[woff + wi] = wdata[wi] & 0xFF;
+      st.blobs[wkey] = wblob; this.regs[rd] = 1; return true;
     }
     return false;
   };

@@ -646,6 +646,9 @@ class HostApi:
         self.query_results: List[int] = []
         self.gpio: Dict[int, dict] = {}   # reference GPIO emulator: pin -> {dir,pull,value}
         self.schemas: Dict[int, bytes] = {}   # per-pack typed-field schema span bytes (0x60/0x61)
+        self.blob_cards: Dict[tuple, bytearray] = {}  # (pack, card) -> large-card bytes for slice tests/sim
+        self.slice_offset = 0
+        self.slice_len = 0
         # Reference DMA-ring emulator (Device.*/Stream.*): deterministic fake ring.
         self.devices: Dict[int, dict] = {}
         self.streams: Dict[int, dict] = {}
@@ -1893,6 +1896,39 @@ class HostApi:
         if method == "QueryResult":
             idx = _sx32(vm.regs[rs1])
             vm.regs[rd] = self.query_results[idx] if 0 <= idx < len(self.query_results) else 0
+            return True
+        if method == "SetSlice":
+            self.slice_offset = max(0, _sx32(vm.regs[rs1]))
+            self.slice_len = max(0, _sx32(vm.regs[rs2]))
+            vm.regs[rd] = 1
+            return True
+        if method == "CardLen":
+            cid = vm.regs[rs1] & MASK32
+            vm.regs[rd] = len(self.blob_cards.get((pack, cid), bytearray()))
+            return True
+        if method == "ReadSlice":
+            cid = vm.regs[rs1] & MASK32
+            blob = self.blob_cards.get((pack, cid), bytearray())
+            off = min(self.slice_offset, len(blob))
+            end = min(off + self.slice_len, len(blob))
+            vm.regs[rd] = self._new_span_bytes(vm, bytes(blob[off:end]))
+            return True
+        if method == "WriteSlice":
+            cid = vm.regs[rs1] & MASK32
+            data = self._span_raw(vm, vm.regs[rs2])
+            key = (pack, cid)
+            blob = self.blob_cards.get(key)
+            if blob is None:
+                blob = bytearray()
+                self.blob_cards[key] = blob
+            off = self.slice_offset
+            if off > len(blob):
+                blob.extend(b"\x00" * (off - len(blob)))
+            end = off + len(data)
+            if end > len(blob):
+                blob.extend(b"\x00" * (end - len(blob)))
+            blob[off:end] = data
+            vm.regs[rd] = 1
             return True
         return False
 
