@@ -38,13 +38,31 @@ Io.WriteByte(124);
 
 Storage.UsePack(2);
 Search.Clear();
+Search.Configure("retail-products", 7);
+print(Search.Compatible("retail-products", 7));
 Search.UpsertText(1, "red apple fruit");
 Search.UpsertText(2, "blue berry fruit");
+Search.SetFacet(1, "category|fruit");
+Search.SetFacet(2, "category|fruit");
+Search.SetNumber(1, "price|89");
+Search.SetNumber(2, "price|129");
 int hits = Search.QueryText("red fruit");
 print(hits);
 print(Search.Result(0));
 print(Search.Score(0));
 print(Search.Plan(0));
+print(Search.Facets("category"));
+int fv = Search.FacetValue(0); Io.Write(fv); Io.WriteByte(124);
+print(Search.FacetCount(0));
+print(Search.Range("price|80|100"));
+print(Search.Result(0));
+Search.Save("seg");
+Search.Clear();
+print(Search.QueryText("red"));
+Search.Load("seg");
+print(Search.QueryText("red"));
+Search.JournalDelete(1);
+print(Search.QueryText("red"));
 '''
 
 EXPECTED_PREFIX = (
@@ -82,8 +100,19 @@ def test_picowal_pr78_facades():
     assert py == js
     assert py.startswith(EXPECTED_PREFIX), py
     tail = py[len(EXPECTED_PREFIX):]
+    # After the text query metadata, the stream contains: compatible, hit count,
+    # first result/score/plan, facet count, facet value text, facet count, range
+    # count/result, save/clear/load query counts and journal-delete query count.
     vals = [int.from_bytes(tail[i:i+4], "big") for i in range(0, len(tail), 4)]
-    assert vals == [2, 1, 2, 2], vals
+    assert tail[:20] == b"\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x02"
+    rest = tail[20:]
+    assert rest.startswith((1).to_bytes(4, "big") + b"fruit|" + (2).to_bytes(4, "big"))
+    ints_tail = []
+    p = 4 + len(b"fruit|") + 4
+    while p + 4 <= len(rest):
+        ints_tail.append(int.from_bytes(rest[p:p+4], "big"))
+        p += 4
+    assert ints_tail == [1, 1, 0, 1, 0], ints_tail
 
 
 def main():

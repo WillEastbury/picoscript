@@ -290,7 +290,7 @@ The editor can derive completions from the language namespace table:
 | `Tensor.` | `SetShape`, `DotI8`, `MatVecI8`, `AddI32`, `MulI32`, `ScaleI32`, `ReluI32`, `RmsNormI32`, `RoPEI32`, `SoftmaxI32`, `ArgMaxI32` |
 | `BitLinear.` | `SetShape`, `MatVecTernary` |
 | `Query.` | `BuildLookupFilter`, `BuildManyToManyMap` |
-| `Search.` | `Clear`, `UpsertText`, `Delete`, `IndexPack`, `QueryText`, `SetVector`, `QueryHybrid`, `Result`, `Score`, `Plan`, `SetSemanticWeight` |
+| `Search.` | `Clear`, `UpsertText`, `Delete`, `IndexPack`, `QueryText`, `SetVector`, `QueryHybrid`, `Result`, `Score`, `Plan`, `SetSemanticWeight`, `Configure`, `Compatible`, `Rebuild`, `SetFacet`, `SetNumber`, `ClearFields`, `Facets`, `FacetValue`, `FacetCount`, `Range`, `Save`, `Load`, `JournalUpsert`, `JournalDelete`, `JournalFacet`, `JournalNumber`, `JournalReplay` |
 | `Thread.` | `Skip`, `Wait`, `Raise`, `YieldCounted` |
 | `Math.` | `Add`, `Sub`, `Mul`, `Div`, `Inc` |
 | `Flow.` | `Jump`, `Branch`, `Call`, `Return` |

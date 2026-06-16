@@ -604,6 +604,7 @@ _CAP_BY_NS = {
     "Pack": CAP_CAPSULE, "Card": CAP_CAPSULE, "Fifo": CAP_CAPSULE,
     "Device": CAP_DEVICE, "Stream": CAP_DMA,
     "Event": CAP_EVENT, "Ui": CAP_UI,
+    "Search": CAP_STORAGE,
 }
 
 
@@ -646,6 +647,12 @@ class HostApi:
         self.query_results: List[int] = []
         self.search_docs: Dict[int, dict] = {}
         self.search_results: List[tuple] = []
+        self.search_facets: Dict[tuple, str] = {}
+        self.search_numbers: Dict[tuple, int] = {}
+        self.search_facet_results: List[tuple] = []
+        self.search_range_results: List[int] = []
+        self.search_saved = None
+        self.search_meta = {"name": "", "schema": 0, "generation": 0, "flags": 0}
         self.search_plan: Dict[str, int] = {"lexical": 0, "vector": 0, "hybrid": 0, "semantic": 0}
         self.search_vector_sig = 0
         self.search_semantic_weight = 0
@@ -2056,7 +2063,23 @@ class HostApi:
         pack = str(self.cur_pack)
         if method == "Clear":
             self.search_docs.clear(); self.search_results = []
+            self.search_facets.clear(); self.search_numbers.clear()
+            self.search_facet_results = []; self.search_range_results = []
             self.search_plan = {"lexical": 0, "vector": 0, "hybrid": 0, "semantic": 0}
+            vm.regs[rd] = 1; return True
+        if method == "Configure":
+            self.search_meta = {
+                "name": self._span_str(vm, vm.regs[rs1]),
+                "schema": vm.regs[rs2] & MASK32,
+                "generation": vm.regs[rs2] & MASK32,
+                "flags": 0,
+            }
+            vm.regs[rd] = 1; return True
+        if method == "Compatible":
+            vm.regs[rd] = 1 if self.search_meta.get("name") == self._span_str(vm, vm.regs[rs1]) and self.search_meta.get("schema") == (vm.regs[rs2] & MASK32) else 0
+            return True
+        if method == "Rebuild":
+            self.search_results = []; self.search_facet_results = []; self.search_range_results = []
             vm.regs[rd] = 1; return True
         if method == "UpsertText":
             card = vm.regs[rs1] & MASK32
@@ -2068,7 +2091,30 @@ class HostApi:
             key = self._search_key(pack, card)
             ok = 1 if key in self.search_docs else 0
             self.search_docs.pop(key, None)
+            self.search_facets = {k: v for k, v in self.search_facets.items() if k[0] != key}
+            self.search_numbers = {k: v for k, v in self.search_numbers.items() if k[0] != key}
             vm.regs[rd] = ok; return True
+        if method == "SetFacet":
+            card = vm.regs[rs1] & MASK32
+            field_val = self._span_str(vm, vm.regs[rs2]).split("|", 1)
+            field, value = (field_val + [""])[:2]
+            self.search_facets[(self._search_key(pack, card), field)] = value
+            vm.regs[rd] = 1; return True
+        if method == "SetNumber":
+            card = vm.regs[rs1] & MASK32
+            field_val = self._span_str(vm, vm.regs[rs2]).split("|", 1)
+            field = field_val[0]
+            try:
+                value = int(field_val[1])
+            except (IndexError, ValueError):
+                value = 0
+            self.search_numbers[(self._search_key(pack, card), field)] = value
+            vm.regs[rd] = 1; return True
+        if method == "ClearFields":
+            key = self._search_key(pack, vm.regs[rs1] & MASK32)
+            self.search_facets = {k: v for k, v in self.search_facets.items() if k[0] != key}
+            self.search_numbers = {k: v for k, v in self.search_numbers.items() if k[0] != key}
+            vm.regs[rd] = 1; return True
         if method == "IndexPack":
             p = str(vm.regs[rs1] & MASK32)
             n = 0
@@ -2115,6 +2161,62 @@ class HostApi:
                     self.search_plan.get("hybrid", 0), self.search_plan.get("semantic", 0)]
             vm.regs[rd] = vals[which] if 0 <= which < len(vals) else 0
             return True
+        if method == "Facets":
+            field = self._span_str(vm, vm.regs[rs1])
+            counts: Dict[str, int] = {}
+            for (_key, f), value in self.search_facets.items():
+                if f == field:
+                    counts[value] = counts.get(value, 0) + 1
+            self.search_facet_results = sorted(counts.items())
+            vm.regs[rd] = len(self.search_facet_results); return True
+        if method == "FacetValue":
+            idx = _sx32(vm.regs[rs1])
+            vm.regs[rd] = self._str_span(vm, self.search_facet_results[idx][0]) if 0 <= idx < len(self.search_facet_results) else 0
+            return True
+        if method == "FacetCount":
+            idx = _sx32(vm.regs[rs1])
+            vm.regs[rd] = self.search_facet_results[idx][1] if 0 <= idx < len(self.search_facet_results) else 0
+            return True
+        if method == "Range":
+            field_min_max = self._span_str(vm, vm.regs[rs1]).split("|")
+            field = field_min_max[0] if field_min_max else ""
+            try:
+                lo = int(field_min_max[1]); hi = int(field_min_max[2])
+            except (IndexError, ValueError):
+                lo = -0x80000000; hi = 0x7FFFFFFF
+            hits = []
+            for (key, f), value in self.search_numbers.items():
+                if f == field and lo <= value <= hi:
+                    hits.append(key & 0x3FFFFF)
+            self.search_range_results = sorted(hits)
+            self.search_results = [(card, 1, card) for card in self.search_range_results]
+            vm.regs[rd] = len(self.search_range_results); return True
+        if method == "Save":
+            self.search_saved = (
+                dict(self.search_docs), dict(self.search_facets), dict(self.search_numbers),
+                dict(self.search_meta)
+            )
+            vm.regs[rd] = 1; return True
+        if method == "Load":
+            if self.search_saved:
+                docs, facets, numbers, meta = self.search_saved
+                self.search_docs = dict(docs); self.search_facets = dict(facets)
+                self.search_numbers = dict(numbers); self.search_meta = dict(meta)
+                vm.regs[rd] = 1
+            else:
+                vm.regs[rd] = 0
+            return True
+        if method == "JournalUpsert":
+            # Deterministic sim: journal mutation is equivalent to immediate mutation.
+            return self._search(vm, "UpsertText", rd, rs1, rs2)
+        if method == "JournalDelete":
+            return self._search(vm, "Delete", rd, rs1, rs2)
+        if method == "JournalFacet":
+            return self._search(vm, "SetFacet", rd, rs1, rs2)
+        if method == "JournalNumber":
+            return self._search(vm, "SetNumber", rd, rs1, rs2)
+        if method == "JournalReplay":
+            vm.regs[rd] = 1; return True
         return False
 
     def _storage(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:

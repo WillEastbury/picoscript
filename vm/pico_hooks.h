@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0xF6BD6368
+#define PV_HOOK_TABLE_VERSION 0x5C6CC107
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -351,6 +351,11 @@
 #define PV_HOOK_SEARCH_SCORE                     0x1D8
 #define PV_HOOK_SEARCH_PLAN                      0x1D9
 #define PV_HOOK_SEARCH_SETSEMANTICWEIGHT         0x1DA
+#define PV_HOOK_SEARCH_CONFIGURE                 0x1DB
+#define PV_HOOK_SEARCH_COMPATIBLE                0x1DC
+#define PV_HOOK_SEARCH_REBUILD                   0x1DD
+#define PV_HOOK_SEARCH_SETFACET                  0x1DE
+#define PV_HOOK_SEARCH_SETNUMBER                 0x1DF
 #define PV_HOOK_TENSOR_SETSHAPE                  0x1E0
 #define PV_HOOK_TENSOR_DOTI8                     0x1E1
 #define PV_HOOK_TENSOR_MATVECI8                  0x1E2
@@ -364,5 +369,17 @@
 #define PV_HOOK_TENSOR_ARGMAXI32                 0x1EA
 #define PV_HOOK_BITLINEAR_SETSHAPE               0x1F0
 #define PV_HOOK_BITLINEAR_MATVECTERNARY          0x1F1
+#define PV_HOOK_SEARCH_CLEARFIELDS               0x200
+#define PV_HOOK_SEARCH_FACETS                    0x201
+#define PV_HOOK_SEARCH_FACETVALUE                0x202
+#define PV_HOOK_SEARCH_FACETCOUNT                0x203
+#define PV_HOOK_SEARCH_RANGE                     0x204
+#define PV_HOOK_SEARCH_SAVE                      0x205
+#define PV_HOOK_SEARCH_LOAD                      0x206
+#define PV_HOOK_SEARCH_JOURNALUPSERT             0x207
+#define PV_HOOK_SEARCH_JOURNALDELETE             0x208
+#define PV_HOOK_SEARCH_JOURNALFACET              0x209
+#define PV_HOOK_SEARCH_JOURNALNUMBER             0x20A
+#define PV_HOOK_SEARCH_JOURNALREPLAY             0x20B
 
 #endif

@@ -1492,14 +1492,20 @@
   };
   function searchTerms(text) { var m = String(text).toLowerCase().match(/[a-z0-9]+/g); return m || []; }
   PicoVM.prototype._search = function (method, rd, rs1, rs2) {
-    if (!this._searchState) this._searchState = { docs: {}, results: [], plan: [0, 0, 0, 0], vector: 0, sem: 0 };
+    if (!this._searchState) this._searchState = { docs: {}, results: [], plan: [0, 0, 0, 0], vector: 0, sem: 0, facets: {}, nums: {}, facetResults: [], saved: null, meta: { name: "", schema: 0 } };
     var s = this._searchState, pack = String((this._st && this._st.pack) || 0);
     function key(card) { return ((parseInt(pack, 10) || 0) << 22) | (card & 0x3FFFFF); }
-    if (method === "Clear") { s.docs = {}; s.results = []; s.plan = [0, 0, 0, 0]; this.regs[rd] = 1; return true; }
+    if (method === "Clear") { s.docs = {}; s.results = []; s.plan = [0, 0, 0, 0]; s.facets = {}; s.nums = {}; s.facetResults = []; this.regs[rd] = 1; return true; }
+    if (method === "Configure") { s.meta = { name: this._spanStr(this.regs[rs1]), schema: this.regs[rs2] >>> 0 }; this.regs[rd] = 1; return true; }
+    if (method === "Compatible") { this.regs[rd] = (s.meta.name === this._spanStr(this.regs[rs1]) && s.meta.schema === (this.regs[rs2] >>> 0)) ? 1 : 0; return true; }
+    if (method === "Rebuild") { s.results = []; s.facetResults = []; this.regs[rd] = 1; return true; }
     if (method === "SetVector") { s.vector = this.regs[rs1] >>> 0; this.regs[rd] = 1; return true; }
     if (method === "SetSemanticWeight") { s.sem = Math.max(0, this.regs[rs1] | 0); this.regs[rd] = s.sem; return true; }
     if (method === "UpsertText") { var card = this.regs[rs1] >>> 0; s.docs[key(card)] = { card: card, text: this._spanStr(this.regs[rs2]), vector: s.vector }; this.regs[rd] = 1; return true; }
-    if (method === "Delete") { var dk = key(this.regs[rs1] >>> 0), ok = s.docs[dk] ? 1 : 0; delete s.docs[dk]; this.regs[rd] = ok; return true; }
+    if (method === "Delete") { var dk = key(this.regs[rs1] >>> 0), ok = s.docs[dk] ? 1 : 0; delete s.docs[dk]; Object.keys(s.facets).forEach(function(k){ if(k.indexOf(dk + "|")===0) delete s.facets[k]; }); Object.keys(s.nums).forEach(function(k){ if(k.indexOf(dk + "|")===0) delete s.nums[k]; }); this.regs[rd] = ok; return true; }
+    if (method === "SetFacet") { var fc = this.regs[rs1] >>> 0, fp = this._spanStr(this.regs[rs2]).split("|"); s.facets[key(fc) + "|" + fp[0]] = fp[1] || ""; this.regs[rd] = 1; return true; }
+    if (method === "SetNumber") { var nc = this.regs[rs1] >>> 0, np = this._spanStr(this.regs[rs2]).split("|"); s.nums[key(nc) + "|" + np[0]] = parseInt(np[1] || "0", 10) || 0; this.regs[rd] = 1; return true; }
+    if (method === "ClearFields") { var ck = key(this.regs[rs1] >>> 0); Object.keys(s.facets).forEach(function(k){ if(k.indexOf(ck + "|")===0) delete s.facets[k]; }); Object.keys(s.nums).forEach(function(k){ if(k.indexOf(ck + "|")===0) delete s.nums[k]; }); this.regs[rd] = 1; return true; }
     if (method === "IndexPack") {
       var ST = storeLib(); if (!this._st) this._st = { store: new ST.PicoStore(), pack: 0, card: 0, results: [], schemas: {}, blobs: {}, sliceOffset: 0, sliceLen: 0 };
       var ipack = String(this.regs[rs1] >>> 0), rows = this._st.store.all(ipack), n = 0;
@@ -1522,6 +1528,17 @@
     if (method === "Result") { var ri = this.regs[rs1] | 0; this.regs[rd] = (ri >= 0 && ri < s.results.length) ? s.results[ri][0] : 0; return true; }
     if (method === "Score") { var si = this.regs[rs1] | 0; this.regs[rd] = (si >= 0 && si < s.results.length) ? s.results[si][1] : 0; return true; }
     if (method === "Plan") { var pi = this.regs[rs1] | 0; this.regs[rd] = (pi >= 0 && pi < s.plan.length) ? s.plan[pi] : 0; return true; }
+    if (method === "Facets") { var field = this._spanStr(this.regs[rs1]), counts = {}; Object.keys(s.facets).forEach(function(k){ var sp=k.split("|"); if(sp[1]===field) counts[s.facets[k]]=(counts[s.facets[k]]||0)+1; }); s.facetResults = Object.keys(counts).sort().map(function(v){ return [v, counts[v]]; }); this.regs[rd] = s.facetResults.length; return true; }
+    if (method === "FacetValue") { var fvi = this.regs[rs1] | 0; this.regs[rd] = (fvi >= 0 && fvi < s.facetResults.length) ? this._strSpan(s.facetResults[fvi][0]) : 0; return true; }
+    if (method === "FacetCount") { var fci = this.regs[rs1] | 0; this.regs[rd] = (fci >= 0 && fci < s.facetResults.length) ? s.facetResults[fci][1] : 0; return true; }
+    if (method === "Range") { var spec=this._spanStr(this.regs[rs1]).split("|"), field=spec[0], lo=parseInt(spec[1]||"-2147483648",10), hi=parseInt(spec[2]||"2147483647",10), hits=[]; Object.keys(s.nums).forEach(function(k){ var sp=k.split("|"), v=s.nums[k]; if(sp[1]===field && v>=lo && v<=hi) hits.push(parseInt(sp[0],10)&0x3FFFFF); }); hits.sort(function(a,b){return a-b;}); s.results=hits.map(function(c){return [c,1];}); this.regs[rd]=hits.length; return true; }
+    if (method === "Save") { s.saved = { docs: Object.assign({}, s.docs), facets: Object.assign({}, s.facets), nums: Object.assign({}, s.nums), meta: Object.assign({}, s.meta) }; this.regs[rd]=1; return true; }
+    if (method === "Load") { if(s.saved){ s.docs=Object.assign({},s.saved.docs); s.facets=Object.assign({},s.saved.facets); s.nums=Object.assign({},s.saved.nums); s.meta=Object.assign({},s.saved.meta); this.regs[rd]=1; } else this.regs[rd]=0; return true; }
+    if (method === "JournalUpsert") return this._search("UpsertText", rd, rs1, rs2);
+    if (method === "JournalDelete") return this._search("Delete", rd, rs1, rs2);
+    if (method === "JournalFacet") return this._search("SetFacet", rd, rs1, rs2);
+    if (method === "JournalNumber") return this._search("SetNumber", rd, rs1, rs2);
+    if (method === "JournalReplay") { this.regs[rd]=1; return true; }
     return false;
   };
 

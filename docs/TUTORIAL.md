@@ -378,9 +378,12 @@ PicoScript also exposes language hooks for the newer Picowal host features:
   `Query.BuildManyToManyMap(mappingPack, spec)` for bounded relation query
   builders.
 - `Search.Clear/UpsertText/Delete/IndexPack/QueryText/QueryHybrid/Result/Score/Plan`
-  as a deterministic facade over Picowal host search. The reference VM uses a
-  small lexical/vector-signature approximation; production hosts can bind BM25,
-  ANN, hybrid ranking, and semantic rerank callbacks behind the same hooks.
+  plus `Configure/Compatible/Rebuild`, `SetFacet/Facets/FacetValue/FacetCount`,
+  `SetNumber/Range`, `Save/Load`, and `Journal*` mutation hooks as a deterministic
+  facade over Picowal host search indexes. The reference VM uses a small
+  lexical/vector-signature/facet/range approximation; production hosts can bind
+  BM25, ANN, hybrid ranking, semantic rerank callbacks, persistent index segments,
+  and append-only search journals behind the same hooks.
 
 ## 9. Where to go next
 

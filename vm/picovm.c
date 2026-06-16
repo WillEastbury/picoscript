@@ -954,7 +954,7 @@ uint32_t pv_hook_cap(int hook)
     if (hook >= 0x170 && hook <= 0x177) return PV_CAP_DMA;     /* Stream.* */
     if ((hook >= 0x180 && hook <= 0x186) || (hook >= 0x1B3 && hook <= 0x1B5)) return PV_CAP_EVENT;   /* Event.* */
     if (hook >= 0x188 && hook <= 0x193) return PV_CAP_UI;      /* Ui.* */
-    if (hook >= 0x1D0 && hook <= 0x1DA) return PV_CAP_STORAGE; /* Search.* over card packs */
+    if ((hook >= 0x1D0 && hook <= 0x1DF) || (hook >= 0x200 && hook <= 0x20B)) return PV_CAP_STORAGE; /* Search.* over card packs */
     return 0;                                                /* pure: String/Number/Maths/Span/... */
 }
 
