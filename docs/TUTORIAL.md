@@ -330,6 +330,58 @@ int part = Stream.Slice(lease);
 On PIOS, these hooks should map to descriptor/lease range reads rather than
 copying the whole request or stream buffer into PicoScript memory.
 
+## 13. Tensor and transformer primitives
+
+PicoScript now has a small inference-kernel surface so an AI harness can be
+written once and run on whatever capability the host VM provides: scalar VM,
+M33 DSP, desktop SIMD, or a future tensor accelerator.
+
+| Primitive | Use |
+|-----------|-----|
+| `Tensor.SetShape(rows, cols)` | configure matrix/vector shape |
+| `Tensor.DotI8(a, b)` | signed int8 dot product |
+| `Tensor.MatVecI8(matrix, vector)` | int8 matrix-vector, returns `span<int32_be>` |
+| `Tensor.AddI32`, `MulI32`, `ScaleI32`, `ReluI32` | elementwise FFN/residual helpers |
+| `Tensor.RmsNormI32(x, gamma)` | integer RMSNorm-like normalization |
+| `Tensor.RoPEI32(x, cosSin)` | pairwise RoPE rotation using Q15 cos/sin |
+| `Tensor.SoftmaxI32(logits)` | deterministic Q15 attention weights |
+| `Tensor.ArgMaxI32(logits)` | index of the largest int32 |
+| `BitLinear.MatVecTernary(weights, act)` | BitNet-style ternary matvec |
+
+All buffers are spans. Matrix-vector outputs are int32 values encoded big-endian
+in a returned span, so they can feed the next primitive without changing the VM
+instruction format.
+
+```c
+Tensor.SetShape(2, 4);
+int out = Tensor.MatVecI8(weightRows, activation);
+int token = Tensor.ArgMaxI32(out);
+```
+
+For BitNet-style packed weights:
+
+```c
+BitLinear.SetShape(rows, cols);
+int out = BitLinear.MatVecTernary(packedTritRows, activationI8);
+```
+
+The reference VM implements deterministic scalar versions. A production host can
+bind the same hooks to M33 DSP, AVX2, V3D/QPU, or another accelerator.
+
+## 14. Picowal PR78 facades
+
+PicoScript also exposes language hooks for the newer Picowal host features:
+
+- `Storage.Ready()` and `Storage.IsUserPack(pack)` for disk-only/user-pack
+  policy checks.
+- `Query.BuildLookupFilter(pack, spec)` and
+  `Query.BuildManyToManyMap(mappingPack, spec)` for bounded relation query
+  builders.
+- `Search.Clear/UpsertText/Delete/IndexPack/QueryText/QueryHybrid/Result/Score/Plan`
+  as a deterministic facade over Picowal host search. The reference VM uses a
+  small lexical/vector-signature approximation; production hosts can bind BM25,
+  ANN, hybrid ranking, and semantic rerank callbacks behind the same hooks.
+
 ## 9. Where to go next
 
 - **Guide tab:** copy and edit examples for loops, branches, HTTP, storage, UI,

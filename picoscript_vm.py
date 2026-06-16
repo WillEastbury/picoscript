@@ -644,6 +644,15 @@ class HostApi:
         self.cur_pack = 0
         self.cur_card = 0
         self.query_results: List[int] = []
+        self.search_docs: Dict[int, dict] = {}
+        self.search_results: List[tuple] = []
+        self.search_plan: Dict[str, int] = {"lexical": 0, "vector": 0, "hybrid": 0, "semantic": 0}
+        self.search_vector_sig = 0
+        self.search_semantic_weight = 0
+        self.tensor_rows = 0
+        self.tensor_cols = 0
+        self.bitlinear_rows = 0
+        self.bitlinear_cols = 0
         self.gpio: Dict[int, dict] = {}   # reference GPIO emulator: pin -> {dir,pull,value}
         self.schemas: Dict[int, bytes] = {}   # per-pack typed-field schema span bytes (0x60/0x61)
         self.blob_cards: Dict[tuple, bytearray] = {}  # (pack, card) -> large-card bytes for slice tests/sim
@@ -777,6 +786,12 @@ class HostApi:
                     acc += (w - 256 if w > 127 else w) * (a - 256 if a > 127 else a)
                 vm.regs[rd] = acc & MASK32
                 return
+        if ns == "Tensor":
+            if self._tensor(vm, method, rd, rs1, rs2):
+                return
+        if ns == "BitLinear":
+            if self._bitlinear(vm, method, rd, rs1, rs2):
+                return
         # Memory + span / slice / materialize.
         if ns == "Memory" and method == "Set":
             a = vm.regs[rs1] % vm.arena_bytes
@@ -847,6 +862,12 @@ class HostApi:
             if self._resp(vm, method, rd, rs1, rs2):
                 return
         # Program-level card store: Storage.* over a PicoStore (text via byte-spans).
+        if ns == "Query":
+            if self._query_helpers(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Search":
+            if self._search(vm, method, rd, rs1, rs2):
+                return
         if ns == "Storage":
             if self._storage(vm, method, rd, rs1, rs2):
                 return
@@ -1849,6 +1870,253 @@ class HostApi:
             return False
         return False
 
+    @staticmethod
+    def _i8(b: int) -> int:
+        return b - 256 if b > 127 else b
+
+    @staticmethod
+    def _i32be_at(data: bytes, idx: int) -> int:
+        off = idx * 4
+        if off + 4 > len(data):
+            return 0
+        v = int.from_bytes(data[off:off + 4], "big", signed=True)
+        return v
+
+    @staticmethod
+    def _i32be_pack(vals: List[int]) -> bytes:
+        out = bytearray()
+        for v in vals:
+            out += int(_sx32(v)).to_bytes(4, "big", signed=True)
+        return bytes(out)
+
+    def _tensor(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "SetShape":
+            self.tensor_rows = max(0, _sx32(vm.regs[rs1]))
+            self.tensor_cols = max(0, _sx32(vm.regs[rs2]))
+            vm.regs[rd] = 1
+            return True
+        if method == "DotI8":
+            a = self._span_raw(vm, vm.regs[rs1])
+            b = self._span_raw(vm, vm.regs[rs2])
+            n = self.tensor_cols or min(len(a), len(b))
+            acc = 0
+            for i in range(min(n, len(a), len(b))):
+                acc += self._i8(a[i]) * self._i8(b[i])
+            vm.regs[rd] = acc & MASK32
+            return True
+        if method == "MatVecI8":
+            mat = self._span_raw(vm, vm.regs[rs1])
+            vec = self._span_raw(vm, vm.regs[rs2])
+            rows = self.tensor_rows
+            cols = self.tensor_cols or len(vec)
+            vals = []
+            for r in range(rows):
+                acc = 0
+                base = r * cols
+                for c in range(cols):
+                    if base + c < len(mat) and c < len(vec):
+                        acc += self._i8(mat[base + c]) * self._i8(vec[c])
+                vals.append(acc)
+            vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack(vals))
+            return True
+        if method in ("AddI32", "MulI32", "ScaleI32", "ReluI32", "RmsNormI32", "RoPEI32", "SoftmaxI32", "ArgMaxI32"):
+            a = self._span_raw(vm, vm.regs[rs1])
+            n = len(a) // 4
+            if method == "ArgMaxI32":
+                best_i, best_v = 0, None
+                for i in range(n):
+                    v = self._i32be_at(a, i)
+                    if best_v is None or v > best_v:
+                        best_i, best_v = i, v
+                vm.regs[rd] = best_i
+                return True
+            vals = []
+            if method == "AddI32":
+                b = self._span_raw(vm, vm.regs[rs2])
+                n = min(n, len(b) // 4)
+                vals = [self._i32be_at(a, i) + self._i32be_at(b, i) for i in range(n)]
+            elif method == "MulI32":
+                b = self._span_raw(vm, vm.regs[rs2])
+                n = min(n, len(b) // 4)
+                vals = [_sx32((self._i32be_at(a, i) * self._i32be_at(b, i)) >> 8) for i in range(n)]
+            elif method == "ScaleI32":
+                scale = _sx32(vm.regs[rs2])
+                vals = [self._i32be_at(a, i) * scale for i in range(n)]
+            elif method == "ReluI32":
+                vals = [max(0, self._i32be_at(a, i)) for i in range(n)]
+            elif method == "RmsNormI32":
+                import math
+                b = self._span_raw(vm, vm.regs[rs2])
+                ss = sum(self._i32be_at(a, i) * self._i32be_at(a, i) for i in range(n))
+                rms = max(1, int(math.isqrt(max(1, ss // max(1, n)))))
+                vals = []
+                for i in range(n):
+                    g = self._i32be_at(b, i) if i * 4 + 4 <= len(b) else 256
+                    num = self._i32be_at(a, i) * g
+                    vals.append(_sx32((abs(num) // rms) * (-1 if num < 0 else 1)))
+            elif method == "RoPEI32":
+                b = self._span_raw(vm, vm.regs[rs2])
+                vals = []
+                pairs = n // 2
+                for i in range(pairs):
+                    x = self._i32be_at(a, i * 2)
+                    y = self._i32be_at(a, i * 2 + 1)
+                    cs = self._i32be_at(b, i * 2) if (i * 2) * 4 + 4 <= len(b) else 32768
+                    sn = self._i32be_at(b, i * 2 + 1) if (i * 2 + 1) * 4 + 4 <= len(b) else 0
+                    vals.append(_sx32((x * cs - y * sn) >> 15))
+                    vals.append(_sx32((x * sn + y * cs) >> 15))
+            elif method == "SoftmaxI32":
+                xs = [self._i32be_at(a, i) for i in range(n)]
+                if xs:
+                    mx = max(xs)
+                    ws = [max(1, 32768 >> min(15, max(0, (mx - x) >> 8))) for x in xs]
+                    s = max(1, sum(ws))
+                    vals = [(w * 32767) // s for w in ws]
+            vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack(vals))
+            return True
+        return False
+
+    @staticmethod
+    def _ternary_weight(packed: bytes, idx: int) -> int:
+        if idx // 4 >= len(packed):
+            return 0
+        code = (packed[idx // 4] >> ((idx & 3) * 2)) & 3
+        return 1 if code == 1 else (-1 if code == 2 else 0)
+
+    def _bitlinear(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "SetShape":
+            self.bitlinear_rows = max(0, _sx32(vm.regs[rs1]))
+            self.bitlinear_cols = max(0, _sx32(vm.regs[rs2]))
+            vm.regs[rd] = 1
+            return True
+        if method == "MatVecTernary":
+            weights = self._span_raw(vm, vm.regs[rs1])
+            vec = self._span_raw(vm, vm.regs[rs2])
+            rows, cols = self.bitlinear_rows, self.bitlinear_cols or len(vec)
+            vals = []
+            for r in range(rows):
+                acc = 0
+                base = r * cols
+                for c in range(cols):
+                    if c < len(vec):
+                        acc += self._ternary_weight(weights, base + c) * self._i8(vec[c])
+                vals.append(acc)
+            vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack(vals))
+            return True
+        return False
+
+    def _query_helpers(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "BuildLookupFilter":
+            pack = self._span_str(vm, vm.regs[rs1])
+            parts = self._span_str(vm, vm.regs[rs2]).split("|")
+            while len(parts) < 6:
+                parts.append("")
+            display, filt, op, value, current_id_field, current_id = parts[:6]
+            lines = [f"S:{display}", f"F:{pack}"]
+            if filt and op:
+                lines.append(f"W:{filt}|{op}|{value}")
+            if current_id_field and current_id:
+                lines.append(f"W:{current_id_field}|!=|{current_id}")
+            vm.regs[rd] = self._str_span(vm, "\n".join(lines))
+            return True
+        if method == "BuildManyToManyMap":
+            pack = self._span_str(vm, vm.regs[rs1])
+            parts = self._span_str(vm, vm.regs[rs2]).split("|")
+            while len(parts) < 3:
+                parts.append("")
+            source_field, source_id, target_field = parts[:3]
+            vm.regs[rd] = self._str_span(vm, f"S:{target_field}\nF:{pack}\nW:{source_field}|==|{source_id}")
+            return True
+        return False
+
+    @staticmethod
+    def _search_key(pack: str, card: int) -> int:
+        try:
+            p = int(pack) & 0x3FF
+        except ValueError:
+            p = 0
+        return (p << 22) | (card & 0x3FFFFF)
+
+    @staticmethod
+    def _search_terms(text: str) -> List[str]:
+        terms, cur = [], []
+        for ch in text.lower():
+            if ch.isalnum():
+                cur.append(ch)
+            elif cur:
+                terms.append("".join(cur)); cur = []
+        if cur:
+            terms.append("".join(cur))
+        return terms
+
+    def _record_text(self, rec: dict) -> str:
+        return " ".join(str(v) for _k, v in sorted(rec.items()))
+
+    def _search(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        pack = str(self.cur_pack)
+        if method == "Clear":
+            self.search_docs.clear(); self.search_results = []
+            self.search_plan = {"lexical": 0, "vector": 0, "hybrid": 0, "semantic": 0}
+            vm.regs[rd] = 1; return True
+        if method == "UpsertText":
+            card = vm.regs[rs1] & MASK32
+            text = self._span_str(vm, vm.regs[rs2])
+            self.search_docs[self._search_key(pack, card)] = {"card": card, "text": text, "vector": self.search_vector_sig}
+            vm.regs[rd] = 1; return True
+        if method == "Delete":
+            card = vm.regs[rs1] & MASK32
+            key = self._search_key(pack, card)
+            ok = 1 if key in self.search_docs else 0
+            self.search_docs.pop(key, None)
+            vm.regs[rd] = ok; return True
+        if method == "IndexPack":
+            p = str(vm.regs[rs1] & MASK32)
+            n = 0
+            for cid, rec in self.store.all(p):
+                self.search_docs[self._search_key(p, cid)] = {"card": cid, "text": self._record_text(rec), "vector": 0}
+                n += 1
+            vm.regs[rd] = n; return True
+        if method == "SetVector":
+            self.search_vector_sig = vm.regs[rs1] & MASK32
+            vm.regs[rd] = 1; return True
+        if method == "SetSemanticWeight":
+            self.search_semantic_weight = max(0, _sx32(vm.regs[rs1]))
+            vm.regs[rd] = self.search_semantic_weight; return True
+        if method in ("QueryText", "QueryHybrid"):
+            q = self._span_str(vm, vm.regs[rs1])
+            qterms = self._search_terms(q)
+            results, lexical, vector, semantic = [], 0, 0, 0
+            for key, doc in self.search_docs.items():
+                dterms = self._search_terms(doc["text"])
+                score = sum(dterms.count(t) for t in qterms)
+                if score:
+                    lexical += 1
+                if method == "QueryHybrid" and self.search_vector_sig and doc.get("vector") == self.search_vector_sig:
+                    score += 1; vector += 1
+                if self.search_semantic_weight and q.lower() in doc["text"].lower():
+                    score += self.search_semantic_weight; semantic += 1
+                if score:
+                    results.append((doc["card"], score, key))
+            results.sort(key=lambda x: (-x[1], x[0]))
+            self.search_results = results[:128]
+            self.search_plan = {"lexical": lexical, "vector": vector, "hybrid": len(self.search_results), "semantic": semantic}
+            vm.regs[rd] = len(self.search_results); return True
+        if method == "Result":
+            idx = _sx32(vm.regs[rs1])
+            vm.regs[rd] = self.search_results[idx][0] if 0 <= idx < len(self.search_results) else 0
+            return True
+        if method == "Score":
+            idx = _sx32(vm.regs[rs1])
+            vm.regs[rd] = self.search_results[idx][1] if 0 <= idx < len(self.search_results) else 0
+            return True
+        if method == "Plan":
+            which = _sx32(vm.regs[rs1])
+            vals = [self.search_plan.get("lexical", 0), self.search_plan.get("vector", 0),
+                    self.search_plan.get("hybrid", 0), self.search_plan.get("semantic", 0)]
+            vm.regs[rd] = vals[which] if 0 <= which < len(vals) else 0
+            return True
+        return False
+
     def _storage(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
         """Execute a Storage.* card op. Returns True if handled.
 
@@ -1859,6 +2127,14 @@ class HostApi:
         plain integers. Cards are dict records held in a PicoStore.
         """
         pack = str(self.cur_pack)
+        if method == "Ready":
+            vm.regs[rd] = 1
+            self.host_status = 0
+            return True
+        if method == "IsUserPack":
+            p = vm.regs[rs1] & MASK32
+            vm.regs[rd] = 1 if 2 <= p <= 0x3FF else 0
+            return True
         if method == "GetSchemaForPack":
             data = self.schemas.get(vm.regs[rs1] & MASK32, b"")
             vm.regs[rd] = self._new_span_bytes(vm, data)

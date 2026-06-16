@@ -434,6 +434,31 @@ CONSTRUCTS = [
      "    Io.Write(CMD)\n"
      "ENDIF"),
 
+    ("AI tensors: matvec + bitlinear",
+     "Inference kernels are span-based so a PicoScript harness can run on the VM or "
+     "be host-accelerated. This example runs int8 matrix-vector and ternary BitLinear "
+     "matrix-vector kernels. Outputs are int32 big-endian spans.",
+     "Memory.Set(1000,1); Memory.Set(1001,2); Memory.Set(1002,3); Memory.Set(1003,4);\n"
+     "Memory.Set(1004,255); Memory.Set(1005,0); Memory.Set(1006,2); Memory.Set(1007,254);\n"
+     "Memory.Set(1100,1); Memory.Set(1101,1); Memory.Set(1102,1); Memory.Set(1103,1);\n"
+     "Tensor.SetShape(2, 4);\n"
+     "int mat = Span.Make(1000, 8); int vec = Span.Make(1100, 4);\n"
+     "Io.Write(Tensor.MatVecI8(mat, vec));\n"
+     "Memory.Set(1200,145); Memory.Set(1201,162);\n"
+     "BitLinear.SetShape(2, 4);\n"
+     "int tw = Span.Make(1200, 2);\n"
+     "Io.Write(BitLinear.MatVecTernary(tw, vec));",
+     "Memory.Set(1000, 1)\nMemory.Set(1001, 2)\nMemory.Set(1002, 3)\nMemory.Set(1003, 4)\n"
+     "Memory.Set(1004, 255)\nMemory.Set(1005, 0)\nMemory.Set(1006, 2)\nMemory.Set(1007, 254)\n"
+     "Memory.Set(1100, 1)\nMemory.Set(1101, 1)\nMemory.Set(1102, 1)\nMemory.Set(1103, 1)\n"
+     "Tensor.SetShape(2, 4)\n"
+     "DIM MAT = Span.Make(1000, 8)\nDIM VEC = Span.Make(1100, 4)\n"
+     "Io.Write(Tensor.MatVecI8(MAT, VEC))\n"
+     "Memory.Set(1200, 145)\nMemory.Set(1201, 162)\n"
+     "BitLinear.SetShape(2, 4)\n"
+     "DIM TW = Span.Make(1200, 2)\n"
+     "Io.Write(BitLinear.MatVecTernary(TW, VEC))"),
+
     ("Streaming: DMA ring (Device.* / Stream.*)",
      "Streaming hardware is a producer/consumer ring of DMA buffers, structurally "
      "like Req/Resp but over hardware. Device.Open names a device; Stream.Open starts "

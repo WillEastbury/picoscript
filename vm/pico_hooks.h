@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0xF4E15A1E
+#define PV_HOOK_TABLE_VERSION 0xF6BD6368
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -123,6 +123,7 @@
 #define PV_HOOK_STORAGE_SETFIELDSTR              0x6C
 #define PV_HOOK_STORAGE_GETFIELDSTR              0x6D
 #define PV_HOOK_STORAGE_QUERYRESULT              0x6E
+#define PV_HOOK_STORAGE_READY                    0x6F
 #define PV_HOOK_THREAD_YIELDCOUNTED              0x70
 #define PV_HOOK_IO_WRITE                         0x71
 #define PV_HOOK_IO_WRITEBYTE                     0x72
@@ -330,11 +331,38 @@
 #define PV_HOOK_STORAGE_CARDLEN                  0x1A1
 #define PV_HOOK_STORAGE_READSLICE                0x1A2
 #define PV_HOOK_STORAGE_WRITESLICE               0x1A3
+#define PV_HOOK_STORAGE_ISUSERPACK               0x1A4
 #define PV_HOOK_REQ_SETSLICE                     0x1B0
 #define PV_HOOK_REQ_BODYSLICE                    0x1B1
 #define PV_HOOK_REQ_BODYLEN                      0x1B2
 #define PV_HOOK_EVENT_SETSLICE                   0x1B3
 #define PV_HOOK_EVENT_DATASLICE                  0x1B4
 #define PV_HOOK_EVENT_DATALEN                    0x1B5
+#define PV_HOOK_QUERY_BUILDLOOKUPFILTER          0x1C0
+#define PV_HOOK_QUERY_BUILDMANYTOMANYMAP         0x1C1
+#define PV_HOOK_SEARCH_CLEAR                     0x1D0
+#define PV_HOOK_SEARCH_UPSERTTEXT                0x1D1
+#define PV_HOOK_SEARCH_DELETE                    0x1D2
+#define PV_HOOK_SEARCH_INDEXPACK                 0x1D3
+#define PV_HOOK_SEARCH_QUERYTEXT                 0x1D4
+#define PV_HOOK_SEARCH_SETVECTOR                 0x1D5
+#define PV_HOOK_SEARCH_QUERYHYBRID               0x1D6
+#define PV_HOOK_SEARCH_RESULT                    0x1D7
+#define PV_HOOK_SEARCH_SCORE                     0x1D8
+#define PV_HOOK_SEARCH_PLAN                      0x1D9
+#define PV_HOOK_SEARCH_SETSEMANTICWEIGHT         0x1DA
+#define PV_HOOK_TENSOR_SETSHAPE                  0x1E0
+#define PV_HOOK_TENSOR_DOTI8                     0x1E1
+#define PV_HOOK_TENSOR_MATVECI8                  0x1E2
+#define PV_HOOK_TENSOR_ADDI32                    0x1E3
+#define PV_HOOK_TENSOR_MULI32                    0x1E4
+#define PV_HOOK_TENSOR_SCALEI32                  0x1E5
+#define PV_HOOK_TENSOR_RELUI32                   0x1E6
+#define PV_HOOK_TENSOR_RMSNORMI32                0x1E7
+#define PV_HOOK_TENSOR_ROPEI32                   0x1E8
+#define PV_HOOK_TENSOR_SOFTMAXI32                0x1E9
+#define PV_HOOK_TENSOR_ARGMAXI32                 0x1EA
+#define PV_HOOK_BITLINEAR_SETSHAPE               0x1F0
+#define PV_HOOK_BITLINEAR_MATVECTERNARY          0x1F1
 
 #endif

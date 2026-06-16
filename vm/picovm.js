@@ -95,6 +95,8 @@
     this.constFloor = 0x8000;                 // INV-9: lowest literal const-pool address ([floor,0x8000) RO)
     this.mem = new Uint8Array(520 * 1024);   // process arena = RP2350 (Pico 2) 520 KB SRAM
     this.dotLen = 0;                          // active span length for Dot8.Of
+    this.tensorRows = 0; this.tensorCols = 0;
+    this.bitlinearRows = 0; this.bitlinearCols = 0;
     this.arenaTop = 0x8000;             // bump pointer for Span.Materialize copies
     this.spans = [null];                // span table; handle = index (1-based)
     this.pc = 0;
@@ -358,6 +360,10 @@
         return;
       }
     }
+    if (name.indexOf("Tensor.") === 0) { if (this._tensor(name.slice(7), rd, rs1, rs2)) return; }
+    if (name.indexOf("BitLinear.") === 0) { if (this._bitlinear(name.slice(10), rd, rs1, rs2)) return; }
+    if (name.indexOf("Query.") === 0) { if (this._queryHelpers(name.slice(6), rd, rs1, rs2)) return; }
+    if (name.indexOf("Search.") === 0) { if (this._search(name.slice(7), rd, rs1, rs2)) return; }
     // ---- program-level card store: Storage.* over a PicoStore --------------
     if (name.indexOf("Storage.") === 0) {
       if (this._storage(name.slice(8), rd, rs1, rs2)) return;
@@ -1412,6 +1418,114 @@
   // Mirrors picoscript_vm HostApi._storage. Context model (cur pack + card)
   // keeps every op within the 2-in/1-out host ABI; field names and queries are
   // UTF-8 byte-spans the program builds in arena memory.
+  // ---- Tensor / BitLinear inference primitives ----------------------------
+  function i8(b) { return b > 127 ? b - 256 : b; }
+  function i32beAt(bytes, idx) {
+    var o = idx * 4; if (o + 4 > bytes.length) return 0;
+    return ((bytes[o] << 24) | (bytes[o + 1] << 16) | (bytes[o + 2] << 8) | bytes[o + 3]) | 0;
+  }
+  function packI32(vals) {
+    var out = [];
+    for (var i = 0; i < vals.length; i++) { var v = vals[i] | 0; out.push((v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255); }
+    return out;
+  }
+  PicoVM.prototype._tensor = function (method, rd, rs1, rs2) {
+    if (method === "SetShape") { this.tensorRows = Math.max(0, this.regs[rs1] | 0); this.tensorCols = Math.max(0, this.regs[rs2] | 0); this.regs[rd] = 1; return true; }
+    if (method === "DotI8") { var a = this._spanBytes(this.regs[rs1]), b = this._spanBytes(this.regs[rs2]), n = this.tensorCols || Math.min(a.length, b.length), acc = 0; for (var i = 0; i < n && i < a.length && i < b.length; i++) acc = (acc + i8(a[i]) * i8(b[i])) | 0; this.regs[rd] = acc; return true; }
+    if (method === "MatVecI8") { var mat = this._spanBytes(this.regs[rs1]), vec = this._spanBytes(this.regs[rs2]), rows = this.tensorRows, cols = this.tensorCols || vec.length, vals = []; for (var r = 0; r < rows; r++) { var sum = 0, base = r * cols; for (var c = 0; c < cols; c++) if (base + c < mat.length && c < vec.length) sum = (sum + i8(mat[base + c]) * i8(vec[c])) | 0; vals.push(sum); } this.regs[rd] = this._newSpanBytes(packI32(vals)); return true; }
+    if (method === "ArgMaxI32") { var ai = this._spanBytes(this.regs[rs1]), bestI = 0, bestV = null, an = Math.floor(ai.length / 4); for (var ix = 0; ix < an; ix++) { var av = i32beAt(ai, ix); if (bestV === null || av > bestV) { bestV = av; bestI = ix; } } this.regs[rd] = bestI; return true; }
+    if (["AddI32","MulI32","ScaleI32","ReluI32","RmsNormI32","RoPEI32","SoftmaxI32"].indexOf(method) >= 0) {
+      var x = this._spanBytes(this.regs[rs1]), xn = Math.floor(x.length / 4), res = [];
+      if (method === "AddI32" || method === "MulI32") {
+        var y = this._spanBytes(this.regs[rs2]), yn = Math.min(xn, Math.floor(y.length / 4));
+        for (var j = 0; j < yn; j++) {
+          var av2 = i32beAt(x, j), bv2 = i32beAt(y, j);
+          res.push(method === "AddI32" ? ((av2 + bv2) | 0) : ((Math.imul(av2, bv2) >> 8) | 0));
+        }
+      } else if (method === "ScaleI32") {
+        var sc = this.regs[rs2] | 0; for (var k = 0; k < xn; k++) res.push(Math.imul(i32beAt(x, k), sc));
+      } else if (method === "ReluI32") {
+        for (var m = 0; m < xn; m++) { var rv = i32beAt(x, m); res.push(rv < 0 ? 0 : rv); }
+      } else if (method === "RmsNormI32") {
+        var g = this._spanBytes(this.regs[rs2]), ss = 0; for (var rn = 0; rn < xn; rn++) { var xv = i32beAt(x, rn); ss += xv * xv; }
+        var rms = Math.max(1, Math.floor(Math.sqrt(Math.max(1, Math.floor(ss / Math.max(1, xn))))));
+        for (var ri = 0; ri < xn; ri++) { var gg = (ri * 4 + 4 <= g.length) ? i32beAt(g, ri) : 256; res.push(((i32beAt(x, ri) * gg) / rms) | 0); }
+      } else if (method === "RoPEI32") {
+        var csb = this._spanBytes(this.regs[rs2]), pairs = Math.floor(xn / 2);
+        for (var pi = 0; pi < pairs; pi++) {
+          var xx = i32beAt(x, pi * 2), yy = i32beAt(x, pi * 2 + 1);
+          var cc = (pi * 8 + 4 <= csb.length) ? i32beAt(csb, pi * 2) : 32768;
+          var sn = (pi * 8 + 8 <= csb.length) ? i32beAt(csb, pi * 2 + 1) : 0;
+          res.push(((xx * cc - yy * sn) >> 15) | 0, ((xx * sn + yy * cc) >> 15) | 0);
+        }
+      } else if (method === "SoftmaxI32") {
+        var xs = [], mx = null; for (var si = 0; si < xn; si++) { var sv = i32beAt(x, si); xs.push(sv); if (mx === null || sv > mx) mx = sv; }
+        var ws = [], sumw = 0; for (var wi = 0; wi < xs.length; wi++) { var bucket = Math.min(15, Math.max(0, (mx - xs[wi]) >> 8)); var ww = Math.max(1, 32768 >> bucket); ws.push(ww); sumw += ww; }
+        for (var oi = 0; oi < ws.length; oi++) res.push(Math.floor(ws[oi] * 32767 / Math.max(1, sumw)));
+      }
+      this.regs[rd] = this._newSpanBytes(packI32(res)); return true;
+    }
+    return false;
+  };
+  function ternaryWeight(packed, idx) { if (((idx / 4) | 0) >= packed.length) return 0; var code = (packed[(idx / 4) | 0] >>> ((idx & 3) * 2)) & 3; return code === 1 ? 1 : (code === 2 ? -1 : 0); }
+  PicoVM.prototype._bitlinear = function (method, rd, rs1, rs2) {
+    if (method === "SetShape") { this.bitlinearRows = Math.max(0, this.regs[rs1] | 0); this.bitlinearCols = Math.max(0, this.regs[rs2] | 0); this.regs[rd] = 1; return true; }
+    if (method === "MatVecTernary") { var w = this._spanBytes(this.regs[rs1]), v = this._spanBytes(this.regs[rs2]), rows = this.bitlinearRows, cols = this.bitlinearCols || v.length, vals = []; for (var r = 0; r < rows; r++) { var acc = 0, base = r * cols; for (var c = 0; c < cols; c++) if (c < v.length) acc = (acc + ternaryWeight(w, base + c) * i8(v[c])) | 0; vals.push(acc); } this.regs[rd] = this._newSpanBytes(packI32(vals)); return true; }
+    return false;
+  };
+
+  PicoVM.prototype._queryHelpers = function (method, rd, rs1, rs2) {
+    if (method === "BuildLookupFilter") {
+      var pack = this._spanStr(this.regs[rs1]), parts = this._spanStr(this.regs[rs2]).split("|");
+      while (parts.length < 6) parts.push("");
+      var lines = ["S:" + parts[0], "F:" + pack];
+      if (parts[1] && parts[2]) lines.push("W:" + parts[1] + "|" + parts[2] + "|" + parts[3]);
+      if (parts[4] && parts[5]) lines.push("W:" + parts[4] + "|!=|" + parts[5]);
+      this.regs[rd] = this._strSpan(lines.join("\n")); return true;
+    }
+    if (method === "BuildManyToManyMap") {
+      var p = this._spanStr(this.regs[rs1]), a = this._spanStr(this.regs[rs2]).split("|");
+      while (a.length < 3) a.push("");
+      this.regs[rd] = this._strSpan("S:" + a[2] + "\nF:" + p + "\nW:" + a[0] + "|==|" + a[1]); return true;
+    }
+    return false;
+  };
+  function searchTerms(text) { var m = String(text).toLowerCase().match(/[a-z0-9]+/g); return m || []; }
+  PicoVM.prototype._search = function (method, rd, rs1, rs2) {
+    if (!this._searchState) this._searchState = { docs: {}, results: [], plan: [0, 0, 0, 0], vector: 0, sem: 0 };
+    var s = this._searchState, pack = String((this._st && this._st.pack) || 0);
+    function key(card) { return ((parseInt(pack, 10) || 0) << 22) | (card & 0x3FFFFF); }
+    if (method === "Clear") { s.docs = {}; s.results = []; s.plan = [0, 0, 0, 0]; this.regs[rd] = 1; return true; }
+    if (method === "SetVector") { s.vector = this.regs[rs1] >>> 0; this.regs[rd] = 1; return true; }
+    if (method === "SetSemanticWeight") { s.sem = Math.max(0, this.regs[rs1] | 0); this.regs[rd] = s.sem; return true; }
+    if (method === "UpsertText") { var card = this.regs[rs1] >>> 0; s.docs[key(card)] = { card: card, text: this._spanStr(this.regs[rs2]), vector: s.vector }; this.regs[rd] = 1; return true; }
+    if (method === "Delete") { var dk = key(this.regs[rs1] >>> 0), ok = s.docs[dk] ? 1 : 0; delete s.docs[dk]; this.regs[rd] = ok; return true; }
+    if (method === "IndexPack") {
+      var ST = storeLib(); if (!this._st) this._st = { store: new ST.PicoStore(), pack: 0, card: 0, results: [], schemas: {}, blobs: {}, sliceOffset: 0, sliceLen: 0 };
+      var ipack = String(this.regs[rs1] >>> 0), rows = this._st.store.all(ipack), n = 0;
+      rows.forEach(function (e) { var text = Object.keys(e[1]).sort().map(function (k) { return String(e[1][k]); }).join(" "); s.docs[((parseInt(ipack, 10) || 0) << 22) | (e[0] & 0x3FFFFF)] = { card: e[0], text: text, vector: 0 }; n++; });
+      this.regs[rd] = n; return true;
+    }
+    if (method === "QueryText" || method === "QueryHybrid") {
+      var q = this._spanStr(this.regs[rs1]), qt = searchTerms(q), res = [], lex = 0, vec = 0, sem = 0;
+      Object.keys(s.docs).forEach(function (k) {
+        var d = s.docs[k], dt = searchTerms(d.text), score = 0;
+        qt.forEach(function (t) { dt.forEach(function (u) { if (u === t) score++; }); });
+        if (score) lex++;
+        if (method === "QueryHybrid" && s.vector && d.vector === s.vector) { score++; vec++; }
+        if (s.sem && String(d.text).toLowerCase().indexOf(String(q).toLowerCase()) >= 0) { score += s.sem; sem++; }
+        if (score) res.push([d.card, score]);
+      });
+      res.sort(function (a, b) { return (b[1] - a[1]) || (a[0] - b[0]); });
+      s.results = res.slice(0, 128); s.plan = [lex, vec, s.results.length, sem]; this.regs[rd] = s.results.length; return true;
+    }
+    if (method === "Result") { var ri = this.regs[rs1] | 0; this.regs[rd] = (ri >= 0 && ri < s.results.length) ? s.results[ri][0] : 0; return true; }
+    if (method === "Score") { var si = this.regs[rs1] | 0; this.regs[rd] = (si >= 0 && si < s.results.length) ? s.results[si][1] : 0; return true; }
+    if (method === "Plan") { var pi = this.regs[rs1] | 0; this.regs[rd] = (pi >= 0 && pi < s.plan.length) ? s.plan[pi] : 0; return true; }
+    return false;
+  };
+
+  // ---- Storage.* card CRUD/query over PicoStore ---------------------------
   PicoVM.prototype._storage = function (method, rd, rs1, rs2) {
     if (!this._st) {
       var ST = storeLib();
@@ -1419,6 +1533,8 @@
     }
     var st = this._st;
     var pack = String(st.pack);
+    if (method === "Ready") { this.hostStatus = 0; this.regs[rd] = 1; return true; }
+    if (method === "IsUserPack") { var up = this.regs[rs1] >>> 0; this.regs[rd] = (up >= 2 && up <= 0x3FF) ? 1 : 0; return true; }
     if (method === "GetSchemaForPack") {
       this.regs[rd] = this._newSpanBytes(st.schemas[this.regs[rs1] | 0] || []); return true;
     }

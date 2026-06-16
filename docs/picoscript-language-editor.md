@@ -287,6 +287,10 @@ The editor can derive completions from the language namespace table:
 | `Req.` | `Seq`, `Principal`, `Method`, `Path`, `Header`, `BodyMode`, `BodyCount`, `BodySpan`, `SetSlice`, `BodySlice`, `BodyLen` |
 | `Stream.` | `Open`, `Next`, `Span`, `Submit`, `Release`, `Close`, `SetSlice`, `Slice` |
 | `Event.` | `Post`, `Next`, `Type`, `Target`, `Data`, `SetData`, `Count`, `SetSlice`, `DataSlice`, `DataLen` |
+| `Tensor.` | `SetShape`, `DotI8`, `MatVecI8`, `AddI32`, `MulI32`, `ScaleI32`, `ReluI32`, `RmsNormI32`, `RoPEI32`, `SoftmaxI32`, `ArgMaxI32` |
+| `BitLinear.` | `SetShape`, `MatVecTernary` |
+| `Query.` | `BuildLookupFilter`, `BuildManyToManyMap` |
+| `Search.` | `Clear`, `UpsertText`, `Delete`, `IndexPack`, `QueryText`, `SetVector`, `QueryHybrid`, `Result`, `Score`, `Plan`, `SetSemanticWeight` |
 | `Thread.` | `Skip`, `Wait`, `Raise`, `YieldCounted` |
 | `Math.` | `Add`, `Sub`, `Mul`, `Div`, `Inc` |
 | `Flow.` | `Jump`, `Branch`, `Call`, `Return` |
@@ -431,6 +435,22 @@ hooks. `Storage.SaveCard` is currently a flush/no-op because `SetField` is eager
 - `Req.SetSlice(offset,len)` + `Req.BodySlice(index)` / `Req.BodyLen(index)`
 - `Stream.SetSlice(offset,len)` + `Stream.Slice(lease)`
 - `Event.SetSlice(offset,len)` + `Event.DataSlice(ev)` / `Event.DataLen(ev)`
+
+### AI inference primitives
+
+The tensor surface is span-based and VM-adaptive. The reference VM runs scalar,
+while production hosts may bind the same hooks to M33 DSP, AVX2, V3D/QPU or
+another accelerator.
+
+- `Tensor.SetShape(rows, cols)` configures subsequent matrix ops.
+- `Tensor.DotI8(a,b)` and `Tensor.MatVecI8(matrix,vector)` cover int8 kernels.
+- `BitLinear.SetShape(rows,cols)` + `BitLinear.MatVecTernary(weights,act)` covers
+  BitNet-style ternary rows.
+- `Tensor.AddI32/MulI32/ScaleI32/ReluI32/RmsNormI32/RoPEI32/SoftmaxI32/ArgMaxI32`
+  cover residuals, gated FFN, normalization, RoPE, attention weights and logits.
+
+All tensor outputs are spans of big-endian int32 values unless the method returns
+a scalar register (`DotI8`, `ArgMaxI32`).
 
 These are language-stable and host-fillable. They preserve bytecode compatibility while allowing runtime-specific implementation behind the contract.
 

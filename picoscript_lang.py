@@ -127,10 +127,46 @@ NAMESPACE_MAP = {
         "SetFieldStr":      OP_NOOP,
         "GetFieldStr":      OP_NOOP,
         "QueryResult":      OP_NOOP,
+        "Ready":            OP_NOOP,
+        "IsUserPack":       OP_NOOP,
         "SetSlice":         OP_NOOP,
         "CardLen":          OP_NOOP,
         "ReadSlice":        OP_NOOP,
         "WriteSlice":       OP_NOOP,
+    },
+    "Query": {
+        "BuildLookupFilter": OP_NOOP,
+        "BuildManyToManyMap": OP_NOOP,
+    },
+    "Search": {
+        "Clear": OP_NOOP,
+        "UpsertText": OP_NOOP,
+        "Delete": OP_NOOP,
+        "IndexPack": OP_NOOP,
+        "QueryText": OP_NOOP,
+        "SetVector": OP_NOOP,
+        "QueryHybrid": OP_NOOP,
+        "Result": OP_NOOP,
+        "Score": OP_NOOP,
+        "Plan": OP_NOOP,
+        "SetSemanticWeight": OP_NOOP,
+    },
+    "Tensor": {
+        "SetShape": OP_NOOP,
+        "DotI8": OP_NOOP,
+        "MatVecI8": OP_NOOP,
+        "AddI32": OP_NOOP,
+        "MulI32": OP_NOOP,
+        "ScaleI32": OP_NOOP,
+        "ReluI32": OP_NOOP,
+        "RmsNormI32": OP_NOOP,
+        "RoPEI32": OP_NOOP,
+        "SoftmaxI32": OP_NOOP,
+        "ArgMaxI32": OP_NOOP,
+    },
+    "BitLinear": {
+        "SetShape": OP_NOOP,
+        "MatVecTernary": OP_NOOP,
     },
     "Thread": {
         "Skip":  OP_NOOP,
@@ -553,12 +589,46 @@ HOST_HOOK_CODES = {
     ("Storage", "SetFieldStr"): 0x6C,
     ("Storage", "GetFieldStr"): 0x6D,
     ("Storage", "QueryResult"): 0x6E,
+    ("Storage", "Ready"):       0x6F,
     # Large-card slice hooks (0x01A0-0x01A3): SetSlice(offset,len), CardLen(card),
     # ReadSlice(card)->span, WriteSlice(card,span)->ok. Extended hostcall page.
     ("Storage", "SetSlice"):    0x01A0,
     ("Storage", "CardLen"):     0x01A1,
     ("Storage", "ReadSlice"):   0x01A2,
     ("Storage", "WriteSlice"):  0x01A3,
+    ("Storage", "IsUserPack"):  0x01A4,
+    # Query helper builders from picowal PR78 (bounded relation query helpers).
+    ("Query", "BuildLookupFilter"): 0x01C0,
+    ("Query", "BuildManyToManyMap"): 0x01C1,
+    # Host search primitives from picowal PR78. The reference VM implements a
+    # deterministic lexical/vector-signature approximation; production hosts can bind
+    # BM25/vector ANN/hybrid/semantic callbacks behind the same hooks.
+    ("Search", "Clear"):        0x01D0,
+    ("Search", "UpsertText"):   0x01D1,
+    ("Search", "Delete"):       0x01D2,
+    ("Search", "IndexPack"):    0x01D3,
+    ("Search", "QueryText"):    0x01D4,
+    ("Search", "SetVector"):    0x01D5,
+    ("Search", "QueryHybrid"):  0x01D6,
+    ("Search", "Result"):       0x01D7,
+    ("Search", "Score"):        0x01D8,
+    ("Search", "Plan"):         0x01D9,
+    ("Search", "SetSemanticWeight"): 0x01DA,
+    # Tensor/matrix primitives for deterministic inference kernels.
+    ("Tensor", "SetShape"):     0x01E0,   # rs1=rows/len rs2=cols          rd=ok
+    ("Tensor", "DotI8"):        0x01E1,   # rs1=a-span rs2=b-span          rd=int32 dot
+    ("Tensor", "MatVecI8"):     0x01E2,   # rs1=matrix i8 span rs2=vec i8  rd=span<int32_be>
+    ("Tensor", "AddI32"):       0x01E3,   # rs1=a i32be span rs2=b i32be   rd=span<int32_be>
+    ("Tensor", "MulI32"):       0x01E4,   # rs1=a i32be span rs2=b i32be   rd=span<int32_be>
+    ("Tensor", "ScaleI32"):     0x01E5,   # rs1=i32be span rs2=scale       rd=span<int32_be>
+    ("Tensor", "ReluI32"):      0x01E6,   # rs1=i32be span                 rd=span<int32_be>
+    ("Tensor", "RmsNormI32"):   0x01E7,   # rs1=x i32be span rs2=gamma     rd=span<int32_be> (Q8 scale)
+    ("Tensor", "RoPEI32"):      0x01E8,   # rs1=x pairs rs2=cos/sin Q15    rd=span<int32_be>
+    ("Tensor", "SoftmaxI32"):   0x01E9,   # rs1=logits i32be               rd=span<Q15 i32be>
+    ("Tensor", "ArgMaxI32"):    0x01EA,   # rs1=i32be span                 rd=index
+    # BitLinear / BitNet-style ternary weights (2-bit packed; 4 weights/byte).
+    ("BitLinear", "SetShape"):  0x01F0,   # rs1=rows rs2=cols              rd=ok
+    ("BitLinear", "MatVecTernary"): 0x01F1,# rs1=packed weights rs2=i8 vec rd=span<int32_be>
     # Thread hints (0x70)
     ("Thread", "YieldCounted"): 0x70,
     # Io / output (0x71-0x72)

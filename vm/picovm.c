@@ -941,7 +941,7 @@ uint32_t pv_hook_cap(int hook)
     if (hook >= 0x10 && hook <= 0x14) return PV_CAP_QUEUE;   /* Queue.* */
     if ((hook >= 0x15 && hook <= 0x1F) || hook == 0x38 || hook == 0x39) return PV_CAP_NET;  /* Resp.* */
     if (hook == PV_HOOK_RANDOM_U32) return PV_CAP_RANDOM;    /* Random.U32 */
-    if ((hook >= 0x60 && hook <= 0x6E) || (hook >= 0x1A0 && hook <= 0x1A3)) return PV_CAP_STORAGE; /* Storage.* */
+    if ((hook >= 0x60 && hook <= 0x6F) || (hook >= 0x1A0 && hook <= 0x1A4)) return PV_CAP_STORAGE; /* Storage.* */
     if (hook >= 0xB0 && hook <= 0xBA) return PV_CAP_TIME;    /* DateTime.* */
     if (hook >= 0xC0 && hook <= 0xC6) return PV_CAP_ENV;     /* Locale.* */
     if (hook >= 0xD0 && hook <= 0xD8) return PV_CAP_ENV;     /* Environment.* */
@@ -954,6 +954,7 @@ uint32_t pv_hook_cap(int hook)
     if (hook >= 0x170 && hook <= 0x177) return PV_CAP_DMA;     /* Stream.* */
     if ((hook >= 0x180 && hook <= 0x186) || (hook >= 0x1B3 && hook <= 0x1B5)) return PV_CAP_EVENT;   /* Event.* */
     if (hook >= 0x188 && hook <= 0x193) return PV_CAP_UI;      /* Ui.* */
+    if (hook >= 0x1D0 && hook <= 0x1DA) return PV_CAP_STORAGE; /* Search.* over card packs */
     return 0;                                                /* pure: String/Number/Maths/Span/... */
 }
 

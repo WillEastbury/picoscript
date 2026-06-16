@@ -120,6 +120,13 @@ Only these are implemented end-to-end; do **not** invent others.
 - Large card / payload windows: `Storage.SetSlice/CardLen/ReadSlice/WriteSlice`,
   `Req.SetSlice/BodySlice/BodyLen`, `Stream.SetSlice/Slice`,
   `Event.SetSlice/DataSlice/DataLen`.
+- Transformer/inference primitives: `Tensor.SetShape/DotI8/MatVecI8/AddI32/
+  MulI32/ScaleI32/ReluI32/RmsNormI32/RoPEI32/SoftmaxI32/ArgMaxI32` and
+  `BitLinear.SetShape/MatVecTernary`. Use spans for all buffers.
+- Picowal PR78 facades: `Storage.Ready/IsUserPack`,
+  `Query.BuildLookupFilter/BuildManyToManyMap`, and
+  `Search.Clear/UpsertText/Delete/IndexPack/QueryText/SetVector/QueryHybrid/
+  Result/Score/Plan/SetSemanticWeight`.
 - `Utf8Writer.*`, `Utf8Reader.*`, `Json.*`, `Xml.*` — text/binary builders.
 - `Random.U32(seedReg)`, `Queue.Enqueue/Dequeue/Depth(...)`.
 
