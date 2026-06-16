@@ -1087,6 +1087,8 @@
         if (verb === "OPEN") { var dev = this.parseAtom(), scfg = this.parseAtom(); return { t: "Call", ns: "Stream", method: "Open", args: [dev, scfg] }; }
         if (verb === "NEXT") return { t: "Call", ns: "Stream", method: "Next", args: [this.parseAtom()] };
         if (verb === "SPAN") return { t: "Call", ns: "Stream", method: "Span", args: [this.parseAtom()] };
+        if (verb === "SETSLICE") { this.needStmt(wantValue, "STREAM SETSLICE"); var so = this.parseAtom(); if (this.peek().kind === "op" && this.peek().value === ",") this.next(); var sl = this.parseAtom(); return { t: "Call", ns: "Stream", method: "SetSlice", args: [so, sl] }; }
+        if (verb === "SLICE") return { t: "Call", ns: "Stream", method: "Slice", args: [this.parseAtom()] };
         if (verb === "SUBMIT") { this.needStmt(wantValue, "STREAM SUBMIT"); var sst = this.parseAtom(); this.eatOp("="); var sle = this.parseExpr(); return { t: "Call", ns: "Stream", method: "Submit", args: [sst, sle] }; }
         if (verb === "RELEASE") { this.needStmt(wantValue, "STREAM RELEASE"); return { t: "Call", ns: "Stream", method: "Release", args: [this.parseAtom()] }; }
         if (verb === "CLOSE") { this.needStmt(wantValue, "STREAM CLOSE"); return { t: "Call", ns: "Stream", method: "Close", args: [this.parseAtom()] }; }
@@ -1103,7 +1105,10 @@
         if (verb === "TYPE") return { t: "Call", ns: "Event", method: "Type", args: [this.parseAtom()] };
         if (verb === "TARGET") return { t: "Call", ns: "Event", method: "Target", args: [this.parseAtom()] };
         if (verb === "DATA") return { t: "Call", ns: "Event", method: "Data", args: [this.parseAtom()] };
+        if (verb === "DATALEN") return { t: "Call", ns: "Event", method: "DataLen", args: [this.parseAtom()] };
+        if (verb === "DATASLICE") return { t: "Call", ns: "Event", method: "DataSlice", args: [this.parseAtom()] };
         if (verb === "COUNT") return { t: "Call", ns: "Event", method: "Count", args: [] };
+        if (verb === "SETSLICE") { this.needStmt(wantValue, "EVENT SETSLICE"); var eo = this.parseAtom(); if (this.peek().kind === "op" && this.peek().value === ",") this.next(); var el = this.parseAtom(); return { t: "Call", ns: "Event", method: "SetSlice", args: [eo, el] }; }
         if (verb === "SETDATA") { this.needStmt(wantValue, "EVENT SETDATA"); var ev = this.parseAtom(); this.eatOp("="); var sp = this.parseExpr(); return { t: "Call", ns: "Event", method: "SetData", args: [ev, sp] }; }
         throw new Error("BASIC: unknown EVENT verb " + verb);
       }

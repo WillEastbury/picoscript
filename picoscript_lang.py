@@ -466,6 +466,9 @@ HOST_HOOK_CODES = {
     ("Req", "BodyMode"):        0x0C,
     ("Req", "BodyCount"):       0x0D,
     ("Req", "BodySpan"):        0x0E,
+    ("Req", "SetSlice"):        0x01B0,
+    ("Req", "BodySlice"):       0x01B1,
+    ("Req", "BodyLen"):         0x01B2,
     # Queue hooks (0x10-0x14)
     ("Queue", "Dequeue"):       0x10,
     ("Queue", "Enqueue"):       0x11,
@@ -802,6 +805,8 @@ HOST_HOOK_CODES = {
     ("Stream", "Submit"):       0x0173,   # rs1=streamHandle rs2=lease    rd=ok (TX)
     ("Stream", "Release"):      0x0174,   # rs1=leaseHandle               rd=ok (RX return-to-ring)
     ("Stream", "Close"):        0x0175,   # rs1=streamHandle              rd=ok
+    ("Stream", "SetSlice"):     0x0176,   # rs1=offset rs2=len            rd=ok
+    ("Stream", "Slice"):        0x0177,   # rs1=leaseHandle               rd=span (window)
     # Assert/PSUnit (0x0178-0x017C): a PicoScript-authored unit/smoke test harness.
     # Host-injected (counters in the host), like Gpio/Stream; deterministic integer
     # logic so Python VM == JS VM. Tests call Assert.Eq/True; the runner reads
@@ -823,6 +828,9 @@ HOST_HOOK_CODES = {
     ("Event", "Data"):          0x0184,   # rs1=eventId                   rd=span (0=none)
     ("Event", "SetData"):       0x0185,   # rs1=eventId rs2=span          rd=ok
     ("Event", "Count"):         0x0186,   #                               rd=pending count
+    ("Event", "SetSlice"):      0x01B3,   # rs1=offset rs2=len            rd=ok
+    ("Event", "DataSlice"):     0x01B4,   # rs1=eventId                   rd=span (window)
+    ("Event", "DataLen"):       0x01B5,   # rs1=eventId                   rd=len
     # Ui (0x0188-0x0193): a retained scene tree for a clean, minimal remote
     # windowing protocol (RDP/X spirit, but tiny). Build a window + boxes/text/
     # controls, then Ui.Serialize emits the compact deterministic PicoWire binary

@@ -339,6 +339,60 @@ CONSTRUCTS = [
      "DIM ALL = Storage.ReadSlice(7)\n"
      "Io.Write(ALL)"),
 
+    ("Stream data: slice a frame",
+     "Stream leases can be read whole with <code>Stream.Span(lease)</code> or as a "
+     "window with <code>Stream.SetSlice(offset,len)</code> + <code>Stream.Slice(lease)</code>. "
+     "This models TCP/UDP/device payloads where an event handler only needs a header "
+     "or frame window.",
+     "int dev = Device.Open(\"udp0\", 0);\n"
+     "int s = Stream.Open(dev, 65588);\n"
+     "int lease = Stream.Next(s);\n"
+     "Stream.SetSlice(10, 5);\n"
+     "int part = Stream.Slice(lease);\n"
+     "int total = 0;\n"
+     "for (i = 0; i < Span.Len(part); i++) { total += Span.Get(part, i); }\n"
+     "print(total);\n"
+     "Stream.Release(lease);\n"
+     "Stream.Close(s);\n"
+     "Device.Close(dev);",
+     "DIM DEV = DEVICE OPEN \"udp0\"\n"
+     "DIM S = STREAM OPEN DEV 65588\n"
+     "DIM LEASE = STREAM NEXT S\n"
+     "STREAM SETSLICE 10, 5\n"
+     "DIM PART = STREAM SLICE LEASE\n"
+     "DIM TOTAL = 0\n"
+     "FOR I = 0 TO Span.Len(PART) - 1\n"
+     "    TOTAL += Span.Get(PART, I)\n"
+     "NEXT\n"
+     "PRINT TOTAL\n"
+     "STREAM RELEASE LEASE\n"
+     "STREAM CLOSE S\n"
+     "DEVICE CLOSE DEV"),
+
+    ("Event handler: slice payload",
+     "Events can carry a payload span. The handler may read the whole payload with "
+     "<code>Event.Data(ev)</code>, or only a window with <code>Event.SetSlice</code> + "
+     "<code>Event.DataSlice(ev)</code>. Here the event carries a TCP-style parameter "
+     "frame and the handler extracts only the command value.",
+     "int ev = Event.Post(2, 99);\n"
+     "int payload = \"cmd=PING&n=3\";\n"
+     "Event.SetData(ev, payload);\n"
+     "int got = Event.Next();\n"
+     "if (Event.Type(got) == 2) {\n"
+     "    Event.SetSlice(4, 4);\n"
+     "    int cmd = Event.DataSlice(got);\n"
+     "    Io.Write(cmd);\n"
+     "}",
+     "DIM EV = EVENT POST 2 99\n"
+     "DIM PAYLOAD = \"cmd=PING&n=3\"\n"
+     "EVENT SETDATA EV = PAYLOAD\n"
+     "DIM GOT = EVENT NEXT\n"
+     "IF EVENT TYPE GOT = 2 THEN\n"
+     "    EVENT SETSLICE 4, 4\n"
+     "    DIM CMD = EVENT DATASLICE GOT\n"
+     "    Io.Write(CMD)\n"
+     "ENDIF"),
+
     ("Streaming: DMA ring (Device.* / Stream.*)",
      "Streaming hardware is a producer/consumer ring of DMA buffers, structurally "
      "like Req/Resp but over hardware. Device.Open names a device; Stream.Open starts "

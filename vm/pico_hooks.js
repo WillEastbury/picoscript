@@ -304,6 +304,8 @@
       0x173: "Stream.Submit",
       0x174: "Stream.Release",
       0x175: "Stream.Close",
+      0x176: "Stream.SetSlice",
+      0x177: "Stream.Slice",
       0x178: "Assert.Eq",
       0x179: "Assert.True",
       0x17A: "Assert.Count",
@@ -332,6 +334,12 @@
       0x1A1: "Storage.CardLen",
       0x1A2: "Storage.ReadSlice",
       0x1A3: "Storage.WriteSlice",
+      0x1B0: "Req.SetSlice",
+      0x1B1: "Req.BodySlice",
+      0x1B2: "Req.BodyLen",
+      0x1B3: "Event.SetSlice",
+      0x1B4: "Event.DataSlice",
+      0x1B5: "Event.DataLen",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }

@@ -653,6 +653,8 @@ class HostApi:
         self.devices: Dict[int, dict] = {}
         self.streams: Dict[int, dict] = {}
         self.leases: Dict[int, dict] = {}
+        self.stream_slice_offset = 0
+        self.stream_slice_len = 0
         self._dev_seq = 0
         self._stream_seq = 0
         self._lease_seq = 0
@@ -663,6 +665,8 @@ class HostApi:
         self.events: Dict[int, dict] = {}     # eventId -> {type, target, data(bytes|None), span}
         self.event_queue: List[int] = []      # pending eventIds (FIFO)
         self._event_seq = 0
+        self.event_slice_offset = 0
+        self.event_slice_len = 0
         # Ui.* retained scene tree: nodeId -> {kind,id,x,y,w,h,value,text,children}.
         self.ui_nodes: Dict[int, dict] = {}
         self._ui_seq = 0
@@ -674,6 +678,8 @@ class HostApi:
         # Simulated PIOS I/O binding state: one bound request context (I4) and
         # one in-flight response descriptor graph (I2) per VM invocation.
         self.request_context: Optional[dict] = None
+        self.req_slice_offset = 0
+        self.req_slice_len = 0
         self.response_graph: List[dict] = []
         self.response_sealed = False
         self.response_ended = False
@@ -1452,6 +1458,11 @@ class HostApi:
             name_h = self._str_span(vm, str(k))
             value_h = self._str_span(vm, str(v))
             hdr[str(k).lower()] = {"name": name_h, "value": value_h}
+        def body_span(chunk):
+            if isinstance(chunk, (bytes, bytearray)):
+                return self._new_span_bytes(vm, bytes(chunk))
+            return self._str_span(vm, str(chunk))
+
         self.request_context = {
             "seq": int(seq) & MASK32,
             "principal": self._str_span(vm, str(principal)),
@@ -1459,7 +1470,7 @@ class HostApi:
             "path": self._str_span(vm, str(path)),
             "headers": hdr,
             "body_mode": int(body_mode) & MASK32,
-            "body": [self._str_span(vm, str(chunk)) for chunk in body],
+            "body": [body_span(chunk) for chunk in body],
         }
         self.response_graph = []
         self.response_sealed = False
@@ -1569,6 +1580,24 @@ class HostApi:
         if method == "BodySpan":
             idx = _sx32(R[rs1])
             R[rd] = ctx["body"][idx] if 0 <= idx < len(ctx["body"]) else 0
+            return True
+        if method == "SetSlice":
+            self.req_slice_offset = max(0, _sx32(R[rs1]))
+            self.req_slice_len = max(0, _sx32(R[rs2]))
+            R[rd] = 1
+            return True
+        if method == "BodyLen":
+            idx = _sx32(R[rs1])
+            h = ctx["body"][idx] if 0 <= idx < len(ctx["body"]) else 0
+            R[rd] = len(self._span_raw(vm, h)) if h else 0
+            return True
+        if method == "BodySlice":
+            idx = _sx32(R[rs1])
+            h = ctx["body"][idx] if 0 <= idx < len(ctx["body"]) else 0
+            data = self._span_raw(vm, h) if h else b""
+            off = min(self.req_slice_offset, len(data))
+            end = min(off + self.req_slice_len, len(data))
+            R[rd] = self._new_span_bytes(vm, data[off:end])
             return True
         return False
 
@@ -2039,6 +2068,22 @@ class HostApi:
                 le["span"] = self._new_span_bytes(vm, le["data"])
             vm.regs[rd] = le["span"]
             return True
+        if method == "SetSlice":
+            self.stream_slice_offset = max(0, _sx32(vm.regs[rs1]))
+            self.stream_slice_len = max(0, _sx32(vm.regs[rs2]))
+            vm.regs[rd] = 1
+            return True
+        if method == "Slice":
+            le = self.leases.get(vm.regs[rs1] & MASK32)
+            if not le or le["released"]:
+                self.host_status = 1
+                vm.regs[rd] = 0
+                return True
+            data = le["data"]
+            off = min(self.stream_slice_offset, len(data))
+            end = min(off + self.stream_slice_len, len(data))
+            vm.regs[rd] = self._new_span_bytes(vm, data[off:end])
+            return True
         if method == "Submit":                                  # TX: hand filled buffer to device
             st = self.streams.get(vm.regs[rs1] & MASK32)
             le = self.leases.get(vm.regs[rs2] & MASK32)
@@ -2131,6 +2176,20 @@ class HostApi:
             if not ev["span"]:
                 ev["span"] = self._new_span_bytes(vm, ev["data"])
             vm.regs[rd] = ev["span"]
+            return True
+        if method == "SetSlice":
+            self.event_slice_offset = max(0, _sx32(vm.regs[rs1]))
+            self.event_slice_len = max(0, _sx32(vm.regs[rs2]))
+            vm.regs[rd] = 1
+            return True
+        if method == "DataLen":
+            vm.regs[rd] = len(ev["data"]) if ev and ev["data"] is not None else 0
+            return True
+        if method == "DataSlice":
+            data = ev["data"] if ev and ev["data"] is not None else b""
+            off = min(self.event_slice_offset, len(data))
+            end = min(off + self.event_slice_len, len(data))
+            vm.regs[rd] = self._new_span_bytes(vm, data[off:end])
             return True
         if method == "SetData":
             if ev is not None:

@@ -602,6 +602,15 @@ class Parser:
                 return Call("Stream", "Next", [self.parse_atom()])
             if verb == "SPAN":
                 return Call("Stream", "Span", [self.parse_atom()])
+            if verb == "SETSLICE":
+                self._need_stmt(want_value, "STREAM SETSLICE")
+                off = self.parse_atom()
+                if self.peek().kind == "op" and self.peek().value == ",":
+                    self.next()
+                ln = self.parse_atom()
+                return Call("Stream", "SetSlice", [off, ln])
+            if verb == "SLICE":
+                return Call("Stream", "Slice", [self.parse_atom()])
             if verb == "SUBMIT":
                 self._need_stmt(want_value, "STREAM SUBMIT")
                 st = self.parse_atom(); self.eat_op("="); le = self.parse_expr()
@@ -635,8 +644,19 @@ class Parser:
                 return Call("Event", "Target", [self.parse_atom()])
             if verb == "DATA":
                 return Call("Event", "Data", [self.parse_atom()])
+            if verb == "DATALEN":
+                return Call("Event", "DataLen", [self.parse_atom()])
+            if verb == "DATASLICE":
+                return Call("Event", "DataSlice", [self.parse_atom()])
             if verb == "COUNT":
                 return Call("Event", "Count", [])
+            if verb == "SETSLICE":
+                self._need_stmt(want_value, "EVENT SETSLICE")
+                off = self.parse_atom()
+                if self.peek().kind == "op" and self.peek().value == ",":
+                    self.next()
+                ln = self.parse_atom()
+                return Call("Event", "SetSlice", [off, ln])
             if verb == "SETDATA":
                 self._need_stmt(want_value, "EVENT SETDATA")
                 ev = self.parse_atom(); self.eat_op("="); sp = self.parse_expr()

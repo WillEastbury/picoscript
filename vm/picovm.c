@@ -937,7 +937,7 @@ uint32_t pv_hook_cap(int hook)
     if (hook == PV_HOOK_CRYPTO_ENCRYPT || hook == PV_HOOK_CRYPTO_DECRYPT) return PV_CAP_CRYPTO;
     if (hook >= 0x130 && hook <= 0x133) return PV_CAP_NET;   /* Http Read/Generate (Parse/Encode are pure) */
     if (hook >= 0x01 && hook <= 0x06) return PV_CAP_KERNEL;  /* Kernel.* */
-    if (hook >= 0x07 && hook <= 0x0E) return PV_CAP_NET;     /* Req.* */
+    if ((hook >= 0x07 && hook <= 0x0E) || (hook >= 0x1B0 && hook <= 0x1B2)) return PV_CAP_NET;     /* Req.* */
     if (hook >= 0x10 && hook <= 0x14) return PV_CAP_QUEUE;   /* Queue.* */
     if ((hook >= 0x15 && hook <= 0x1F) || hook == 0x38 || hook == 0x39) return PV_CAP_NET;  /* Resp.* */
     if (hook == PV_HOOK_RANDOM_U32) return PV_CAP_RANDOM;    /* Random.U32 */
@@ -951,8 +951,8 @@ uint32_t pv_hook_cap(int hook)
     if (hook >= 0x150 && hook <= 0x156) return PV_CAP_GPIO;  /* Gpio.* */
     if (hook >= 0x160 && hook <= 0x167) return PV_CAP_CAPSULE; /* Pack/Card/Fifo */
     if (hook >= 0x168 && hook <= 0x16B) return PV_CAP_DEVICE;  /* Device.* */
-    if (hook >= 0x170 && hook <= 0x175) return PV_CAP_DMA;     /* Stream.* */
-    if (hook >= 0x180 && hook <= 0x186) return PV_CAP_EVENT;   /* Event.* */
+    if (hook >= 0x170 && hook <= 0x177) return PV_CAP_DMA;     /* Stream.* */
+    if ((hook >= 0x180 && hook <= 0x186) || (hook >= 0x1B3 && hook <= 0x1B5)) return PV_CAP_EVENT;   /* Event.* */
     if (hook >= 0x188 && hook <= 0x193) return PV_CAP_UI;      /* Ui.* */
     return 0;                                                /* pure: String/Number/Maths/Span/... */
 }

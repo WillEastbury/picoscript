@@ -249,6 +249,47 @@ can run locally. PIOS should bind the same hooks to WALFS/SD range I/O, so a
 Typed active-record cards should use dot fields for small structured records;
 blob and dataset cards should use slice/row APIs under the hood.
 
+## 12. Stream, request, and event payload slices
+
+The same slice-first rule applies to inbound data. HTTP bodies, TCP/UDP frames,
+device streams, and event payloads may be much larger than the bytes a handler
+needs. The whole-blob APIs still exist, but handlers can ask for a window.
+
+| Source | Whole blob | Slice window |
+|--------|------------|--------------|
+| HTTP/TCP request body | `Req.BodySpan(index)` | `Req.SetSlice(offset, len)` then `Req.BodySlice(index)` |
+| Stream lease | `Stream.Span(lease)` | `Stream.SetSlice(offset, len)` then `Stream.Slice(lease)` |
+| Event payload | `Event.Data(ev)` | `Event.SetSlice(offset, len)` then `Event.DataSlice(ev)` |
+
+Example: handle an event carrying a TCP-style frame and extract just the command:
+
+```c
+int ev = Event.Post(2, 99);
+int payload = "cmd=PING&n=3";
+Event.SetData(ev, payload);
+
+int got = Event.Next();
+if (Event.Type(got) == 2) {
+    Event.SetSlice(4, 4);
+    int cmd = Event.DataSlice(got);
+    Io.Write(cmd);        // PING
+}
+```
+
+Example: read a window from a stream lease:
+
+```c
+int dev = Device.Open("udp0", 0);
+int s = Stream.Open(dev, 65588);  // RX, 26-byte frame, 1 frame
+int lease = Stream.Next(s);
+
+Stream.SetSlice(10, 5);
+int part = Stream.Slice(lease);
+```
+
+On PIOS, these hooks should map to descriptor/lease range reads rather than
+copying the whole request or stream buffer into PicoScript memory.
+
 ## 9. Where to go next
 
 - **Guide tab:** copy and edit examples for loops, branches, HTTP, storage, UI,

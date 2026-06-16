@@ -1177,6 +1177,11 @@
         value: this._strSpan(String(headers[k]))
       };
     }, this);
+    function bodySpan(chunk) {
+      if (chunk instanceof Uint8Array) return this._newSpanBytes(Array.from(chunk));
+      if (Array.isArray(chunk)) return this._newSpanBytes(chunk.map(function (b) { return b & 0xFF; }));
+      return this._strSpan(String(chunk));
+    }
     this.requestContext = {
       seq: (ctx.seq || 0) >>> 0,
       principal: this._strSpan(String(ctx.principal || "")),
@@ -1184,7 +1189,9 @@
       path: this._strSpan(String(ctx.path || "/")),
       headers: hdr,
       bodyMode: (ctx.bodyMode || ctx.body_mode || 0) >>> 0,
-      body: body.map(function (chunk) { return this._strSpan(String(chunk)); }, this)
+      body: body.map(function (chunk) { return bodySpan.call(this, chunk); }, this),
+      sliceOffset: 0,
+      sliceLen: 0
     };
     this.responseGraph = [];
     this.responseSealed = false;
@@ -1268,6 +1275,9 @@
     if (method === "BodyMode") { R[rd] = ctx.bodyMode | 0; return true; }
     if (method === "BodyCount") { R[rd] = ctx.body.length | 0; return true; }
     if (method === "BodySpan") { var idx = R[rs1] | 0; R[rd] = (idx >= 0 && idx < ctx.body.length) ? ctx.body[idx] : 0; return true; }
+    if (method === "SetSlice") { ctx.sliceOffset = Math.max(0, R[rs1] | 0); ctx.sliceLen = Math.max(0, R[rs2] | 0); R[rd] = 1; return true; }
+    if (method === "BodyLen") { var li = R[rs1] | 0, lh = (li >= 0 && li < ctx.body.length) ? ctx.body[li] : 0; R[rd] = lh ? this._spanBytes(lh).length : 0; return true; }
+    if (method === "BodySlice") { var si = R[rs1] | 0, sh = (si >= 0 && si < ctx.body.length) ? ctx.body[si] : 0, sd = sh ? this._spanBytes(sh) : []; var so = Math.min(ctx.sliceOffset, sd.length), se = Math.min(so + ctx.sliceLen, sd.length); R[rd] = this._newSpanBytes(sd.slice(so, se)); return true; }
     return false;
   };
   PicoVM.prototype._resp = function (method, rd, rs1, rs2) {
@@ -1503,7 +1513,7 @@
   // dir(bit0:0=RX/1=TX) | bufSize<<1 | frames<<16. Python VM == JS VM.
   PicoVM.prototype._ringState = function () {
     if (this._streamProvider) return this._streamProvider;
-    if (!this._dev) this._dev = { devices: {}, streams: {}, leases: {}, ds: 0, ss: 0, ls: 0 };
+    if (!this._dev) this._dev = { devices: {}, streams: {}, leases: {}, ds: 0, ss: 0, ls: 0, sliceOffset: 0, sliceLen: 0 };
     return this._dev;
   };
   PicoVM.prototype._ringFrame = function (idx, buf) {
@@ -1540,6 +1550,13 @@
       if (!le || le.released) { this.hostStatus = 1; this.regs[rd] = 0; return true; }
       if (!le.span) le.span = this._newSpanBytes(le.data);
       this.regs[rd] = le.span; return true;
+    }
+    if (method === "SetSlice") { d.sliceOffset = Math.max(0, this.regs[rs1] | 0); d.sliceLen = Math.max(0, this.regs[rs2] | 0); this.regs[rd] = 1; return true; }
+    if (method === "Slice") {
+      var xle = d.leases[this.regs[rs1] | 0];
+      if (!xle || xle.released) { this.hostStatus = 1; this.regs[rd] = 0; return true; }
+      var xo = Math.min(d.sliceOffset, xle.data.length), xe = Math.min(xo + d.sliceLen, xle.data.length);
+      this.regs[rd] = this._newSpanBytes(xle.data.slice(xo, xe)); return true;
     }
     if (method === "Submit") {
       var sst = d.streams[this.regs[rs1] | 0], sle = d.leases[this.regs[rs2] | 0];
@@ -1583,7 +1600,7 @@
   // enqueues; Next dequeues the oldest (0 = empty). External UI/timer events are
   // injected through the same Post path -> byte-identical to the Python VM.
   PicoVM.prototype._event = function (method, rd, rs1, rs2) {
-    if (!this._ev) this._ev = { recs: {}, queue: [], seq: 0 };
+    if (!this._ev) this._ev = { recs: {}, queue: [], seq: 0, sliceOffset: 0, sliceLen: 0 };
     var e = this._ev;
     if (method === "Post") {
       e.seq++;
@@ -1601,6 +1618,9 @@
       if (!rec.span) rec.span = this._newSpanBytes(rec.data);
       this.regs[rd] = rec.span; return true;
     }
+    if (method === "SetSlice") { e.sliceOffset = Math.max(0, this.regs[rs1] | 0); e.sliceLen = Math.max(0, this.regs[rs2] | 0); this.regs[rd] = 1; return true; }
+    if (method === "DataLen") { this.regs[rd] = (rec && rec.data !== null) ? rec.data.length : 0; return true; }
+    if (method === "DataSlice") { var ed = (rec && rec.data !== null) ? rec.data : [], eo = Math.min(e.sliceOffset, ed.length), ee = Math.min(eo + e.sliceLen, ed.length); this.regs[rd] = this._newSpanBytes(ed.slice(eo, ee)); return true; }
     if (method === "SetData") {
       if (rec) { rec.data = this._spanBytes(this.regs[rs2]); rec.span = 0; this.regs[rd] = 1; }
       else this.regs[rd] = 0;
