@@ -34,6 +34,50 @@ def out_ints(vm):
     return [s32(int.from_bytes(b, "big")) for b in vm.output]
 
 
+def c_save_bytes(base, data):
+    return "".join(f"Storage.Save(0, 0, {base + i}, {b});\n" for i, b in enumerate(data))
+
+
+def basic_save_bytes(base, data):
+    return "".join(f"Storage.Save(0, 0, {base + i}, {b})\n" for i, b in enumerate(data))
+
+
+def c_load_bytes_to_mem(card_base, mem_base, n):
+    return "".join(
+        f"int b{i} = 0; Storage.Load(0, 0, {card_base + i}, b{i}); Memory.Set({mem_base + i}, b{i});\n"
+        for i in range(n)
+    )
+
+
+def basic_load_bytes_to_mem(card_base, mem_base, n):
+    return "".join(
+        f"DIM B{i} = 0\nStorage.Load(0, 0, {card_base + i}, B{i})\nMemory.Set({mem_base + i}, B{i})\n"
+        for i in range(n)
+    )
+
+
+def c_copy_cards_to_span(card_base, mem_base, length_var, out_var):
+    return (
+        f"for (i = 0; i < {length_var}; i = i + 1) {{\n"
+        "    int b = 0;\n"
+        f"    Storage.Load(0, 0, {card_base} + i, b);\n"
+        f"    Memory.Set({mem_base} + i, b);\n"
+        "}\n"
+        f"int {out_var} = Span.Make({mem_base}, {length_var});\n"
+    )
+
+
+def basic_copy_cards_to_span(card_base, mem_base, length_var, out_var):
+    return (
+        f"FOR I = 0 TO {length_var} - 1\n"
+        "    DIM B = 0\n"
+        f"    Storage.Load(0, 0, {card_base} + I, B)\n"
+        f"    Memory.Set({mem_base} + I, B)\n"
+        "NEXT\n"
+        f"DIM {out_var} = Span.Make({mem_base}, {length_var})\n"
+    )
+
+
 # (title, description, C-style source, BASIC-style source)
 CONSTRUCTS = [
     ("Variables & arithmetic",
@@ -135,69 +179,128 @@ CONSTRUCTS = [
      "Net.Status(200)\nNet.Type(\"application/json\")\nprint(42)",
      "Net.Status(200).\nNet.Type(\"application/json\").\nPrint 42."),
 
-    ("Cards: CRUD &amp; query (Storage.*)",
-     "Program-level card store. Field names and queries are UTF-8 byte-spans built "
-     "in arena memory (Memory.Set + Span.Make); cards are serialized with the "
-     "PicoBinarySerializer into a PicoStore. UsePack selects a pack, AddCard/EditCard "
-     "select the current card, then SetField/GetField/QueryCard operate on it. This "
-     "creates 3 cards, reads (7) and updates (50) one, queries qty&gt;40 (3 ids), then "
-     "deletes one and re-queries (2).",
-     "Memory.Set(200,113); Memory.Set(201,116); Memory.Set(202,121);\n"
-     "int qty = Span.Make(200, 3);\n"
-     "Memory.Set(210,113); Memory.Set(211,116); Memory.Set(212,121); Memory.Set(213,32);\n"
-     "Memory.Set(214,62); Memory.Set(215,32); Memory.Set(216,52); Memory.Set(217,48);\n"
-     "int qry = Span.Make(210, 8);\n"
+    ("Cards: create &amp; update",
+     "Create records in a PicoWAL/PicoStore pack, write fields, edit an existing "
+     "card, and read the updated field back. Field names are spans; string literals "
+     "are the readable way to create those spans.",
+     "int qty = \"qty\";\n"
+     "Storage.UsePack(1);\n"
+     "int first = Storage.AddCard();\n"
+     "Storage.SetField(qty, 42);\n"
+     "int second = Storage.AddCard();\n"
+     "Storage.SetField(qty, 7);\n"
+     "Storage.EditCard(second);\n"
+     "print(Storage.GetField(qty));\n"
+     "Storage.SetField(qty, 50);\n"
+     "print(Storage.GetField(qty));",
+     "DIM QTY = \"qty\"\n"
+     "STORE USE PACK 1\n"
+     "DIM FIRST NEW CARD\n"
+     "STORE SET QTY = 42\n"
+     "DIM SECOND NEW CARD\n"
+     "STORE SET QTY = 7\n"
+     "LOAD CARD SECOND\n"
+     "PRINT LOAD QTY\n"
+     "STORE SET QTY = 50\n"
+     "PRINT LOAD QTY"),
+
+    ("Cards: query records",
+     "Query a pack with the card query language (<code>field OP value</code>). This "
+     "creates three cards, finds the two with <code>qty &gt; 40</code>, prints their "
+     "card ids, deletes one, then re-runs the query.",
+     "int qty = \"qty\";\n"
+     "int q = \"qty > 40\";\n"
      "Storage.UsePack(1);\n"
      "int a = Storage.AddCard(); Storage.SetField(qty, 42);\n"
      "int b = Storage.AddCard(); Storage.SetField(qty, 7);\n"
      "int c = Storage.AddCard(); Storage.SetField(qty, 99);\n"
-     "Storage.EditCard(b); print(Storage.GetField(qty));\n"
-     "Storage.SetField(qty, 50); print(Storage.GetField(qty));\n"
-     "int n = Storage.QueryCard(qry); print(n);\n"
-     "print(Storage.QueryResult(0)); print(Storage.QueryResult(1)); print(Storage.QueryResult(2));\n"
-     "Storage.DeleteCard(1); print(Storage.QueryCard(qry));",
-     "Memory.Set(200, 113)\nMemory.Set(201, 116)\nMemory.Set(202, 121)\n"
-     "DIM QTY = Span.Make(200, 3)\n"
-     "Memory.Set(210, 113)\nMemory.Set(211, 116)\nMemory.Set(212, 121)\nMemory.Set(213, 32)\n"
-     "Memory.Set(214, 62)\nMemory.Set(215, 32)\nMemory.Set(216, 52)\nMemory.Set(217, 48)\n"
-     "DIM QRY = Span.Make(210, 8)\n"
-     "Storage.UsePack(1)\n"
-     "DIM A = Storage.AddCard()\nStorage.SetField(QTY, 42)\n"
-     "DIM B = Storage.AddCard()\nStorage.SetField(QTY, 7)\n"
-     "DIM C = Storage.AddCard()\nStorage.SetField(QTY, 99)\n"
-     "Storage.EditCard(B)\nPRINT Storage.GetField(QTY)\n"
-     "Storage.SetField(QTY, 50)\nPRINT Storage.GetField(QTY)\n"
-     "DIM N = Storage.QueryCard(QRY)\nPRINT N\n"
-     "PRINT Storage.QueryResult(0)\nPRINT Storage.QueryResult(1)\nPRINT Storage.QueryResult(2)\n"
-     "Storage.DeleteCard(1)\nPRINT Storage.QueryCard(QRY)",
-     "Memory.Set(200, 113)\nMemory.Set(201, 116)\nMemory.Set(202, 121)\n"
-     "qty = Span.Make(200, 3)\n"
-     "Memory.Set(210, 113)\nMemory.Set(211, 116)\nMemory.Set(212, 121)\nMemory.Set(213, 32)\n"
-     "Memory.Set(214, 62)\nMemory.Set(215, 32)\nMemory.Set(216, 52)\nMemory.Set(217, 48)\n"
-     "qry = Span.Make(210, 8)\n"
-     "Storage.UsePack(1)\n"
-     "a = Storage.AddCard()\nStorage.SetField(qty, 42)\n"
-     "b = Storage.AddCard()\nStorage.SetField(qty, 7)\n"
-     "c = Storage.AddCard()\nStorage.SetField(qty, 99)\n"
-     "Storage.EditCard(b)\nprint(Storage.GetField(qty))\n"
-     "Storage.SetField(qty, 50)\nprint(Storage.GetField(qty))\n"
-     "n = Storage.QueryCard(qry)\nprint(n)\n"
-     "print(Storage.QueryResult(0))\nprint(Storage.QueryResult(1))\nprint(Storage.QueryResult(2))\n"
-     "Storage.DeleteCard(1)\nprint(Storage.QueryCard(qry))",
-     "Memory.Set(200, 113).\nMemory.Set(201, 116).\nMemory.Set(202, 121).\n"
-     "Set qty to Span.Make(200, 3).\n"
-     "Memory.Set(210, 113).\nMemory.Set(211, 116).\nMemory.Set(212, 121).\nMemory.Set(213, 32).\n"
-     "Memory.Set(214, 62).\nMemory.Set(215, 32).\nMemory.Set(216, 52).\nMemory.Set(217, 48).\n"
-     "Set qry to Span.Make(210, 8).\n"
-     "Storage.UsePack(1).\n"
-     "Set a to Storage.AddCard().\nStorage.SetField(qty, 42).\n"
-     "Set b to Storage.AddCard().\nStorage.SetField(qty, 7).\n"
-     "Set c to Storage.AddCard().\nStorage.SetField(qty, 99).\n"
-     "Storage.EditCard(b).\nPrint Storage.GetField(qty).\n"
-     "Storage.SetField(qty, 50).\nPrint Storage.GetField(qty).\n"
-     "Set n to Storage.QueryCard(qry).\nPrint n.\n"
-     "Print Storage.QueryResult(0).\nPrint Storage.QueryResult(1).\nPrint Storage.QueryResult(2).\n"
-     "Storage.DeleteCard(1).\nPrint Storage.QueryCard(qry)."),
+     "print(Storage.QueryCard(q));\n"
+     "print(Storage.QueryResult(0));\n"
+     "print(Storage.QueryResult(1));\n"
+     "Storage.DeleteCard(a);\n"
+     "print(Storage.QueryCard(q));",
+     "DIM QTY = \"qty\"\n"
+     "DIM Q = \"qty > 40\"\n"
+     "STORE USE PACK 1\n"
+     "DIM A NEW CARD\n"
+     "STORE SET QTY = 42\n"
+     "DIM B NEW CARD\n"
+     "STORE SET QTY = 7\n"
+     "DIM C NEW CARD\n"
+     "STORE SET QTY = 99\n"
+     "PRINT LOAD QUERY Q\n"
+     "PRINT LOAD RESULT 0\n"
+     "PRINT LOAD RESULT 1\n"
+     "STORE DELETE CARD A\n"
+     "PRINT LOAD QUERY Q"),
+
+    ("HTTP request: parse query + body",
+     "The portal's HTTP simulator writes request metadata into PicoWAL cards: method "
+     "at card 1, body length at 2, query length at 5, query bytes mirrored at 10+, "
+     "and body bytes mirrored at 20+. This runnable example seeds those same cards, "
+     "parses query and form-body parameters, and returns 201 for POST.",
+     "Storage.Save(0, 0, 1, 2);\n"
+     "Storage.Save(0, 0, 5, 8);\n"
+     "Storage.Save(0, 0, 2, 6);\n" +
+     c_save_bytes(10, b"name=Ada") +
+     c_save_bytes(20, b"qty=42") +
+     "int method = 0; int qlen = 0; int blen = 0;\n"
+     "Storage.Load(0, 0, 1, method);\n"
+     "Storage.Load(0, 0, 5, qlen);\n"
+     "Storage.Load(0, 0, 2, blen);\n"
+     + c_load_bytes_to_mem(10, 2000, len(b"name=Ada")) +
+     "int query = Span.Make(2000, qlen);\n" +
+     c_load_bytes_to_mem(20, 3000, len(b"qty=42")) +
+     "int body = Span.Make(3000, blen);\n"
+     "int qmodel = Http.ParseQuery(query);\n"
+     "int bmodel = Http.ParseForm(body);\n"
+     "if (method == 2) { Net.Status(201); } else { Net.Status(200); }\n"
+     "Io.Write(qmodel); Io.Write(bmodel);",
+     "Storage.Save(0, 0, 1, 2)\n"
+     "Storage.Save(0, 0, 5, 8)\n"
+     "Storage.Save(0, 0, 2, 6)\n" +
+     basic_save_bytes(10, b"name=Ada") +
+     basic_save_bytes(20, b"qty=42") +
+     "DIM METHOD = 0\nDIM QLEN = 0\nDIM BLEN = 0\n"
+     "Storage.Load(0, 0, 1, METHOD)\n"
+     "Storage.Load(0, 0, 5, QLEN)\n"
+     "Storage.Load(0, 0, 2, BLEN)\n"
+     + basic_load_bytes_to_mem(10, 2000, len(b"name=Ada")) +
+     "DIM QUERY = Span.Make(2000, QLEN)\n" +
+     basic_load_bytes_to_mem(20, 3000, len(b"qty=42")) +
+     "DIM BODY = Span.Make(3000, BLEN)\n"
+     "DIM QMODEL = Http.ParseQuery(QUERY)\n"
+     "DIM BMODEL = Http.ParseForm(BODY)\n"
+     "IF METHOD = 2 THEN\n"
+     "    NET.STATUS(201)\n"
+     "ELSE\n"
+     "    NET.STATUS(200)\n"
+     "ENDIF\n"
+     "Io.Write(QMODEL)\nIo.Write(BMODEL)"),
+
+    ("TCP stream: parse parameter frame",
+     "The TCP/raw-bytes panel writes inbound bytes to PicoWAL too. For raw TCP, the "
+     "body length is card 2 and a small frame mirror is at cards 20+. Here the frame is "
+     "<code>cmd=PING&amp;n=3</code>; the program parses it with the same query parser and "
+     "responds with the normalized key/value model.",
+     "Storage.Save(0, 0, 2, 12);\n" +
+     c_save_bytes(20, b"cmd=PING&n=3") +
+     "int len = 0;\n"
+     "Storage.Load(0, 0, 2, len);\n"
+     + c_load_bytes_to_mem(20, 2000, len(b"cmd=PING&n=3")) +
+     "int frame = Span.Make(2000, len);\n"
+     "int model = Http.ParseQuery(frame);\n"
+     "Net.Status(200);\n"
+     "Io.Write(model);",
+     "Storage.Save(0, 0, 2, 12)\n" +
+     basic_save_bytes(20, b"cmd=PING&n=3") +
+     "DIM LEN = 0\n"
+     "Storage.Load(0, 0, 2, LEN)\n"
+     + basic_load_bytes_to_mem(20, 2000, len(b"cmd=PING&n=3")) +
+     "DIM FRAME = Span.Make(2000, LEN)\n"
+     "DIM MODEL = Http.ParseQuery(FRAME)\n"
+     "NET.STATUS(200)\n"
+     "Io.Write(MODEL)"),
 
     ("Streaming: DMA ring (Device.* / Stream.*)",
      "Streaming hardware is a producer/consumer ring of DMA buffers, structurally "
@@ -1177,7 +1280,8 @@ function render(){
   document.getElementById('regs').innerHTML=Array.from(vm.regs).map(function(v,idx){
     return '<div class="r">R'+idx+' <b>'+v+'</b></div>';}).join('');
   document.getElementById('state').textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;
-  document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']';
+  var _txt=vm.outputText(),_pr=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_txt);
+  document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']'+(_pr&&_txt?'\ntext: '+JSON.stringify(_txt):'');
   var ps=document.getElementById('psunit');
   if(ps){
     var tot=(vm._asTotal||0)>>>0, fail=(vm._asFailed||0)>>>0;

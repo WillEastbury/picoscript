@@ -12,7 +12,8 @@ where that was my only objection I implemented a representative op to prove it.
 ## Implemented this session
 `Bits.*`, `Dot8.*` (NEON SDOT / SMLAD), native `Memory.*`/`Io`, `String.*`,
 `Number.*`, `Maths.Power/Sqrt`, `Template.*` (holes/sections/`{{#each}}`),
-`Compress.PicoCompress/PicoDecompress` (RLE), `Crypto.Sha256` + `Crypto.HmacSha256`
+`Compress.PicoCompress/PicoDecompress`, `Compress.BrotliCompress/BrotliDecompress`,
+`Compress.Gzip*`/`Deflate*`, `Crypto.Sha256` + `Crypto.HmacSha256`
 (RFC 2104, parity-tested to RFC 4231 vectors), `Html.Encode/Decode`,
 `Http.ParseQuery/ParseForm` (url-decode -> Template model) + `Http.EncodeJson/ParseJson`
 (model <-> JSON, nested JSON flattens to the `{{#each}}` model).
@@ -66,9 +67,11 @@ implemented; the 64-bit ones are deferred for this reason.
 - **3-argument ops** — `Maths.Clamp(x,lo,hi)`, `Lerp(a,b,t)`. The host-hook ABI
   is 2-in/1-out, so a 3-arg op needs the stateful 2-call pattern (like
   `String.SetReplace` / `Dot8.Len`) or an `imm16`-carried constant. Doable.
-- **Standard codecs** — `Compress.Brotli/Gzip/Deflate`. Require full spec-exact
-  LZ77+Huffman bitstream codecs, bit-identical across Python and JS. The custom
-  `PicoCompress` (RLE) is implemented and covers the embedded case.
+- **Standard codecs** — implemented. `PicoCompress` is the vendored
+  `picocompress` codec. `Brotli` is a real in-runtime RFC 7932 encoder/decoder
+  whose output browser/zlib decoders accept. `Gzip`/`Deflate` are kept for
+  outside-world interop. All are parity-tested across the runtime paths that
+  implement them; see `docs/COMPRESS.md`.
 - **HTML DOM + HTTP parsing** — `Html.CreateNode/SetAttribute/QuerySelector/
   ParseTree/Serialize` need a mutable tree model + parser. The pure HTTP parsers
   **are implemented**: `Http.ParseQuery/ParseForm` (URL-decode -> `key=value`

@@ -12,7 +12,7 @@ native JS).
 |------|-------|
 | `text_tools.pc` | `String.ToUpper/Length`, `Number.Parse/ToHex`, `Html.Encode` over arena spans |
 | `web_template.pc` | the picoweb flow: `Http.ParseQuery` → key=value model → `Template.Compile`/`Render` |
-| `hashing.pc` | `Crypto.Sha256` (32-byte digest) + `Compress.PicoCompress`/`PicoDecompress` (RLE) |
+| `hashing.pc` | `Crypto.Sha256` (32-byte digest) + the real `Compress.PicoCompress`/`PicoDecompress` codec |
 
 These are exercised by `tests/test_examples_parity.py`, which runs each on all five
 runtimes and asserts identical output.

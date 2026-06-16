@@ -86,6 +86,7 @@
     this.cards = this._extCards || new Map();   // PicoWAL store persists if external
     this.callStack = [];
     this.output = [];          // array of byte values (0..255)
+    this.outputEvents = [];    // typed chunks for display only: int / bytes / byte
     this.httpStatus = -1;
     this.httpType = null;
     this.queues = {};
@@ -227,6 +228,7 @@
   PicoVM.prototype._emit = function (val) {
     var v = val >>> 0;
     this.output.push((v >>> 24) & 0xFF, (v >>> 16) & 0xFF, (v >>> 8) & 0xFF, v & 0xFF);
+    this.outputEvents.push({ kind: "int", value: v | 0 });
   };
 
   PicoVM.prototype._noop = function (rd, rs1, rs2, imm) {
@@ -407,10 +409,14 @@
     // ---- Io: write raw bytes (UTF-8 strings) to the output buffer ----------
     if (name === "Io.Write") {
       var sw = this.spans[this.regs[rs1]];
-      if (sw) { for (var iw = 0; iw < sw.len; iw++) this.output.push(this.mem[sw.ptr + iw]); }
+      if (sw) {
+        var bs = [];
+        for (var iw = 0; iw < sw.len; iw++) { var bv = this.mem[sw.ptr + iw]; this.output.push(bv); bs.push(bv); }
+        this.outputEvents.push({ kind: "bytes", bytes: bs });
+      }
       return;
     }
-    if (name === "Io.WriteByte") { this.output.push(this.regs[rs1] & 0xFF); return; }
+    if (name === "Io.WriteByte") { var ob = this.regs[rs1] & 0xFF; this.output.push(ob); this.outputEvents.push({ kind: "byte", value: ob }); return; }
     // ---- text/binary primitives: Utf8Writer / Utf8Reader / Json / Xml -----
     if (name.indexOf("Utf8Writer.") === 0 || name.indexOf("Utf8Reader.") === 0 ||
         name.indexOf("Json.") === 0 || name.indexOf("Xml.") === 0) {
@@ -1673,6 +1679,24 @@
   // Decode the output buffer (PIPE ints + Io.Write bytes) as UTF-8 text.
   PicoVM.prototype.outputText = function () {
     return new TextDecoder("utf-8").decode(new Uint8Array(this.output));
+  };
+
+  // Human-readable output for mixed programs. Raw VM output remains `output`; this
+  // only formats typed chunks for the browser UI (e.g. PRINT "<br/>"; PRINT 14).
+  PicoVM.prototype.outputDisplayText = function () {
+    if (!this.outputEvents || !this.outputEvents.length) return this.outputText();
+    var dec = new TextDecoder("utf-8"), parts = [];
+    for (var i = 0; i < this.outputEvents.length; i++) {
+      var e = this.outputEvents[i];
+      if (e.kind === "int") parts.push(String(e.value | 0));
+      else if (e.kind === "byte") {
+        var b = e.value & 0xFF;
+        parts.push((b === 10 || b === 13 || b === 9 || (b >= 32 && b <= 126)) ? String.fromCharCode(b) : "[" + b + "]");
+      } else if (e.kind === "bytes") {
+        parts.push(dec.decode(Uint8Array.from(e.bytes || [])));
+      }
+    }
+    return parts.join("");
   };
 
   // ── module container: embedded + checked ABI version (INV-23) ─────────────

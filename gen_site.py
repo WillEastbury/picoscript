@@ -57,6 +57,7 @@ RETURN
 
 DOC_FILES = [
     ("readme", "README", os.path.join(ROOT, "README.md")),
+    ("tutorial", "Tutorial", os.path.join(ROOT, "docs", "TUTORIAL.md")),
     ("spec", "Language Spec", os.path.join(ROOT, "LANGUAGE_SPEC.md")),
     ("arch", "Compiler Architecture", os.path.join(ROOT, "docs", "COMPILER_ARCHITECTURE.md")),
     ("editor", "Editor Contract", os.path.join(ROOT, "docs", "picoscript-language-editor.md")),
@@ -209,6 +210,7 @@ PAGE = r"""<!DOCTYPE html>
   .pill { display:inline-block; padding:2px 7px; border-radius:10px; font-size:10px; font-weight:600;
           background:#2c313f; color:var(--muted); }
   .main { display:flex; flex:1; overflow:hidden; position:relative; }
+  .main.tool-pinned .view.active { padding-right:var(--flyout-w); }
   .view { display:none; flex:1; overflow:hidden; flex-direction:column; }
   .view.active { display:flex; }
   .sidebar { width:var(--sidebar-w); background:var(--panel); border-right:1px solid #2c313f;
@@ -289,13 +291,23 @@ PAGE = r"""<!DOCTYPE html>
   .wal th { background:var(--panel2); color:var(--muted); }
   .flyout-overlay { display:none; position:absolute; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,.4); z-index:40; }
   .flyout-overlay.open { display:block; }
-  .flyout { position:absolute; top:0; right:0; width:var(--flyout-w); height:100%;
+  .tool-panel { position:absolute; top:0; right:0; width:var(--flyout-w); height:100%;
     background:var(--panel); border-left:1px solid #2c313f; z-index:50;
-    overflow-y:auto; padding:16px; display:none; flex-direction:column; }
-  .flyout.open { display:flex; }
-  .flyout h3 { font-size:14px; color:var(--accent); margin-bottom:10px; }
-  .flyout .close-btn { position:absolute; top:10px; right:12px; background:none; border:none;
-    color:var(--muted); font-size:18px; cursor:pointer; }
+    overflow:hidden; padding:0; display:none; flex-direction:column; box-shadow:-8px 0 24px rgba(0,0,0,.25); }
+  .tool-panel.open { display:flex; }
+  .tool-head { display:flex; align-items:center; gap:6px; padding:8px; border-bottom:1px solid #2c313f; background:var(--panel2); flex-shrink:0; }
+  .tool-tabs { display:flex; gap:2px; flex:1; min-width:0; overflow:auto; }
+  .tool-tabs button { border:none; background:none; color:var(--muted); padding:5px 8px; border-radius:4px;
+    font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap; }
+  .tool-tabs button.active { background:var(--accent); color:#fff; }
+  .tool-actions { display:flex; gap:4px; flex-shrink:0; }
+  .tool-actions button { border:1px solid #2c313f; background:#0c0e14; color:var(--muted); border-radius:5px;
+    padding:4px 7px; font-size:13px; line-height:1; cursor:pointer; min-width:28px; }
+  .tool-actions button.active { color:#fff; border-color:var(--accent); background:#20263a; }
+  .tool-body { flex:1; min-height:0; overflow:auto; padding:14px 16px; }
+  .tool-tab { display:none; flex-direction:column; min-height:100%; }
+  .tool-tab.active { display:flex; }
+  .tool-tab h3 { font-size:14px; color:var(--accent); margin-bottom:10px; }
   .flyout-trigger { display:none; gap:4px; position:absolute; right:0; top:50%; transform:translateY(-50%);
     z-index:35; flex-direction:column; }
   .flyout-trigger button { writing-mode:vertical-rl; text-orientation:mixed; border:none;
@@ -329,7 +341,7 @@ PAGE = r"""<!DOCTYPE html>
   .badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:700;
     background:#3d2b00; color:#ffd866; margin-left:8px; }
   ::-webkit-scrollbar { width:8px; height:8px; } ::-webkit-scrollbar-thumb { background:#3a4150; border-radius:4px; }
-  @media (max-width:900px){ .sidebar{width:180px;} .flyout{width:320px;} .regs{grid-template-columns:repeat(2,1fr);} }
+  @media (max-width:900px){ .sidebar{width:180px;} .tool-panel{width:320px;} .main.tool-pinned .view.active{padding-right:320px;} .regs{grid-template-columns:repeat(2,1fr);} }
 </style>
 </head>
 <body>
@@ -388,7 +400,6 @@ PAGE = r"""<!DOCTYPE html>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
           <select id="example" style="width:auto"></select>
           <select id="lang" style="width:auto"><option value="c">C-style</option><option value="basic">BASIC</option><option value="python">Python</option><option value="english">English</option></select>
-          <label style="font-size:11px;color:var(--muted)"><input type="checkbox" id="walpersist"> PicoWAL</label>
         </div>
         <div id="monaco" style="flex:1;border:1px solid #2c313f;border-radius:6px;overflow:hidden;min-height:120px"></div>
         <textarea id="src" style="flex:1;display:none;min-height:120px" spellcheck="false"></textarea>
@@ -457,59 +468,67 @@ PAGE = r"""<!DOCTYPE html>
   </div>
   <!-- Flyout triggers -->
   <div class="flyout-trigger" id="flyoutTriggers">
-    <button onclick="openFlyout('fly-http')">HTTP</button>
-    <button onclick="openFlyout('fly-tcp')">TCP</button>
-    <button onclick="openFlyout('fly-cards')">Cards</button>
-    <button onclick="openFlyout('fly-query')">Query</button>
-    <button onclick="openFlyout('fly-spans')">Spans</button>
+    <button onclick="openToolPanel('http')">HTTP</button>
+    <button onclick="openToolPanel('tcp')">TCP</button>
+    <button onclick="openToolPanel('cards')">Cards</button>
+    <button onclick="openToolPanel('query')">Query</button>
+    <button onclick="openToolPanel('spans')">Spans</button>
   </div>
-  <div class="flyout-overlay" id="flyoutOverlay" onclick="closeFlyout()"></div>
-  <!-- HTTP flyout -->
-  <div class="flyout" id="fly-http">
-    <button class="close-btn" onclick="closeFlyout()">&times;</button>
-    <h3>HTTP Simulator</h3>
-    <select id="reqmode" style="margin-bottom:6px"><option value="text">HTTP/text</option><option value="hex">hex</option></select>
-    <textarea id="reqbox" style="height:90px" spellcheck="false"></textarea>
-    <div style="display:flex;gap:6px;margin:8px 0"><button class="act" onclick="sendRequest()">Send &#9654;</button><button class="ghost" onclick="loadSample()">Sample</button><button class="ghost" onclick="loadResponder()">Responder</button></div>
-    <div class="respbox" id="respout">(send a request)</div>
-  </div>
-  <!-- TCP flyout -->
-  <div class="flyout" id="fly-tcp">
-    <button class="close-btn" onclick="closeFlyout()">&times;</button>
-    <h3>TCP / Raw Bytes</h3>
-    <textarea id="tcpbox" style="height:60px" placeholder="48 65 6c 6c 6f" spellcheck="false"></textarea>
-    <div style="display:flex;gap:6px;margin:8px 0"><button class="act" onclick="sendTcp()">Send &#9654;</button></div>
-    <div style="max-height:150px;overflow:auto"><table class="wal"><tbody id="walbody2"></tbody></table></div>
-    <button class="ghost" style="margin-top:6px" onclick="walClear()">Clear</button>
-  </div>
-  <!-- Cards flyout -->
-  <div class="flyout" id="fly-cards">
-    <button class="close-btn" onclick="closeFlyout()">&times;</button>
-    <h3>Cards (PicoStore)</h3>
-    <input id="packname" value="orders" style="width:100%;margin-bottom:6px" placeholder="pack name">
-    <textarea id="cardjson" style="height:50px" spellcheck="false">{"qty": 42, "sku": "ABC", "status": 1}</textarea>
-    <div style="display:flex;gap:6px;margin:6px 0"><button class="act" onclick="cardCreate()">Create</button><button class="ghost" onclick="cardSeed()">Seed</button><button class="ghost" onclick="cardClear()">Clear</button></div>
-    <div id="cardmsg" class="cerr"></div>
-    <div class="respbox" id="serout" style="min-height:24px;font-size:10px">&hellip;</div>
-    <div style="flex:1;overflow:auto;margin-top:6px"><table class="wal"><tbody id="cardlist"></tbody></table></div>
-  </div>
-  <!-- Query flyout -->
-  <div class="flyout" id="fly-query">
-    <button class="close-btn" onclick="closeFlyout()">&times;</button>
-    <h3>Query</h3>
-    <input id="querybox" value="qty > 40 AND status = 1" style="width:100%;margin-bottom:6px">
-    <button class="act" onclick="cardQuery()">Run &#9654;</button>
-    <div style="flex:1;overflow:auto;margin-top:8px"><table class="wal"><thead><tr><th>id</th><th>record</th></tr></thead><tbody id="qresults"></tbody></table></div>
-  </div>
-  <!-- Spans flyout -->
-  <div class="flyout" id="fly-spans">
-    <button class="close-btn" onclick="closeFlyout()">&times;</button>
-    <h3>Spans &amp; Memory</h3>
-    <p style="color:var(--muted);font-size:12px;line-height:1.6">
-      <b>Memory.Set(addr, byte)</b> write to arena<br><b>Span.Make(addr, len)</b> create span<br>
-      <b>Span.Slice(span, off, len)</b> zero-copy view<br><b>Span.Materialize(span)</b> copy to new region<br>
-      <b>Span.Len/Get</b> length and indexed read
-    </p>
+  <div class="flyout-overlay" id="flyoutOverlay" onclick="closeToolPanel(false)"></div>
+  <div class="tool-panel" id="toolPanel">
+    <div class="tool-head">
+      <div class="tool-tabs">
+        <button data-tool="http" onclick="selectToolTab('http')">HTTP</button>
+        <button data-tool="tcp" onclick="selectToolTab('tcp')">TCP</button>
+        <button data-tool="cards" onclick="selectToolTab('cards')">Cards</button>
+        <button data-tool="query" onclick="selectToolTab('query')">Query</button>
+        <button data-tool="spans" onclick="selectToolTab('spans')">Spans</button>
+      </div>
+      <div class="tool-actions">
+        <button id="toolPin" onclick="toggleToolPin()" title="Pin tools panel" aria-label="Pin tools panel">📌</button>
+        <button onclick="closeToolPanel(true)" title="Close">&times;</button>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="tool-tab" id="tool-http">
+        <h3>HTTP Simulator</h3>
+        <select id="reqmode" style="margin-bottom:6px"><option value="text">HTTP/text</option><option value="hex">hex</option></select>
+        <textarea id="reqbox" style="height:90px" spellcheck="false"></textarea>
+        <div style="display:flex;gap:6px;margin:8px 0"><button class="act" onclick="sendRequest()">Send &#9654;</button><button class="ghost" onclick="loadSample()">Sample</button><button class="ghost" onclick="loadResponder()">Responder</button></div>
+        <div class="respbox" id="respout">(send a request)</div>
+      </div>
+      <div class="tool-tab" id="tool-tcp">
+        <h3>TCP / Raw Bytes</h3>
+        <textarea id="tcpbox" style="height:60px" placeholder="48 65 6c 6c 6f" spellcheck="false"></textarea>
+        <div style="display:flex;gap:6px;margin:8px 0"><button class="act" onclick="sendTcp()">Send &#9654;</button><button class="ghost" onclick="loadTcpSample()">Sample</button></div>
+        <div class="respbox" id="tcpout">(send bytes)</div>
+        <div style="max-height:150px;overflow:auto"><table class="wal"><tbody id="walbody2"></tbody></table></div>
+        <button class="ghost" style="margin-top:6px" onclick="walClear()">Clear</button>
+      </div>
+      <div class="tool-tab" id="tool-cards">
+        <h3>Cards (PicoStore)</h3>
+        <input id="packname" value="orders" style="width:100%;margin-bottom:6px" placeholder="pack name">
+        <textarea id="cardjson" style="height:50px" spellcheck="false">{"qty": 42, "sku": "ABC", "status": 1}</textarea>
+        <div style="display:flex;gap:6px;margin:6px 0"><button class="act" onclick="cardCreate()">Create</button><button class="ghost" onclick="cardSeed()">Seed</button><button class="ghost" onclick="cardClear()">Clear</button></div>
+        <div id="cardmsg" class="cerr"></div>
+        <div class="respbox" id="serout" style="min-height:24px;font-size:10px">&hellip;</div>
+        <div style="flex:1;overflow:auto;margin-top:6px"><table class="wal"><tbody id="cardlist"></tbody></table></div>
+      </div>
+      <div class="tool-tab" id="tool-query">
+        <h3>Query</h3>
+        <input id="querybox" value="qty > 40 AND status = 1" style="width:100%;margin-bottom:6px">
+        <button class="act" onclick="cardQuery()">Run &#9654;</button>
+        <div style="flex:1;overflow:auto;margin-top:8px"><table class="wal"><thead><tr><th>id</th><th>record</th></tr></thead><tbody id="qresults"></tbody></table></div>
+      </div>
+      <div class="tool-tab" id="tool-spans">
+        <h3>Spans &amp; Memory</h3>
+        <p style="color:var(--muted);font-size:12px;line-height:1.6">
+          <b>Memory.Set(addr, byte)</b> write to arena<br><b>Span.Make(addr, len)</b> create span<br>
+          <b>Span.Slice(span, off, len)</b> zero-copy view<br><b>Span.Materialize(span)</b> copy to new region<br>
+          <b>Span.Len/Get</b> length and indexed read
+        </p>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -704,7 +723,7 @@ function compileSrc(run){
   try{var r=PicoCompile.compileDebug(src,lang);DBG.words=r.words.map(function(w){return w>>>0;});DBG.disasm=DBG.words.map(jsDisasm);DBG.vars=r.vars||{};err.textContent='compiled '+DBG.words.length+' words';err.style.color='#7ee787';dbgReset();if(run)dbgRun();}
   catch(e){err.textContent=String(e.message||e);err.style.color='#ff7b72';}
 }
-function dbgReset(){var persist=document.getElementById('walpersist')&&document.getElementById('walpersist').checked;DBG.vm=new PicoVM(persist?{cards:walBackend()}:{});DBG.vm.load(DBG.words);render();renderWal();}
+function dbgReset(){DBG.vm=new PicoVM({cards:walBackend()});DBG.vm.load(DBG.words);render();renderWal();}
 function dbgStep(){if(DBG.vm){DBG.vm.step();render();renderWal();}}
 function dbgRun(){if(!DBG.vm)dbgReset();var g=0;while(DBG.vm.step()&&g++<200000){}render();renderWal();}
 function render(){
@@ -758,17 +777,82 @@ function cardQuery(){var pack=curPack(),q=document.getElementById('querybox').va
 
 // HTTP/TCP
 function methodCode(m){return({GET:1,POST:2,PUT:3,DELETE:4,HEAD:5,PATCH:6,OPTIONS:7})[(m||'').toUpperCase()]||0;}
-function parseRequest(text,isHex){var bytes=[];if(isHex){text.replace(/0x/gi,'').replace(/[,]/g,' ').trim().split(/\s+/).filter(Boolean).forEach(function(h){if(h.length>2){for(var i=0;i+1<h.length;i+=2)bytes.push(parseInt(h.substr(i,2),16)&0xFF);}else if(h.length)bytes.push(parseInt(h,16)&0xFF);});}else{for(var i=0;i<text.length;i++)bytes.push(text.charCodeAt(i)&0xFF);}var sum=0;bytes.forEach(function(b){sum=(sum+b)|0;});var method=0,pathLen=0,bodyLen=0;if(!isHex){var fl=(text.split(/\r?\n/)[0]||'').split(/\s+/);if(fl.length>=2){method=methodCode(fl[0]);pathLen=fl[1].length;}var idx=text.indexOf('\r\n\r\n');var sep=4;if(idx<0){idx=text.indexOf('\n\n');sep=2;}if(idx>=0){bodyLen=text.length-(idx+sep);if(bodyLen<0)bodyLen=0;}}return{bytes:bytes,length:bytes.length,method:method,bodyLen:bodyLen,sum:sum,pathLen:pathLen};}
-function writeDescriptor(wal,req){wal.set(0,req.length);wal.set(1,req.method);wal.set(2,req.bodyLen);wal.set(3,req.sum);wal.set(4,req.pathLen);var n=Math.min(req.bytes.length,256);for(var i=0;i<n;i++)wal.set(256+i,req.bytes[i]);}
+function bytesOf(s){var a=[];for(var i=0;i<s.length;i++)a.push(s.charCodeAt(i)&0xFF);return a;}
+function parseRequest(text,isHex){
+  var bytes=[], raw=text, path='', query='', body='';
+  if(isHex){
+    text.replace(/0x/gi,'').replace(/[,]/g,' ').trim().split(/\s+/).filter(Boolean).forEach(function(h){
+      if(h.length>2){for(var i=0;i+1<h.length;i+=2)bytes.push(parseInt(h.substr(i,2),16)&0xFF);}
+      else if(h.length)bytes.push(parseInt(h,16)&0xFF);
+    });
+    raw=String.fromCharCode.apply(null,bytes); body=raw; query=raw;
+  }else{
+    bytes=bytesOf(text);
+  }
+  var sum=0;bytes.forEach(function(b){sum=(sum+b)|0;});
+  var method=0,pathLen=0,bodyLen=body.length;
+  if(!isHex){
+    var first=(text.split(/\r?\n/)[0]||''),fl=first.split(/\s+/);
+    if(fl.length>=2){
+      method=methodCode(fl[0]); path=fl[1]||''; pathLen=path.length;
+      var qi=path.indexOf('?'); query=qi>=0?path.slice(qi+1):'';
+    }
+    var idx=text.indexOf('\r\n\r\n'),sep=4;if(idx<0){idx=text.indexOf('\n\n');sep=2;}
+    if(idx>=0){body=text.slice(idx+sep);bodyLen=body.length;if(bodyLen<0)bodyLen=0;}
+  }
+  return{bytes:bytes,length:bytes.length,method:method,bodyLen:bodyLen,sum:sum,pathLen:pathLen,
+         pathBytes:bytesOf(path),queryBytes:bytesOf(query),bodyBytes:bytesOf(body)};
+}
+function writeBytes(wal,base,arr,max){var n=Math.min(arr.length,max);for(var i=0;i<n;i++)wal.set(base+i,arr[i]);return n;}
+function writeDescriptor(wal,req){
+  wal.set(0,req.length); wal.set(1,req.method); wal.set(2,req.bodyLen); wal.set(3,req.sum); wal.set(4,req.pathLen);
+  wal.set(5,req.queryBytes.length); wal.set(6,req.bodyBytes.length);
+  writeBytes(wal,256,req.bytes,256); writeBytes(wal,512,req.pathBytes,256); writeBytes(wal,768,req.queryBytes,256); writeBytes(wal,1024,req.bodyBytes,512);
+  /* Low-card mirrors for simple Storage.Load examples (old 5-bit card address form). */
+  writeBytes(wal,10,req.queryBytes,10); writeBytes(wal,20,req.bodyBytes,12);
+}
 function sendRequest(){var text=document.getElementById('reqbox').value,isHex=document.getElementById('reqmode').value==='hex';var req=parseRequest(text,isHex),wal=walBackend();writeDescriptor(wal,req);var lang=document.getElementById('lang').value,src=getSrc();try{var r=PicoCompile.compile(src,lang);}catch(e){document.getElementById('respout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderResponse(vm,req);renderWal();}
-function sendTcp(){var text=document.getElementById('tcpbox').value;var req=parseRequest(text,true),wal=walBackend();writeDescriptor(wal,req);renderWal();}
-function renderResponse(vm,req){var reasons={200:'OK',201:'Created',400:'Bad Request',404:'Not Found',500:'Error'};var el=document.getElementById('respout');el.style.color='#7ee787';var body=vm.outputInts();if(vm.httpStatus<0){el.style.color='#ffd866';el.textContent='(no Net.Status)\noutput: ['+body.join(', ')+']';return;}var L=[];L.push('HTTP/1.1 '+vm.httpStatus+' '+(reasons[vm.httpStatus]||''));L.push('Content-Type: '+(vm.httpType||'application/octet-stream'));L.push('X-Steps: '+vm.steps);L.push('');var _bt=vm.outputText(),_bp=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_bt);L.push(_bp&&_bt?_bt:JSON.stringify(body));el.textContent=L.join('\n');}
+function sendTcp(){var text=document.getElementById('tcpbox').value;var req=parseRequest(text,true),wal=walBackend();writeDescriptor(wal,req);var lang=document.getElementById('lang').value,src=getSrc();try{var r=PicoCompile.compile(src,lang);}catch(e){document.getElementById('tcpout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderTcpResponse(vm,req);renderWal();}
+function responseBodyText(vm){return (typeof vm.outputDisplayText==='function')?vm.outputDisplayText():vm.outputText();}
+function renderResponse(vm,req){var reasons={200:'OK',201:'Created',400:'Bad Request',404:'Not Found',500:'Error'};var el=document.getElementById('respout');el.style.color='#7ee787';var body=vm.outputInts();if(vm.httpStatus<0){el.style.color='#ffd866';el.textContent='(no Net.Status)\noutput: ['+body.join(', ')+']';return;}var L=[];L.push('HTTP/1.1 '+vm.httpStatus+' '+(reasons[vm.httpStatus]||''));L.push('Content-Type: '+(vm.httpType||'application/octet-stream'));L.push('X-Steps: '+vm.steps);L.push('');var _bt=responseBodyText(vm),_bp=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_bt);L.push(_bp&&_bt?_bt:JSON.stringify(body));el.textContent=L.join('\n');}
+function renderTcpResponse(vm,req){var el=document.getElementById('tcpout');el.style.color='#7ee787';var txt=responseBodyText(vm),printable=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(txt),body=vm.outputInts();el.textContent=(vm.httpStatus>=0?('status '+vm.httpStatus+'\n'):'')+(printable&&txt?txt:('output: ['+body.join(', ')+']'));}
 function loadResponder(){document.getElementById('lang').value='basic';onLangChange();setSrc(RESPONDER);compileSrc(false);}
 function loadSample(){document.getElementById('reqmode').value='text';document.getElementById('reqbox').value='POST /orders HTTP/1.1\r\nHost: pico.dev\r\nContent-Type: application/json\r\nContent-Length: 11\r\n\r\n{"qty": 42}';}
+function loadTcpSample(){document.getElementById('tcpbox').value='63 6d 64 3d 50 49 4e 47 26 6e 3d 33';}
 
-// Flyouts
-function openFlyout(id){closeFlyout();document.getElementById('flyoutOverlay').classList.add('open');document.getElementById(id).classList.add('open');if(id==='fly-cards')try{cardRender();}catch(e){}}
-function closeFlyout(){document.getElementById('flyoutOverlay').classList.remove('open');document.querySelectorAll('.flyout').forEach(function(f){f.classList.remove('open');});}
+// Tabbed tool panel (HTTP/TCP/Cards/Query/Spans)
+var TOOL_TAB='http', TOOL_PINNED=false;
+function selectToolTab(tab){
+  TOOL_TAB=tab||TOOL_TAB;
+  document.querySelectorAll('.tool-tab').forEach(function(p){p.classList.toggle('active',p.id==='tool-'+TOOL_TAB);});
+  document.querySelectorAll('.tool-tabs button').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-tool')===TOOL_TAB);});
+  if(TOOL_TAB==='cards'||TOOL_TAB==='query')try{cardRender();}catch(e){}
+}
+function openToolPanel(tab){
+  selectToolTab(tab||TOOL_TAB);
+  document.getElementById('toolPanel').classList.add('open');
+  document.getElementById('flyoutOverlay').classList.toggle('open',!TOOL_PINNED);
+  syncToolLayout();
+}
+function closeToolPanel(force){
+  if(TOOL_PINNED&&!force)return;
+  document.getElementById('toolPanel').classList.remove('open');
+  document.getElementById('flyoutOverlay').classList.remove('open');
+  syncToolLayout();
+}
+function syncToolLayout(){
+  var main=document.querySelector('.main');
+  if(main) main.classList.toggle('tool-pinned',TOOL_PINNED&&document.getElementById('toolPanel').classList.contains('open'));
+  if(window.EDITOR&&typeof window.EDITOR.layout==='function')setTimeout(function(){try{window.EDITOR.layout();}catch(e){}},0);
+}
+function toggleToolPin(){
+  TOOL_PINNED=!TOOL_PINNED;
+  var b=document.getElementById('toolPin');
+  if(b){b.classList.toggle('active',TOOL_PINNED);b.textContent=TOOL_PINNED?'📍':'📌';b.title=TOOL_PINNED?'Unpin tools panel':'Pin tools panel';b.setAttribute('aria-label',b.title);}
+  if(document.getElementById('toolPanel').classList.contains('open'))
+    document.getElementById('flyoutOverlay').classList.toggle('open',!TOOL_PINNED);
+  syncToolLayout();
+}
 
 // Reference tree
 var REF_SECTIONS=['ref-overview','ref-syntax','ref-namespaces','ref-bindings','ref-samples','ref-internals','ref-rawdocs'];

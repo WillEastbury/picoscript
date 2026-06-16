@@ -1,23 +1,57 @@
 # PicoScript
 
-Deterministic userland scripting language for embedded queue-driven processing in the Pico stack.
+PicoScript is a small deterministic language for embedded and edge programs in
+the Pico stack. It is designed for code that must run the same way in a browser,
+on a host, and on bare metal.
 
-> **▶ Live playground &amp; reference:** open **[`docs/index.html`](docs/index.html)** (or the
-> GitHub Pages site at **https://willeastbury.github.io/picoscript/**) to browse every
-> language construct (C-style, BASIC, Python-style and natural-English, all four
-> side by side), compile/run/step programs in the
-> browser, and send HTTP/TCP requests to a program over a localStorage-backed PicoWAL store.
+> **Start here:** open the live portal at
+> **https://willeastbury.github.io/picoscript/**, then read **Tutorial** and use
+> the **Playground** tab. The portal lets you edit, compile, run, and step
+> PicoScript in the browser.
+
+## What you can do with it
+
+- Write programs in **C-style**, **BASIC**, **Python-style**, or **English**.
+- Compile all four styles through the same IL and runtime model.
+- Run bytecode on the Python, JavaScript, or C VM.
+- Transpile to native C or native JavaScript when you want to skip the VM loop.
+- Use deterministic runtime namespaces for strings, numbers, templates, HTTP
+  parsing, storage/cards, compression, hashing, events, and remote UI.
+- Test parity: the same program should produce the same output on every path.
+
+## Quick start
+
+In the browser:
+
+1. Open <https://willeastbury.github.io/picoscript/>.
+2. Click **Tutorial** in the Reference docs, or open the **Guide** tab.
+3. Click **Edit in Playground** on any guide card.
+4. Click **Compile & Run**.
+
+From a local checkout:
+
+```powershell
+cd C:\source\picoscript
+C:\Python313\python.exe picoscript_build.py run examples\text_tools.pc --print
+C:\Python313\python.exe picoscript_build.py emit examples\text_tools.pc --as bytecode --hex
+```
+
+The CLI prints VM output as packed integer chunks. The browser also shows a
+decoded `text:` line when the output bytes are printable.
 
 ## Current state
 
-- **v1 (stable):** Case-sensitive, namespace/method syntax with semicolons. Fixed bytecode ISA.
-- **v2 (new):** Case-insensitive, block-structured, CRLF line-ending syntax. Extended with String/Number/Maths/DateTime/Locale libraries.
+- **Stable bytecode ISA:** 16 opcodes, deterministic host-hook model.
+- **Four frontends:** C-style, BASIC, Python-style, and English all lower to the
+  same PicoIL.
+- **Five execution paths:** Python VM, JS VM, C VM, native C, and native JS.
+- **In-browser portal:** the compiler and VM run directly from GitHub Pages.
 
 GitHub mirror: https://github.com/WillEastbury/picoscript
 
 ## Scope
 
-PicoScript runs inside picoweb as deterministic, bounded userland logic for:
+PicoScript runs inside picoweb/PIOS as deterministic, bounded userland logic for:
 - Queue-driven message processing (FIFOs, IRQ/SW_IRQ wake events)
 - Lease-based type-hinted span access to process memory
 - Arena allocation and zero-copy descriptor shipping
@@ -55,6 +89,7 @@ PicoScript runs inside picoweb as deterministic, bounded userland logic for:
 | `picoscript.py` | ISA helpers and instruction encoding |
 | `picoscript_opcodes.py` | Opcode reference |
 | `LANGUAGE_SPEC.md` | Formal runtime and access model spec |
+| `docs/TUTORIAL.md` | Followable getting-started path: portal, playground, CLI, spans, compression, UI, and parity checks |
 | `docs/COMPILER_ARCHITECTURE.md` | Frontend/IL/backend lowering pipeline |
 | `docs/picoscript-language-editor.md` | Language syntax, editor contract, completions |
 | `docs/AGENT_PROMPT.md` | **Ready-to-use prompt** for an LLM/agent to generate valid PicoScript (grammar, rules, host calls, worked 4-style examples) |

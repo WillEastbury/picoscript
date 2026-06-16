@@ -197,9 +197,9 @@ cross-style parity, and it is a strong correctness signal for fine-tuning data.
   all four styles on every build.
 - **Host namespaces:** the source of truth is `HOST_HOOK_CODES` in
   `picoscript_lang.py`, but only list a namespace here once it is actually
-  dispatched by `HostApi.call` in `picoscript_vm.py` (and mirrored in
-  `vm/picovm.js`). Hooks present in the table but unimplemented in the VM (e.g.
-  `String.*`, `Number.*`, `Maths.*` at time of writing) must **not** be offered
-  to the generator.
-- **8-bit hook codes:** new host hooks must use a code ≤ `0xFF` (the runtime
-  dispatches on `imm16 & 0xFF`); codes ≥ `0x100` are unreachable.
+  dispatched by `HostApi.call` in `picoscript_vm.py` and mirrored in the JS/C
+  runtimes where parity is required. Hooks present in the table but not wired
+  should be documented as planned, not offered as working examples.
+- **Extended hook codes:** hooks may use codes above `0xFF`. The lowerer emits
+  `EXT_HOST_HOOK_BASE | (code & 0xFFF)` and the VM decodes the 12-bit extended
+  value. `Compress.*` (0x0100+) uses this path.
