@@ -508,6 +508,7 @@ Persistent storage: pack/card schema, CRUD, query.
 | Method | Opcode | Hook Code | v2 Example |
 |--------|--------|-----------|----------|
 | AddCard | 0x00 | 0x7062 | `Storage.AddCard(...)` |
+| CardLen | 0x00 | 0x61A1 | `Storage.CardLen(...)` |
 | DeleteCard | 0x00 | 0x7064 | `Storage.DeleteCard(...)` |
 | EditCard | 0x00 | 0x7069 | `Storage.EditCard(...)` |
 | GetField | 0x00 | 0x706A | `Storage.GetField(...)` |
@@ -519,12 +520,15 @@ Persistent storage: pack/card schema, CRUD, query.
 | QueryCard | 0x00 | 0x7067 | `Storage.QueryCard(...)` |
 | QueryResult | 0x00 | 0x706E | `Storage.QueryResult(...)` |
 | ReadCard | 0x00 | 0x7066 | `Storage.ReadCard(...)` |
+| ReadSlice | 0x00 | 0x61A2 | `Storage.ReadSlice(...)` |
 | Save | 0x02 | - | `Storage.Save(...)` |
 | SetField | 0x00 | 0x706B | `Storage.SetField(...)` |
 | SetFieldStr | 0x00 | 0x706C | `Storage.SetFieldStr(...)` |
 | SetSchemaForPack | 0x00 | 0x7061 | `Storage.SetSchemaForPack(...)` |
+| SetSlice | 0x00 | 0x61A0 | `Storage.SetSlice(...)` |
 | UpdateCard | 0x00 | 0x7063 | `Storage.UpdateCard(...)` |
 | UsePack | 0x00 | 0x7068 | `Storage.UsePack(...)` |
+| WriteSlice | 0x00 | 0x61A3 | `Storage.WriteSlice(...)` |
 
 ## String
 

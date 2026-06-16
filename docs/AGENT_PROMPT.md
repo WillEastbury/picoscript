@@ -112,6 +112,14 @@ Only these are implemented end-to-end; do **not** invent others.
   `Storage.SetField(span,val)`, `Storage.GetField(span)`,
   `Storage.DeleteCard(id)`, `Storage.QueryCard(querySpan)`,
   `Storage.QueryResult(i)` — program-level card store.
+- Prefer active-record card syntax in C-style examples when a pack has a schema:
+  `Order ord = Storage.GetCard(pack,id); ord.qty = 42; Storage.SaveCard(ord);`.
+  Use `Storage.QueryCards(pack,"qty > 40")` + `Storage.QueryResult(i)` for
+  materialized query loops. Use the low-level `SetField/GetField` API only for
+  schema-less/ordinal cards.
+- Large card / payload windows: `Storage.SetSlice/CardLen/ReadSlice/WriteSlice`,
+  `Req.SetSlice/BodySlice/BodyLen`, `Stream.SetSlice/Slice`,
+  `Event.SetSlice/DataSlice/DataLen`.
 - `Utf8Writer.*`, `Utf8Reader.*`, `Json.*`, `Xml.*` — text/binary builders.
 - `Random.U32(seedReg)`, `Queue.Enqueue/Dequeue/Depth(...)`.
 

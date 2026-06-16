@@ -61,10 +61,15 @@ The VM has an in-memory card store for tests. Real persistence is the kernel's.
 
 | Hook (example) | in → out | contract |
 |----------------|----------|----------|
-| `Storage.AddCard(packSpan, dataSpan)` | (span, span) → int handle | persist; returns a card id |
-| `Storage.GetCard(idInt)` | (int) → span (leased) | read; span is a **lease** (INV-4) |
-| `Storage.Query(...)` | … | bounded result set |
+| `Storage.AddCard()` / `Storage.EditCard(id)` | → id / id → id | select/create the current record card |
+| `Storage.SetField/GetField` | field span + value / field span → value | typed field access on the current card |
+| `Storage.QueryCard(querySpan)` / `QueryResult(i)` | query → count / index → id | bounded result set |
+| `Storage.SetSlice(offset,len)` / `ReadSlice(card)` | window + card → span | range read for large/blob cards |
+| `Storage.WriteSlice(card, span)` / `CardLen(card)` | card+span → ok / card → len | range write and length |
 
+- Active-record C-style source (`Order ord = Storage.GetCard(pack,id); ord.qty = 42;`)
+  is compiler sugar over the current-card hooks above; production persistence still
+  comes from the kernel storage service.
 - OWNER: kernel storage service holds the backing pages; the worker gets a **validated
   lease** (`pooldesc`), never a raw pointer. CACHEABILITY: must match the kernel's mapping
   attributes for that page — *if the kernel maps it non-cacheable, the worker mapping is

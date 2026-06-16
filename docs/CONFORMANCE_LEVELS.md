@@ -262,6 +262,8 @@ LET random_value = Random.U32()  -- Returns 0-4294967295
 - `Storage.PatchCard(pack_id, card_id, patch)` → Partial update
 - `Storage.ReadCard(pack_id, card_id)` → Read record
 - `Storage.QueryCard(pack_id, query)` → Query records
+- `Storage.SetSlice(offset, len)`, `Storage.CardLen(card)`, `Storage.ReadSlice(card)`, `Storage.WriteSlice(card, span)` → range access for large/blob cards
+- C-style active-record sugar (`Storage.GetCard`, dot fields, `Storage.SaveCard`, `Storage.QueryCards`) → schema-backed authoring layer over the Storage hooks
 
 **Backend:**
 - Initially Picowal (embedded card store)

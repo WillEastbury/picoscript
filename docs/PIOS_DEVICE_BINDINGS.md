@@ -180,15 +180,22 @@ Parse **in place** over the leased span — `Utf8Reader.*`, `Http.ParseJson`,
 > whose source is the body stream): the capsule does `Reader.Next()`/`Read(n)` and the
 > platform pulls + leases chunks transparently and zero-copy. See §11.
 
-### Schema / typed-field layer (picowal/walfs) — reserved but not realised
-The card model's **schema features are declared but stubbed**: `Storage.GetSchemaForPack`
-(0x60), `SetSchemaForPack` (0x61), `EditCard` (0x69), `GetField` (0x6A), `SetField` (0x6B),
-`GetFieldStr` (0x6D), `QueryResult` (0x6E) all have reserved hook codes but are `OP_NOOP`
-placeholders with no VM host implementation. This is the **missing piece** for both data
-cards *and* the GPIO model: a pin card wants a schema to declare its `direction`/`kind`/
-`range`, and data cards want typed fields + schema-validated CRUD + field-filtered query.
-Realising the walfs schema engine in the deterministic VM host (byte-identical across the
-three VMs, parity-tested) is the work — see §11.
+### Schema / typed-field layer (picowal/walfs)
+The reference Python/JS VM now implements the program-level PicoStore card model:
+`Storage.UsePack/AddCard/EditCard/DeleteCard`, `SetField/GetField`, `SetFieldStr/
+GetFieldStr`, `QueryCard/QueryResult`, and schema span storage
+(`GetSchemaForPack`/`SetSchemaForPack`). C-style source also has active-record
+sugar (`Order ord = Storage.GetCard(pack,id)`, `ord.qty = 42`,
+`Storage.SaveCard(ord)`) that lowers to those hooks.
+
+Production PIOS still owns the real walfs/picowal backing store and must bind the
+same hook contract to persistent storage. The device model can use that schema
+layer to declare pin `direction`/`kind`/`range`; data cards can use typed fields,
+schema-validated CRUD and field-filtered query.
+
+Large/blob cards use slice hooks (`Storage.SetSlice`, `CardLen`, `ReadSlice`,
+`WriteSlice`) so a 400MB card can be scanned via WALFS/SD range I/O without
+materializing the card in the VM.
 
 ---
 

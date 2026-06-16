@@ -35,7 +35,8 @@ where that was my only objection I implemented a representative op to prove it.
 > **Correction:** I previously claimed codes >0xFF "can't be dispatched (8-bit
 > aliasing)". **That was wrong.** The lowerer emits `EXT_HOST_HOOK_BASE (0x6000)
 > | (code & 0xFFF)` for codes >0xFF and the VM decodes `imm16 & 0xFFF`, so
-> `Compress`/`Crypto`/`Html`/`Http`/`X509`/`Auth` (0x100–0x149) dispatch fine —
+> `Compress`/`Crypto`/`Html`/`Http`/`X509`/`Auth`, `Storage` slices
+> (`0x1A0+`), and request/stream/event slices (`0x176+`, `0x1B0+`) dispatch fine —
 > proven by `Crypto.Sha256("abc")` matching the known digest.
 
 ## Hard reasons — genuinely cannot be a self-contained deterministic primitive

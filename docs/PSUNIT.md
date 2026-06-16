@@ -70,12 +70,14 @@ A test can set up state and then assert on it — for example, seed three cards 
 query them:
 
 ```c
-int qty = "qty";
 Storage.UsePack(1024);
-int a = Storage.AddCard(); Storage.SetField(qty, 42);
-int b = Storage.AddCard(); Storage.SetField(qty, 7);
-Storage.EditCard(a);
-Assert.Eq(Storage.GetField(qty), 42);
+int a = Storage.AddCard();
+
+Order ord = Storage.GetCard(1024, a);
+ord.qty = 42;
+Storage.SaveCard(ord);
+
+Assert.Eq(ord.qty, 42);
 ```
 
 ## Running tests

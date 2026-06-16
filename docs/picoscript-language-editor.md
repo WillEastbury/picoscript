@@ -283,7 +283,10 @@ The editor can derive completions from the language namespace table:
 | Trigger | Suggestions |
 |---------|-------------|
 | start of statement | `Storage`, `Thread`, `Math`, `Flow`, `Dsp`, `Net`, `Kernel`, `Queue`, `Random`, `Memory`, `Span`, `Descriptor`, `Lease` |
-| `Storage.` | `Load`, `Save`, `Pipe`, `GetSchemaForPack`, `SetSchemaForPack`, `AddCard`, `UpdateCard`, `DeleteCard`, `PatchCard`, `ReadCard`, `QueryCard`, `UsePack`, `EditCard`, `GetField`, `SetField`, `SetFieldStr`, `GetFieldStr`, `QueryResult` |
+| `Storage.` | `Load`, `Save`, `Pipe`, `GetSchemaForPack`, `SetSchemaForPack`, `AddCard`, `UpdateCard`, `DeleteCard`, `PatchCard`, `ReadCard`, `QueryCard`, `UsePack`, `EditCard`, `GetField`, `SetField`, `SetFieldStr`, `GetFieldStr`, `QueryResult`, `SetSlice`, `CardLen`, `ReadSlice`, `WriteSlice`, `GetCard`, `SaveCard`, `QueryCards` |
+| `Req.` | `Seq`, `Principal`, `Method`, `Path`, `Header`, `BodyMode`, `BodyCount`, `BodySpan`, `SetSlice`, `BodySlice`, `BodyLen` |
+| `Stream.` | `Open`, `Next`, `Span`, `Submit`, `Release`, `Close`, `SetSlice`, `Slice` |
+| `Event.` | `Post`, `Next`, `Type`, `Target`, `Data`, `SetData`, `Count`, `SetSlice`, `DataSlice`, `DataLen` |
 | `Thread.` | `Skip`, `Wait`, `Raise`, `YieldCounted` |
 | `Math.` | `Add`, `Sub`, `Mul`, `Div`, `Inc` |
 | `Flow.` | `Jump`, `Branch`, `Call`, `Return` |
@@ -398,6 +401,36 @@ Program-level card CRUD/query executable in the reference and JS VMs (PicoStore-
 - `Storage.DeleteCard(RcardId, Rok);` — delete a card from the current pack.
 - `Storage.QueryCard(RquerySpan, Rcount);` — run the query language, return match count.
 - `Storage.QueryResult(Ridx, RoutId);` — read the i-th matching card id.
+- `Storage.SetSlice(Roffset, Rlen, Rok);` — select a byte window on a large/blob card.
+- `Storage.CardLen(RcardId, RoutLen);` — return large/blob card byte length.
+- `Storage.ReadSlice(RcardId, RoutSpan);` — return the selected card window as a span.
+- `Storage.WriteSlice(RcardId, Rspan, Rok);` — patch bytes at the selected offset.
+
+### Active-record card sugar (C-style)
+
+For schema-backed cards, prefer readable active-record source:
+
+```c
+Order ord = Storage.GetCard(Orders, 4);
+ord.qty = 42;
+Storage.SaveCard(ord);
+
+int n = Storage.QueryCards(Orders, "qty > 40");
+for (i = 0; i < n; i++) {
+    Order hit = Storage.GetCard(Orders, Storage.QueryResult(i));
+    hit.qty--;
+    Storage.SaveCard(hit);
+}
+```
+
+The compiler lowers this to the existing `UsePack/EditCard/GetField/SetField/QueryCard`
+hooks. `Storage.SaveCard` is currently a flush/no-op because `SetField` is eager.
+
+### Slice-first request/stream/event data
+
+- `Req.SetSlice(offset,len)` + `Req.BodySlice(index)` / `Req.BodyLen(index)`
+- `Stream.SetSlice(offset,len)` + `Stream.Slice(lease)`
+- `Event.SetSlice(offset,len)` + `Event.DataSlice(ev)` / `Event.DataLen(ev)`
 
 These are language-stable and host-fillable. They preserve bytecode compatibility while allowing runtime-specific implementation behind the contract.
 

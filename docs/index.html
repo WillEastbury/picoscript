@@ -1414,7 +1414,9 @@ the selector comes from untrusted input.</p>
 <li><code>Descriptor.Make/SetFlags/GetPtr/GetLen/GetFlags/CopyBatch(...)</code> for descriptor flow and bulk transfer.</li>
 <li><code>Lease.Acquire/Release/Validate/CachedValidate/GetSpan/GetTypeHint(...)</code> for capability/lease-mediated access with fast-path validation.</li>
 <li><code>Storage.GetSchemaForPack</code>, <code>Storage.SetSchemaForPack</code>, <code>Storage.AddCard</code>, <code>Storage.UpdateCard</code>, <code>Storage.DeleteCard</code>, <code>Storage.PatchCard</code>, <code>Storage.ReadCard</code>, <code>Storage.QueryCard</code> as backend-swappable storage API hooks. Cards are encoded with the <strong>PicoBinarySerializer</strong> (magic <code>PSC1</code>, self-describing, fields sorted by UTF-8 name bytes for determinism) and <code>QueryCard</code> accepts the card <strong>query language</strong> (<code>field OP value [AND|OR ...]</code>, <code>OP ∈ = == != &lt;&gt; &lt; &gt; &lt;= &gt;= ~</code>).</li>
-<li><strong>Program-level card CRUD/query</strong> (executable in the reference + JS VMs, PicoStore-backed): a context model keeps every op within the 2-in/1-out host ABI. <code>Storage.UsePack(packId)</code> selects the pack; <code>Storage.AddCard() → id</code> creates an empty card and selects it; <code>Storage.EditCard(id) → id</code> selects an existing card; <code>Storage.SetField(nameSpan, intVal)</code> / <code>Storage.SetFieldStr(nameSpan, valSpan)</code> write a field; <code>Storage.GetField(nameSpan) → intVal</code> / <code>Storage.GetFieldStr(nameSpan) → span</code> read one; <code>Storage.DeleteCard(id) → ok</code>; <code>Storage.QueryCard(querySpan) → count</code> runs the query language and <code>Storage.QueryResult(idx) → id</code> iterates matches. Field names and queries are UTF-8 <strong>byte-spans</strong> the program builds in arena memory via <code>Memory.Set</code> + <code>Span.Make</code> (the fixed-width bytecode carries no string pool), so no instruction-format change is needed; ids and integer values travel in plain registers.</li>
+<li><strong>Program-level card CRUD/query</strong> (executable in the reference + JS VMs, PicoStore-backed): a context model keeps every op within the 2-in/1-out host ABI. <code>Storage.UsePack(packId)</code> selects the pack; <code>Storage.AddCard() → id</code> creates an empty card and selects it; <code>Storage.EditCard(id) → id</code> selects an existing card; <code>Storage.SetField(nameSpan, intVal)</code> / <code>Storage.SetFieldStr(nameSpan, valSpan)</code> write a field; <code>Storage.GetField(nameSpan) → intVal</code> / <code>Storage.GetFieldStr(nameSpan) → span</code> read one; <code>Storage.DeleteCard(id) → ok</code>; <code>Storage.QueryCard(querySpan) → count</code> runs the query language and <code>Storage.QueryResult(idx) → id</code> iterates matches. C-style active-record sugar sits above this ABI: <code>Order ord = Storage.GetCard(pack,id)</code>, <code>ord.qty = 42</code>, <code>ord.qty--</code>, <code>Storage.SaveCard(ord)</code>, and <code>Storage.QueryCards(pack,"qty &gt; 40")</code> lower deterministically to <code>UsePack/EditCard/GetField/SetField/QueryCard</code>. The low-level span/query API remains the schema-less/ordinal escape hatch.</li>
+<li><strong>Large-card slices:</strong> blob/dataset cards must be accessed by range, not whole-card materialization. <code>Storage.SetSlice(offset,len)</code> selects a byte window, <code>Storage.CardLen(card)</code> returns a blob card length, <code>Storage.ReadSlice(card) → span</code> returns the selected window, and <code>Storage.WriteSlice(card, span) → ok</code> patches bytes at the current offset. The simulator keeps a deterministic blob-card backend; PIOS should back the same hooks with WALFS/SD range I/O for 400MB+ cards.</li>
+<li><strong>Inbound payload slices:</strong> request, stream, and event data expose the same slice-first pattern. Whole-blob APIs remain (<code>Req.BodySpan</code>, <code>Stream.Span</code>, <code>Event.Data</code>); slice APIs are <code>Req.SetSlice/BodySlice/BodyLen</code>, <code>Stream.SetSlice/Slice</code>, and <code>Event.SetSlice/DataSlice/DataLen</code>.</li>
 <li><code>String.Concat/Length/Substring/IndexOf/Split/Trim/ToUpper/ToLower/Replace/Format/Parse/Equals(...)</code> for string manipulation.</li>
 <li><code>Number.Parse/Format/Round/Floor/Ceiling/Abs/Min/Max/Clamp/ToInt/ToFloat(...)</code> for numeric formatting and conversion.</li>
 <li><code>Maths.Sqrt/Pow/Sin/Cos/Tan/Log/Exp/Abs/Min/Max/Gcd/Lcm(...)</code> for mathematical operations.</li>
@@ -2218,7 +2220,19 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
 </tr>
 <tr>
 <td><code>Storage.</code></td>
-<td><code>Load</code>, <code>Save</code>, <code>Pipe</code>, <code>GetSchemaForPack</code>, <code>SetSchemaForPack</code>, <code>AddCard</code>, <code>UpdateCard</code>, <code>DeleteCard</code>, <code>PatchCard</code>, <code>ReadCard</code>, <code>QueryCard</code>, <code>UsePack</code>, <code>EditCard</code>, <code>GetField</code>, <code>SetField</code>, <code>SetFieldStr</code>, <code>GetFieldStr</code>, <code>QueryResult</code></td>
+<td><code>Load</code>, <code>Save</code>, <code>Pipe</code>, <code>GetSchemaForPack</code>, <code>SetSchemaForPack</code>, <code>AddCard</code>, <code>UpdateCard</code>, <code>DeleteCard</code>, <code>PatchCard</code>, <code>ReadCard</code>, <code>QueryCard</code>, <code>UsePack</code>, <code>EditCard</code>, <code>GetField</code>, <code>SetField</code>, <code>SetFieldStr</code>, <code>GetFieldStr</code>, <code>QueryResult</code>, <code>SetSlice</code>, <code>CardLen</code>, <code>ReadSlice</code>, <code>WriteSlice</code>, <code>GetCard</code>, <code>SaveCard</code>, <code>QueryCards</code></td>
+</tr>
+<tr>
+<td><code>Req.</code></td>
+<td><code>Seq</code>, <code>Principal</code>, <code>Method</code>, <code>Path</code>, <code>Header</code>, <code>BodyMode</code>, <code>BodyCount</code>, <code>BodySpan</code>, <code>SetSlice</code>, <code>BodySlice</code>, <code>BodyLen</code></td>
+</tr>
+<tr>
+<td><code>Stream.</code></td>
+<td><code>Open</code>, <code>Next</code>, <code>Span</code>, <code>Submit</code>, <code>Release</code>, <code>Close</code>, <code>SetSlice</code>, <code>Slice</code></td>
+</tr>
+<tr>
+<td><code>Event.</code></td>
+<td><code>Post</code>, <code>Next</code>, <code>Type</code>, <code>Target</code>, <code>Data</code>, <code>SetData</code>, <code>Count</code>, <code>SetSlice</code>, <code>DataSlice</code>, <code>DataLen</code></td>
 </tr>
 <tr>
 <td><code>Thread.</code></td>
@@ -2367,6 +2381,31 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
 <li><code>Storage.DeleteCard(RcardId, Rok);</code> — delete a card from the current pack.</li>
 <li><code>Storage.QueryCard(RquerySpan, Rcount);</code> — run the query language, return match count.</li>
 <li><code>Storage.QueryResult(Ridx, RoutId);</code> — read the i-th matching card id.</li>
+<li><code>Storage.SetSlice(Roffset, Rlen, Rok);</code> — select a byte window on a large/blob card.</li>
+<li><code>Storage.CardLen(RcardId, RoutLen);</code> — return large/blob card byte length.</li>
+<li><code>Storage.ReadSlice(RcardId, RoutSpan);</code> — return the selected card window as a span.</li>
+<li><code>Storage.WriteSlice(RcardId, Rspan, Rok);</code> — patch bytes at the selected offset.</li>
+</ul>
+<h3 id="active-record-card-sugar-c-style">Active-record card sugar (C-style)</h3>
+<p>For schema-backed cards, prefer readable active-record source:</p>
+<pre><code class="language-c">Order ord = Storage.GetCard(Orders, 4);
+ord.qty = 42;
+Storage.SaveCard(ord);
+
+int n = Storage.QueryCards(Orders, &quot;qty &gt; 40&quot;);
+for (i = 0; i &lt; n; i++) {
+    Order hit = Storage.GetCard(Orders, Storage.QueryResult(i));
+    hit.qty--;
+    Storage.SaveCard(hit);
+}
+</code></pre>
+<p>The compiler lowers this to the existing <code>UsePack/EditCard/GetField/SetField/QueryCard</code>
+hooks. <code>Storage.SaveCard</code> is currently a flush/no-op because <code>SetField</code> is eager.</p>
+<h3 id="slice-first-requeststreamevent-data">Slice-first request/stream/event data</h3>
+<ul>
+<li><code>Req.SetSlice(offset,len)</code> + <code>Req.BodySlice(index)</code> / <code>Req.BodyLen(index)</code></li>
+<li><code>Stream.SetSlice(offset,len)</code> + <code>Stream.Slice(lease)</code></li>
+<li><code>Event.SetSlice(offset,len)</code> + <code>Event.DataSlice(ev)</code> / <code>Event.DataLen(ev)</code></li>
 </ul>
 <p>These are language-stable and host-fillable. They preserve bytecode compatibility while allowing runtime-specific implementation behind the contract.</p>
 <p>Access model rule: all runtime data access should be lease-mediated (<code>Lease.*</code>) using a type hint plus span/pointer <code>(offset,length)</code>.</p>
@@ -2670,6 +2709,14 @@ to be a simple value or a parenthesised expression — e.g. <code>Repeat (a+b) t
   <code>Storage.SetField(span,val)</code>, <code>Storage.GetField(span)</code>,
   <code>Storage.DeleteCard(id)</code>, <code>Storage.QueryCard(querySpan)</code>,
   <code>Storage.QueryResult(i)</code> — program-level card store.</li>
+<li>Prefer active-record card syntax in C-style examples when a pack has a schema:
+  <code>Order ord = Storage.GetCard(pack,id); ord.qty = 42; Storage.SaveCard(ord);</code>.
+  Use <code>Storage.QueryCards(pack,"qty &gt; 40")</code> + <code>Storage.QueryResult(i)</code> for
+  materialized query loops. Use the low-level <code>SetField/GetField</code> API only for
+  schema-less/ordinal cards.</li>
+<li>Large card / payload windows: <code>Storage.SetSlice/CardLen/ReadSlice/WriteSlice</code>,
+  <code>Req.SetSlice/BodySlice/BodyLen</code>, <code>Stream.SetSlice/Slice</code>,
+  <code>Event.SetSlice/DataSlice/DataLen</code>.</li>
 <li><code>Utf8Writer.*</code>, <code>Utf8Reader.*</code>, <code>Json.*</code>, <code>Xml.*</code> — text/binary builders.</li>
 <li><code>Random.U32(seedReg)</code>, <code>Queue.Enqueue/Dequeue/Depth(...)</code>.</li>
 </ul>
@@ -4167,7 +4214,8 @@ only non-portable namespaces are the host-injected ones below (<code>Req</code>/
 <p><strong>Correction:</strong> I previously claimed codes &gt;0xFF "can't be dispatched (8-bit
 aliasing)". <strong>That was wrong.</strong> The lowerer emits <code>EXT_HOST_HOOK_BASE (0x6000)
 | (code &amp; 0xFFF)</code> for codes &gt;0xFF and the VM decodes <code>imm16 &amp; 0xFFF</code>, so
-<code>Compress</code>/<code>Crypto</code>/<code>Html</code>/<code>Http</code>/<code>X509</code>/<code>Auth</code> (0x100–0x149) dispatch fine —
+<code>Compress</code>/<code>Crypto</code>/<code>Html</code>/<code>Http</code>/<code>X509</code>/<code>Auth</code>, <code>Storage</code> slices
+(<code>0x1A0+</code>), and request/stream/event slices (<code>0x176+</code>, <code>0x1B0+</code>) dispatch fine —
 proven by <code>Crypto.Sha256("abc")</code> matching the known digest.</p>
 </blockquote>
 <h2 id="hard-reasons-genuinely-cannot-be-a-self-contained-deterministic-primitive">Hard reasons — genuinely cannot be a self-contained deterministic primitive</h2>
