@@ -171,7 +171,7 @@
   <h1>PicoScript</h1>
   <div class="tabs">
     <button class="tab active" onclick="showView('guide')">Guide &amp; Reference</button>
-    <button class="tab" onclick="showView('play')">Playground</button>
+    <button class="tab" onclick="showView('play')">WebIDE</button>
   </div>
   <div class="lang-toggle" id="langToggle">
     <button data-lang="c" class="active" onclick="setLang('c')">C &#123;&#125;</button>
@@ -12524,8 +12524,8 @@ function buildGuideTree(){
 }
 function showGuideCard(idx){
   CUR_GUIDE_CARD=idx;
-  CUR_REF_SECTION=null;  // we're in guide mode
-  var d=DATA[idx],lang=CUR_LANG;if(!d[lang]) lang=d.c?'c':'basic';
+  CUR_REF_SECTION=null;
+  var d=DATA[idx],lang=CUR_LANG;
   var SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cstyle',report:'bstyle',functional:'pystyle'};
   var src;
   if(d[lang]){src=d[lang].src;}
@@ -12533,6 +12533,7 @@ function showGuideCard(idx){
     var fromLang=d.c?'c':(d.basic?'basic':(d.python?'python':'english'));
     var fromSrc=d[fromLang]?d[fromLang].src:'';
     src=PicoCompile.translate(fromSrc,fromLang,lang);
+    if(src===fromSrc)src=null; // translate returned unchanged = not supported
   } else {src=null;}
   var ri=document.getElementById('refInlineContent');if(ri)ri.style.display='none';
   document.querySelectorAll('.ref-section').forEach(function(s){s.style.display='none';});
@@ -12542,7 +12543,7 @@ function showGuideCard(idx){
     (src?'<pre class="'+(SC[lang]||'cstyle')+'">'+esc(src)+'</pre>':'<pre style="color:var(--muted)">(not available in this dialect)</pre>')+
     '<div class="run-area"><button class="act" onclick="guideRun('+idx+')">Run &#9654;</button>'+
     '<button class="ghost" onclick="guideStep('+idx+')">Step</button>'+
-    '<button class="ghost" onclick="guideEdit('+idx+')">Edit in Playground</button>'+
+    '<button class="ghost" onclick="guideEdit('+idx+')">Edit in WebIDE</button>'+
     '<span class="out" id="gcardout'+idx+'"></span></div>';
   if(ri){var wrapper=gc.querySelector('.guide-card-wrap');if(!wrapper){wrapper=document.createElement('div');wrapper.className='guide-card-wrap';gc.insertBefore(wrapper,ri);}wrapper.innerHTML=cardHtml;}
   else{gc.innerHTML=cardHtml;}
@@ -12832,7 +12833,7 @@ function toggleToolPin(){
 // Reference tree
 var REF_SECTIONS=['ref-overview','ref-syntax','ref-namespaces','ref-bindings','ref-samples','ref-internals','ref-rawdocs'];
 var REF_LABELS=['Overview','Language Syntax','Namespaces','Bindings & I/O','App Samples','Internals','Source Docs'];
-function buildRefTree(){var html='<div class="group-title">Reference</div>';REF_SECTIONS.forEach(function(id,i){html+='<div class="tree-item'+(i===0?' active':'')+'" data-ref="'+id+'" onclick="showRefSection(\''+id+'\')">'+REF_LABELS[i]+(id==='ref-internals'?' <span class="badge" style="font-size:8px">impl</span>':'')+'</div>';});document.getElementById('refTree').innerHTML=html;}
+function buildRefTree(){var el=document.getElementById('refTree');if(!el)return;var html='<div class="group-title">Reference</div>';REF_SECTIONS.forEach(function(id,i){html+='<div class="tree-item'+(i===0?' active':'')+'" data-ref="'+id+'" onclick="showRefSection(\''+id+'\')">'+REF_LABELS[i]+(id==='ref-internals'?' <span class="badge" style="font-size:8px">impl</span>':'')+'</div>';});el.innerHTML=html;}
 function showRefSection(id){showRefInline(id);} // backward compat
 function showDoc(k){document.querySelectorAll('.docpanel').forEach(function(e){e.classList.remove('active');});document.querySelectorAll('.docnav-btn').forEach(function(e){e.classList.remove('active');});document.getElementById('doc-'+k).classList.add('active');var btn=document.querySelector('.docnav-btn[data-doc="'+k+'"]');if(btn)btn.classList.add('active');}
 

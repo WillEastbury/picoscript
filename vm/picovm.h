@@ -102,6 +102,14 @@ struct pv_ctx {
     int       http_status;     /* -1 until Net.Status */
     int       http_type;       /* content-type marker value, 0 until Net.Type */
 
+    /* HTTP request context — populated by the pool worker (pv_http_parse_request)
+     * before each handler runs, so PicoScript Req.* hooks resolve natively.
+     * Pointers reference the worker's recv buffer (valid for the handler's life). */
+    const char *req_method;  int req_method_len;
+    const char *req_path;    int req_path_len;
+    const char *req_headers; int req_headers_len;   /* raw "name: value\r\n" block */
+    const char *req_body;    int req_body_len;
+
     int64_t   retval;
     uint64_t  rng_state;
 

@@ -805,7 +805,7 @@ PAGE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PicoScript Playground &amp; Language Guide</title>
+<title>PicoScript WebIDE &amp; Language Guide</title>
 <style>
   :root { --accent:#667eea; --bg:#0f1117; --panel:#1a1d27; --panel2:#232734;
           --text:#e6e8ef; --muted:#9aa0ad; --c:#7ee787; --b:#79c0ff; --py:#ffd866; --en:#f0a3ff;
@@ -977,7 +977,7 @@ PAGE = r"""<!DOCTYPE html>
 <body>
 <!-- Top bar with language toggle -->
 <div class="topbar">
-  <h1>PicoScript</h1>
+  <h1>PicoScript WebIDE</h1>
   <div class="lang-toggle" id="langToggle">
     <button data-lang="c" class="active" onclick="setLang('c')">C &#123;&#125;</button>
     <button data-lang="basic" onclick="setLang('basic')">BASIC</button>
@@ -1107,10 +1107,11 @@ var GROUPS = [
   {name:'Operators', items:[5]},
   {name:'Dispatch & State', items:[6,7]},
   {name:'Subroutines', items:[8,9]},
-  {name:'I/O & Cards', items:[12,13]},
-  {name:'Devices', items:[14]},
-  {name:'Testing', items:[15]},
-  {name:'GUI', items:[16]}
+  {name:'I/O & Cards', items:[12,13,14,15,16]},
+  {name:'Streams & Events', items:[17,18,19,20,21]},
+  {name:'AI & Hardware', items:[22,23,24,25]},
+  {name:'Functions & Errors', items:[26,27]},
+  {name:'OS & Web Hooks', items:[28,29]}
 ];
 
 function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -1157,13 +1158,19 @@ function showCard(idx){
   CUR_CARD = idx;
   var d = DATA[idx];
   var lang = CUR_LANG;
-  if(!d[lang]) lang = d.c ? 'c' : 'basic';
-  var STYLE_CLASS = {c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle'};
+  var STYLE_CLASS = {c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cstyle',report:'bstyle',functional:'pystyle'};
+  var src;
+  if(d[lang]){src=d[lang].src;}
+  else if(typeof PicoCompile!=='undefined'&&PicoCompile.translate){
+    var fromLang=d.c?'c':(d.basic?'basic':'python');
+    src=PicoCompile.translate(d[fromLang].src,fromLang,lang);
+    if(src===d[fromLang].src)src=null;
+  } else {src=null;}
   var cv = document.getElementById('cardView');
   cv.innerHTML =
     '<div class="card-title">'+(idx+1)+'. '+esc(d.title)+'</div>'+
     '<div class="card-desc">'+d.desc+'</div>'+
-    (d[lang] ? '<pre class="'+STYLE_CLASS[lang]+'">'+esc(d[lang].src)+'</pre>' : '<pre style="color:var(--muted)">(not available in this dialect)</pre>')+
+    (src ? '<pre class="'+(STYLE_CLASS[lang]||'cstyle')+'">'+esc(src)+'</pre>' : '<pre style="color:var(--muted)">(not available in this dialect)</pre>')+
     '<div class="run-area">'+
       '<button class="act" onclick="loadCard('+idx+')">Load into editor &#9654;</button>'+
       '<a class="ghost" href="index.html" style="text-decoration:none;padding:6px 10px">Full guide &#8599;</a>'+
@@ -1178,9 +1185,15 @@ function showCard(idx){
 // Import a guide example into the editor and run it locally (samples live in the
 // full language guide; the editor screen is for writing + running your own code).
 function loadCard(i){
-  var d=DATA[i], lang=CUR_LANG; if(!d[lang]) lang='basic';
+  var d=DATA[i], lang=CUR_LANG;
+  var src;
+  if(d[lang]){src=d[lang].src;}
+  else if(typeof PicoCompile!=='undefined'&&PicoCompile.translate){
+    var fromLang=d.c?'c':(d.basic?'basic':'python');
+    src=PicoCompile.translate(d[fromLang].src,fromLang,lang);
+  } else {var fl=d.c?'c':'basic';lang=fl;src=d[fl].src;}
   document.getElementById('lang').value=lang; if(typeof onLangChange==='function') onLangChange();
-  setSrc(d[lang].src);
+  setSrc(src);
   document.querySelectorAll('.dbg-bar button').forEach(function(b){ b.classList.toggle('active', /Source Editor/.test(b.textContent)); });
   showDbgPanel('dbg-src'); expandDbg(); compileSrc(true);
 }

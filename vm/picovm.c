@@ -177,6 +177,15 @@ static void pv_arena_puts(pv_ctx *ctx, uint32_t *k, const char *s)
 {
     while (*s) pv_arena_put(ctx, k, (uint8_t)*s++);
 }
+/* Copy raw C bytes into the bump arena and return a span handle (0 on empty).
+ * Used to surface the HTTP request context (ctx->req_*) to Req.* hooks. */
+static int pv_span_from_cbytes(pv_ctx *ctx, const char *s, int n)
+{
+    uint32_t k = 0;
+    if (!s || n <= 0) return 0;
+    for (int i = 0; i < n; i++) pv_arena_put(ctx, &k, (uint8_t)s[i]);
+    return pv_arena_finish(ctx, k);
+}
 static int pv_arena_match(pv_ctx *ctx, uint32_t at, int32_t avail, const char *s)
 {
     int32_t n = 0;
