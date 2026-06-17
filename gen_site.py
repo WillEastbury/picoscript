@@ -565,9 +565,18 @@ function showView(v){
 }
 var CUR_REF_SECTION=null;
 function setLang(lang){
+  var oldLang=CUR_LANG;
   CUR_LANG=lang;
   document.querySelectorAll('#langToggle button').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-lang')===lang);});
   document.getElementById('lang').value=lang;
+  // Roundtrip editor code to new language
+  if(typeof getSrc==='function'&&typeof setSrc==='function'){
+    var src=getSrc();
+    if(src&&src.trim()&&oldLang!==lang&&typeof PicoCompile!=='undefined'&&PicoCompile.translate){
+      var translated=PicoCompile.translate(src,oldLang,lang);
+      if(translated)setSrc(translated);
+    }
+  }
   if(typeof onLangChange==='function') onLangChange();
   renderSyntaxRef(); renderSamples();
   if(CUR_REF_SECTION){showRefInline(CUR_REF_SECTION);}
