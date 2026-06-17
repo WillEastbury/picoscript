@@ -452,3 +452,82 @@ PicoScript also exposes language hooks for the newer Picowal host features:
 - **`docs/COMPRESS.md`:** codec details.
 - **`docs/PICO_UI.md`:** events and remote UI.
 - **`docs/PSUNIT.md`:** writing PicoScript tests in PicoScript.
+
+## 14. OS-worker primitives
+
+PicoScript programs can use OS-worker primitives for process lifecycle, timers,
+identity, error recovery, and inter-card module switching. The reference VM (Python
+and JS) provides deterministic simulators; PIOS binds real OS services behind the
+same hooks.
+
+### Process lifecycle and environment
+
+```c
+int pid = Process.Self();       // current process id (1 by default)
+int ppid = Process.Parent();    // parent process id (0 = root)
+int child = Process.Spawn(1024, 42);  // spawn capsule pack=1024 entry=42
+int s = Process.Status(child);  // 0=running, 1=exited, 2=faulted
+Process.Kill(child);            // terminate a process
+
+Env.Set("MODE", "production");
+int val = Env.Get("MODE");      // -> span "production"
+int n = Env.Count();            // number of env vars
+int k = Env.Key(0);             // key at index 0
+```
+
+### Timers and scheduler events
+
+Timer expirations inject `EVENT_TIMER` (type=100) events into the `Event.*` queue.
+Use `Scheduler.Tick(ms)` in tests to advance simulated time.
+
+```c
+int t1 = Timer.After(1000);   // one-shot: fires after 1000ms
+int t2 = Timer.Every(500);    // repeating: fires every 500ms
+Timer.Cancel(t2);              // cancel a timer
+int ms = Timer.Elapsed();      // simulated monotonic clock
+
+Scheduler.Tick(1500);          // advance time by 1500ms, fire pending timers
+int ev = Event.Next();         // dequeue EVENT_TIMER
+int type = Event.Type(ev);     // 100 = EVENT_TIMER
+int handle = Event.Target(ev); // which timer fired
+```
+
+### Identity and capabilities
+
+```c
+int name = Principal.Current();     // -> span "anonymous" (default)
+int ok = Principal.HasRole("admin"); // 0 or 1
+int claims = Principal.Claims();     // -> span "key=value;..."
+
+int has = Capability.Has(8);     // check if STORAGE cap is granted
+Capability.Drop(8);             // voluntarily drop a capability
+Sandbox.Deny(8);                // irrevocably deny (can't Request back)
+```
+
+### Global error handling
+
+When `Error.SetHandler` is set and a VM fault occurs, the VM jumps to the handler
+instead of halting. Inspect the fault with `Error.Code/Detail` and recover with
+`Error.Resume` or `Error.Clear`.
+
+```c
+// Phase 1: global handler (ON ERROR GOTO style)
+Error.SetHandler(:handler);
+// ... code that might fault ...
+Flow.Jump(:done);
+:handler
+int code = Error.Code();
+int detail = Error.Detail();
+Error.Clear();
+:done
+```
+
+### Capsule module switching
+
+```c
+int r = Capsule.Call(1024, 1);      // run pack=1024 card=1 synchronously
+Capsule.Schedule(1024, 2);          // bind card to future event dispatch
+int mod = Capsule.LoadModule(1024, 3);  // load without executing
+int result = Capsule.RunModule(mod);     // execute loaded module
+Capsule.Jump(1024, 4);              // transfer execution (halts current)
+```

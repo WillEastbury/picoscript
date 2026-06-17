@@ -298,6 +298,15 @@ The editor can derive completions from the language namespace table:
 | `Sampling.` | `ArgMax`, `TopK`, `Temperature` |
 | `Query.` | `BuildLookupFilter`, `BuildManyToManyMap` |
 | `Search.` | `Clear`, `UpsertText`, `Delete`, `IndexPack`, `QueryText`, `SetVector`, `QueryHybrid`, `Result`, `Score`, `Plan`, `SetSemanticWeight`, `Configure`, `Compatible`, `Rebuild`, `SetFacet`, `SetNumber`, `ClearFields`, `Facets`, `FacetValue`, `FacetCount`, `Range`, `Save`, `Load`, `JournalUpsert`, `JournalDelete`, `JournalFacet`, `JournalNumber`, `JournalReplay` |
+| `Process.` | `Self`, `Parent`, `Spawn`, `Exit`, `Kill`, `Status`, `Wait`, `Args` |
+| `Env.` | `Get`, `Set`, `Count`, `Key` |
+| `Timer.` | `After`, `Every`, `Cancel`, `Elapsed` |
+| `Scheduler.` | `Tick` |
+| `Principal.` | `Current`, `HasRole`, `Claims` |
+| `Capability.` | `Has`, `Request`, `Drop` |
+| `Sandbox.` | `Deny` |
+| `Error.` | `SetHandler`, `HasHandler`, `Code`, `Detail`, `Resume`, `Clear` |
+| `Capsule.` | `Call`, `Schedule`, `Jump`, `LoadModule`, `RunModule` |
 | `Thread.` | `Skip`, `Wait`, `Raise`, `YieldCounted` |
 | `Math.` | `Add`, `Sub`, `Mul`, `Div`, `Inc` |
 | `Flow.` | `Jump`, `Branch`, `Call`, `Return` |
