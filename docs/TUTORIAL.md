@@ -347,6 +347,12 @@ M33 DSP, desktop SIMD, or a future tensor accelerator.
 | `Tensor.SoftmaxI32(logits)` | deterministic Q15 attention weights |
 | `Tensor.ArgMaxI32(logits)` | index of the largest int32 |
 | `BitLinear.MatVecTernary(weights, act)` | BitNet-style ternary matvec |
+| `BitLinear.MatVecBitmap(weights, act)` | bitmap trit rows (`zero_mask` + `minus_mask`) |
+| `BitLinear.MatVecBase3(weights, act)` | base-3 packed trit rows |
+| `Tokenizer.EncodeBytes/DecodeBytes` | byte-fallback tokenizer baseline |
+| `Model.SetConfig/GetConfig/TensorView` | model metadata and tensor views |
+| `Kv.WriteK/WriteV/ReadK/ReadV` | KV cache records by layer/position |
+| `Sampling.ArgMax/TopK/Temperature` | logits selection helpers |
 
 All buffers are spans. Matrix-vector outputs are int32 values encoded big-endian
 in a returned span, so they can feed the next primitive without changing the VM
@@ -363,10 +369,28 @@ For BitNet-style packed weights:
 ```c
 BitLinear.SetShape(rows, cols);
 int out = BitLinear.MatVecTernary(packedTritRows, activationI8);
+int out2 = BitLinear.MatVecBitmap(bitmapRows, activationI8);
+int out3 = BitLinear.MatVecBase3(base3Rows, activationI8);
 ```
 
 The reference VM implements deterministic scalar versions. A production host can
 bind the same hooks to M33 DSP, AVX2, V3D/QPU, or another accelerator.
+
+Minimal model loop scaffolding:
+
+```c
+Tokenizer.EncodeBytes(prompt);
+int token = Tokenizer.Token(0);
+
+Model.SetConfig(1, 128);                 // e.g. hidden_dim
+Model.TensorView(3, "4096|2|4|15");      // offset|rows|cols|format
+
+Kv.WriteK((layer << 16) | pos, kSpan);
+Kv.WriteV((layer << 16) | pos, vSpan);
+
+int logits = Tensor.MatVecI8(lmHeadRows, hidden);
+int next = Sampling.ArgMax(logits);
+```
 
 ## 14. Picowal PR78 facades
 

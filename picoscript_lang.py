@@ -184,6 +184,37 @@ NAMESPACE_MAP = {
     "BitLinear": {
         "SetShape": OP_NOOP,
         "MatVecTernary": OP_NOOP,
+        "MatVecBitmap": OP_NOOP,
+        "MatVecBase3": OP_NOOP,
+    },
+    "Tokenizer": {
+        "EncodeBytes": OP_NOOP,
+        "DecodeBytes": OP_NOOP,
+        "Count": OP_NOOP,
+        "Token": OP_NOOP,
+    },
+    "Model": {
+        "SetConfig": OP_NOOP,
+        "GetConfig": OP_NOOP,
+        "TensorView": OP_NOOP,
+        "TensorOffset": OP_NOOP,
+        "TensorRows": OP_NOOP,
+        "TensorCols": OP_NOOP,
+        "TensorFormat": OP_NOOP,
+    },
+    "Kv": {
+        "SetShape": OP_NOOP,
+        "WriteK": OP_NOOP,
+        "WriteV": OP_NOOP,
+        "ReadK": OP_NOOP,
+        "ReadV": OP_NOOP,
+        "Len": OP_NOOP,
+        "Clear": OP_NOOP,
+    },
+    "Sampling": {
+        "ArgMax": OP_NOOP,
+        "TopK": OP_NOOP,
+        "Temperature": OP_NOOP,
     },
     "Thread": {
         "Skip":  OP_NOOP,
@@ -663,6 +694,30 @@ HOST_HOOK_CODES = {
     # BitLinear / BitNet-style ternary weights (2-bit packed; 4 weights/byte).
     ("BitLinear", "SetShape"):  0x01F0,   # rs1=rows rs2=cols              rd=ok
     ("BitLinear", "MatVecTernary"): 0x01F1,# rs1=packed weights rs2=i8 vec rd=span<int32_be>
+    ("BitLinear", "MatVecBitmap"): 0x01F2, # rs1=zero/minus bitmaps rs2=i8  rd=span<int32_be>
+    ("BitLinear", "MatVecBase3"): 0x01F3,  # rs1=base3 rows rs2=i8 vec      rd=span<int32_be>
+    # Tokenizer / model / KV / sampling primitive surface for PicoScript AI harnesses.
+    ("Tokenizer", "EncodeBytes"): 0x0210,
+    ("Tokenizer", "DecodeBytes"): 0x0211,
+    ("Tokenizer", "Count"):      0x0212,
+    ("Tokenizer", "Token"):      0x0213,
+    ("Model", "SetConfig"):      0x0220,
+    ("Model", "GetConfig"):      0x0221,
+    ("Model", "TensorView"):     0x0222,
+    ("Model", "TensorOffset"):   0x0223,
+    ("Model", "TensorRows"):     0x0224,
+    ("Model", "TensorCols"):     0x0225,
+    ("Model", "TensorFormat"):   0x0226,
+    ("Kv", "SetShape"):          0x0230,
+    ("Kv", "WriteK"):            0x0231,
+    ("Kv", "WriteV"):            0x0232,
+    ("Kv", "ReadK"):             0x0233,
+    ("Kv", "ReadV"):             0x0234,
+    ("Kv", "Len"):               0x0235,
+    ("Kv", "Clear"):             0x0236,
+    ("Sampling", "ArgMax"):      0x0240,
+    ("Sampling", "TopK"):        0x0241,
+    ("Sampling", "Temperature"): 0x0242,
     # Thread hints (0x70)
     ("Thread", "YieldCounted"): 0x70,
     # Io / output (0x71-0x72)

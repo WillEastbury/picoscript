@@ -288,7 +288,11 @@ The editor can derive completions from the language namespace table:
 | `Stream.` | `Open`, `Next`, `Span`, `Submit`, `Release`, `Close`, `SetSlice`, `Slice` |
 | `Event.` | `Post`, `Next`, `Type`, `Target`, `Data`, `SetData`, `Count`, `SetSlice`, `DataSlice`, `DataLen` |
 | `Tensor.` | `SetShape`, `DotI8`, `MatVecI8`, `AddI32`, `MulI32`, `ScaleI32`, `ReluI32`, `RmsNormI32`, `RoPEI32`, `SoftmaxI32`, `ArgMaxI32` |
-| `BitLinear.` | `SetShape`, `MatVecTernary` |
+| `BitLinear.` | `SetShape`, `MatVecTernary`, `MatVecBitmap`, `MatVecBase3` |
+| `Tokenizer.` | `EncodeBytes`, `DecodeBytes`, `Count`, `Token` |
+| `Model.` | `SetConfig`, `GetConfig`, `TensorView`, `TensorOffset`, `TensorRows`, `TensorCols`, `TensorFormat` |
+| `Kv.` | `SetShape`, `WriteK`, `WriteV`, `ReadK`, `ReadV`, `Len`, `Clear` |
+| `Sampling.` | `ArgMax`, `TopK`, `Temperature` |
 | `Query.` | `BuildLookupFilter`, `BuildManyToManyMap` |
 | `Search.` | `Clear`, `UpsertText`, `Delete`, `IndexPack`, `QueryText`, `SetVector`, `QueryHybrid`, `Result`, `Score`, `Plan`, `SetSemanticWeight`, `Configure`, `Compatible`, `Rebuild`, `SetFacet`, `SetNumber`, `ClearFields`, `Facets`, `FacetValue`, `FacetCount`, `Range`, `Save`, `Load`, `JournalUpsert`, `JournalDelete`, `JournalFacet`, `JournalNumber`, `JournalReplay` |
 | `Thread.` | `Skip`, `Wait`, `Raise`, `YieldCounted` |
@@ -444,13 +448,17 @@ another accelerator.
 
 - `Tensor.SetShape(rows, cols)` configures subsequent matrix ops.
 - `Tensor.DotI8(a,b)` and `Tensor.MatVecI8(matrix,vector)` cover int8 kernels.
-- `BitLinear.SetShape(rows,cols)` + `BitLinear.MatVecTernary(weights,act)` covers
-  BitNet-style ternary rows.
+- `BitLinear.SetShape(rows,cols)` + `BitLinear.MatVecTernary/Bitmap/Base3(weights,act)`
+  covers BitNet-style ternary rows.
 - `Tensor.AddI32/MulI32/ScaleI32/ReluI32/RmsNormI32/RoPEI32/SoftmaxI32/ArgMaxI32`
   cover residuals, gated FFN, normalization, RoPE, attention weights and logits.
 
 All tensor outputs are spans of big-endian int32 values unless the method returns
 a scalar register (`DotI8`, `ArgMaxI32`).
+
+Tokenizer/model/KV/sampling hooks provide the rest of a scriptable inference
+harness: byte-fallback tokenization, model config/tensor metadata, KV cache
+reads/writes, and logits selection.
 
 These are language-stable and host-fillable. They preserve bytecode compatibility while allowing runtime-specific implementation behind the contract.
 

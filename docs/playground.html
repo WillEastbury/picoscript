@@ -655,6 +655,8 @@
       0x1EA: "Tensor.ArgMaxI32",
       0x1F0: "BitLinear.SetShape",
       0x1F1: "BitLinear.MatVecTernary",
+      0x1F2: "BitLinear.MatVecBitmap",
+      0x1F3: "BitLinear.MatVecBase3",
       0x200: "Search.ClearFields",
       0x201: "Search.Facets",
       0x202: "Search.FacetValue",
@@ -667,6 +669,27 @@
       0x209: "Search.JournalFacet",
       0x20A: "Search.JournalNumber",
       0x20B: "Search.JournalReplay",
+      0x210: "Tokenizer.EncodeBytes",
+      0x211: "Tokenizer.DecodeBytes",
+      0x212: "Tokenizer.Count",
+      0x213: "Tokenizer.Token",
+      0x220: "Model.SetConfig",
+      0x221: "Model.GetConfig",
+      0x222: "Model.TensorView",
+      0x223: "Model.TensorOffset",
+      0x224: "Model.TensorRows",
+      0x225: "Model.TensorCols",
+      0x226: "Model.TensorFormat",
+      0x230: "Kv.SetShape",
+      0x231: "Kv.WriteK",
+      0x232: "Kv.WriteV",
+      0x233: "Kv.ReadK",
+      0x234: "Kv.ReadV",
+      0x235: "Kv.Len",
+      0x236: "Kv.Clear",
+      0x240: "Sampling.ArgMax",
+      0x241: "Sampling.TopK",
+      0x242: "Sampling.Temperature",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }
@@ -2493,6 +2516,10 @@ function compressBound(inputLen) {
     }
     if (name.indexOf("Tensor.") === 0) { if (this._tensor(name.slice(7), rd, rs1, rs2)) return; }
     if (name.indexOf("BitLinear.") === 0) { if (this._bitlinear(name.slice(10), rd, rs1, rs2)) return; }
+    if (name.indexOf("Tokenizer.") === 0) { if (this._tokenizer(name.slice(10), rd, rs1, rs2)) return; }
+    if (name.indexOf("Model.") === 0) { if (this._model(name.slice(6), rd, rs1, rs2)) return; }
+    if (name.indexOf("Kv.") === 0) { if (this._kv(name.slice(3), rd, rs1, rs2)) return; }
+    if (name.indexOf("Sampling.") === 0) { if (this._sampling(name.slice(9), rd, rs1, rs2)) return; }
     if (name.indexOf("Query.") === 0) { if (this._queryHelpers(name.slice(6), rd, rs1, rs2)) return; }
     if (name.indexOf("Search.") === 0) { if (this._search(name.slice(7), rd, rs1, rs2)) return; }
     // ---- program-level card store: Storage.* over a PicoStore --------------
@@ -3602,6 +3629,49 @@ function compressBound(inputLen) {
   PicoVM.prototype._bitlinear = function (method, rd, rs1, rs2) {
     if (method === "SetShape") { this.bitlinearRows = Math.max(0, this.regs[rs1] | 0); this.bitlinearCols = Math.max(0, this.regs[rs2] | 0); this.regs[rd] = 1; return true; }
     if (method === "MatVecTernary") { var w = this._spanBytes(this.regs[rs1]), v = this._spanBytes(this.regs[rs2]), rows = this.bitlinearRows, cols = this.bitlinearCols || v.length, vals = []; for (var r = 0; r < rows; r++) { var acc = 0, base = r * cols; for (var c = 0; c < cols; c++) if (c < v.length) acc = (acc + ternaryWeight(w, base + c) * i8(v[c])) | 0; vals.push(acc); } this.regs[rd] = this._newSpanBytes(packI32(vals)); return true; }
+    if (method === "MatVecBitmap") { var bw = this._spanBytes(this.regs[rs1]), bv = this._spanBytes(this.regs[rs2]), brows = this.bitlinearRows, bcols = this.bitlinearCols || bv.length, mb = Math.ceil(bcols / 8), bvals = []; for (var br = 0; br < brows; br++) { var bacc = 0, row = br * mb * 2; for (var bc = 0; bc < bcols && bc < bv.length; bc++) { var bit = 1 << (bc & 7), z = (bw[row + ((bc / 8) | 0)] || 0) & bit, mn = (bw[row + mb + ((bc / 8) | 0)] || 0) & bit; bacc = (bacc + (z ? 0 : (mn ? -1 : 1)) * i8(bv[bc])) | 0; } bvals.push(bacc); } this.regs[rd] = this._newSpanBytes(packI32(bvals)); return true; }
+    if (method === "MatVecBase3") { var pw = this._spanBytes(this.regs[rs1]), pv = this._spanBytes(this.regs[rs2]), prows = this.bitlinearRows, pcols = this.bitlinearCols || pv.length, rb = Math.ceil(pcols / 5), stride = (rb + 3) & ~3, pvals = []; for (var pr = 0; pr < prows; pr++) { var pacc = 0, col = 0; for (var pb = 0; pb < rb; pb++) { var code = pw[pr * stride + pb] || 0, tr = [0,0,0,0,0]; for (var ti = 4; ti >= 0; ti--) { var tt = code % 3; code = Math.floor(code / 3); tr[ti] = tt === 0 ? 0 : (tt === 1 ? 1 : -1); } for (var tj = 0; tj < 5 && col < pcols && col < pv.length; tj++, col++) pacc = (pacc + tr[tj] * i8(pv[col])) | 0; } pvals.push(pacc); } this.regs[rd] = this._newSpanBytes(packI32(pvals)); return true; }
+    return false;
+  };
+
+  PicoVM.prototype._tokenizer = function (method, rd, rs1, rs2) {
+    if (!this._tok) this._tok = [];
+    if (method === "EncodeBytes") { var d = this._spanBytes(this.regs[rs1]); this._tok = d.map(function (b) { return b + 3; }); this.regs[rd] = this._tok.length; return true; }
+    if (method === "DecodeBytes") { this.regs[rd] = this._newSpanBytes(this._tok.filter(function(t){return t>=3&&t<=258;}).map(function(t){return (t-3)&255;})); return true; }
+    if (method === "Count") { this.regs[rd] = this._tok.length; return true; }
+    if (method === "Token") { var i = this.regs[rs1] | 0; this.regs[rd] = (i >= 0 && i < this._tok.length) ? this._tok[i] : 0; return true; }
+    return false;
+  };
+  PicoVM.prototype._model = function (method, rd, rs1, rs2) {
+    if (!this._modelState) this._modelState = { cfg: {}, tensors: {} };
+    var m = this._modelState;
+    if (method === "SetConfig") { m.cfg[this.regs[rs1] | 0] = this.regs[rs2] | 0; this.regs[rd] = 1; return true; }
+    if (method === "GetConfig") { this.regs[rd] = m.cfg[this.regs[rs1] | 0] || 0; return true; }
+    if (method === "TensorView") { var spec = this._spanStr(this.regs[rs2]).split("|"); while (spec.length < 4) spec.push("0"); var tid = this.regs[rs1] | 0; m.tensors[tid] = { off: parseInt(spec[0]||"0",10)||0, rows: parseInt(spec[1]||"0",10)||0, cols: parseInt(spec[2]||"0",10)||0, fmt: parseInt(spec[3]||"0",10)||0 }; this.regs[rd] = tid; return true; }
+    var t = m.tensors[this.regs[rs1] | 0] || {};
+    if (method === "TensorOffset") { this.regs[rd] = t.off || 0; return true; }
+    if (method === "TensorRows") { this.regs[rd] = t.rows || 0; return true; }
+    if (method === "TensorCols") { this.regs[rd] = t.cols || 0; return true; }
+    if (method === "TensorFormat") { this.regs[rd] = t.fmt || 0; return true; }
+    return false;
+  };
+  PicoVM.prototype._kv = function (method, rd, rs1, rs2) {
+    if (!this._kvState) this._kvState = { k: {}, v: {}, shape: [0,0,0] };
+    var kv = this._kvState, key = (((this.regs[rs1] >>> 16) & 0xFFFF) + ":" + (this.regs[rs1] & 0xFFFF));
+    if (method === "SetShape") { kv.shape = [this.regs[rs1] | 0, this.regs[rs2] | 0, this.regs[rs2] | 0]; this.regs[rd] = 1; return true; }
+    if (method === "WriteK") { kv.k[key] = this._spanBytes(this.regs[rs2]); this.regs[rd] = 1; return true; }
+    if (method === "WriteV") { kv.v[key] = this._spanBytes(this.regs[rs2]); this.regs[rd] = 1; return true; }
+    if (method === "ReadK") { this.regs[rd] = this._newSpanBytes(kv.k[key] || []); return true; }
+    if (method === "ReadV") { this.regs[rd] = this._newSpanBytes(kv.v[key] || []); return true; }
+    if (method === "Len") { this.regs[rd] = Object.keys(kv.k).length + Object.keys(kv.v).length; return true; }
+    if (method === "Clear") { kv.k = {}; kv.v = {}; this.regs[rd] = 1; return true; }
+    return false;
+  };
+  PicoVM.prototype._sampling = function (method, rd, rs1, rs2) {
+    if (!this._sampTemp) this._sampTemp = 256;
+    if (method === "Temperature") { this._sampTemp = Math.max(1, this.regs[rs1] | 0); this.regs[rd] = this._sampTemp; return true; }
+    if (method === "ArgMax") return this._tensor("ArgMaxI32", rd, rs1, rs2);
+    if (method === "TopK") { var d = this._spanBytes(this.regs[rs1]), k = Math.max(1, this.regs[rs2] | 0), vals = []; for (var i = 0; i < Math.floor(d.length/4); i++) vals.push([i32beAt(d,i),i]); vals.sort(function(a,b){return (b[0]-a[0])||(a[1]-b[1]);}); this.regs[rd]=this._newSpanBytes(packI32(vals.slice(0,k).map(function(x){return x[1];}))); return true; }
     return false;
   };
 

@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0x5C6CC107
+#define PV_HOOK_TABLE_VERSION 0x25379DC3
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -369,6 +369,8 @@
 #define PV_HOOK_TENSOR_ARGMAXI32                 0x1EA
 #define PV_HOOK_BITLINEAR_SETSHAPE               0x1F0
 #define PV_HOOK_BITLINEAR_MATVECTERNARY          0x1F1
+#define PV_HOOK_BITLINEAR_MATVECBITMAP           0x1F2
+#define PV_HOOK_BITLINEAR_MATVECBASE3            0x1F3
 #define PV_HOOK_SEARCH_CLEARFIELDS               0x200
 #define PV_HOOK_SEARCH_FACETS                    0x201
 #define PV_HOOK_SEARCH_FACETVALUE                0x202
@@ -381,5 +383,26 @@
 #define PV_HOOK_SEARCH_JOURNALFACET              0x209
 #define PV_HOOK_SEARCH_JOURNALNUMBER             0x20A
 #define PV_HOOK_SEARCH_JOURNALREPLAY             0x20B
+#define PV_HOOK_TOKENIZER_ENCODEBYTES            0x210
+#define PV_HOOK_TOKENIZER_DECODEBYTES            0x211
+#define PV_HOOK_TOKENIZER_COUNT                  0x212
+#define PV_HOOK_TOKENIZER_TOKEN                  0x213
+#define PV_HOOK_MODEL_SETCONFIG                  0x220
+#define PV_HOOK_MODEL_GETCONFIG                  0x221
+#define PV_HOOK_MODEL_TENSORVIEW                 0x222
+#define PV_HOOK_MODEL_TENSOROFFSET               0x223
+#define PV_HOOK_MODEL_TENSORROWS                 0x224
+#define PV_HOOK_MODEL_TENSORCOLS                 0x225
+#define PV_HOOK_MODEL_TENSORFORMAT               0x226
+#define PV_HOOK_KV_SETSHAPE                      0x230
+#define PV_HOOK_KV_WRITEK                        0x231
+#define PV_HOOK_KV_WRITEV                        0x232
+#define PV_HOOK_KV_READK                         0x233
+#define PV_HOOK_KV_READV                         0x234
+#define PV_HOOK_KV_LEN                           0x235
+#define PV_HOOK_KV_CLEAR                         0x236
+#define PV_HOOK_SAMPLING_ARGMAX                  0x240
+#define PV_HOOK_SAMPLING_TOPK                    0x241
+#define PV_HOOK_SAMPLING_TEMPERATURE             0x242
 
 #endif

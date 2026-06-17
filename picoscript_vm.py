@@ -660,6 +660,13 @@ class HostApi:
         self.tensor_cols = 0
         self.bitlinear_rows = 0
         self.bitlinear_cols = 0
+        self.tokenizer_tokens: List[int] = []
+        self.model_config: Dict[int, int] = {}
+        self.model_tensors: Dict[int, dict] = {}
+        self.kv_shape = {"layers": 0, "positions": 0, "dim": 0}
+        self.kv_k: Dict[tuple, bytes] = {}
+        self.kv_v: Dict[tuple, bytes] = {}
+        self.sampling_temp = 256
         self.gpio: Dict[int, dict] = {}   # reference GPIO emulator: pin -> {dir,pull,value}
         self.schemas: Dict[int, bytes] = {}   # per-pack typed-field schema span bytes (0x60/0x61)
         self.blob_cards: Dict[tuple, bytearray] = {}  # (pack, card) -> large-card bytes for slice tests/sim
@@ -798,6 +805,18 @@ class HostApi:
                 return
         if ns == "BitLinear":
             if self._bitlinear(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Tokenizer":
+            if self._tokenizer(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Model":
+            if self._model(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Kv":
+            if self._kv(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Sampling":
+            if self._sampling(vm, method, rd, rs1, rs2):
                 return
         # Memory + span / slice / materialize.
         if ns == "Memory" and method == "Set":
@@ -2009,6 +2028,133 @@ class HostApi:
                         acc += self._ternary_weight(weights, base + c) * self._i8(vec[c])
                 vals.append(acc)
             vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack(vals))
+            return True
+        if method == "MatVecBitmap":
+            weights = self._span_raw(vm, vm.regs[rs1])
+            vec = self._span_raw(vm, vm.regs[rs2])
+            rows, cols = self.bitlinear_rows, self.bitlinear_cols or len(vec)
+            mask_bytes = (cols + 7) // 8
+            vals = []
+            for r in range(rows):
+                acc = 0
+                row = r * mask_bytes * 2
+                zero = weights[row:row + mask_bytes]
+                minus = weights[row + mask_bytes:row + mask_bytes * 2]
+                for c in range(cols):
+                    if c >= len(vec):
+                        break
+                    bit = 1 << (c & 7)
+                    z = c // 8 < len(zero) and (zero[c // 8] & bit)
+                    m = c // 8 < len(minus) and (minus[c // 8] & bit)
+                    w = 0 if z else (-1 if m else 1)
+                    acc += w * self._i8(vec[c])
+                vals.append(acc)
+            vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack(vals))
+            return True
+        if method == "MatVecBase3":
+            weights = self._span_raw(vm, vm.regs[rs1])
+            vec = self._span_raw(vm, vm.regs[rs2])
+            rows, cols = self.bitlinear_rows, self.bitlinear_cols or len(vec)
+            row_bytes = (cols + 4) // 5
+            stride = (row_bytes + 3) & ~3
+            vals = []
+            for r in range(rows):
+                acc = 0
+                row = r * stride
+                col = 0
+                for b in range(row_bytes):
+                    code = weights[row + b] if row + b < len(weights) else 0
+                    trits = [0] * 5
+                    for i in range(4, -1, -1):
+                        t = code % 3; code //= 3
+                        trits[i] = 0 if t == 0 else (1 if t == 1 else -1)
+                    for t in trits:
+                        if col >= cols or col >= len(vec):
+                            break
+                        acc += t * self._i8(vec[col]); col += 1
+                vals.append(acc)
+            vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack(vals))
+            return True
+        return False
+
+    def _tokenizer(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "EncodeBytes":
+            data = self._span_raw(vm, vm.regs[rs1])
+            self.tokenizer_tokens = [b + 3 for b in data]  # SentencePiece byte fallback ids 3..258
+            vm.regs[rd] = len(self.tokenizer_tokens)
+            return True
+        if method == "DecodeBytes":
+            out = bytes((t - 3) & 0xFF for t in self.tokenizer_tokens if 3 <= t <= 258)
+            vm.regs[rd] = self._new_span_bytes(vm, out)
+            return True
+        if method == "Count":
+            vm.regs[rd] = len(self.tokenizer_tokens)
+            return True
+        if method == "Token":
+            idx = _sx32(vm.regs[rs1])
+            vm.regs[rd] = self.tokenizer_tokens[idx] if 0 <= idx < len(self.tokenizer_tokens) else 0
+            return True
+        return False
+
+    def _model(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "SetConfig":
+            self.model_config[_sx32(vm.regs[rs1])] = _sx32(vm.regs[rs2])
+            vm.regs[rd] = 1; return True
+        if method == "GetConfig":
+            vm.regs[rd] = self.model_config.get(_sx32(vm.regs[rs1]), 0)
+            return True
+        if method == "TensorView":
+            spec = self._span_str(vm, vm.regs[rs2]).split("|")
+            while len(spec) < 4:
+                spec.append("0")
+            tid = _sx32(vm.regs[rs1])
+            self.model_tensors[tid] = {
+                "offset": int(spec[0] or 0), "rows": int(spec[1] or 0),
+                "cols": int(spec[2] or 0), "format": int(spec[3] or 0),
+            }
+            vm.regs[rd] = tid; return True
+        t = self.model_tensors.get(_sx32(vm.regs[rs1]), {})
+        if method == "TensorOffset":
+            vm.regs[rd] = t.get("offset", 0); return True
+        if method == "TensorRows":
+            vm.regs[rd] = t.get("rows", 0); return True
+        if method == "TensorCols":
+            vm.regs[rd] = t.get("cols", 0); return True
+        if method == "TensorFormat":
+            vm.regs[rd] = t.get("format", 0); return True
+        return False
+
+    def _kv(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "SetShape":
+            self.kv_shape = {"layers": _sx32(vm.regs[rs1]), "positions": _sx32(vm.regs[rs2]), "dim": _sx32(vm.regs[rs2])}
+            vm.regs[rd] = 1; return True
+        key = ((_sx32(vm.regs[rs1]) >> 16) & 0xFFFF, _sx32(vm.regs[rs1]) & 0xFFFF)
+        if method == "WriteK":
+            self.kv_k[key] = self._span_raw(vm, vm.regs[rs2]); vm.regs[rd] = 1; return True
+        if method == "WriteV":
+            self.kv_v[key] = self._span_raw(vm, vm.regs[rs2]); vm.regs[rd] = 1; return True
+        if method == "ReadK":
+            vm.regs[rd] = self._new_span_bytes(vm, self.kv_k.get(key, b"")); return True
+        if method == "ReadV":
+            vm.regs[rd] = self._new_span_bytes(vm, self.kv_v.get(key, b"")); return True
+        if method == "Len":
+            vm.regs[rd] = len(self.kv_k) + len(self.kv_v); return True
+        if method == "Clear":
+            self.kv_k.clear(); self.kv_v.clear(); vm.regs[rd] = 1; return True
+        return False
+
+    def _sampling(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "Temperature":
+            self.sampling_temp = max(1, _sx32(vm.regs[rs1]))
+            vm.regs[rd] = self.sampling_temp; return True
+        if method == "ArgMax":
+            return self._tensor(vm, "ArgMaxI32", rd, rs1, rs2)
+        if method == "TopK":
+            data = self._span_raw(vm, vm.regs[rs1])
+            k = max(1, _sx32(vm.regs[rs2]))
+            vals = [(self._i32be_at(data, i), i) for i in range(len(data) // 4)]
+            vals.sort(key=lambda x: (-x[0], x[1]))
+            vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack([idx for _v, idx in vals[:k]]))
             return True
         return False
 
