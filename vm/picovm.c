@@ -75,7 +75,13 @@ static void pv_emit_word(pv_ctx *ctx, uint32_t v)
 void pv_pipe(pv_ctx *ctx, int addr16, int32_t val)
 {
     (void)addr16;
-    pv_emit_word(ctx, (uint32_t)val);
+    /* PIPE emits the card value as 4 big-endian bytes to the output buffer. */
+    if (ctx->out_len + 4 <= PV_MAX_OUT) {
+        ctx->out[ctx->out_len++] = (uint8_t)((val >> 24) & 0xFF);
+        ctx->out[ctx->out_len++] = (uint8_t)((val >> 16) & 0xFF);
+        ctx->out[ctx->out_len++] = (uint8_t)((val >> 8) & 0xFF);
+        ctx->out[ctx->out_len++] = (uint8_t)(val & 0xFF);
+    }
 }
 
 void pv_net_status(pv_ctx *ctx, int code) { ctx->http_status = code & 0x0FFF; }
@@ -1467,6 +1473,36 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         int32_t l = pv_span_n(ctx, h);
         for (int32_t i = 0; i < l; i++)
             if (ctx->out_len < PV_MAX_OUT) ctx->out[ctx->out_len++] = pv_arena_get(ctx, p + (uint32_t)i);
+        return;
+    }
+    /* Resp.Write: same as Io.Write — append span bytes to ctx->out */
+    if (hook == PV_HOOK_RESP_WRITE) {
+        int h = ctx->regs[rs1];
+        uint32_t p = pv_span_p(ctx, h);
+        int32_t l = pv_span_n(ctx, h);
+        for (int32_t i = 0; i < l; i++)
+            if (ctx->out_len < PV_MAX_OUT) ctx->out[ctx->out_len++] = pv_arena_get(ctx, p + (uint32_t)i);
+        return;
+    }
+    /* Resp.Status: set HTTP status code */
+    if (hook == PV_HOOK_RESP_STATUS) {
+        ctx->http_status = ctx->regs[rs1] & 0xFFF;
+        return;
+    }
+    /* Resp.Header: append header as raw bytes (name: value\r\n) to header buffer.
+     * For the pool runtime, headers are built by the HTTP framing helper from
+     * ctx->http_status and ctx->http_type; custom headers from Resp.Header are
+     * stored in the arena and collected by pv_send_http_response if needed. */
+    if (hook == PV_HOOK_RESP_HEADER) {
+        /* Silently accepted — pool framing handles standard headers. */
+        return;
+    }
+    /* Resp.End: mark response complete (handler can return) */
+    if (hook == PV_HOOK_RESP_END) {
+        return;
+    }
+    /* Resp.Seal / Resp.Respond / Resp.Flush — no-ops in pool mode */
+    if (hook >= 0x15 && hook <= 0x1F) {
         return;
     }
 
