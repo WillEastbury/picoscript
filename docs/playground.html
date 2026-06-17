@@ -472,6 +472,10 @@
       0xB8: "DateTime.GetDayOfWeek",
       0xB9: "DateTime.GetDayOfYear",
       0xBA: "DateTime.UnixTimestamp",
+      0xBB: "DateTime.DiffDays",
+      0xBC: "DateTime.Year",
+      0xBD: "DateTime.Month",
+      0xBE: "DateTime.Day",
       0xC0: "Locale.GetCurrentLocale",
       0xC1: "Locale.SetLocale",
       0xC2: "Locale.FormatCurrency",
@@ -624,6 +628,8 @@
       0x1B3: "Event.SetSlice",
       0x1B4: "Event.DataSlice",
       0x1B5: "Event.DataLen",
+      0x1B6: "Req.Param",
+      0x1B7: "Req.ParamCount",
       0x1C0: "Query.BuildLookupFilter",
       0x1C1: "Query.BuildManyToManyMap",
       0x1D0: "Search.Clear",
@@ -721,6 +727,44 @@
       0x267: "TextRender.Hole",
       0x268: "TextRender.Br",
       0x270: "Model.ReadTensorRow",
+      0x280: "Process.Self",
+      0x281: "Process.Parent",
+      0x282: "Process.Spawn",
+      0x283: "Process.Exit",
+      0x284: "Process.Kill",
+      0x285: "Process.Status",
+      0x286: "Process.Wait",
+      0x287: "Process.Args",
+      0x288: "Env.Get",
+      0x289: "Env.Set",
+      0x28A: "Env.Count",
+      0x28B: "Env.Key",
+      0x290: "Timer.After",
+      0x291: "Timer.Every",
+      0x292: "Timer.Cancel",
+      0x293: "Timer.Elapsed",
+      0x294: "Scheduler.Tick",
+      0x2A0: "Principal.Current",
+      0x2A1: "Principal.HasRole",
+      0x2A2: "Principal.Claims",
+      0x2A3: "Capability.Has",
+      0x2A4: "Capability.Request",
+      0x2A5: "Capability.Drop",
+      0x2A6: "Sandbox.Deny",
+      0x2B0: "Error.SetHandler",
+      0x2B1: "Error.HasHandler",
+      0x2B2: "Error.Code",
+      0x2B3: "Error.Detail",
+      0x2B4: "Error.Resume",
+      0x2B5: "Error.Clear",
+      0x2C0: "Capsule.Call",
+      0x2C1: "Capsule.Schedule",
+      0x2C2: "Capsule.Jump",
+      0x2C3: "Capsule.LoadModule",
+      0x2C4: "Capsule.RunModule",
+      0x2D0: "Base64.Encode",
+      0x2D1: "Base64.Decode",
+      0x2D2: "Base64.UrlDecode",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }
@@ -2227,12 +2271,14 @@ function compressBound(inputLen) {
 
   // Binding capability classes (INV-17). Bit values match vm/picovm.h PV_CAP_* and
   // picoscript_vm.CAP_*; pure computation needs none (class 0, always allowed).
-  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024, CAPSULE: 2048, DEVICE: 4096, DMA: 8192, EVENT: 16384, UI: 32768 };
-  var CAP_ALL = 0xFFFF;
+  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024, CAPSULE: 2048, DEVICE: 4096, DMA: 8192, EVENT: 16384, UI: 32768, PROCESS: 65536, TIMER: 131072, PRINCIPAL: 262144, CAPSULE_EXEC: 524288 };
+  var CAP_ALL = 0xFFFFF;
   var CAP_BY_NS = { Kernel: CAP.KERNEL, Queue: CAP.QUEUE, Random: CAP.RANDOM,
     Req: CAP.NET, Resp: CAP.NET, Net: CAP.NET, Storage: CAP.STORAGE, DateTime: CAP.TIME,
     Context: CAP.CONTEXT, Auth: CAP.AUTH, X509: CAP.AUTH, Environment: CAP.ENV, Locale: CAP.ENV, Gpio: CAP.GPIO,
-    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Stream: CAP.DMA, Event: CAP.EVENT, Ui: CAP.UI };
+    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Stream: CAP.DMA, Event: CAP.EVENT, Ui: CAP.UI,
+    Process: CAP.PROCESS, Env: CAP.PROCESS, Timer: CAP.TIMER, Scheduler: CAP.TIMER,
+    Principal: CAP.PRINCIPAL, Capability: CAP.PRINCIPAL, Sandbox: CAP.PRINCIPAL, Capsule: CAP.CAPSULE_EXEC };
   function hookCap(name) {   // "Ns.Method" -> required capability class (0 = pure)
     var dot = name.indexOf("."), ns = name.slice(0, dot), m = name.slice(dot + 1);
     if (ns === "Maths" && (m === "Random" || m === "RandomRange")) return CAP.RANDOM;
@@ -2328,7 +2374,18 @@ function compressBound(inputLen) {
     this.verify();                       // INV-10: verify before execution
     while (!this.halted && this.pc < this.program.length) {
       if (this.steps >= this.maxSteps) throw picoFault(FAULT.STEP_BUDGET, this.pc, 0, "step budget exceeded");
-      this.step();
+      try {
+        this.step();
+      } catch (ex) {
+        if (ex.fault !== undefined && this._errState && this._errState.handlerPc) {
+          this._errState.code = ex.fault;
+          this._errState.detail = ex.detail || 0;
+          this._errState.resumePc = (ex.pc || 0) + 1;
+          this.pc = this._errState.handlerPc;
+        } else {
+          throw ex;
+        }
+      }
     }
     return this;
   };
@@ -2621,6 +2678,19 @@ function compressBound(inputLen) {
       if (this._textio(name.slice(0, dot), name.slice(dot + 1), rd, rs1, rs2)) return;
     }
     if (name.indexOf("TextRender.") === 0) { if (this._textrender(name.slice(11), rd, rs1, rs2)) return; }
+    // ---- OS-worker: Process/Env, Timer/Scheduler, Principal/Capability/Sandbox, Error, Capsule ----
+    if (name.indexOf("Process.") === 0) { if (this._processEnv("Process", name.slice(8), rd, rs1, rs2)) return; }
+    if (name.indexOf("Env.") === 0) { if (this._processEnv("Env", name.slice(4), rd, rs1, rs2)) return; }
+    if (name.indexOf("Timer.") === 0) { if (this._timerScheduler("Timer", name.slice(6), rd, rs1, rs2)) return; }
+    if (name.indexOf("Scheduler.") === 0) { if (this._timerScheduler("Scheduler", name.slice(10), rd, rs1, rs2)) return; }
+    if (name.indexOf("Principal.") === 0) { if (this._principalCap("Principal", name.slice(10), rd, rs1, rs2)) return; }
+    if (name.indexOf("Capability.") === 0) { if (this._principalCap("Capability", name.slice(11), rd, rs1, rs2)) return; }
+    if (name.indexOf("Sandbox.") === 0) { if (this._principalCap("Sandbox", name.slice(8), rd, rs1, rs2)) return; }
+    if (name.indexOf("Error.") === 0) { if (this._errorHook(name.slice(6), rd, rs1, rs2)) return; }
+    if (name.indexOf("Capsule.") === 0) { if (this._capsuleExec(name.slice(8), rd, rs1, rs2)) return; }
+    if (name.indexOf("Base64.") === 0) { if (this._base64(name.slice(7), rd, rs1, rs2)) return; }
+    if (name === "DateTime.DiffDays" || name === "DateTime.Year" || name === "DateTime.Month" || name === "DateTime.Day") { if (this._datetimeExt(name.slice(9), rd, rs1, rs2)) return; }
+    if (name === "Req.Param" || name === "Req.ParamCount") { if (this._reqParam(name.slice(4), rd, rs1, rs2)) return; }
     this.log.push("host " + name + " R" + rd + " R" + rs1);
   };
 
@@ -2637,6 +2707,10 @@ function compressBound(inputLen) {
     var s = this.spans[handle];
     if (!s) return "";
     return new TextDecoder("utf-8").decode(this.mem.subarray(s.ptr, s.ptr + s.len));
+  };
+  PicoVM.prototype._strToBytes = function (str) {
+    var b = new TextEncoder().encode(str);
+    return Array.from(b);
   };
 
   PicoVM.prototype._strSpan = function (text) {
@@ -4169,6 +4243,274 @@ function compressBound(inputLen) {
     return parts.join("");
   };
 
+  // -- Process.*/Env.* OS-worker process lifecycle (mirrors HostApi._process_env) ----
+  PicoVM.prototype._processEnv = function (ns, method, rd, rs1, rs2) {
+    if (!this._proc) this._proc = { seq: 0, self: 1, parent: 0, table: {}, args: [], envVars: {} };
+    var p = this._proc;
+    if (ns === "Process") {
+      if (method === "Self") { this.regs[rd] = p.self; return true; }
+      if (method === "Parent") { this.regs[rd] = p.parent; return true; }
+      if (method === "Spawn") {
+        p.seq++;
+        var pid = p.seq + 100;
+        p.table[pid] = { status: 0, exitCode: 0, pack: this.regs[rs1] >>> 0, entry: this.regs[rs2] >>> 0 };
+        this.log.push("Process.Spawn pack=" + (this.regs[rs1] >>> 0) + " entry=" + (this.regs[rs2] >>> 0) + " -> pid=" + pid);
+        this.regs[rd] = pid; return true;
+      }
+      if (method === "Exit") {
+        var code = this.regs[rs1] | 0;
+        p.table[p.self] = { status: 1, exitCode: code, pack: 0, entry: 0 };
+        this.log.push("Process.Exit code=" + code);
+        this.halted = true; return true;
+      }
+      if (method === "Kill") {
+        var kp = p.table[this.regs[rs1] >>> 0];
+        if (kp && kp.status === 0) { kp.status = 2; kp.exitCode = -1; this.regs[rd] = 1; }
+        else this.regs[rd] = 0;
+        return true;
+      }
+      if (method === "Status") {
+        var sp = p.table[this.regs[rs1] >>> 0];
+        this.regs[rd] = sp ? sp.status : 1; return true;
+      }
+      if (method === "Wait") {
+        var wp = p.table[this.regs[rs1] >>> 0];
+        this.regs[rd] = wp ? (wp.exitCode | 0) : 0; return true;
+      }
+      if (method === "Args") { this.regs[rd] = this._newSpanBytes(p.args); return true; }
+    }
+    if (ns === "Env") {
+      if (method === "Get") {
+        var key = this._spanStr(this.regs[rs1]);
+        var val = p.envVars[key];
+        if (val !== undefined) { this.regs[rd] = this._newSpanBytes(this._strToBytes(val)); }
+        else { this.regs[rd] = 0; this.hostStatus = 1; }
+        return true;
+      }
+      if (method === "Set") {
+        p.envVars[this._spanStr(this.regs[rs1])] = this._spanStr(this.regs[rs2]);
+        this.regs[rd] = 1; return true;
+      }
+      if (method === "Count") {
+        this.regs[rd] = Object.keys(p.envVars).length; return true;
+      }
+      if (method === "Key") {
+        var keys = Object.keys(p.envVars).sort();
+        var idx = this.regs[rs1] >>> 0;
+        if (idx < keys.length) { this.regs[rd] = this._newSpanBytes(this._strToBytes(keys[idx])); }
+        else { this.regs[rd] = 0; this.hostStatus = 1; }
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // -- Timer.*/Scheduler.* timers and deterministic scheduler (mirrors HostApi._timer_scheduler) ----
+  PicoVM.prototype._timerScheduler = function (ns, method, rd, rs1, rs2) {
+    if (!this._tmr) this._tmr = { seq: 0, timers: {}, elapsedMs: 0 };
+    var t = this._tmr;
+    if (ns === "Timer") {
+      if (method === "After") {
+        t.seq++; var ms = this.regs[rs1] >>> 0;
+        t.timers[t.seq] = { ms: ms, repeat: false, remaining: ms, active: true };
+        this.regs[rd] = t.seq; return true;
+      }
+      if (method === "Every") {
+        t.seq++; var ms2 = this.regs[rs1] >>> 0;
+        t.timers[t.seq] = { ms: ms2, repeat: true, remaining: ms2, active: true };
+        this.regs[rd] = t.seq; return true;
+      }
+      if (method === "Cancel") {
+        var ti = t.timers[this.regs[rs1] >>> 0];
+        if (ti) { ti.active = false; this.regs[rd] = 1; }
+        else this.regs[rd] = 0;
+        return true;
+      }
+      if (method === "Elapsed") { this.regs[rd] = t.elapsedMs >>> 0; return true; }
+    }
+    if (ns === "Scheduler") {
+      if (method === "Tick") {
+        var delta = this.regs[rs1] >>> 0;
+        t.elapsedMs += delta;
+        var fired = 0;
+        if (!this._ev) this._ev = { recs: {}, queue: [], seq: 0, sliceOffset: 0, sliceLen: 0 };
+        var e = this._ev;
+        var handles = Object.keys(t.timers);
+        for (var i = 0; i < handles.length; i++) {
+          var h = handles[i] | 0, ti2 = t.timers[h];
+          if (!ti2.active) continue;
+          ti2.remaining -= delta;
+          while (ti2.remaining <= 0 && ti2.active) {
+            fired++;
+            e.seq++;
+            e.recs[e.seq] = { type: 100, target: h, data: null, span: 0 };
+            e.queue.push(e.seq);
+            if (ti2.repeat) ti2.remaining += ti2.ms;
+            else { ti2.active = false; break; }
+          }
+        }
+        this.regs[rd] = fired; return true;
+      }
+    }
+    return false;
+  };
+
+  // -- Principal.*/Capability.*/Sandbox.* identity & authz harness (mirrors HostApi._principal_cap) ----
+  PicoVM.prototype._principalCap = function (ns, method, rd, rs1, rs2) {
+    if (!this._auth) this._auth = { name: "anonymous", roles: [], claims: {}, denied: 0 };
+    var a = this._auth;
+    if (ns === "Principal") {
+      if (method === "Current") { this.regs[rd] = this._newSpanBytes(this._strToBytes(a.name)); return true; }
+      if (method === "HasRole") {
+        var role = this._spanStr(this.regs[rs1]);
+        this.regs[rd] = a.roles.indexOf(role) >= 0 ? 1 : 0; return true;
+      }
+      if (method === "Claims") {
+        var ks = Object.keys(a.claims).sort();
+        var pairs = ks.map(function (k) { return k + "=" + a.claims[k]; }).join(";");
+        this.regs[rd] = this._newSpanBytes(this._strToBytes(pairs)); return true;
+      }
+    }
+    if (ns === "Capability") {
+      if (method === "Has") {
+        var cb = this.regs[rs1] >>> 0;
+        this.regs[rd] = ((this.caps & cb) && !(a.denied & cb)) ? 1 : 0; return true;
+      }
+      if (method === "Request") {
+        var cb2 = this.regs[rs1] >>> 0;
+        if (a.denied & cb2) this.regs[rd] = 0;
+        else { this.caps |= cb2; this.regs[rd] = 1; }
+        return true;
+      }
+      if (method === "Drop") {
+        this.caps &= ~(this.regs[rs1] >>> 0);
+        this.regs[rd] = 1; return true;
+      }
+    }
+    if (ns === "Sandbox") {
+      if (method === "Deny") {
+        var cb3 = this.regs[rs1] >>> 0;
+        a.denied |= cb3; this.caps &= ~cb3;
+        this.regs[rd] = 1; return true;
+      }
+    }
+    return false;
+  };
+
+  // -- Error.* global error handler + fault inspection (mirrors HostApi._error_hook) ----
+  PicoVM.prototype._errorHook = function (method, rd, rs1, rs2) {
+    if (!this._errState) this._errState = { handlerPc: 0, code: 0, detail: 0, resumePc: 0 };
+    var es = this._errState;
+    if (method === "SetHandler") { es.handlerPc = this.regs[rs1] >>> 0; this.regs[rd] = 1; return true; }
+    if (method === "HasHandler") { this.regs[rd] = es.handlerPc ? 1 : 0; return true; }
+    if (method === "Code") { this.regs[rd] = es.code >>> 0; return true; }
+    if (method === "Detail") { this.regs[rd] = es.detail >>> 0; return true; }
+    if (method === "Resume") {
+      es.code = 0; es.detail = 0;
+      if (es.resumePc) { this.pc = es.resumePc; es.resumePc = 0; }
+      this.regs[rd] = 1; return true;
+    }
+    if (method === "Clear") { es.code = 0; es.detail = 0; this.regs[rd] = 1; return true; }
+    return false;
+  };
+
+  // -- Capsule.* inter-card module switching (mirrors HostApi._capsule_exec) ----
+  PicoVM.prototype._capsuleExec = function (method, rd, rs1, rs2) {
+    if (!this._capExec) this._capExec = { seq: 0, modules: {}, schedules: [] };
+    var c = this._capExec;
+    if (method === "Call") {
+      this.log.push("Capsule.Call pack=" + (this.regs[rs1] >>> 0) + " card=" + (this.regs[rs2] >>> 0));
+      this.regs[rd] = 0; return true;
+    }
+    if (method === "Schedule") {
+      c.schedules.push({ pack: this.regs[rs1] >>> 0, card: this.regs[rs2] >>> 0 });
+      this.log.push("Capsule.Schedule pack=" + (this.regs[rs1] >>> 0) + " card=" + (this.regs[rs2] >>> 0));
+      this.regs[rd] = 1; return true;
+    }
+    if (method === "Jump") {
+      this.log.push("Capsule.Jump pack=" + (this.regs[rs1] >>> 0) + " card=" + (this.regs[rs2] >>> 0));
+      this.halted = true; return true;
+    }
+    if (method === "LoadModule") {
+      c.seq++; var h = c.seq;
+      c.modules[h] = { pack: this.regs[rs1] >>> 0, card: this.regs[rs2] >>> 0 };
+      this.log.push("Capsule.LoadModule pack=" + (this.regs[rs1] >>> 0) + " card=" + (this.regs[rs2] >>> 0) + " -> handle=" + h);
+      this.regs[rd] = h; return true;
+    }
+    if (method === "RunModule") {
+      var m = c.modules[this.regs[rs1] >>> 0];
+      if (m) this.log.push("Capsule.RunModule handle=" + (this.regs[rs1] >>> 0) + " pack=" + m.pack + " card=" + m.card);
+      this.regs[rd] = 0; return true;
+    }
+    return false;
+  };
+
+  // -- Base64.* encode/decode (mirrors HostApi._base64) ----
+  PicoVM.prototype._base64 = function (method, rd, rs1, rs2) {
+    if (typeof btoa === "undefined" && typeof Buffer === "undefined") return false;
+    if (method === "Encode") {
+      var data = this._spanBytes(this.regs[rs1]);
+      var str = "";
+      for (var i = 0; i < data.length; i++) str += String.fromCharCode(data[i]);
+      var enc = (typeof btoa !== "undefined") ? btoa(str) : Buffer.from(data).toString("base64");
+      this.regs[rd] = this._newSpanBytes(this._strToBytes(enc));
+      return true;
+    }
+    if (method === "Decode" || method === "UrlDecode") {
+      var b64 = this._spanStr(this.regs[rs1]);
+      if (method === "UrlDecode") {
+        b64 = b64.replace(/-/g, "+").replace(/_/g, "/");
+        var pad = (4 - b64.length % 4) % 4;
+        for (var p = 0; p < pad; p++) b64 += "=";
+      }
+      try {
+        var dec;
+        if (typeof atob !== "undefined") {
+          var raw = atob(b64); dec = [];
+          for (var j = 0; j < raw.length; j++) dec.push(raw.charCodeAt(j));
+        } else {
+          var buf = Buffer.from(b64, "base64"); dec = Array.from(buf);
+        }
+        this.regs[rd] = this._newSpanBytes(dec);
+      } catch (e) {
+        this.regs[rd] = this._newSpanBytes([]);
+        this.hostStatus = 2;
+      }
+      return true;
+    }
+    return false;
+  };
+
+  // -- DateTime extended (DiffDays/Year/Month/Day) (mirrors HostApi._datetime_ext) ----
+  PicoVM.prototype._datetimeExt = function (method, rd, rs1, rs2) {
+    if (method === "DiffDays") {
+      var a = this.regs[rs1] | 0, b = this.regs[rs2] | 0;
+      this.regs[rd] = ((a - b) / 86400000) | 0;
+      return true;
+    }
+    var ms = this.regs[rs1] | 0;
+    var dt = new Date(ms);
+    if (method === "Year") { this.regs[rd] = dt.getUTCFullYear(); return true; }
+    if (method === "Month") { this.regs[rd] = dt.getUTCMonth() + 1; return true; }
+    if (method === "Day") { this.regs[rd] = dt.getUTCDate(); return true; }
+    return false;
+  };
+
+  // -- Req.Param / Req.ParamCount (mirrors HostApi._req_param) ----
+  PicoVM.prototype._reqParam = function (method, rd, rs1, rs2) {
+    var ctx = this._reqCtx || {};
+    var path = ctx.path || "";
+    var segs = path.split("/").filter(function (s) { return s.length > 0; });
+    if (method === "ParamCount") { this.regs[rd] = segs.length; return true; }
+    if (method === "Param") {
+      var idx = this.regs[rs1] >>> 0;
+      if (idx < segs.length) { this.regs[rd] = this._newSpanBytes(this._strToBytes(segs[idx])); }
+      else { this.regs[rd] = 0; this.hostStatus = 1; }
+      return true;
+    }
+    return false;
+  };
+
   // ── module container: embedded + checked ABI version (INV-23) ─────────────
   // Mirrors pico_module.py byte-for-byte: [MAGIC, ABI, HOOK_TABLE_VERSION, count, ...words].
   // load refuses a module whose magic/ABI/hook-table version != this runtime.
@@ -4714,7 +5056,20 @@ function compressBound(inputLen) {
     parseProgram: function () { var s = []; while (this.peek().kind !== "eof") s.push(this.parseToplevel()); return s; },
     parseToplevel: function () {
       var t = this.peek();
-      if (t.kind === "kw" && t.value === "void") { this.next(); var name = this.next().value; this.expect("("); this.expect(")"); return { t: "Func", name: name, body: this.parseBlock() }; }
+      if (t.kind === "kw" && t.value === "void") {
+        this.next(); var name = this.next().value; this.expect("(");
+        var params = [];
+        if (!this.accept(")")) {
+          while (true) {
+            var pt = this.peek();
+            if (pt.kind === "kw" && pt.value === "int") this.next();
+            params.push(this.next().value);
+            if (!this.accept(",")) break;
+          }
+          this.expect(")");
+        }
+        return { t: "Func", name: name, body: this.parseBlock(), params: params.length ? params : null };
+      }
       return this.parseStmt();
     },
     parseBlock: function () { this.expect("{"); var s = []; while (!this.accept("}")) { if (this.peek().kind === "eof") throw new Error("C: unterminated block"); s.push(this.parseStmt()); } return s; },
@@ -4903,10 +5258,16 @@ function compressBound(inputLen) {
     varOf: function (name) { var k = name.toLowerCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
     lowerProgram: function (prog) {
       var self = this, body = [];
-      prog.forEach(function (s) { if (s.t === "Func") self.funcs.push(s); else body.push(s); });
+      this._funcParams = {};
+      prog.forEach(function (s) { if (s.t === "Func") { self.funcs.push(s); self._funcParams[s.name.toLowerCase()] = s.params || []; } else body.push(s); });
       body.forEach(function (s) { self.stmt(s); });
       this.b.ret();
-      this.funcs.forEach(function (f) { self.b.label("fn_" + f.name.toLowerCase()); f.body.forEach(function (s) { self.stmt(s); }); self.b.ret(); });
+      this.funcs.forEach(function (f) {
+        self.b.label("fn_" + f.name.toLowerCase());
+        (f.params || []).forEach(function (p, i) { var pv = self.varOf(p); var av = self.varOf("__arg" + i + "__"); self.b.mov(pv, av); });
+        f.body.forEach(function (s) { self.stmt(s); });
+        self.b.ret();
+      });
       return this.b.insts;
     },
     stmt: function (s) {
@@ -5095,7 +5456,12 @@ function compressBound(inputLen) {
         if (C_ALIASES[ak] && !this.funcs.some(function (f) { return f.name.toLowerCase() === ak; })) {
           return this.lowerCall({ t: "Call", ns: C_ALIASES[ak][0], method: C_ALIASES[ak][1], args: c.args }, want);
         }
-        this.b.call("fn_" + m.toLowerCase()); return null;
+        // pass args via arg-passing regs
+        var params = (this._funcParams || {})[ak] || [];
+        for (var ai = 0; ai < c.args.length; ai++) { var aav = this.varOf("__arg" + ai + "__"); this.assignTo(aav, c.args[ai]); }
+        this.b.call("fn_" + m.toLowerCase());
+        if (want) return this.varOf("__ret__");
+        return null;
       }
       if (ns.toUpperCase() === "NET") {
         var M = m.toUpperCase();
@@ -5201,10 +5567,19 @@ function compressBound(inputLen) {
         if (kw === "SWITCH") return this.parseSwitch();
       if (kw === "DISPATCH") return this.parseDispatch();
         if (kw === "GOTO") { this.next(); var nm = this.next().value; this.endLine(); return { t: "Goto", label: nm }; }
-        if (kw === "GOSUB") { this.next(); var nm2 = this.next().value; this.endLine(); return { t: "Gosub", name: nm2 }; }
+        if (kw === "GOSUB") {
+          this.next(); var nm2 = this.next().value;
+          var gArgs = null;
+          if (this.peek().kind === "op" && this.peek().value === "(") { gArgs = this.parseArgs(); }
+          this.endLine(); return { t: "Gosub", name: nm2, args: gArgs };
+        }
         if (kw === "SUB") return this.parseSub();
         if (kw === "SERVER") return this.parseServer();
-        if (kw === "RETURN") { this.next(); this.endLine(); return { t: "Return" }; }
+        if (kw === "RETURN") {
+          this.next();
+          if (this.peek().kind === "nl" || this.peek().kind === "eof") { this.endLine(); return { t: "Return" }; }
+          var rv = this.parseExpr(); this.endLine(); return { t: "Return", value: rv };
+        }
         if (kw === "BREAK") { this.next(); this.endLine(); return { t: "Break" }; }
         if (kw === "SKIP") { this.next(); this.endLine(); return { t: "Skip" }; }
         if (kw === "PRINT") { this.next(); var v = this.parseExpr(); this.endLine(); return { t: "Print", value: v }; }
@@ -5433,7 +5808,20 @@ function compressBound(inputLen) {
       }
       this.eatKw("ENDDISPATCH"); this.endLine(); return { t: "Dispatch", expr: expr, cases: cases, def: def };
     },
-    parseSub: function () { this.eatKw("SUB"); var name = this.next().value; this.endLine(); var body = this.parseBlock("ENDSUB"); this.eatKw("ENDSUB"); this.endLine(); return { t: "Sub", name: name, body: body }; },
+    parseSub: function () {
+      this.eatKw("SUB"); var name = this.next().value;
+      var params = null;
+      if (this.peek().kind === "op" && this.peek().value === "(") {
+        this.next(); params = [];
+        if (!(this.peek().kind === "op" && this.peek().value === ")")) {
+          params.push(this.next().value);
+          while (this.peek().kind === "op" && this.peek().value === ",") { this.next(); params.push(this.next().value); }
+        }
+        this.eatOp(")");
+      }
+      this.endLine(); var body = this.parseBlock("ENDSUB"); this.eatKw("ENDSUB"); this.endLine();
+      return { t: "Sub", name: name, body: body, params: params };
+    },
     parseServer: function () { this.eatKw("SERVER"); this.endLine(); var body = this.parseBlock("ENDSERVER"); this.eatKw("ENDSERVER"); this.endLine(); return { t: "ServerMain", body: body }; },
     parseCallFromId: function () { var ns = this.next().value; this.eatOp("."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
     parseArgs: function () { this.eatOp("("); var a = []; if (!(this.peek().kind === "op" && this.peek().value === ")")) { a.push(this.parseExpr()); while (this.peek().kind === "op" && this.peek().value === ",") { this.next(); a.push(this.parseExpr()); } } this.eatOp(")"); return a; },
@@ -5501,10 +5889,16 @@ function compressBound(inputLen) {
     varOf: function (name) { var k = name.toUpperCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
     lowerProgram: function (prog) {
       var self = this, body = [];
-      prog.forEach(function (s) { if (s.t === "Sub") self.subs.push(s); else body.push(s); });
+      this._subParams = {};
+      prog.forEach(function (s) { if (s.t === "Sub") { self.subs.push(s); self._subParams[s.name.toLowerCase()] = s.params || []; } else body.push(s); });
       body.forEach(function (s) { self.stmt(s); });
       this.b.ret();
-      this.subs.forEach(function (sub) { self.b.label("sub_" + sub.name.toUpperCase()); sub.body.forEach(function (s) { self.stmt(s); }); self.b.ret(); });
+      this.subs.forEach(function (sub) {
+        self.b.label("sub_" + sub.name.toUpperCase());
+        (sub.params || []).forEach(function (p, i) { var pv = self.varOf(p); var av = self.varOf("__arg" + i + "__"); self.b.mov(pv, av); });
+        sub.body.forEach(function (s) { self.stmt(s); });
+        self.b.ret();
+      });
       return this.b.insts;
     },
     stmt: function (s) {
@@ -5515,8 +5909,11 @@ function compressBound(inputLen) {
       else if (s.t === "IncDec") { var iv = this.varOf(s.name); if (s.delta === 1) this.b.inc(iv); else this.b.arith("sub", iv, iv, new Imm(1)); }
       else if (s.t === "Label") this.b.label("lbl_" + s.name.toUpperCase());
       else if (s.t === "Goto") this.b.jmp("lbl_" + s.label.toUpperCase());
-      else if (s.t === "Gosub") this.b.call("sub_" + s.name.toUpperCase());
-      else if (s.t === "Return") this.b.ret();
+      else if (s.t === "Gosub") {
+        if (s.args) { for (var gi = 0; gi < s.args.length; gi++) { this.assignTo(this.varOf("__arg" + gi + "__"), s.args[gi]); } }
+        this.b.call("sub_" + s.name.toUpperCase());
+      }
+      else if (s.t === "Return") { if (s.value != null) { var rv = this.eval(s.value); this.b.mov(this.varOf("__ret__"), rv); } this.b.ret(); }
       else if (s.t === "Break") this.lowerBreak();
       else if (s.t === "Skip") this.lowerSkip();
       else if (s.t === "If") this.lowerIf(s);
@@ -5696,6 +6093,12 @@ function compressBound(inputLen) {
       if (ns == null) {
         var key = m.toLowerCase();
         var isSub = this.subs.some(function (s) { return s.name.toLowerCase() === key; });
+        if (isSub) {
+          for (var si = 0; si < c.args.length; si++) { this.assignTo(this.varOf("__arg" + si + "__"), c.args[si]); }
+          this.b.call("sub_" + m.toUpperCase());
+          if (want) return this.varOf("__ret__");
+          return null;
+        }
         if (BP_RADIX[key] && !isSub) {
           var r = BP_RADIX[key], cm = r[0], prefix = r[1], upper = r[2];
           var val = this.eval(c.args[0]);
@@ -5818,7 +6221,11 @@ function compressBound(inputLen) {
         if (kw === "goto") { this.next(); var gl = this.expect("id").value; this.expect("newline"); return { t: "Goto", label: gl }; }
         if (kw === "label") { this.next(); var ll = this.expect("id").value; this.expect("newline"); return { t: "Label", name: ll }; }
         if (kw === "def") return this.parseDef();
-        if (kw === "return") { this.next(); this.expect("newline"); return { t: "Return" }; }
+        if (kw === "return") {
+          this.next();
+          if (this.at("newline")) { this.next(); return { t: "Return" }; }
+          var rv = this.parseExpr(); this.expect("newline"); return { t: "Return", value: rv };
+        }
         if (kw === "break") { this.next(); this.expect("newline"); return { t: "Break" }; }
         if (kw === "continue") { this.next(); this.expect("newline"); return { t: "Skip" }; }
         if (kw === "pass") { this.next(); this.expect("newline"); return null; }
@@ -5830,7 +6237,7 @@ function compressBound(inputLen) {
         if (nx.kind === "op" && nx.value === "=") { var nm = this.next().value; this.next(); var vv = this.parseExpr(); this.expect("newline"); return { t: "Let", name: nm, value: vv }; }
         if (nx.kind === "op" && PY_AUG[nx.value]) { var an = this.next().value; var op = PY_AUG[this.next().value]; var rhs = this.parseExpr(); this.expect("newline"); return { t: "Let", name: an, value: { t: "Bin", op: op, lhs: { t: "Var", name: an }, rhs: rhs } }; }
         if (nx.kind === "op" && nx.value === ".") { var call = this.parseCallFromId(); this.expect("newline"); return { t: "CallStmt", call: call }; }
-        if (nx.kind === "op" && nx.value === "(") { var gn = this.next().value; var gargs = this.parseArgs(); this.expect("newline"); if (gargs.length === 0) return { t: "Gosub", name: gn }; return { t: "CallStmt", call: { t: "Call", ns: null, method: gn, args: gargs } }; }
+        if (nx.kind === "op" && nx.value === "(") { var gn = this.next().value; var gargs = this.parseArgs(); this.expect("newline"); return { t: "Gosub", name: gn, args: gargs.length ? gargs : null }; }
       }
       throw new Error("Python: cannot parse statement at " + t.value);
     },
@@ -5882,7 +6289,13 @@ function compressBound(inputLen) {
       this.expect("newline");
       return { t: "DoLoop", topCond: null, topUntil: false, botCond: cond, botUntil: until, body: body };
     },
-    parseDef: function () { this.expectKw("def"); var name = this.expect("id").value; this.expect("op", "("); this.expect("op", ")"); return { t: "Sub", name: name, body: this.parseSuite() }; },
+    parseDef: function () {
+      this.expectKw("def"); var name = this.expect("id").value; this.expect("op", "(");
+      var params = [];
+      if (!this.at("op", ")")) { params.push(this.expect("id").value); while (this.at("op", ",")) { this.next(); params.push(this.expect("id").value); } }
+      this.expect("op", ")");
+      return { t: "Sub", name: name, body: this.parseSuite(), params: params.length ? params : null };
+    },
     parseCallFromId: function () { var ns = this.next().value; this.expect("op", "."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
     parseArgs: function () { this.expect("op", "("); var a = []; if (!this.at("op", ")")) { a.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); a.push(this.parseExpr()); } } this.expect("op", ")"); return a; },
     parseExpr: function (minp) {
@@ -5970,10 +6383,26 @@ function compressBound(inputLen) {
           this.next();
           if (this.atWord("a", "an", "the")) this.next();
           if (this.atWord("routine", "subroutine", "procedure", "function")) { this.next(); if (this.atWord("called", "named")) this.next(); }
-          var dn = this.expect("word").value; return { t: "Sub", name: dn, body: this.parseSuite() };
+          var dn = this.expect("word").value;
+          var dparams = null;
+          if (this.at("op", "(")) {
+            this.next(); dparams = [];
+            if (!this.at("op", ")")) { dparams.push(this.expect("word").value); while (this.at("op", ",")) { this.next(); dparams.push(this.expect("word").value); } }
+            this.expect("op", ")");
+          }
+          return { t: "Sub", name: dn, body: this.parseSuite(), params: dparams };
         }
-        if (w === "do" || w === "call") { this.next(); var cn = this.expect("word").value; this.endStmt(); return { t: "Gosub", name: cn }; }
-        if (w === "return") { this.next(); this.endStmt(); return { t: "Return" }; }
+        if (w === "do" || w === "call") {
+          this.next(); var cn = this.expect("word").value;
+          var cargs = null;
+          if (this.at("op", "(")) { this.next(); cargs = []; if (!this.at("op", ")")) { cargs.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); cargs.push(this.parseExpr()); } } this.expect("op", ")"); }
+          this.endStmt(); return { t: "Gosub", name: cn, args: cargs };
+        }
+        if (w === "return") {
+          this.next();
+          if (this.at("newline") || this.at("eof") || this.at("op", ".")) { this.endStmt(); return { t: "Return" }; }
+          var rv = this.parseExpr(); this.endStmt(); return { t: "Return", value: rv };
+        }
         if (w === "stop" || w === "break") { this.next(); if (this.atWord("out")) this.next(); this.endStmt(); return { t: "Break" }; }
         if (w === "skip" || w === "continue") { this.next(); this.endStmt(); return { t: "Skip" }; }
         if (this.peek(1).kind === "op" && this.peek(1).value === "." && this.peek(2).kind === "word" && this.peek(3).kind === "op" && this.peek(3).value === "(") { var call = this.parseCallFromWord(); this.endStmt(); return { t: "CallStmt", call: call }; }

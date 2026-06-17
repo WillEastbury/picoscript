@@ -307,6 +307,8 @@ The editor can derive completions from the language namespace table:
 | `Sandbox.` | `Deny` |
 | `Error.` | `SetHandler`, `HasHandler`, `Code`, `Detail`, `Resume`, `Clear` |
 | `Capsule.` | `Call`, `Schedule`, `Jump`, `LoadModule`, `RunModule` |
+| `Base64.` | `Encode`, `Decode`, `UrlDecode` |
+| `DateTime.` | `Now`, `UtcNow`, `Parse`, `Format`, `AddSeconds`, `AddMinutes`, `AddHours`, `AddDays`, `GetDayOfWeek`, `GetDayOfYear`, `UnixTimestamp`, `DiffDays`, `Year`, `Month`, `Day` |
 | `Thread.` | `Skip`, `Wait`, `Raise`, `YieldCounted` |
 | `Math.` | `Add`, `Sub`, `Mul`, `Div`, `Inc` |
 | `Flow.` | `Jump`, `Branch`, `Call`, `Return` |

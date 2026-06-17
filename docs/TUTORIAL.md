@@ -531,3 +531,69 @@ int mod = Capsule.LoadModule(1024, 3);  // load without executing
 int result = Capsule.RunModule(mod);     // execute loaded module
 Capsule.Jump(1024, 4);              // transfer execution (halts current)
 ```
+
+## 15. Function parameters and return values
+
+Functions in all 4 frontends accept parameters and return values:
+
+```c
+// C frontend
+void add(int a, int b) {
+    return a + b;
+}
+int result = add(10, 32);   // result = 42
+Io.WriteByte(result);
+```
+
+```python
+# Python frontend
+def add(a, b):
+    return a + b
+r = add(10, 32)
+Io.WriteByte(r)
+```
+
+```basic
+' BASIC frontend
+SUB ADD(A, B)
+    RETURN A + B
+ENDSUB
+LET R = ADD(10, 32)
+```
+
+Calling convention: args via `__arg0__`..`__argN__` registers, return via `__ret__`.
+Non-recursive calls work with full 5-path parity.
+
+## 16. Error handling (try/except)
+
+Python frontend supports try/except/finally with the Error.* hooks:
+
+```python
+try:
+    card = Storage.ReadCard(0, 123)
+except:
+    Resp.Status(404)
+    Resp.End()
+finally:
+    Io.WriteByte(0)
+```
+
+The `raise` statement triggers OP_RAISE; the except body checks `Error.Code`.
+
+## 17. Base64, DateTime, Req.Param
+
+```c
+// Base64 for JWT
+int encoded = Base64.Encode(payload);
+int decoded = Base64.Decode(encoded);
+int urlDecoded = Base64.UrlDecode(jwt_part);
+
+// DateTime decomposition
+int year = DateTime.Year(millis);
+int month = DateTime.Month(millis);
+int diff = DateTime.DiffDays(a, b);
+
+// Path parameter extraction: /api/orders/123
+int count = Req.ParamCount();   // 3
+int seg = Req.Param(2);         // "123"
+```
