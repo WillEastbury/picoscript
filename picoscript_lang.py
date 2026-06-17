@@ -203,8 +203,11 @@ NAMESPACE_MAP = {
         "Attend": OP_NOOP,
     },
     "Tokenizer": {
+        "SetVocab": OP_NOOP,
         "EncodeBytes": OP_NOOP,
+        "EncodeTrie": OP_NOOP,
         "DecodeBytes": OP_NOOP,
+        "DecodeTrie": OP_NOOP,
         "Count": OP_NOOP,
         "Token": OP_NOOP,
     },
@@ -216,6 +219,8 @@ NAMESPACE_MAP = {
         "TensorRows": OP_NOOP,
         "TensorCols": OP_NOOP,
         "TensorFormat": OP_NOOP,
+        "ReadTensor": OP_NOOP,
+        "ReadTensorRow": OP_NOOP,
     },
     "Kv": {
         "SetShape": OP_NOOP,
@@ -731,10 +736,13 @@ HOST_HOOK_CODES = {
     ("BitLinear", "MatVecBitmap"): 0x01F2, # rs1=zero/minus bitmaps rs2=i8  rd=span<int32_be>
     ("BitLinear", "MatVecBase3"): 0x01F3,  # rs1=base3 rows rs2=i8 vec      rd=span<int32_be>
     # Tokenizer / model / KV / sampling primitive surface for PicoScript AI harnesses.
-    ("Tokenizer", "EncodeBytes"): 0x0210,
-    ("Tokenizer", "DecodeBytes"): 0x0211,
-    ("Tokenizer", "Count"):      0x0212,
-    ("Tokenizer", "Token"):      0x0213,
+    ("Tokenizer", "SetVocab"):   0x0210,
+    ("Tokenizer", "EncodeBytes"): 0x0211,
+    ("Tokenizer", "EncodeTrie"): 0x0212,
+    ("Tokenizer", "DecodeBytes"): 0x0213,
+    ("Tokenizer", "DecodeTrie"): 0x0214,
+    ("Tokenizer", "Count"):      0x0215,
+    ("Tokenizer", "Token"):      0x0216,
     ("Model", "SetConfig"):      0x0220,
     ("Model", "GetConfig"):      0x0221,
     ("Model", "TensorView"):     0x0222,
@@ -742,6 +750,8 @@ HOST_HOOK_CODES = {
     ("Model", "TensorRows"):     0x0224,
     ("Model", "TensorCols"):     0x0225,
     ("Model", "TensorFormat"):   0x0226,
+    ("Model", "ReadTensor"):     0x0227,
+    ("Model", "ReadTensorRow"):  0x0270,
     ("Quant", "AbsMax"):         0x0228,
     ("Quant", "QuantI8"):        0x0229,
     ("Quant", "DequantI8"):      0x022A,

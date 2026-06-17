@@ -661,6 +661,8 @@ class HostApi:
         self.bitlinear_rows = 0
         self.bitlinear_cols = 0
         self.tokenizer_tokens: List[int] = []
+        self.tokenizer_vocab: List[tuple] = []  # [(piece_bytes, id), ...] longest first
+        self.tokenizer_rev: Dict[int, bytes] = {}
         self.model_config: Dict[int, int] = {}
         self.model_tensors: Dict[int, dict] = {}
         self.kv_shape = {"layers": 0, "positions": 0, "dim": 0}
@@ -2182,14 +2184,57 @@ class HostApi:
         return (layer, pos, self.kv_head if head is None else head)
 
     def _tokenizer(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "SetVocab":
+            text = self._span_str(vm, vm.regs[rs1])
+            vocab = []
+            rev = {}
+            for line in text.replace(";", "\n").splitlines():
+                if not line or "=" not in line:
+                    continue
+                piece, sid = line.rsplit("=", 1)
+                try:
+                    tid = int(sid, 0)
+                except ValueError:
+                    continue
+                b = piece.encode("utf-8")
+                vocab.append((b, tid)); rev[tid] = b
+            self.tokenizer_vocab = sorted(vocab, key=lambda x: (-len(x[0]), x[1]))
+            self.tokenizer_rev = rev
+            vm.regs[rd] = len(self.tokenizer_vocab)
+            return True
         if method == "EncodeBytes":
             data = self._span_raw(vm, vm.regs[rs1])
             self.tokenizer_tokens = [b + 3 for b in data]  # SentencePiece byte fallback ids 3..258
             vm.regs[rd] = len(self.tokenizer_tokens)
             return True
+        if method == "EncodeTrie":
+            data = self._span_raw(vm, vm.regs[rs1])
+            out = []
+            i = 0
+            while i < len(data):
+                matched = None
+                for piece, tid in self.tokenizer_vocab:
+                    if piece and data.startswith(piece, i):
+                        matched = (piece, tid); break
+                if matched:
+                    out.append(matched[1]); i += len(matched[0])
+                else:
+                    out.append(data[i] + 3); i += 1
+            self.tokenizer_tokens = out
+            vm.regs[rd] = len(out)
+            return True
         if method == "DecodeBytes":
             out = bytes((t - 3) & 0xFF for t in self.tokenizer_tokens if 3 <= t <= 258)
             vm.regs[rd] = self._new_span_bytes(vm, out)
+            return True
+        if method == "DecodeTrie":
+            out = bytearray()
+            for t in self.tokenizer_tokens:
+                if t in self.tokenizer_rev:
+                    out += self.tokenizer_rev[t]
+                elif 3 <= t <= 258:
+                    out.append((t - 3) & 0xFF)
+            vm.regs[rd] = self._new_span_bytes(vm, bytes(out))
             return True
         if method == "Count":
             vm.regs[rd] = len(self.tokenizer_tokens)
@@ -2209,12 +2254,18 @@ class HostApi:
             return True
         if method == "TensorView":
             spec = self._span_str(vm, vm.regs[rs2]).split("|")
-            while len(spec) < 4:
+            spec_len = len(spec)
+            while len(spec) < 6:
                 spec.append("0")
             tid = _sx32(vm.regs[rs1])
+            if spec_len >= 6:
+                pack, card, off, rows, cols, fmt = spec[:6]
+            else:
+                pack, card, off, rows, cols, fmt = "0", "0", spec[0], spec[1], spec[2], spec[3]
             self.model_tensors[tid] = {
-                "offset": int(spec[0] or 0), "rows": int(spec[1] or 0),
-                "cols": int(spec[2] or 0), "format": int(spec[3] or 0),
+                "pack": int(pack or 0), "card": int(card or 0),
+                "offset": int(off or 0), "rows": int(rows or 0),
+                "cols": int(cols or 0), "format": int(fmt or 0),
             }
             vm.regs[rd] = tid; return True
         t = self.model_tensors.get(_sx32(vm.regs[rs1]), {})
@@ -2226,6 +2277,27 @@ class HostApi:
             vm.regs[rd] = t.get("cols", 0); return True
         if method == "TensorFormat":
             vm.regs[rd] = t.get("format", 0); return True
+        if method == "ReadTensor" or method == "ReadTensorRow":
+            tid = _sx32(vm.regs[rs1])
+            t = self.model_tensors.get(tid, {})
+            pack = str(t.get("pack", 0))
+            card = t.get("card", 0)
+            offset = t.get("offset", 0)
+            rows = t.get("rows", 0)
+            cols = t.get("cols", 0)
+            fmt = t.get("format", 0)
+            elem = 1 if fmt in (1, 2, 3, 15) else 4
+            row_bytes = cols * elem
+            blob = self.blob_cards.get((pack, card), bytearray())
+            if method == "ReadTensorRow":
+                row = max(0, _sx32(vm.regs[rs2]))
+                start = offset + row * row_bytes
+                n = row_bytes
+            else:
+                start = offset
+                n = rows * row_bytes
+            vm.regs[rd] = self._new_span_bytes(vm, bytes(blob[start:start + n]))
+            return True
         return False
 
     def _kv(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:

@@ -292,8 +292,8 @@ The editor can derive completions from the language namespace table:
 | `TextRender.` | `Raw`, `Text`, `Open`, `Attr`, `OpenEnd`, `Close`, `Empty`, `Hole`, `Br` |
 | `Quant.` | `AbsMax`, `QuantI8`, `DequantI8`, `ApplyScale`, `GroupScale` |
 | `Attention.` | `SetShape`, `Scores`, `Mix`, `Attend` |
-| `Tokenizer.` | `EncodeBytes`, `DecodeBytes`, `Count`, `Token` |
-| `Model.` | `SetConfig`, `GetConfig`, `TensorView`, `TensorOffset`, `TensorRows`, `TensorCols`, `TensorFormat` |
+| `Tokenizer.` | `SetVocab`, `EncodeBytes`, `EncodeTrie`, `DecodeBytes`, `DecodeTrie`, `Count`, `Token` |
+| `Model.` | `SetConfig`, `GetConfig`, `TensorView`, `TensorOffset`, `TensorRows`, `TensorCols`, `TensorFormat`, `ReadTensor`, `ReadTensorRow` |
 | `Kv.` | `SetShape`, `WriteK`, `WriteV`, `ReadK`, `ReadV`, `Len`, `Clear` |
 | `Sampling.` | `ArgMax`, `TopK`, `Temperature` |
 | `Query.` | `BuildLookupFilter`, `BuildManyToManyMap` |
@@ -463,8 +463,8 @@ All tensor outputs are spans of big-endian int32 values unless the method return
 a scalar register (`DotI8`, `ArgMaxI32`).
 
 Tokenizer/model/KV/sampling hooks provide the rest of a scriptable inference
-harness: byte-fallback tokenization, model config/tensor metadata, KV cache
-reads/writes, and logits selection.
+harness: byte-fallback or longest-prefix vocab tokenization, model config plus
+storage-bound tensor metadata/views, KV cache reads/writes, and logits selection.
 
 These are language-stable and host-fillable. They preserve bytecode compatibility while allowing runtime-specific implementation behind the contract.
 

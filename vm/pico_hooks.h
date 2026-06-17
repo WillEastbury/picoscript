@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0x1F631491
+#define PV_HOOK_TABLE_VERSION 0xEA65A775
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -385,10 +385,13 @@
 #define PV_HOOK_SEARCH_JOURNALFACET              0x209
 #define PV_HOOK_SEARCH_JOURNALNUMBER             0x20A
 #define PV_HOOK_SEARCH_JOURNALREPLAY             0x20B
-#define PV_HOOK_TOKENIZER_ENCODEBYTES            0x210
-#define PV_HOOK_TOKENIZER_DECODEBYTES            0x211
-#define PV_HOOK_TOKENIZER_COUNT                  0x212
-#define PV_HOOK_TOKENIZER_TOKEN                  0x213
+#define PV_HOOK_TOKENIZER_SETVOCAB               0x210
+#define PV_HOOK_TOKENIZER_ENCODEBYTES            0x211
+#define PV_HOOK_TOKENIZER_ENCODETRIE             0x212
+#define PV_HOOK_TOKENIZER_DECODEBYTES            0x213
+#define PV_HOOK_TOKENIZER_DECODETRIE             0x214
+#define PV_HOOK_TOKENIZER_COUNT                  0x215
+#define PV_HOOK_TOKENIZER_TOKEN                  0x216
 #define PV_HOOK_MODEL_SETCONFIG                  0x220
 #define PV_HOOK_MODEL_GETCONFIG                  0x221
 #define PV_HOOK_MODEL_TENSORVIEW                 0x222
@@ -396,6 +399,7 @@
 #define PV_HOOK_MODEL_TENSORROWS                 0x224
 #define PV_HOOK_MODEL_TENSORCOLS                 0x225
 #define PV_HOOK_MODEL_TENSORFORMAT               0x226
+#define PV_HOOK_MODEL_READTENSOR                 0x227
 #define PV_HOOK_QUANT_ABSMAX                     0x228
 #define PV_HOOK_QUANT_QUANTI8                    0x229
 #define PV_HOOK_QUANT_DEQUANTI8                  0x22A
@@ -430,5 +434,6 @@
 #define PV_HOOK_TEXTRENDER_EMPTY                 0x266
 #define PV_HOOK_TEXTRENDER_HOLE                  0x267
 #define PV_HOOK_TEXTRENDER_BR                    0x268
+#define PV_HOOK_MODEL_READTENSORROW              0x270
 
 #endif

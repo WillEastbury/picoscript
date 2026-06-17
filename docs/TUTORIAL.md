@@ -376,7 +376,8 @@ M33 DSP, desktop SIMD, or a future tensor accelerator.
 | `BitLinear.MatVecBitmap(weights, act)` | bitmap trit rows (`zero_mask` + `minus_mask`) |
 | `BitLinear.MatVecBase3(weights, act)` | base-3 packed trit rows |
 | `Tokenizer.EncodeBytes/DecodeBytes` | byte-fallback tokenizer baseline |
-| `Model.SetConfig/GetConfig/TensorView` | model metadata and tensor views |
+| `Tokenizer.SetVocab/EncodeTrie/DecodeTrie` | longest-prefix vocab trie baseline |
+| `Model.SetConfig/GetConfig/TensorView/ReadTensor/ReadTensorRow` | model metadata and storage-bound tensor views |
 | `Kv.WriteK/WriteV/ReadK/ReadV` | KV cache records by layer/position |
 | `Sampling.ArgMax/TopK/Temperature` | logits selection helpers |
 
@@ -407,9 +408,12 @@ Minimal model loop scaffolding:
 ```c
 Tokenizer.EncodeBytes(prompt);
 int token = Tokenizer.Token(0);
+Tokenizer.SetVocab("hello=100;world=101");
+Tokenizer.EncodeTrie("hello world");
 
 Model.SetConfig(1, 128);                 // e.g. hidden_dim
-Model.TensorView(3, "4096|2|4|15");      // offset|rows|cols|format
+Model.TensorView(3, "2|7|4096|2|4|15");  // pack|card|offset|rows|cols|format
+int row = Model.ReadTensorRow(3, 0);
 
 Kv.WriteK((layer << 16) | pos, kSpan);
 Kv.WriteV((layer << 16) | pos, vSpan);

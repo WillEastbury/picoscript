@@ -389,10 +389,13 @@
       0x209: "Search.JournalFacet",
       0x20A: "Search.JournalNumber",
       0x20B: "Search.JournalReplay",
-      0x210: "Tokenizer.EncodeBytes",
-      0x211: "Tokenizer.DecodeBytes",
-      0x212: "Tokenizer.Count",
-      0x213: "Tokenizer.Token",
+      0x210: "Tokenizer.SetVocab",
+      0x211: "Tokenizer.EncodeBytes",
+      0x212: "Tokenizer.EncodeTrie",
+      0x213: "Tokenizer.DecodeBytes",
+      0x214: "Tokenizer.DecodeTrie",
+      0x215: "Tokenizer.Count",
+      0x216: "Tokenizer.Token",
       0x220: "Model.SetConfig",
       0x221: "Model.GetConfig",
       0x222: "Model.TensorView",
@@ -400,6 +403,7 @@
       0x224: "Model.TensorRows",
       0x225: "Model.TensorCols",
       0x226: "Model.TensorFormat",
+      0x227: "Model.ReadTensor",
       0x228: "Quant.AbsMax",
       0x229: "Quant.QuantI8",
       0x22A: "Quant.DequantI8",
@@ -434,6 +438,7 @@
       0x266: "TextRender.Empty",
       0x267: "TextRender.Hole",
       0x268: "TextRender.Br",
+      0x270: "Model.ReadTensorRow",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }

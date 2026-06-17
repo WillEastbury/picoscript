@@ -1530,8 +1530,17 @@
 
   PicoVM.prototype._tokenizer = function (method, rd, rs1, rs2) {
     if (!this._tok) this._tok = [];
+    if (!this._vocab) { this._vocab = []; this._vrev = {}; }
+    if (method === "SetVocab") {
+      var lines = this._spanStr(this.regs[rs1]).replace(/;/g, "\n").split(/\r?\n/), vocab = [], rev = {};
+      lines.forEach(function (line) { var p = line.lastIndexOf("="); if (p > 0) { var piece = line.slice(0, p), id = parseInt(line.slice(p + 1), 10); if (!isNaN(id)) { var bytes = Array.from(new TextEncoder().encode(piece)); vocab.push([bytes, id]); rev[id] = bytes; } } });
+      vocab.sort(function (a, b) { return (b[0].length - a[0].length) || (a[1] - b[1]); });
+      this._vocab = vocab; this._vrev = rev; this.regs[rd] = vocab.length; return true;
+    }
     if (method === "EncodeBytes") { var d = this._spanBytes(this.regs[rs1]); this._tok = d.map(function (b) { return b + 3; }); this.regs[rd] = this._tok.length; return true; }
+    if (method === "EncodeTrie") { var data = this._spanBytes(this.regs[rs1]), out = [], i0 = 0; while (i0 < data.length) { var found = null; for (var vi = 0; vi < this._vocab.length; vi++) { var pc = this._vocab[vi][0], ok = pc.length && i0 + pc.length <= data.length; for (var pj = 0; ok && pj < pc.length; pj++) if (data[i0 + pj] !== pc[pj]) ok = false; if (ok) { found = this._vocab[vi]; break; } } if (found) { out.push(found[1]); i0 += found[0].length; } else { out.push(data[i0] + 3); i0++; } } this._tok = out; this.regs[rd] = out.length; return true; }
     if (method === "DecodeBytes") { this.regs[rd] = this._newSpanBytes(this._tok.filter(function(t){return t>=3&&t<=258;}).map(function(t){return (t-3)&255;})); return true; }
+    if (method === "DecodeTrie") { var db = []; for (var di = 0; di < this._tok.length; di++) { var t = this._tok[di]; if (this._vrev[t]) db = db.concat(this._vrev[t]); else if (t >= 3 && t <= 258) db.push((t - 3) & 255); } this.regs[rd] = this._newSpanBytes(db); return true; }
     if (method === "Count") { this.regs[rd] = this._tok.length; return true; }
     if (method === "Token") { var i = this.regs[rs1] | 0; this.regs[rd] = (i >= 0 && i < this._tok.length) ? this._tok[i] : 0; return true; }
     return false;
@@ -1541,12 +1550,13 @@
     var m = this._modelState;
     if (method === "SetConfig") { m.cfg[this.regs[rs1] | 0] = this.regs[rs2] | 0; this.regs[rd] = 1; return true; }
     if (method === "GetConfig") { this.regs[rd] = m.cfg[this.regs[rs1] | 0] || 0; return true; }
-    if (method === "TensorView") { var spec = this._spanStr(this.regs[rs2]).split("|"); while (spec.length < 4) spec.push("0"); var tid = this.regs[rs1] | 0; m.tensors[tid] = { off: parseInt(spec[0]||"0",10)||0, rows: parseInt(spec[1]||"0",10)||0, cols: parseInt(spec[2]||"0",10)||0, fmt: parseInt(spec[3]||"0",10)||0 }; this.regs[rd] = tid; return true; }
+    if (method === "TensorView") { var spec = this._spanStr(this.regs[rs2]).split("|"), slen = spec.length; while (spec.length < 6) spec.push("0"); var tid = this.regs[rs1] | 0; var pack, card, off, rows, cols, fmt; if (slen >= 6) { pack=spec[0]; card=spec[1]; off=spec[2]; rows=spec[3]; cols=spec[4]; fmt=spec[5]; } else { pack="0"; card="0"; off=spec[0]; rows=spec[1]; cols=spec[2]; fmt=spec[3]; } m.tensors[tid] = { pack: parseInt(pack||"0",10)||0, card: parseInt(card||"0",10)||0, off: parseInt(off||"0",10)||0, rows: parseInt(rows||"0",10)||0, cols: parseInt(cols||"0",10)||0, fmt: parseInt(fmt||"0",10)||0 }; this.regs[rd] = tid; return true; }
     var t = m.tensors[this.regs[rs1] | 0] || {};
     if (method === "TensorOffset") { this.regs[rd] = t.off || 0; return true; }
     if (method === "TensorRows") { this.regs[rd] = t.rows || 0; return true; }
     if (method === "TensorCols") { this.regs[rd] = t.cols || 0; return true; }
     if (method === "TensorFormat") { this.regs[rd] = t.fmt || 0; return true; }
+    if (method === "ReadTensor" || method === "ReadTensorRow") { var st = this._st || { blobs: {} }, blob = (st.blobs[String(t.pack||0)+":"+(t.card||0)] || []), elem = (t.fmt === 1 || t.fmt === 2 || t.fmt === 3 || t.fmt === 15) ? 1 : 4, rb = (t.cols || 0) * elem, start = t.off || 0, n = (t.rows || 0) * rb; if (method === "ReadTensorRow") { var row = Math.max(0, this.regs[rs2] | 0); start += row * rb; n = rb; } this.regs[rd] = this._newSpanBytes(blob.slice(start, start + n)); return true; }
     return false;
   };
   PicoVM.prototype._kv = function (method, rd, rs1, rs2) {
