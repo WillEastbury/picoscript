@@ -195,6 +195,39 @@ static int pv_span_from_cbytes(pv_ctx *ctx, const char *s, int n)
     for (int i = 0; i < n; i++) pv_arena_put(ctx, &k, (uint8_t)s[i]);
     return pv_arena_finish(ctx, k);
 }
+/* Case-insensitive lookup of a header value in ctx->req_headers (name is a C
+ * string of length nn). Returns a span of the trimmed value, or 0 if absent.
+ * Used by Req.Header and Req.Principal (the trusted X-Forge-Principal header
+ * the auth proxy/kernel injects). */
+static int pv_req_header_value(pv_ctx *ctx, const char *name, int nn)
+{
+    const char *hdr = ctx->req_headers;
+    int hl = ctx->req_headers_len;
+    if (!hdr || hl <= 0 || nn <= 0) return 0;
+    int i = 0;
+    while (i < hl) {
+        int ls = i;
+        while (i < hl && hdr[i] != '\n') i++;
+        int le = i;
+        if (le > ls && hdr[le - 1] == '\r') le--;
+        int j = 0, match = 1;
+        while (j < nn) {
+            if (ls + j >= le) { match = 0; break; }
+            uint8_t a = (uint8_t)hdr[ls + j], b = (uint8_t)name[j];
+            if (a >= 'A' && a <= 'Z') a = (uint8_t)(a - 'A' + 'a');
+            if (b >= 'A' && b <= 'Z') b = (uint8_t)(b - 'A' + 'a');
+            if (a != b) { match = 0; break; }
+            j++;
+        }
+        if (match && ls + nn < le && hdr[ls + nn] == ':') {
+            int vs = ls + nn + 1;
+            while (vs < le && (hdr[vs] == ' ' || hdr[vs] == '\t')) vs++;
+            return pv_span_from_cbytes(ctx, hdr + vs, le - vs);
+        }
+        i++;
+    }
+    return 0;
+}
 static int pv_arena_match(pv_ctx *ctx, uint32_t at, int32_t avail, const char *s)
 {
     int32_t n = 0;
@@ -1556,7 +1589,14 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         ctx->regs[rd] = ctx->req_body_len > 0 ? ctx->req_body_len : 0;
         return;
     }
-    if (hook == PV_HOOK_REQ_BODYMODE || hook == PV_HOOK_REQ_SEQ || hook == PV_HOOK_REQ_PRINCIPAL) {
+    if (hook == PV_HOOK_REQ_PRINCIPAL) {
+        /* Authenticated subject injected by the trusted auth front (proxy/kernel)
+         * as the X-Forge-Principal header. Empty span = unauthenticated. The
+         * front MUST strip any client-supplied copy of this header. */
+        ctx->regs[rd] = pv_req_header_value(ctx, "x-forge-principal", 17);
+        return;
+    }
+    if (hook == PV_HOOK_REQ_BODYMODE || hook == PV_HOOK_REQ_SEQ) {
         ctx->regs[rd] = 0;
         return;
     }
