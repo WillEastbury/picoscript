@@ -29,14 +29,14 @@ from typing import List, Optional
 from picoscript_basic import (  # reuse AST + lowering unchanged
     Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
     Switch, Goto, Label, Sub, Gosub, Return, Break, Skip, Print, CallStmt, Lowerer,
-    Dispatch, TryExcept, Raise,
+    Dispatch, TryExcept, Raise, OnBlock,
 )
 
 KEYWORDS = {
     "if", "elif", "else", "while", "for", "in", "range", "def", "return",
     "break", "continue", "pass", "and", "or", "not", "print", "true", "false",
     "match", "case", "do", "until", "goto", "label", "dispatch",
-    "try", "except", "finally", "raise",
+    "try", "except", "finally", "raise", "on",
 }
 
 # comparator symbols -> Cmp condition codes (matches picoscript_basic CMP codes)
@@ -265,6 +265,8 @@ class Parser:
                 return self.parse_def()
             if kw == "try":
                 return self.parse_try()
+            if kw == "on":
+                return self.parse_on()
             if kw == "raise":
                 self.next()
                 if self.at("newline"):
@@ -456,6 +458,15 @@ class Parser:
             self.next()
             finally_body = self.parse_suite()
         return TryExcept(try_body, except_body, finally_body)
+
+    def parse_on(self):
+        """ON Ns.Method: body (indented block)"""
+        self.expect_kw("on")
+        ns = self.expect("id").value
+        self.expect("op", ".")
+        method = self.expect("id").value
+        body = self.parse_suite()
+        return OnBlock(ns, method, body)
 
     def parse_call_from_id(self) -> Call:
         ns = self.next().value

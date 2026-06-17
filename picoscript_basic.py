@@ -76,6 +76,7 @@ KEYWORDS = {
     "EQ", "NE", "LT", "GT", "LE", "GE", "MOD",
     "STORE", "GPIO", "LOAD", "SERVER", "ENDSERVER", "ASSERT",
     "PACK", "CARD", "FIFO", "DEVICE", "STREAM", "UI", "EVENT",
+    "ON", "END",
 }
 CMP_WORDS = {"EQ": "EQ", "NE": "NE", "LT": "LT", "GT": "GT", "LE": "LE", "GE": "GE"}
 
@@ -263,6 +264,9 @@ class TryExcept:
 @dataclass
 class Raise:
     value: object = None
+@dataclass
+class OnBlock:
+    event_ns: str; event_method: str; body: list   # ON Ns.Method: body END ON
 
 
 # ── parser ──────────────────────────────────────────────────────────────────
@@ -382,6 +386,8 @@ class Parser:
                 return self.parse_sub()
             if kw == "SERVER":
                 return self.parse_server()
+            if kw == "ON":
+                return self.parse_on_block()
             if kw == "RETURN":
                 self.next()
                 if self.peek().kind in ("nl", "eof"):
@@ -862,14 +868,22 @@ class Parser:
         return Sub(name, body, params)
 
     def parse_server(self) -> ServerMain:
-        # SERVER ... ENDSERVER -- BASIC server-entry block (the no-braces form of
-        # Server.Main { ... }). Transparent wrapper: the body becomes the program
-        # entry, compiling to the endpoint-shaped bytecode the PIOS worker expects.
         self.eat_kw("SERVER")
         self.end_line()
         body = self.parse_block("ENDSERVER")
         self.eat_kw("ENDSERVER"); self.end_line()
         return ServerMain(body)
+
+    def parse_on_block(self) -> OnBlock:
+        """ON Ns.Method: ... END ON"""
+        self.eat_kw("ON")
+        ns = self.next().value
+        self.eat_op(".")
+        method = self.next().value
+        self.end_line()
+        body = self.parse_block("END")
+        self.eat_kw("END"); self.eat_kw("ON"); self.end_line()
+        return OnBlock(ns, method, body)
 
     def parse_call_from_id(self) -> Call:
         ns = self.next().value
@@ -1069,6 +1083,8 @@ class Lowerer:
                 v = self.eval(s.value)
                 self.b.host("Error", "SetHandler", (v,), None)  # raise uses RAISE opcode
             self.b.raise_sw(0)
+        elif isinstance(s, OnBlock):
+            self.lower_on_block(s)
         else:
             raise SyntaxError(f"cannot lower {s}")
 
@@ -1099,6 +1115,21 @@ class Lowerer:
             for st in s.finally_body:
                 self.stmt(st)
         self.b.label(end_label)
+
+    def lower_on_block(self, s: OnBlock):
+        """ON Ns.Method: body END ON → register handler + labelled sub."""
+        handler_label = f"__on_{s.event_ns.lower()}_{s.event_method.lower()}"
+        # Skip handler body during normal execution
+        end_label = self.b.new_label("endon")
+        self.b.jmp(end_label)
+        # Emit handler as a labelled sub
+        self.b.label(handler_label)
+        for st in s.body:
+            self.stmt(st)
+        self.b.ret()
+        self.b.label(end_label)
+        # Register: Net.Register(event_constant, handler) — the host binds it
+        self.b.host(s.event_ns, "Register", (), None)
 
     def assign_to(self, dst: VReg, expr):
         if isinstance(expr, Bin) and expr.op in _ARITH:

@@ -483,6 +483,13 @@
       0x2D0: "Base64.Encode",
       0x2D1: "Base64.Decode",
       0x2D2: "Base64.UrlDecode",
+      0x2E0: "Net.Listen",
+      0x2E1: "Net.Accept",
+      0x2E2: "Net.Read",
+      0x2E3: "Net.Write",
+      0x2E4: "Net.Shutdown",
+      0x2E5: "Net.PoolSize",
+      0x2E6: "Net.Register",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }

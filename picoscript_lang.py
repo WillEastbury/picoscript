@@ -305,6 +305,13 @@ NAMESPACE_MAP = {
         "Type":    OP_NOOP,  # Content-Type shorthand
         "Body":    OP_NOOP,  # End headers, start body
         "Close":   OP_NOOP,  # Close connection
+        "Listen":  OP_NOOP,  # Raw socket: bind + listen
+        "Accept":  OP_NOOP,  # Raw socket: accept connection
+        "Read":    OP_NOOP,  # Raw socket: recv bytes
+        "Write":   OP_NOOP,  # Raw socket: send bytes
+        "Shutdown": OP_NOOP, # Raw socket: shutdown connection
+        "PoolSize": OP_NOOP, # Configure worker pool size
+        "Register": OP_NOOP, # Register ON event handler
     },
     "Kernel": {
         "WaitIRQ":       OP_NOOP,  # Host hook surface
@@ -919,6 +926,14 @@ HOST_HOOK_CODES = {
     # Req path parameter extraction (0x01B6-0x01B7)
     ("Req", "Param"):            0x01B6,   # rs1=index                    rd=span (path segment)
     ("Req", "ParamCount"):       0x01B7,   #                              rd=segment count
+    # Net socket I/O (0x02E0-0x02E6): raw socket primitives for native server.
+    ("Net", "Listen"):           0x02E0,   # rs1=port                     rd=server_fd
+    ("Net", "Accept"):           0x02E1,   # rs1=server_fd                rd=conn_fd
+    ("Net", "Read"):             0x02E2,   # rs1=conn_fd rs2=max_bytes    rd=span
+    ("Net", "Write"):            0x02E3,   # rs1=conn_fd rs2=span         rd=bytes_written
+    ("Net", "Shutdown"):         0x02E4,   # rs1=conn_fd                  rd=ok
+    ("Net", "PoolSize"):         0x02E5,   # rs1=n                        rd=ok
+    ("Net", "Register"):         0x02E6,   # rs1=event_id                 rd=ok (bind ON handler)
     # Arena scopes (0x7C-0x7E): bump-arena mark / rewind / reset for request-scoped
     # allocation -- Mark() snapshots the arena, Rewind(mark) reclaims everything since,
     # Reset() drops all arena spans back to the base. Frees the span/string namespaces
