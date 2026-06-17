@@ -281,6 +281,13 @@ static void *pv_worker_main(void *arg)
         pthread_mutex_unlock(&w->lock);
 #endif
         w->ctx.regs[0] = (int32_t)(intptr_t)w->conn_fd;
+        /* Drain the HTTP request before dispatching — TCP requires reading
+           the input; closing without recv triggers RST → "connection aborted". */
+        {
+            char _req[8192];
+            int _rn = pv_socket_read(w->conn_fd, _req, sizeof(_req) - 1);
+            (void)_rn;  /* TODO: parse request, install Req.* context */
+        }
         if (w->owner && w->owner->handler) (void)w->owner->handler(&w->ctx);
         (void)pv_send_http_response(w->conn_fd, &w->ctx);
         pv_socket_close(w->conn_fd);
