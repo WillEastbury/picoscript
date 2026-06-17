@@ -28,14 +28,15 @@ from typing import List, Optional
 
 from picoscript_basic import (  # reuse AST + lowering unchanged
     Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
-    Switch, Goto, Label, Sub, Return, Break, Skip, Print, CallStmt, Lowerer,
-    Dispatch,
+    Switch, Goto, Label, Sub, Gosub, Return, Break, Skip, Print, CallStmt, Lowerer,
+    Dispatch, TryExcept, Raise,
 )
 
 KEYWORDS = {
     "if", "elif", "else", "while", "for", "in", "range", "def", "return",
     "break", "continue", "pass", "and", "or", "not", "print", "true", "false",
     "match", "case", "do", "until", "goto", "label", "dispatch",
+    "try", "except", "finally", "raise",
 }
 
 # comparator symbols -> Cmp condition codes (matches picoscript_basic CMP codes)
@@ -204,7 +205,10 @@ class Parser:
         while self.peek().kind != "eof":
             s = self.parse_stmt()
             if s is not None:
-                stmts.append(s)
+                if isinstance(s, list):
+                    stmts.extend(s)
+                else:
+                    stmts.append(s)
         return stmts
 
     def parse_suite(self) -> List[object]:
@@ -218,7 +222,10 @@ class Parser:
                 raise SyntaxError("unexpected EOF inside block")
             s = self.parse_stmt()
             if s is not None:
-                stmts.append(s)
+                if isinstance(s, list):
+                    stmts.extend(s)
+                else:
+                    stmts.append(s)
         self.expect("dedent")
         return stmts
 
@@ -256,6 +263,13 @@ class Parser:
                 self.next(); name = self.expect("id").value; self.expect("newline"); return Label(name)
             if kw == "def":
                 return self.parse_def()
+            if kw == "try":
+                return self.parse_try()
+            if kw == "raise":
+                self.next()
+                if self.at("newline"):
+                    self.next(); return Raise()
+                v = self.parse_expr(); self.expect("newline"); return Raise(v)
             if kw == "return":
                 self.next()
                 if self.at("newline"):
@@ -382,21 +396,33 @@ class Parser:
         self.expect_kw("for")
         var = self.expect("id").value
         self.expect_kw("in")
-        self.expect_kw("range")
-        self.expect("op", "(")
-        a = self.parse_expr()
-        args = [a]
-        while self.at("op", ","):
+        # for x in range(...): counted loop
+        if self.at("kw") and self.peek().value == "range":
             self.next()
-            args.append(self.parse_expr())
-        self.expect("op", ")")
+            self.expect("op", "(")
+            a = self.parse_expr()
+            args = [a]
+            while self.at("op", ","):
+                self.next()
+                args.append(self.parse_expr())
+            self.expect("op", ")")
+            body = self.parse_suite()
+            if len(args) == 1:
+                return ForEach(var, args[0], body)
+            end = self._minus_one(args[1])
+            step = args[2] if len(args) >= 3 else None
+            return ForTo(var, args[0], end, step, body)
+        # for x in collection: desugar to counted Span.Len + Span.Get loop
+        coll = self.parse_expr()
         body = self.parse_suite()
-        if len(args) == 1:                      # range(n) -> 0..n-1
-            return ForEach(var, args[0], body)
-        # range(a, b[, step]) -> a..b-1 inclusive (fold constant end like BASIC FOR a TO b-1)
-        end = self._minus_one(args[1])
-        step = args[2] if len(args) >= 3 else None
-        return ForTo(var, args[0], end, step, body)
+        # Desugar: _coll = coll; for _i in range(Span.Len(_coll)): x = Span.Get(_coll, _i); body
+        coll_var = "__coll__"
+        idx_var = "__idx__"
+        inner = [Let(var, Call("Span", "Get", [Var(coll_var), Var(idx_var)]))] + body
+        return [
+            Let(coll_var, coll),
+            ForEach(idx_var, Call("Span", "Len", [Var(coll_var)]), inner),
+        ]
 
     @staticmethod
     def _minus_one(node):
@@ -417,6 +443,19 @@ class Parser:
         self.expect("op", ")")
         body = self.parse_suite()
         return Sub(name, body, params if params else None)
+
+    def parse_try(self):
+        self.expect_kw("try")
+        try_body = self.parse_suite()
+        except_body = []
+        finally_body = None
+        if self.at("kw") and self.peek().value == "except":
+            self.next()
+            except_body = self.parse_suite()
+        if self.at("kw") and self.peek().value == "finally":
+            self.next()
+            finally_body = self.parse_suite()
+        return TryExcept(try_body, except_body, finally_body)
 
     def parse_call_from_id(self) -> Call:
         ns = self.next().value

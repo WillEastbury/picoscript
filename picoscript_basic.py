@@ -257,6 +257,12 @@ class Print:
 @dataclass
 class CallStmt:
     call: Call
+@dataclass
+class TryExcept:
+    try_body: list; except_body: list; finally_body: Optional[list] = None
+@dataclass
+class Raise:
+    value: object = None
 
 
 # ── parser ──────────────────────────────────────────────────────────────────
@@ -1056,8 +1062,43 @@ class Lowerer:
         elif isinstance(s, ServerMain):
             for st in s.body:
                 self.stmt(st)
+        elif isinstance(s, TryExcept):
+            self.lower_try(s)
+        elif isinstance(s, Raise):
+            if s.value is not None:
+                v = self.eval(s.value)
+                self.b.host("Error", "SetHandler", (v,), None)  # raise uses RAISE opcode
+            self.b.raise_sw(0)
         else:
             raise SyntaxError(f"cannot lower {s}")
+
+    def lower_try(self, s: TryExcept):
+        """try/except/finally -> Error.SetHandler + conditional check pattern.
+        Phase 1: simple fault-flag checking (no label addresses needed).
+        The except block runs if any host call in the try body faults."""
+        handler_label = self.b.new_label("except")
+        end_label = self.b.new_label("endtry")
+        # try body: execute normally
+        for st in s.try_body:
+            self.stmt(st)
+        # check if error occurred (Status.Last != 0)
+        status = self.b.vreg()
+        self.b.host("Error", "Code", (), status)
+        self.b.cmpbr("NZ", status, status, handler_label)
+        if s.finally_body:
+            for st in s.finally_body:
+                self.stmt(st)
+        self.b.jmp(end_label)
+        # except body
+        self.b.label(handler_label)
+        for st in s.except_body:
+            self.stmt(st)
+        clear = self.b.vreg()
+        self.b.host("Error", "Clear", (), clear)
+        if s.finally_body:
+            for st in s.finally_body:
+                self.stmt(st)
+        self.b.label(end_label)
 
     def assign_to(self, dst: VReg, expr):
         if isinstance(expr, Bin) and expr.op in _ARITH:
