@@ -966,6 +966,9 @@ class HostApi:
         if ns in ("Utf8Writer", "Utf8Reader", "Json", "Xml"):
             if self._textio(vm, ns, method, rd, rs1, rs2):
                 return
+        if ns == "TextRender":
+            if self._textrender(vm, method, rd, rs1, rs2):
+                return
         # Unknown hook: record and continue (host-fillable primitive).
         self.log.append(f"host {ns}.{method} rd=R{rd} rs1=R{rs1} rs2=R{rs2} imm={imm16:#06x}")
 
@@ -1791,6 +1794,7 @@ class HostApi:
             if method == "Reset":
                 w["pos"] = 0; w["stack"] = []; return True
             return False
+
         if ns == "Utf8Reader":
             if method == "New":
                 s = vm.spans[R[rs1]] if 0 < R[rs1] < len(vm.spans) else {"ptr": 0, "len": 0}
@@ -1902,6 +1906,50 @@ class HostApi:
             if method == "Empty":
                 self._w_byte(vm, w, 0x2F); self._w_byte(vm, w, 0x3E); return True               # />
             return False
+        return False
+
+    def _model_lookup(self, model: str, key: str) -> str:
+        prefix = key + "="
+        for line in model.splitlines():
+            if line.startswith(prefix):
+                return line[len(prefix):]
+        return ""
+
+    def _textrender(self, vm, method, rd, rs1, rs2) -> bool:
+        R = vm.regs
+        if method == "Hole":
+            model = self._span_str(vm, R[rs1])
+            key = self._span_str(vm, R[rs2])
+            hw = self.writers.get(1)
+            if hw:
+                self._w_text(vm, hw, self._xml_esc(self._model_lookup(model, key)))
+                R[rd] = 1
+            else:
+                R[rd] = 0
+            return True
+        w = self.writers.get(R[rs1])
+        if not w:
+            R[rd] = 0
+            return True
+        if method == "Raw":
+            self._w_span(vm, w, R[rs2]); R[rd] = 1; return True
+        if method == "Text":
+            self._w_text(vm, w, self._xml_esc(self._span_str(vm, R[rs2]))); R[rd] = 1; return True
+        if method == "Open":
+            self._w_byte(vm, w, 0x3C); self._w_span(vm, w, R[rs2]); R[rd] = 1; return True
+        if method == "Attr":
+            spec = self._span_str(vm, R[rs2])
+            name, value = (spec.split("=", 1) + [""])[:2]
+            self._w_byte(vm, w, 0x20); self._w_text(vm, w, name); self._w_text(vm, w, '="')
+            self._w_text(vm, w, self._xml_esc(value)); self._w_byte(vm, w, 0x22); R[rd] = 1; return True
+        if method == "OpenEnd":
+            self._w_byte(vm, w, 0x3E); R[rd] = 1; return True
+        if method == "Close":
+            self._w_text(vm, w, "</"); self._w_span(vm, w, R[rs2]); self._w_byte(vm, w, 0x3E); R[rd] = 1; return True
+        if method == "Empty":
+            self._w_text(vm, w, "/>"); R[rd] = 1; return True
+        if method == "Br":
+            self._w_text(vm, w, "<br/>"); R[rd] = 1; return True
         return False
 
     @staticmethod

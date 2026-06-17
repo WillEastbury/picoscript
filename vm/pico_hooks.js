@@ -425,6 +425,15 @@
       0x251: "Attention.Scores",
       0x252: "Attention.Mix",
       0x253: "Attention.Attend",
+      0x260: "TextRender.Raw",
+      0x261: "TextRender.Text",
+      0x262: "TextRender.Open",
+      0x263: "TextRender.Attr",
+      0x264: "TextRender.OpenEnd",
+      0x265: "TextRender.Close",
+      0x266: "TextRender.Empty",
+      0x267: "TextRender.Hole",
+      0x268: "TextRender.Br",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }

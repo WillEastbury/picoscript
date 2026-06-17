@@ -179,6 +179,29 @@ CONSTRUCTS = [
      "Net.Status(200)\nNet.Type(\"application/json\")\nprint(42)",
      "Net.Status(200).\nNet.Type(\"application/json\").\nPrint 42."),
 
+    ("HTML streaming (TextRender.*)",
+     "Build HTML incrementally on a Utf8Writer: raw tags, escaped text, escaped "
+     "attributes, a model hole, and <br/>. This is lighter than compiling a whole "
+     "template when a handler is streaming a page.",
+     "int w = Utf8Writer.New(3000, 512);\n"
+     "TextRender.Open(w, \"html\"); TextRender.OpenEnd(w);\n"
+     "TextRender.Open(w, \"body\"); TextRender.Attr(w, \"class=main & hot\"); TextRender.OpenEnd(w);\n"
+     "TextRender.Text(w, \"<safe>\"); TextRender.Br(w);\n"
+     "TextRender.Raw(w, \"<b>\"); TextRender.Text(w, \"raw & escaped\"); TextRender.Raw(w, \"</b>\");\n"
+     "int model = \"name=Ada <admin>\";\n"
+     "TextRender.Hole(model, \"name\");\n"
+     "TextRender.Close(w, \"body\"); TextRender.Close(w, \"html\");\n"
+     "Io.Write(Utf8Writer.ToSpan(w));",
+     "DIM W = Utf8Writer.New(3000, 512)\n"
+     "TextRender.Open(W, \"html\")\nTextRender.OpenEnd(W)\n"
+     "TextRender.Open(W, \"body\")\nTextRender.Attr(W, \"class=main & hot\")\nTextRender.OpenEnd(W)\n"
+     "TextRender.Text(W, \"<safe>\")\nTextRender.Br(W)\n"
+     "TextRender.Raw(W, \"<b>\")\nTextRender.Text(W, \"raw & escaped\")\nTextRender.Raw(W, \"</b>\")\n"
+     "DIM MODEL = \"name=Ada <admin>\"\n"
+     "TextRender.Hole(MODEL, \"name\")\n"
+     "TextRender.Close(W, \"body\")\nTextRender.Close(W, \"html\")\n"
+     "Io.Write(Utf8Writer.ToSpan(W))"),
+
     ("Cards: create &amp; update",
      "Create records in a PicoWAL/PicoStore pack, write fields, edit an existing "
      "card, and read the updated field back. Field names are spans; string literals "

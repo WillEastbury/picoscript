@@ -403,6 +403,17 @@ NAMESPACE_MAP = {
         "Compile":        OP_NOOP,    # AOT: template source span -> compiled plan span (at save time)
         "Render":         OP_NOOP,    # plan span + model span -> rendered output span
     },
+    "TextRender": {
+        "Raw": OP_NOOP,
+        "Text": OP_NOOP,
+        "Open": OP_NOOP,
+        "Attr": OP_NOOP,
+        "OpenEnd": OP_NOOP,
+        "Close": OP_NOOP,
+        "Empty": OP_NOOP,
+        "Hole": OP_NOOP,
+        "Br": OP_NOOP,
+    },
     "Maths": {
         "Sin":            OP_NOOP,
         "Cos":            OP_NOOP,
@@ -764,6 +775,16 @@ HOST_HOOK_CODES = {
     # Template engine (0x7A-0x7B): AOT-compiled-at-save, holes rendered at run
     ("Template", "Compile"):    0x7A,
     ("Template", "Render"):     0x7B,
+    # TextRender (0x0260-0x0268): streaming HTML/template helpers on Utf8Writer.
+    ("TextRender", "Raw"):      0x0260,   # rs1=writer rs2=span          append unescaped
+    ("TextRender", "Text"):     0x0261,   # rs1=writer rs2=span          HTML-escape text
+    ("TextRender", "Open"):     0x0262,   # rs1=writer rs2=tag           <tag
+    ("TextRender", "Attr"):     0x0263,   # rs1=writer rs2=name=value    attr escaped
+    ("TextRender", "OpenEnd"):  0x0264,   # rs1=writer                   >
+    ("TextRender", "Close"):    0x0265,   # rs1=writer rs2=tag           </tag>
+    ("TextRender", "Empty"):    0x0266,   # rs1=writer                   />
+    ("TextRender", "Hole"):     0x0267,   # rs1=model key=value rs2=key   escaped value
+    ("TextRender", "Br"):       0x0268,   # rs1=writer                   <br/>
     # Arena scopes (0x7C-0x7E): bump-arena mark / rewind / reset for request-scoped
     # allocation -- Mark() snapshots the arena, Rewind(mark) reclaims everything since,
     # Reset() drops all arena spans back to the base. Frees the span/string namespaces

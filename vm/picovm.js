@@ -435,6 +435,7 @@
       var dot = name.indexOf(".");
       if (this._textio(name.slice(0, dot), name.slice(dot + 1), rd, rs1, rs2)) return;
     }
+    if (name.indexOf("TextRender.") === 0) { if (this._textrender(name.slice(11), rd, rs1, rs2)) return; }
     this.log.push("host " + name + " R" + rd + " R" + rs1);
   };
 
@@ -1418,6 +1419,32 @@
       if (method === "Empty") { this._wByte(xw, 0x2F); this._wByte(xw, 0x3E); return true; }
       return false;
     }
+    return false;
+  };
+
+  function modelLookup(model, key) {
+    var lines = String(model).split(/\r?\n/), p = key + "=";
+    for (var i = 0; i < lines.length; i++) if (lines[i].indexOf(p) === 0) return lines[i].slice(p.length);
+    return "";
+  }
+  PicoVM.prototype._textrender = function (method, rd, rs1, rs2) {
+    if (!this._tio) this._tio = { writers: {}, readers: {}, nextW: 1, nextR: 1 };
+    var R = this.regs, T = this._tio;
+    if (method === "Hole") {
+      var hw = T.writers[1];
+      if (!hw) { R[rd] = 0; return true; }
+      this._wText(hw, xmlEsc(modelLookup(this._spanStr(R[rs1]), this._spanStr(R[rs2])))); R[rd] = 1; return true;
+    }
+    var w = T.writers[R[rs1]];
+    if (!w) { R[rd] = 0; return true; }
+    if (method === "Raw") { this._wSpan(w, R[rs2]); R[rd] = 1; return true; }
+    if (method === "Text") { this._wText(w, xmlEsc(this._spanStr(R[rs2]))); R[rd] = 1; return true; }
+    if (method === "Open") { this._wByte(w, 0x3C); this._wSpan(w, R[rs2]); R[rd] = 1; return true; }
+    if (method === "Attr") { var sp = this._spanStr(R[rs2]).split("="); var name = sp.shift() || ""; var val = sp.join("="); this._wByte(w, 0x20); this._wText(w, name); this._wText(w, '="'); this._wText(w, xmlEsc(val)); this._wByte(w, 0x22); R[rd] = 1; return true; }
+    if (method === "OpenEnd") { this._wByte(w, 0x3E); R[rd] = 1; return true; }
+    if (method === "Close") { this._wText(w, "</"); this._wSpan(w, R[rs2]); this._wByte(w, 0x3E); R[rd] = 1; return true; }
+    if (method === "Empty") { this._wText(w, "/>"); R[rd] = 1; return true; }
+    if (method === "Br") { this._wText(w, "<br/>"); R[rd] = 1; return true; }
     return false;
   };
 

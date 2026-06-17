@@ -289,6 +289,7 @@ The editor can derive completions from the language namespace table:
 | `Event.` | `Post`, `Next`, `Type`, `Target`, `Data`, `SetData`, `Count`, `SetSlice`, `DataSlice`, `DataLen` |
 | `Tensor.` | `SetShape`, `DotI8`, `MatVecI8`, `AddI32`, `MulI32`, `ScaleI32`, `ReluI32`, `RmsNormI32`, `RoPEI32`, `SoftmaxI32`, `ArgMaxI32` |
 | `BitLinear.` | `SetShape`, `MatVecTernary`, `MatVecBitmap`, `MatVecBase3` |
+| `TextRender.` | `Raw`, `Text`, `Open`, `Attr`, `OpenEnd`, `Close`, `Empty`, `Hole`, `Br` |
 | `Quant.` | `AbsMax`, `QuantI8`, `DequantI8`, `ApplyScale`, `GroupScale` |
 | `Attention.` | `SetShape`, `Scores`, `Mix`, `Attend` |
 | `Tokenizer.` | `EncodeBytes`, `DecodeBytes`, `Count`, `Token` |

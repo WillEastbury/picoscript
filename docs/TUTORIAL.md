@@ -140,6 +140,30 @@ In the portal, use the Remote UI panel to render the wire and post click events
 back through `Event.*`. A real host can send the same PicoWire bytes over a
 socket or another transport.
 
+## 6b. Stream HTML without a full template
+
+For dynamic handlers that stream a page, use `Utf8Writer` with `TextRender.*`.
+It gives you escaped text/attributes, raw tag fragments, `<br/>`, and simple
+hole rendering from `key=value` model spans:
+
+```c
+int w = Utf8Writer.New(3000, 512);
+TextRender.Open(w, "body");
+TextRender.Attr(w, "class=main");
+TextRender.OpenEnd(w);
+TextRender.Text(w, "<safe>");      // &lt;safe&gt;
+TextRender.Br(w);                  // <br/>
+
+int model = "name=Ada";
+TextRender.Hole(model, "name");    // Ada
+
+TextRender.Close(w, "body");
+Io.Write(Utf8Writer.ToSpan(w));
+```
+
+Use `Template.Compile/Render` when the page shape is mostly static and saved in
+a card; use `TextRender.*` when a handler is incrementally streaming HTML.
+
 ## 7. Run examples from the command line
 
 The browser is easiest for learning. The CLI is better for repeatable checks.
