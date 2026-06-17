@@ -246,12 +246,7 @@
         <div class="out" id="psunit" style="font-size:13px;margin-top:6px"></div>
       </div>
       <div class="dbg-panel" id="dbg-src">
-        <select id="lang" style="display:none">
-          <option value="c">C-style</option><option value="basic">BASIC</option>
-          <option value="python">Python</option><option value="english">English</option>
-          <option value="cobol">COBOL</option><option value="report">Report</option>
-          <option value="functional">Functional</option>
-        </select>
+        <input type="hidden" id="lang" value="basic">
         <textarea id="src" style="height:100px" spellcheck="false"></textarea>
         <div class="controls">
           <button class="act" onclick="compileSrc(true)">Compile &amp; Run &#9654;</button>
