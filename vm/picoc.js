@@ -2002,10 +2002,626 @@
     };
   }
 
+  function pushAst(out, node) {
+    if (node == null) return;
+    if (Array.isArray(node)) Array.prototype.push.apply(out, node);
+    else out.push(node);
+  }
+  function markAst(node, pos) {
+    var arr = Array.isArray(node) ? node : [node];
+    arr.forEach(function (n) { if (n && typeof n === "object") n.pos = pos; });
+    return node;
+  }
+  function periodTokenize(src, kwset, two, one, who, opt) {
+    opt = opt || {};
+    var out = [], i = 0, n = src.length, bol = true;
+    function push(k, v, p) { out.push({ kind: k, value: v, pos: p }); bol = false; }
+    while (i < n) {
+      var c = src[i], start = i;
+      if (c === "\n") { out.push({ kind: "nl", value: "", pos: start }); i++; bol = true; continue; }
+      if (c === " " || c === "\t" || c === "\r") { i++; continue; }
+      if (opt.commentInlineStarGt && c === "*" && src[i + 1] === ">") { while (i < n && src[i] !== "\n") i++; continue; }
+      if (opt.commentSlashSlash && c === "/" && src[i + 1] === "/") { while (i < n && src[i] !== "\n") i++; continue; }
+      if (opt.commentLineStar && c === "*" && bol) { while (i < n && src[i] !== "\n") i++; continue; }
+      if (opt.commentInlineQuote && c === '"') { while (i < n && src[i] !== "\n") i++; continue; }
+      if (c === '"' || c === "'") {
+        var q = c, j = i + 1, b = "";
+        while (j < n && src[j] !== q) {
+          if (src[j] === "\\" && j + 1 < n) {
+            var nx = src[j + 1];
+            b += ({ n: "\n", t: "\t", "\\": "\\", '"': '"', "'": "'" }[nx] || nx);
+            j += 2;
+          } else {
+            b += src[j++];
+          }
+        }
+        if (j >= n) throw new Error(who + ": unterminated string");
+        push("str", b, start); i = j + 1; continue;
+      }
+      if (isDigit(c)) {
+        var j2 = i;
+        if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; }
+        else while (j2 < n && isDigit(src[j2])) j2++;
+        push("num", src.slice(i, j2), start); i = j2; continue;
+      }
+      if (isAlpha(c) || c === "_") {
+        var j3 = i;
+        while (j3 < n) {
+          var ch = src[j3];
+          if (isAlnum(ch) || ch === "_" || (opt.allowHyphen && ch === "-")) j3++;
+          else break;
+        }
+        var raw = src.slice(i, j3), word = opt.uppercase ? raw.toUpperCase() : raw, key = opt.uppercase ? word : raw.toUpperCase();
+        push(kwset[key] ? "kw" : "id", word, start); i = j3; continue;
+      }
+      var tw = src.slice(i, i + 2);
+      if (two[tw]) { push("op", tw, start); i += 2; continue; }
+      if (one.indexOf(c) >= 0) { push("op", c, start); i++; continue; }
+      throw new Error(who + ": unexpected char " + JSON.stringify(c));
+    }
+    out.push({ kind: "nl", value: "", pos: n });
+    out.push({ kind: "eof", value: "", pos: n });
+    return out;
+  }
+
+  // ---- COBOL-style frontend -------------------------------------------------
+  var COB_KW = {};
+  ["IDENTIFICATION","DIVISION","PROGRAM-ID","DATA","PROCEDURE","WORKING-STORAGE","SECTION","PIC","VALUE","MOVE","TO","COMPUTE","DISPLAY","IF","ELSE","END-IF","PERFORM","VARYING","FROM","BY","UNTIL","END-PERFORM","STOP","RUN","NOT","AND","OR","IS","GREATER","LESS","EQUAL","THAN"].forEach(function (k) { COB_KW[k] = 1; });
+  var COB_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "<>":1 };
+  var COB_ONE = "+-*/()<>=,.:";
+  var COB_CMP = { "=":"EQ", "==":"EQ", "!=":"NE", "<>":"NE", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
+  var COB_PREC = { OR:1, AND:2, "+":5, "-":5, "*":6, "/":6 };
+  Object.keys(COB_CMP).forEach(function (k) { COB_PREC[k] = 3; });
+  function cobtokenize(src) { return periodTokenize(src, COB_KW, COB_TWO, COB_ONE, "COBOL", { commentLineStar: true, commentInlineStarGt: true, allowHyphen: true, uppercase: true }); }
+  function CobParser(toks) { this.toks = toks; this.i = 0; }
+  CobParser.prototype = {
+    peek: function (k) { var j = this.i + (k || 0); return j < this.toks.length ? this.toks[j] : this.toks[this.toks.length - 1]; },
+    next: function () { return this.toks[this.i++]; },
+    at: function (kind, value) { var t = this.peek(); return t.kind === kind && (value === undefined || t.value === value); },
+    atKw: function () { var t = this.peek(); if (t.kind !== "kw") return false; for (var k = 0; k < arguments.length; k++) if (t.value === arguments[k]) return true; return false; },
+    wordAt: function (k) { var t = this.peek(k); return (t.kind === "kw" || t.kind === "id") ? t.value : null; },
+    expect: function (kind, value) { var t = this.next(); if (t.kind !== kind || (value !== undefined && t.value !== value)) throw new Error("COBOL: expected " + (value !== undefined ? value : kind) + " got " + t.value); return t; },
+    expectKw: function (name) { var t = this.next(); if (!(t.kind === "kw" && t.value === name)) throw new Error("COBOL: expected " + name + " got " + t.value); },
+    expectName: function () { var t = this.next(); if (t.kind !== "id") throw new Error("COBOL: expected identifier got " + t.value); return t.value; },
+    skipNl: function () { while (this.at("nl")) this.next(); },
+    endHeader: function () { if (this.at("op", ".")) this.next(); if (this.at("nl") || this.at("eof")) { this.skipNl(); return; } throw new Error("COBOL: expected end of line got " + this.peek().value); },
+    endSimple: function () { if (this.at("op", ".")) this.next(); if (this.at("nl") || this.at("eof")) { this.skipNl(); return; } throw new Error("COBOL: expected end of statement got " + this.peek().value); },
+    skipLine: function () { while (!this.at("eof") && !this.at("nl")) this.next(); this.skipNl(); },
+    atDivision: function (name) { return this.atKw(name) && this.peek(1).kind === "kw" && this.peek(1).value === "DIVISION"; },
+    consumeDivision: function (name) { this.expectKw(name); this.expectKw("DIVISION"); if (this.at("op", ".")) this.next(); this.skipNl(); },
+    atParagraph: function () { return this.peek().kind === "id" && this.peek(1).kind === "op" && this.peek(1).value === "." && (this.peek(2).kind === "nl" || this.peek(2).kind === "eof"); },
+    parseProgram: function () {
+      var decls = [], main = [], subs = [];
+      this.skipNl();
+      while (!this.at("eof")) {
+        if (this.atDivision("IDENTIFICATION")) { this.consumeDivision("IDENTIFICATION"); continue; }
+        if (this.atDivision("DATA")) { this.consumeDivision("DATA"); decls = decls.concat(this.parseDataDivision()); continue; }
+        if (this.atDivision("PROCEDURE")) { this.consumeDivision("PROCEDURE"); var p = this.parseProcedureDivision(); main = main.concat(p.body); subs = subs.concat(p.subs); break; }
+        this.skipLine();
+      }
+      return decls.concat(main, subs);
+    },
+    parseDataDivision: function () {
+      var out = [];
+      while (!this.at("eof") && !this.atDivision("PROCEDURE")) {
+        this.skipNl();
+        if (this.at("eof") || this.atDivision("PROCEDURE")) break;
+        if (this.peek().kind === "num") out.push(this.parseDataItem());
+        else this.skipLine();
+      }
+      return out;
+    },
+    parseDataItem: function () {
+      this.expect("num");
+      var name = this.expectName(), init = { t: "Num", value: 0 };
+      while (!this.at("eof") && !this.at("op", ".") && !this.at("nl")) {
+        if (this.atKw("VALUE")) { this.next(); init = this.parseExpr(); break; }
+        this.next();
+      }
+      if (this.at("op", ".")) this.next();
+      this.skipNl();
+      return { t: "Let", name: name, value: init };
+    },
+    parseProcedureDivision: function () {
+      var body = [], subs = [];
+      this.skipNl();
+      while (!this.at("eof")) {
+        if (this.atParagraph()) subs.push(this.parseParagraph());
+        else pushAst(body, this.parseStmt());
+      }
+      return { body: body, subs: subs };
+    },
+    parseParagraph: function () { var name = this.expectName(); this.expect("op", "."); this.skipNl(); return { t: "Sub", name: name, params: null, body: this.parseBlock([], true) }; },
+    parseBlock: function (stopWords, stopOnParagraph) {
+      var out = [];
+      this.skipNl();
+      while (!this.at("eof")) {
+        if (stopOnParagraph && this.atParagraph()) break;
+        if (this.peek().kind === "kw" && stopWords.indexOf(this.peek().value) >= 0) break;
+        pushAst(out, this.parseStmt());
+        this.skipNl();
+      }
+      return out;
+    },
+    parseStmt: function () { this.skipNl(); var start = this.peek().pos, node = this._parseStmt(); return markAst(node, start); },
+    _parseStmt: function () {
+      var t = this.peek();
+      if (t.kind === "kw") {
+        if (t.value === "MOVE") return this.parseMove();
+        if (t.value === "COMPUTE") return this.parseCompute();
+        if (t.value === "DISPLAY") return this.parseDisplay();
+        if (t.value === "IF") return this.parseIf();
+        if (t.value === "PERFORM") return this.parsePerform();
+        if (t.value === "STOP") return this.parseStopRun();
+      }
+      if (t.kind === "id" && this.peek(1).kind === "op" && this.peek(1).value === "." && (this.peek(2).kind === "id" || this.peek(2).kind === "kw") && this.peek(3).kind === "op" && this.peek(3).value === "(") {
+        var call = this.parseCallFromId(); this.endSimple(); return { t: "CallStmt", call: call };
+      }
+      throw new Error("COBOL: cannot parse statement at " + t.value);
+    },
+    parseMove: function () { this.expectKw("MOVE"); var value = this.parseExpr(); this.expectKw("TO"); var name = this.expectName(); this.endSimple(); return { t: "Let", name: name, value: value }; },
+    parseCompute: function () { this.expectKw("COMPUTE"); var name = this.expectName(); this.expect("op", "="); var value = this.parseExpr(); this.endSimple(); return { t: "Let", name: name, value: value }; },
+    parseDisplay: function () { this.expectKw("DISPLAY"); var value = this.parseExpr(); this.endSimple(); return { t: "Print", value: value }; },
+    parseIf: function () {
+      this.expectKw("IF");
+      var cond = this.parseExpr(), arms = [], els = null;
+      this.endHeader();
+      arms.push([cond, this.parseBlock(["ELSE", "END-IF"], false)]);
+      if (this.atKw("ELSE")) { this.next(); this.endHeader(); els = this.parseBlock(["END-IF"], false); }
+      this.expectKw("END-IF"); this.endSimple();
+      return { t: "If", arms: arms, els: els };
+    },
+    parsePerform: function () { this.expectKw("PERFORM"); if (this.atKw("VARYING")) return this.parsePerformVarying(); var name = this.expectName(); this.endSimple(); return { t: "Gosub", name: name, args: null }; },
+    parsePerformVarying: function () {
+      this.expectKw("VARYING");
+      var v = this.expectName();
+      this.expectKw("FROM");
+      var start = this.parseExpr(), step = { t: "Num", value: 1 };
+      if (this.atKw("BY")) { this.next(); step = this.parseExpr(); }
+      this.expectKw("UNTIL");
+      var cond = this.parseExpr();
+      this.endHeader();
+      var body = this.parseBlock(["END-PERFORM"], false);
+      this.expectKw("END-PERFORM"); this.endSimple();
+      return { t: "ForTo", v: v, start: start, end: this.forEndFromUntil(v, cond), step: step, body: body };
+    },
+    forEndFromUntil: function (v, cond) {
+      if (cond.t === "Cmp" && cond.lhs && cond.lhs.t === "Var" && cond.lhs.name === v) {
+        if (cond.cond === "GT") return cond.rhs;
+        if (cond.cond === "GE") return { t: "Bin", op: "-", lhs: cond.rhs, rhs: { t: "Num", value: 1 } };
+      }
+      throw new Error("COBOL: unsupported PERFORM VARYING UNTIL condition");
+    },
+    parseStopRun: function () { this.expectKw("STOP"); if (this.atKw("RUN")) this.next(); this.endSimple(); return { t: "Return" }; },
+    parseCallFromId: function () { var ns = this.expectName(); this.expect("op", "."); var m = this.next(); if (m.kind !== "id" && m.kind !== "kw") throw new Error("COBOL: expected method after ."); return { t: "Call", ns: ns, method: m.value, args: this.parseArgs() }; },
+    parseArgs: function () { this.expect("op", "("); var a = []; if (!this.at("op", ")")) { a.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); a.push(this.parseExpr()); } } this.expect("op", ")"); return a; },
+    matchBinop: function () {
+      var t = this.peek(), w = this.wordAt(0), w1 = this.wordAt(1), w2 = this.wordAt(2), w3 = this.wordAt(3), w4 = this.wordAt(4);
+      if (t.kind === "op" && COB_PREC[t.value] !== undefined) return [COB_PREC[t.value], 1, COB_CMP[t.value] ? "cmp" : "bin", COB_CMP[t.value] || t.value];
+      if (w === "AND") return [2, 1, "bin", "AND"];
+      if (w === "OR") return [1, 1, "bin", "OR"];
+      if (w === "GREATER" && w1 === "THAN") { if (w2 === "OR" && w3 === "EQUAL" && w4 === "TO") return [3, 5, "cmp", "GE"]; return [3, 2, "cmp", "GT"]; }
+      if (w === "LESS" && w1 === "THAN") { if (w2 === "OR" && w3 === "EQUAL" && w4 === "TO") return [3, 5, "cmp", "LE"]; return [3, 2, "cmp", "LT"]; }
+      if (w === "EQUAL" && w1 === "TO") return [3, 2, "cmp", "EQ"];
+      if (w === "NOT" && w1 === "EQUAL" && w2 === "TO") return [3, 3, "cmp", "NE"];
+      return null;
+    },
+    parseExpr: function (minp) {
+      minp = minp || 0; var left = this.parseUnary();
+      while (true) {
+        var m = this.matchBinop();
+        if (!m || m[0] < minp) break;
+        for (var i = 0; i < m[1]; i++) this.next();
+        var right = this.parseExpr(m[0] + 1);
+        left = (m[2] === "cmp") ? { t: "Cmp", cond: m[3], lhs: left, rhs: right } : { t: "Bin", op: m[3], lhs: left, rhs: right };
+      }
+      return left;
+    },
+    parseUnary: function () { var t = this.peek(); if (t.kind === "op" && t.value === "-") { this.next(); return { t: "Bin", op: "-", lhs: { t: "Num", value: 0 }, rhs: this.parseUnary() }; } if (t.kind === "kw" && t.value === "NOT") { this.next(); return { t: "Cmp", cond: "EQ", lhs: this.parseUnary(), rhs: { t: "Num", value: 0 } }; } return this.parseAtom(); },
+    parseAtom: function () {
+      var t = this.next();
+      if (t.kind === "num") return { t: "Num", value: numval(t.value) };
+      if (t.kind === "str") return { t: "Str", value: t.value };
+      if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.expect("op", ")"); return e; }
+      if (t.kind === "id") {
+        if (this.at("op", ".") && (this.peek(1).kind === "id" || this.peek(1).kind === "kw") && this.peek(2).kind === "op" && this.peek(2).value === "(") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; }
+        if (this.at("op", "(")) return { t: "Call", ns: null, method: t.value, args: this.parseArgs() };
+        return { t: "Var", name: t.value };
+      }
+      throw new Error("COBOL: unexpected token " + t.value);
+    }
+  };
+  function compileCobol(src) { return new BLowerer().lowerProgram(new CobParser(cobtokenize(src)).parseProgram()); }
+
+  // ---- Report/4GL frontend --------------------------------------------------
+  var REP_KW = {};
+  ["DATA","TYPE","VALUE","IF","ELSE","ELSEIF","ENDIF","WRITE","FORM","ENDFORM","USING","PERFORM","CASE","WHEN","OTHERS","ENDCASE","LOOP","AT","INTO","WHERE","ENDLOOP","RETURN","EXIT","CONTINUE","AND","OR","NOT"].forEach(function (k) { REP_KW[k] = 1; });
+  var REP_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "<>":1 };
+  var REP_ONE = "+-*/%()<>=,.:";
+  var REP_CMP = { "=":"EQ", "==":"EQ", "!=":"NE", "<>":"NE", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
+  var REP_PREC = { OR:1, AND:2, "+":5, "-":5, "*":6, "/":6, "%":6 };
+  Object.keys(REP_CMP).forEach(function (k) { REP_PREC[k] = 3; });
+  function reptokenize(src) { return periodTokenize(src, REP_KW, REP_TWO, REP_ONE, "Report", { commentLineStar: true, commentInlineQuote: true, uppercase: true }); }
+  function RepParser(toks) { this.toks = toks; this.i = 0; this.tmp = 0; }
+  RepParser.prototype = {
+    peek: function (k) { var j = this.i + (k || 0); return j < this.toks.length ? this.toks[j] : this.toks[this.toks.length - 1]; },
+    next: function () { return this.toks[this.i++]; },
+    at: function (kind, value) { var t = this.peek(); return t.kind === kind && (value === undefined || t.value === value); },
+    atKw: function () { var t = this.peek(); if (t.kind !== "kw") return false; for (var k = 0; k < arguments.length; k++) if (t.value === arguments[k]) return true; return false; },
+    expect: function (kind, value) { var t = this.next(); if (t.kind !== kind || (value !== undefined && t.value !== value)) throw new Error("Report: expected " + (value !== undefined ? value : kind) + " got " + t.value); return t; },
+    expectKw: function (name) { var t = this.next(); if (!(t.kind === "kw" && t.value === name)) throw new Error("Report: expected " + name + " got " + t.value); },
+    skipNl: function () { while (this.at("nl")) this.next(); },
+    endStmt: function () { if (this.at("op", ".")) this.next(); this.skipNl(); },
+    freshTemp: function () { this.tmp++; return "__loop" + this.tmp; },
+    parseProgram: function () {
+      var out = [];
+      while (!this.at("eof")) {
+        this.skipNl();
+        if (this.at("eof")) break;
+        if (this.at("op", ".")) { this.next(); continue; }
+        pushAst(out, this.parseStmt());
+      }
+      return out;
+    },
+    parseBlockUntil: function (stops) {
+      var out = [];
+      while (!this.at("eof")) {
+        this.skipNl();
+        if (this.peek().kind === "kw" && stops.indexOf(this.peek().value) >= 0) break;
+        if (this.at("op", ".")) { this.next(); continue; }
+        pushAst(out, this.parseStmt());
+      }
+      return out;
+    },
+    parseStmt: function () { this.skipNl(); var start = this.peek().pos, node = this._parseStmt(); return markAst(node, start); },
+    _parseStmt: function () {
+      var t = this.peek();
+      if (t.kind === "kw") {
+        if (t.value === "DATA") return this.parseData();
+        if (t.value === "IF") return this.parseIf();
+        if (t.value === "WRITE") { this.next(); var pv = this.parseExpr(); this.endStmt(); return { t: "Print", value: pv }; }
+        if (t.value === "FORM") return this.parseForm();
+        if (t.value === "PERFORM") return this.parsePerform();
+        if (t.value === "CASE") return this.parseCase();
+        if (t.value === "LOOP") return this.parseLoop();
+        if (t.value === "RETURN") { this.next(); if (this.at("op", ".") || this.at("nl") || this.at("eof")) { this.endStmt(); return { t: "Return" }; } var rv = this.parseExpr(); this.endStmt(); return { t: "Return", value: rv }; }
+        if (t.value === "EXIT") { this.next(); this.endStmt(); return { t: "Break" }; }
+        if (t.value === "CONTINUE") { this.next(); this.endStmt(); return { t: "Skip" }; }
+      }
+      if (t.kind === "id") {
+        if (this.peek(1).kind === "op" && this.peek(1).value === "=") { var name = this.next().value; this.next(); var vv = this.parseExpr(); this.endStmt(); return { t: "Let", name: name, value: vv }; }
+        if (this.peek(1).kind === "op" && this.peek(1).value === "." && (this.peek(2).kind === "id" || this.peek(2).kind === "kw") && this.peek(3).kind === "op" && this.peek(3).value === "(") { var call = this.parseCallFromId(); this.endStmt(); return { t: "CallStmt", call: call }; }
+      }
+      throw new Error("Report: cannot parse statement at " + t.value);
+    },
+    parseData: function () {
+      this.expectKw("DATA");
+      if (this.at("op", ":")) this.next();
+      var decls = [];
+      while (true) {
+        this.skipNl();
+        var name = this.expect("id").value, init = { t: "Num", value: 0 };
+        while (this.peek().kind === "kw" && (this.peek().value === "TYPE" || this.peek().value === "VALUE")) {
+          if (this.peek().value === "TYPE") { this.next(); this.next(); }
+          else { this.next(); init = this.parseExpr(); }
+        }
+        decls.push({ t: "Let", name: name, value: init });
+        if (this.at("op", ",")) { this.next(); continue; }
+        this.endStmt(); return decls;
+      }
+    },
+    parseIf: function () {
+      this.expectKw("IF");
+      var cond = this.parseExpr(), arms = [], els = null;
+      this.endStmt();
+      arms.push([cond, this.parseBlockUntil(["ELSEIF", "ELSE", "ENDIF"])]);
+      while (this.atKw("ELSEIF")) { this.next(); var ec = this.parseExpr(); this.endStmt(); arms.push([ec, this.parseBlockUntil(["ELSEIF", "ELSE", "ENDIF"])]); }
+      if (this.atKw("ELSE")) { this.next(); this.endStmt(); els = this.parseBlockUntil(["ENDIF"]); }
+      this.expectKw("ENDIF"); this.endStmt();
+      return { t: "If", arms: arms, els: els };
+    },
+    parseForm: function () {
+      this.expectKw("FORM");
+      var name = this.expect("id").value, params = null;
+      if (this.atKw("USING")) { this.next(); params = this.parseNameListUntilDot(); }
+      this.endStmt();
+      var body = this.parseBlockUntil(["ENDFORM"]);
+      this.expectKw("ENDFORM"); this.endStmt();
+      return { t: "Sub", name: name, body: body, params: params && params.length ? params : null };
+    },
+    parsePerform: function () {
+      this.expectKw("PERFORM");
+      var name = this.expect("id").value, args = null;
+      if (this.atKw("USING")) { this.next(); args = this.parseExprListUntilDot(); }
+      this.endStmt();
+      return { t: "Gosub", name: name, args: args && args.length ? args : null };
+    },
+    parseCase: function () {
+      this.expectKw("CASE");
+      var expr = this.parseExpr(), cases = [], def = null;
+      this.endStmt();
+      while (!this.atKw("ENDCASE")) {
+        this.expectKw("WHEN");
+        if (this.atKw("OTHERS")) { this.next(); this.endStmt(); def = this.parseBlockUntil(["ENDCASE"]); break; }
+        var val = this.parseExpr(); this.endStmt();
+        cases.push([val, this.parseBlockUntil(["WHEN", "ENDCASE"])]);
+      }
+      this.expectKw("ENDCASE"); this.endStmt();
+      return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    parseLoop: function () {
+      this.expectKw("LOOP"); this.expectKw("AT");
+      var count = this.parseExpr(); this.expectKw("INTO"); var v = this.expect("id").value; var where = null;
+      if (this.atKw("WHERE")) { this.next(); where = this.parseExpr(); }
+      this.endStmt();
+      var body = this.parseBlockUntil(["ENDLOOP"]);
+      this.expectKw("ENDLOOP"); this.endStmt();
+      if (where) body = [{ t: "If", arms: [[where, body]], els: null }];
+      return { t: "ForEach", v: v || this.freshTemp(), count: count, body: body };
+    },
+    parseNameListUntilDot: function () { var a = []; while (!this.at("op", ".") && !this.at("eof")) { if (this.at("op", ",")) { this.next(); continue; } a.push(this.expect("id").value); } return a; },
+    parseExprListUntilDot: function () { var a = []; while (!this.at("op", ".") && !this.at("eof")) { if (this.at("op", ",")) { this.next(); continue; } a.push(this.parseExpr()); } return a; },
+    parseCallFromId: function () { var ns = this.expect("id").value; this.expect("op", "."); var m = this.next(); if (m.kind !== "id" && m.kind !== "kw") throw new Error("Report: expected method after ."); return { t: "Call", ns: ns, method: m.value, args: this.parseArgs() }; },
+    parseArgs: function () { this.expect("op", "("); var a = []; if (!this.at("op", ")")) { a.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); a.push(this.parseExpr()); } } this.expect("op", ")"); return a; },
+    matchBinop: function () {
+      var t = this.peek();
+      if (t.kind === "op" && REP_PREC[t.value] !== undefined) return [REP_PREC[t.value], 1, REP_CMP[t.value] ? "cmp" : "bin", REP_CMP[t.value] || (t.value === "%" ? "MOD" : t.value)];
+      if (t.kind === "kw" && t.value === "AND") return [2, 1, "bin", "AND"];
+      if (t.kind === "kw" && t.value === "OR") return [1, 1, "bin", "OR"];
+      return null;
+    },
+    parseExpr: function (minp) {
+      minp = minp || 0; var left = this.parseUnary();
+      while (true) {
+        var m = this.matchBinop();
+        if (!m || m[0] < minp) break;
+        this.next(); var right = this.parseExpr(m[0] + 1);
+        left = (m[2] === "cmp") ? { t: "Cmp", cond: m[3], lhs: left, rhs: right } : { t: "Bin", op: m[3], lhs: left, rhs: right };
+      }
+      return left;
+    },
+    parseUnary: function () { var t = this.peek(); if (t.kind === "op" && t.value === "-") { this.next(); return { t: "Bin", op: "-", lhs: { t: "Num", value: 0 }, rhs: this.parseUnary() }; } if (t.kind === "kw" && t.value === "NOT") { this.next(); return { t: "Cmp", cond: "EQ", lhs: this.parseUnary(), rhs: { t: "Num", value: 0 } }; } return this.parseAtom(); },
+    parseAtom: function () {
+      var t = this.next();
+      if (t.kind === "num") return { t: "Num", value: numval(t.value) };
+      if (t.kind === "str") return { t: "Str", value: t.value };
+      if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.expect("op", ")"); return e; }
+      if (t.kind === "id") {
+        if (this.at("op", ".") && (this.peek(1).kind === "id" || this.peek(1).kind === "kw") && this.peek(2).kind === "op" && this.peek(2).value === "(") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; }
+        if (this.at("op", "(")) return { t: "Call", ns: null, method: t.value, args: this.parseArgs() };
+        return { t: "Var", name: t.value };
+      }
+      throw new Error("Report: unexpected token " + t.value);
+    }
+  };
+  function compileReport(src) { return new BLowerer().lowerProgram(new RepParser(reptokenize(src)).parseProgram()); }
+
+  // ---- Functional frontend --------------------------------------------------
+  var FUN_KW = {};
+  ["let","if","then","else","elif","match","with","for","in","do","while","printfn","printf","not","true","false","and","or","return","break","continue","skip","rec","mutable"].forEach(function (k) { FUN_KW[k] = 1; });
+  var FUN_TWO = { "==":1, "!=":1, "<>":1, "<=":1, ">=":1, "|>":1, "->":1, "..":1, "&&":1, "||":1 };
+  var FUN_ONE = "+-*/%()<>=,.:|";
+  var FUN_CMP = { "=":"EQ", "==":"EQ", "!=":"NE", "<>":"NE", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
+  var FUN_PREC = { or:1, "||":1, and:2, "&&":2, "=":3, "==":3, "!=":3, "<>":3, "<":3, ">":3, "<=":3, ">=":3, "+":5, "-":5, "*":6, "/":6, "%":6 };
+  var FUN_BIN = { "+":"+", "-":"-", "*":"*", "/":"/", "%":"MOD", and:"AND", or:"OR", "&&":"AND", "||":"OR" };
+  function ftokenizeLine(text, out, kwset, two, one, who, lineStart) {
+    var i = 0, n = text.length;
+    while (i < n) {
+      var c = text[i], start = lineStart + i;
+      if (c === " " || c === "\t") { i++; continue; }
+      if (c === "/" && text[i + 1] === "/") break;
+      if (isDigit(c)) {
+        var j = i;
+        if (c === "0" && (text[j + 1] === "x" || text[j + 1] === "X")) { j += 2; while (j < n && /[0-9a-fA-F]/.test(text[j])) j++; }
+        else while (j < n && isDigit(text[j])) j++;
+        out.push({ kind: "num", value: text.slice(i, j), pos: start }); i = j; continue;
+      }
+      if (isAlpha(c) || c === "_") {
+        var j2 = i; while (j2 < n && (isAlnum(text[j2]) || text[j2] === "_")) j2++;
+        var w = text.slice(i, j2), lw = w.toLowerCase();
+        out.push({ kind: kwset[lw] ? "kw" : "id", value: w, pos: start }); i = j2; continue;
+      }
+      if (c === '"') {
+        var j3 = i + 1, b = "";
+        while (j3 < n && text[j3] !== '"') {
+          if (text[j3] === "\\" && j3 + 1 < n) { var nx = text[j3 + 1]; b += ({ n: "\n", t: "\t", "\\": "\\", '"': '"' }[nx] || nx); j3 += 2; }
+          else b += text[j3++];
+        }
+        if (j3 >= n) throw new Error("Functional: unterminated string");
+        out.push({ kind: "str", value: b, pos: start }); i = j3 + 1; continue;
+      }
+      var tw = text.slice(i, i + 2);
+      if (two[tw]) { out.push({ kind: "op", value: tw, pos: start }); i += 2; continue; }
+      if (one.indexOf(c) >= 0) { out.push({ kind: "op", value: c, pos: start }); i++; continue; }
+      throw new Error("Functional: unexpected char " + JSON.stringify(c));
+    }
+  }
+  function funtokenize(src) {
+    var out = [], indents = [0], lines = src.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n"), offset = 0;
+    for (var li = 0; li < lines.length; li++) {
+      var line = lines[li], lineStart = offset; offset += line.length + 1;
+      var stripped = line.replace(/^[ \t]+/, "");
+      if (stripped === "" || stripped.indexOf("//") === 0) continue;
+      var indent = line.length - stripped.length;
+      if (indent > indents[indents.length - 1]) { indents.push(indent); out.push({ kind: "indent", value: "", pos: lineStart }); }
+      else {
+        while (indent < indents[indents.length - 1]) { indents.pop(); out.push({ kind: "dedent", value: "", pos: lineStart }); }
+        if (indent !== indents[indents.length - 1]) throw new Error("Functional: inconsistent indentation");
+      }
+      var before = out.length;
+      ftokenizeLine(line, out, FUN_KW, FUN_TWO, FUN_ONE, "Functional", lineStart);
+      if (out.length > before) out.push({ kind: "newline", value: "", pos: lineStart });
+    }
+    while (indents.length > 1) { indents.pop(); out.push({ kind: "dedent", value: "", pos: offset }); }
+    out.push({ kind: "eof", value: "", pos: offset });
+    return out;
+  }
+  function FunCallTarget(ns, method) { this.ns = ns; this.method = method; }
+  function FunParser(toks) { this.toks = toks; this.i = 0; }
+  FunParser.prototype = {
+    peek: function (k) { var j = this.i + (k || 0); return j < this.toks.length ? this.toks[j] : this.toks[this.toks.length - 1]; },
+    next: function () { return this.toks[this.i++]; },
+    at: function (kind, value) { var t = this.peek(); return t.kind === kind && (value === undefined || t.value === value); },
+    atKw: function () { var t = this.peek(); if (t.kind !== "kw") return false; var w = t.value.toLowerCase(); for (var k = 0; k < arguments.length; k++) if (w === arguments[k]) return true; return false; },
+    expect: function (kind, value) { var t = this.next(); if (t.kind !== kind || (value !== undefined && t.value !== value)) throw new Error("Functional: expected " + (value !== undefined ? value : kind) + " got " + t.value); return t; },
+    expectKw: function (name) { var t = this.next(); if (!(t.kind === "kw" && t.value.toLowerCase() === name)) throw new Error("Functional: expected " + name + " got " + t.value); },
+    parseProgram: function () { var out = []; while (!this.at("eof")) pushAst(out, this.parseStmt(true)); return out; },
+    parseSuite: function (allowFunc) {
+      this.expect("newline"); this.expect("indent");
+      var out = [];
+      while (!this.at("dedent")) { if (this.at("eof")) throw new Error("Functional: EOF in block"); pushAst(out, this.parseStmt(allowFunc)); }
+      this.expect("dedent"); return out;
+    },
+    parseStmtBody: function () {
+      if (this.at("newline")) return this.parseSuite(false);
+      var st = this.parseStmt(false);
+      if (st == null) return [];
+      return Array.isArray(st) ? st : [st];
+    },
+    parseFunctionBody: function () {
+      if (!this.at("newline")) { var expr = this.parseExpr(); this.expect("newline"); return [{ t: "Return", value: expr }]; }
+      this.expect("newline"); this.expect("indent");
+      var body = [];
+      while (!this.at("dedent")) {
+        if (this.lineStartsExpr()) {
+          var ex = this.parseExpr(); this.expect("newline"); body.push({ t: "Return", value: ex });
+          if (!this.at("dedent")) throw new Error("Functional: expression result must be final in function body");
+          break;
+        }
+        pushAst(body, this.parseStmt(false));
+      }
+      this.expect("dedent");
+      if (!body.length || body[body.length - 1].t !== "Return") body.push({ t: "Return" });
+      return body;
+    },
+    parseStmt: function (allowFunc) {
+      if (this.at("newline")) { this.next(); return null; }
+      var start = this.peek().pos, node = this._parseStmt(allowFunc);
+      return markAst(node, start);
+    },
+    _parseStmt: function (allowFunc) {
+      var t = this.peek();
+      if (t.kind === "kw") {
+        var kw = t.value.toLowerCase();
+        if (kw === "let") return this.parseLetStmt(allowFunc);
+        if (kw === "printfn" || kw === "printf") { this.next(); var pv = this.parseExpr(); this.expect("newline"); return { t: "Print", value: pv }; }
+        if (kw === "if") return this.parseIfStmt();
+        if (kw === "while") return this.parseWhileStmt();
+        if (kw === "for") return this.parseForStmt();
+        if (kw === "match") return this.parseMatchStmt();
+        if (kw === "return") { this.next(); if (this.at("newline")) { this.next(); return { t: "Return" }; } var rv = this.parseExpr(); this.expect("newline"); return { t: "Return", value: rv }; }
+        if (kw === "break") { this.next(); this.expect("newline"); return { t: "Break" }; }
+        if (kw === "continue" || kw === "skip") { this.next(); this.expect("newline"); return { t: "Skip" }; }
+      }
+      var expr = this.parseExpr();
+      this.expect("newline");
+      if (expr.t === "Call") return { t: "CallStmt", call: expr };
+      throw new Error("Functional: expression statement must be a call");
+    },
+    parseLetStmt: function (allowFunc) {
+      this.expectKw("let");
+      if (this.atKw("rec")) this.next();
+      if (this.atKw("mutable")) this.next();
+      var name = this.expect("id").value, params = [];
+      while (this.at("id")) params.push(this.next().value);
+      this.expect("op", "=");
+      if (params.length) {
+        if (!allowFunc) throw new Error("Functional: function definitions only allowed at top level");
+        return { t: "Sub", name: name, params: params, body: this.parseFunctionBody() };
+      }
+      var value = this.parseBindingExpr();
+      this.expect("newline");
+      return { t: "Let", name: name, value: value };
+    },
+    parseBindingExpr: function () {
+      if (this.at("newline")) { this.expect("newline"); this.expect("indent"); var expr = this.parseExpr(); this.expect("newline"); this.expect("dedent"); return expr; }
+      return this.parseExpr();
+    },
+    parseIfStmt: function () {
+      this.expectKw("if"); var cond = this.parseExpr(); this.expectKw("then");
+      var arms = [[cond, this.parseStmtBody()]], els = null;
+      while (this.atKw("elif")) { this.next(); var c2 = this.parseExpr(); this.expectKw("then"); arms.push([c2, this.parseStmtBody()]); }
+      if (this.atKw("else")) { this.next(); els = this.parseStmtBody(); }
+      return { t: "If", arms: arms, els: els };
+    },
+    parseWhileStmt: function () { this.expectKw("while"); var cond = this.parseExpr(); this.expectKw("do"); return { t: "While", cond: cond, body: this.parseStmtBody() }; },
+    parseForStmt: function () {
+      this.expectKw("for"); var v = this.expect("id").value; this.expectKw("in");
+      var start = this.parseExpr();
+      if (this.at("op", "..")) { this.next(); var end = this.parseExpr(); this.expectKw("do"); return { t: "ForTo", v: v, start: start, end: end, step: null, body: this.parseStmtBody() }; }
+      this.expectKw("do"); return { t: "ForEach", v: v, count: start, body: this.parseStmtBody() };
+    },
+    parseMatchStmt: function () {
+      this.expectKw("match"); var expr = this.parseExpr(); this.expectKw("with"); this.expect("newline");
+      var cases = [], def = null;
+      while (this.at("op", "|")) {
+        this.next();
+        if (this.at("id", "_")) { this.next(); this.expect("op", "->"); def = this.parseStmtBody(); continue; }
+        var val = this.parseExpr(); this.expect("op", "->"); cases.push([val, this.parseStmtBody()]);
+      }
+      if (!cases.length && !def) throw new Error("Functional: expected at least one match arm");
+      return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    parseExpr: function () { if (this.atKw("if")) return this.parseIfExpr(); return this.parsePipe(); },
+    parseIfExpr: function () { this.expectKw("if"); var cond = this.parsePipe(); this.expectKw("then"); var th = this.parseExpr(); this.expectKw("else"); var el = this.parseExpr(); return { t: "Ternary", cond: cond, then: th, els: el }; },
+    parsePipe: function () { var left = this.parseBinary(0); while (this.at("op", "|>")) { this.next(); left = this.applyPipe(left, this.parseApplication()); } return left; },
+    applyPipe: function (lhs, rhs) {
+      if (rhs.t === "Var") return { t: "Call", ns: null, method: rhs.name, args: [lhs] };
+      if (rhs.t === "Call") return { t: "Call", ns: rhs.ns, method: rhs.method, args: [lhs].concat(rhs.args || []) };
+      if (rhs instanceof FunCallTarget) return { t: "Call", ns: rhs.ns, method: rhs.method, args: [lhs] };
+      throw new Error("Functional: invalid pipe target");
+    },
+    parseBinary: function (minp) {
+      var left = this.parseApplication();
+      while (true) {
+        var t = this.peek(), op = null;
+        if (t.kind === "op" && FUN_PREC[t.value] !== undefined) op = t.value;
+        else if (t.kind === "kw" && FUN_PREC[t.value.toLowerCase()] !== undefined) op = t.value.toLowerCase();
+        if (op == null || FUN_PREC[op] < minp) break;
+        this.next(); var right = this.parseBinary(FUN_PREC[op] + 1);
+        left = FUN_CMP[op] ? { t: "Cmp", cond: FUN_CMP[op], lhs: left, rhs: right } : { t: "Bin", op: FUN_BIN[op], lhs: left, rhs: right };
+      }
+      return left;
+    },
+    parseApplication: function () {
+      var left = this.parseUnary();
+      while (this.isAppArgStart(this.peek()) && this.callableExpr(left)) {
+        var arg = this.parseUnary();
+        if (left.t === "Var") left = { t: "Call", ns: null, method: left.name, args: [arg] };
+        else if (left instanceof FunCallTarget) left = { t: "Call", ns: left.ns, method: left.method, args: [arg] };
+        else if (left.t === "Call") left.args.push(arg);
+      }
+      if (left instanceof FunCallTarget) return { t: "Call", ns: left.ns, method: left.method, args: [] };
+      return left;
+    },
+    parseUnary: function () { var t = this.peek(); if (t.kind === "op" && t.value === "-") { this.next(); return { t: "Bin", op: "-", lhs: { t: "Num", value: 0 }, rhs: this.parseUnary() }; } if (t.kind === "kw" && t.value.toLowerCase() === "not") { this.next(); return { t: "Cmp", cond: "EQ", lhs: this.parseUnary(), rhs: { t: "Num", value: 0 } }; } return this.parseAtom(); },
+    parseAtom: function () {
+      var t = this.next();
+      if (t.kind === "num") return { t: "Num", value: numval(t.value) };
+      if (t.kind === "str") return { t: "Str", value: t.value };
+      if (t.kind === "kw" && (t.value.toLowerCase() === "true" || t.value.toLowerCase() === "false")) return { t: "Num", value: t.value.toLowerCase() === "true" ? 1 : 0 };
+      if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.expect("op", ")"); return e; }
+      if (t.kind === "id") {
+        if (this.at("op", ".")) { this.next(); var m = this.next(); if (m.kind !== "id" && m.kind !== "kw") throw new Error("Functional: expected method after ."); if (this.at("op", "(")) return { t: "Call", ns: t.value, method: m.value, args: this.parseParenArgs() }; return new FunCallTarget(t.value, m.value); }
+        if (this.at("op", "(")) return { t: "Call", ns: null, method: t.value, args: this.parseParenArgs() };
+        return { t: "Var", name: t.value };
+      }
+      throw new Error("Functional: unexpected token " + t.value);
+    },
+    parseParenArgs: function () { this.expect("op", "("); var a = []; if (!this.at("op", ")")) { a.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); a.push(this.parseExpr()); } } this.expect("op", ")"); return a; },
+    callableExpr: function (node) { return !!node && (node.t === "Var" || node.t === "Call" || node instanceof FunCallTarget); },
+    isAppArgStart: function (t) { if (t.kind === "num" || t.kind === "str" || t.kind === "id") return true; if (t.kind === "op" && (t.value === "(" || t.value === "-")) return true; return t.kind === "kw" && ["true","false","not"].indexOf(t.value.toLowerCase()) >= 0; },
+    lineStartsExpr: function () { var t = this.peek(); if (t.kind === "num" || t.kind === "str" || t.kind === "id") return true; if (t.kind === "op" && (t.value === "(" || t.value === "-")) return true; return t.kind === "kw" && ["if","true","false","not"].indexOf(t.value.toLowerCase()) >= 0; }
+  };
+  function compileFunctional(src) { return new BLowerer().lowerProgram(new FunParser(funtokenize(src)).parseProgram()); }
+
   function compileIL(src, lang) {
     return (lang === "basic") ? compileBasic(src)
          : (lang === "python") ? compilePython(src)
          : (lang === "english") ? compileEnglish(src)
+         : (lang === "cobol") ? compileCobol(src)
+         : (lang === "report") ? compileReport(src)
+         : (lang === "functional") ? compileFunctional(src)
          : compileC(src);
   }
 
@@ -2018,15 +2634,52 @@
       else if (fromLang === "basic") ast = new BParser(btokenize(src)).parseProgram();
       else if (fromLang === "python") ast = new PyParser(pytokenize(src)).parseProgram();
       else if (fromLang === "english") ast = new EnParser(entokenize(src)).parseProgram();
+      else if (fromLang === "cobol") ast = new CobParser(cobtokenize(src)).parseProgram();
+      else if (fromLang === "report") ast = new RepParser(reptokenize(src)).parseProgram();
+      else if (fromLang === "functional") ast = new FunParser(funtokenize(src)).parseProgram();
       else return src;
     } catch (e) { return src; }
     if (toLang === "c") return astToC(ast);
     if (toLang === "basic") return astToBasic(ast);
     if (toLang === "python") return astToPython(ast);
     if (toLang === "english") return astToEnglish(ast);
+    if (toLang === "cobol") return astToCobol(ast);
+    if (toLang === "report") return astToReport(ast);
+    if (toLang === "functional") return astToFunctional(ast);
     return src;
   }
-  function exprStr(e, L) { if (!e) return "0"; if (e.t==="Num") return String(e.value); if (e.t==="Str") return '"'+e.value+'"'; if (e.t==="Var") return e.name; if (e.t==="Call"){var p=e.ns?(e.ns+"."):"";;return p+e.method+"("+e.args.map(function(a){return exprStr(a,L);}).join(", ")+")";} if(e.t==="Bin"){var op=e.op;if(L==="basic"){if(op==="%")op=" MOD ";if(op==="&&")op=" AND ";if(op==="||")op=" OR ";}return exprStr(e.lhs,L)+" "+op+" "+exprStr(e.rhs,L);} if(e.t==="Cmp"){var m={EQ:"==",NE:"!=",LT:"<",GT:">",LE:"<=",GE:">="};var bm={EQ:"=",NE:"<>",LT:"<",GT:">",LE:"<=",GE:">="};return exprStr(e.lhs,L)+" "+(L==="basic"?(bm[e.cond]||e.cond):(m[e.cond]||e.cond))+" "+exprStr(e.rhs,L);} if(e.t==="Ternary"){if(L==="basic")return "IIF("+exprStr(e.cond,L)+", "+exprStr(e.then,L)+", "+exprStr(e.els,L)+")";if(L==="python")return exprStr(e.then,L)+" if "+exprStr(e.cond,L)+" else "+exprStr(e.els,L);return "("+exprStr(e.cond,L)+" ? "+exprStr(e.then,L)+" : "+exprStr(e.els,L)+")";} if(e.t==="FieldRef")return e.obj+"."+e.field; return "?"; }
+  function exprStr(e, L) {
+    if (!e) return "0";
+    if (e.t === "Num") return String(e.value);
+    if (e.t === "Str") {
+      var q = (L === "report" || L === "cobol") ? "'" : '"';
+      var s = String(e.value).replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
+      s = (q === "'") ? s.replace(/'/g, "\\'") : s.replace(/"/g, '\\"');
+      return q + s + q;
+    }
+    if (e.t === "Var") return e.name;
+    if (e.t === "Call") { var p = e.ns ? (e.ns + ".") : ""; return p + e.method + "(" + (e.args || []).map(function (a) { return exprStr(a, L); }).join(", ") + ")"; }
+    if (e.t === "Bin") {
+      var op = e.op;
+      if (L === "basic" || L === "report" || L === "cobol") { if (op === "%" || op === "MOD") op = "MOD"; if (op === "&&" || op === "AND") op = "AND"; if (op === "||" || op === "OR") op = "OR"; }
+      else if (L === "functional") { if (op === "AND") op = "and"; if (op === "OR") op = "or"; if (op === "MOD") op = "%"; }
+      return exprStr(e.lhs, L) + " " + op + " " + exprStr(e.rhs, L);
+    }
+    if (e.t === "Cmp") {
+      var m = { EQ:"==", NE:"!=", LT:"<", GT:">", LE:"<=", GE:">=" };
+      var bm = { EQ:"=", NE:"<>", LT:"<", GT:">", LE:"<=", GE:">=" };
+      var map = (L === "basic" || L === "report" || L === "cobol") ? bm : m;
+      return exprStr(e.lhs, L) + " " + (map[e.cond] || e.cond) + " " + exprStr(e.rhs, L);
+    }
+    if (e.t === "Ternary") {
+      if (L === "basic") return "IIF(" + exprStr(e.cond, L) + ", " + exprStr(e.then, L) + ", " + exprStr(e.els, L) + ")";
+      if (L === "python") return exprStr(e.then, L) + " if " + exprStr(e.cond, L) + " else " + exprStr(e.els, L);
+      if (L === "functional") return "if " + exprStr(e.cond, L) + " then " + exprStr(e.then, L) + " else " + exprStr(e.els, L);
+      return "(" + exprStr(e.cond, L) + " ? " + exprStr(e.then, L) + " : " + exprStr(e.els, L) + ")";
+    }
+    if (e.t === "FieldRef") return e.obj + "." + e.field;
+    return "?";
+  }
   function astToC(prog){var l=[],f=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")f.push(s);else l.push(sC(s,0));});f.forEach(function(fn){l.push("void "+fn.name+"("+(fn.params||[]).map(function(p){return "int "+p;}).join(", ")+") {");(fn.body||[]).forEach(function(s){l.push(sC(s,1));});l.push("}");});return l.join("\n");}
   function sC(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Let"||s.t==="Dim")return p+"int "+s.name+" = "+exprStr(s.init||s.value||{t:"Num",value:0},"c")+";";if(s.t==="Assign")return p+s.name+" = "+exprStr(s.value,"c")+";";if(s.t==="IncDec")return p+s.name+(s.delta>0?"++":"--")+";";if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]];var els=s.els;var o=p+"if ("+exprStr(arms[0][0],"c")+") {\n";arms[0][1].forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";for(var i=1;i<arms.length;i++){o+=" else if ("+exprStr(arms[i][0],"c")+") {\n";arms[i][1].forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";}if(els){o+=" else {\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";}return o;}if(s.t==="While"){var o=p+"while ("+exprStr(s.cond,"c")+") {\n";s.body.forEach(function(st){o+=sC(st,d+1)+"\n";});return o+p+"}";}if(s.t==="ForTo")return p+"for ("+s.v+" = "+exprStr(s.start,"c")+"; "+s.v+" <= "+exprStr(s.end,"c")+"; "+s.v+"++) {\n"+s.body.map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="ForEach")return p+"for ("+s.v+" = 0; "+s.v+" < "+exprStr(s.count,"c")+"; "+s.v+"++) {\n"+s.body.map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="Return")return p+"return"+(s.value?" "+exprStr(s.value,"c"):"")+";";if(s.t==="Break")return p+"break;";if(s.t==="Skip"||s.t==="Continue")return p+"continue;";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"c");});return p+s.name+"("+a.join(", ")+");";}if(s.t==="CallStmt")return p+exprStr(s.call,"c")+";";if(s.t==="Print")return p+"print("+exprStr(s.value,"c")+");";return p+"// "+s.t;}
   function astToBasic(prog){var l=[],ss=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")ss.push(s);else l.push(sB(s,0));});ss.forEach(function(f){var pa=(f.params||[]).length?"("+f.params.join(", ")+")":"";l.push("SUB "+(f.name||"").toUpperCase()+pa);(f.body||[]).forEach(function(s){l.push(sB(s,1));});l.push("ENDSUB");});return l.join("\n");}
@@ -2035,6 +2688,13 @@
   function sP(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign")return p+s.name+" = "+exprStr(s.value||s.init||{t:"Num",value:0},"python");if(s.t==="IncDec")return p+s.name+" += "+s.delta;if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]];var els=s.els;var o=p+"if "+exprStr(arms[0][0],"python")+":\n";arms[0][1].forEach(function(st){o+=sP(st,d+1)+"\n";});for(var i=1;i<arms.length;i++){o+=p+"elif "+exprStr(arms[i][0],"python")+":\n";arms[i][1].forEach(function(st){o+=sP(st,d+1)+"\n";});}if(els){o+=p+"else:\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sP(st,d+1)+"\n";});}return o.trimEnd();}if(s.t==="While"){var o=p+"while "+exprStr(s.cond,"python")+":\n";s.body.forEach(function(st){o+=sP(st,d+1)+"\n";});return o.trimEnd();}if(s.t==="ForTo")return p+"for "+s.v+" in range("+exprStr(s.start,"python")+", "+exprStr(s.end,"python")+" + 1):\n"+s.body.map(function(st){return sP(st,d+1);}).join("\n");if(s.t==="ForEach")return p+"for "+s.v+" in range("+exprStr(s.count,"python")+"):\n"+s.body.map(function(st){return sP(st,d+1);}).join("\n");if(s.t==="Return")return p+"return"+(s.value?" "+exprStr(s.value,"python"):"");if(s.t==="Break")return p+"break";if(s.t==="Skip"||s.t==="Continue")return p+"continue";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"python");});return p+s.name+"("+a.join(", ")+")";}if(s.t==="CallStmt")return p+exprStr(s.call,"python");if(s.t==="Print")return p+"print("+exprStr(s.value,"python")+")";return p+"# "+s.t;}
   function astToEnglish(prog){var l=[],defs=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")defs.push(s);else l.push(sE(s,0));});defs.forEach(function(f){var pa=(f.params||[]).length?"("+f.params.join(", ")+")":"";l.push("Define "+f.name+pa+":");(f.body||[]).forEach(function(s){l.push(sE(s,1));});});return l.join("\n");}
   function sE(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign")return p+"Set "+s.name+" to "+exprStr(s.value||s.init||{t:"Num",value:0},"english")+".";if(s.t==="IncDec")return p+(s.delta>0?"Increase ":"Decrease ")+s.name+" by 1.";if(s.t==="If"){var o=p+"If "+exprStr(s.arms[0][0],"english")+":\n";s.arms[0][1].forEach(function(st){o+=sE(st,d+1)+"\n";});if(s.els){o+=p+"Otherwise:\n";s.els.forEach(function(st){o+=sE(st,d+1)+"\n";});}return o.trimEnd();}if(s.t==="While"){var o=p+"While "+exprStr(s.cond,"english")+":\n";s.body.forEach(function(st){o+=sE(st,d+1)+"\n";});return o.trimEnd();}if(s.t==="ForTo"||s.t==="ForEach"){var n=s.count||s.end;return p+"For each "+(s.v||"i")+" from 0 to "+exprStr(n,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");}if(s.t==="Return")return p+"Return"+(s.value?" "+exprStr(s.value,"english"):"")+".";if(s.t==="Break")return p+"Stop.";if(s.t==="Skip"||s.t==="Continue")return p+"Skip.";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"english");});return p+"Call "+s.name+(a.length?"("+a.join(", ")+")":"")+".";} if(s.t==="CallStmt")return p+exprStr(s.call,"english")+".";if(s.t==="Print")return p+"Print "+exprStr(s.value,"english")+".";return p+"' "+s.t;}
+
+  function astToCobol(prog){var main=[],subs=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")subs.push(s);else main.push(s);});var l=["IDENTIFICATION DIVISION.","PROGRAM-ID. PICO.","PROCEDURE DIVISION."];main.forEach(function(s){l.push(sCob(s,1));});subs.forEach(function(f){l.push((f.name||"SUB")+".");(f.body||[]).forEach(function(s){l.push(sCob(s,1));});});return l.join("\n");}
+  function sCob(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign")return p+"COMPUTE "+s.name+" = "+exprStr(s.value||s.init||{t:"Num",value:0},"cobol")+".";if(s.t==="Print")return p+"DISPLAY "+exprStr(s.value,"cobol")+".";if(s.t==="Gosub")return p+"PERFORM "+s.name+".";if(s.t==="CallStmt")return p+exprStr(s.call,"cobol")+".";if(s.t==="Return")return p+"STOP RUN.";if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]],els=s.els,o=p+"IF "+exprStr(arms[0][0],"cobol");arms[0][1].forEach(function(st){o+="\n"+sCob(st,d+1);});for(var i=1;i<arms.length;i++){o+="\n"+p+"ELSE\n"+p+"    IF "+exprStr(arms[i][0],"cobol");arms[i][1].forEach(function(st){o+="\n"+sCob(st,d+2);});o+="\n"+p+"    END-IF.";}if(els){o+="\n"+p+"ELSE";(Array.isArray(els)?els:[els]).forEach(function(st){o+="\n"+sCob(st,d+1);});}return o+"\n"+p+"END-IF.";}if(s.t==="ForTo"){var step=s.step?exprStr(s.step,"cobol"):"1";return p+"PERFORM VARYING "+s.v+" FROM "+exprStr(s.start,"cobol")+" BY "+step+" UNTIL "+s.v+" > "+exprStr(s.end,"cobol")+"\n"+(s.body||[]).map(function(st){return sCob(st,d+1);}).join("\n")+"\n"+p+"END-PERFORM.";}if(s.t==="Switch"){var arms2=[];(s.cases||[]).forEach(function(c){arms2.push([{t:"Cmp",cond:"EQ",lhs:s.expr,rhs:c[0]},c[1]]);});return sCob({t:"If",arms:arms2,els:s.def},d);}return p+"*> "+s.t;}
+  function astToReport(prog){var l=[],subs=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")subs.push(s);else l.push(sRep(s,0));});subs.forEach(function(f){var pa=(f.params&&f.params.length)?" USING "+f.params.join(" "):"";l.push("FORM "+f.name+pa+".");(f.body||[]).forEach(function(s){l.push(sRep(s,1));});l.push("ENDFORM.");});return l.join("\n");}
+  function sRep(s,d){var p="  ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign")return p+s.name+" = "+exprStr(s.value||s.init||{t:"Num",value:0},"report")+".";if(s.t==="Print")return p+"WRITE "+exprStr(s.value,"report")+".";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"report");});return p+"PERFORM "+s.name+(a.length?" USING "+a.join(" "):"")+".";}if(s.t==="CallStmt")return p+exprStr(s.call,"report")+".";if(s.t==="Return")return p+"RETURN.";if(s.t==="Break")return p+"EXIT.";if(s.t==="Skip"||s.t==="Continue")return p+"CONTINUE.";if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]],els=s.els,o=p+"IF "+exprStr(arms[0][0],"report")+".";arms[0][1].forEach(function(st){o+="\n"+sRep(st,d+1);});for(var i=1;i<arms.length;i++){o+="\n"+p+"ELSEIF "+exprStr(arms[i][0],"report")+".";arms[i][1].forEach(function(st){o+="\n"+sRep(st,d+1);});}if(els){o+="\n"+p+"ELSE.";(Array.isArray(els)?els:[els]).forEach(function(st){o+="\n"+sRep(st,d+1);});}return o+"\n"+p+"ENDIF.";}if(s.t==="Switch"){var o2=p+"CASE "+exprStr(s.expr,"report")+"."; (s.cases||[]).forEach(function(c){o2+="\n"+p+"WHEN "+exprStr(c[0],"report")+"."; (c[1]||[]).forEach(function(st){o2+="\n"+sRep(st,d+1);});}); if(s.def){o2+="\n"+p+"WHEN OTHERS."; s.def.forEach(function(st){o2+="\n"+sRep(st,d+1);});} return o2+"\n"+p+"ENDCASE.";}if(s.t==="ForEach")return p+"LOOP AT "+exprStr(s.count,"report")+" INTO "+(s.v||"I")+".\n"+(s.body||[]).map(function(st){return sRep(st,d+1);}).join("\n")+"\n"+p+"ENDLOOP.";if(s.t==="ForTo"){var cnt={t:"Bin",op:"+",lhs:{t:"Bin",op:"-",lhs:s.end,rhs:s.start},rhs:{t:"Num",value:1}};return p+"LOOP AT "+exprStr(cnt,"report")+" INTO "+(s.v||"I")+".\n"+(s.body||[]).map(function(st){return sRep(st,d+1);}).join("\n")+"\n"+p+"ENDLOOP.";}return p+"* "+s.t;}
+  function astToFunctional(prog){var defs=[],body=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")defs.push(s);else body.push(s);});var l=[];defs.forEach(function(f){var pa=(f.params||[]).join(" ");if((f.body||[]).length===1&&f.body[0].t==="Return"&&f.body[0].value)l.push("let "+f.name+(pa?" "+pa:"")+" = "+exprStr(f.body[0].value,"functional"));else{l.push("let "+f.name+(pa?" "+pa:"")+" =");(f.body||[]).forEach(function(s){l.push(sFun(s,1));});}l.push("");});body.forEach(function(s){l.push(sFun(s,0));});return l.join("\n").replace(/\n+$/,"");}
+  function sFun(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign")return p+"let "+s.name+" = "+exprStr(s.value||s.init||{t:"Num",value:0},"functional");if(s.t==="Print")return p+"printfn "+exprStr(s.value,"functional");if(s.t==="Return")return p+(s.value?"return "+exprStr(s.value,"functional"):"return");if(s.t==="Break")return p+"break";if(s.t==="Skip"||s.t==="Continue")return p+"continue";if(s.t==="CallStmt")return p+exprStr(s.call,"functional");if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"functional");});return p+s.name+"("+a.join(", ")+")";}if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]],els=s.els,o=p+"if "+exprStr(arms[0][0],"functional")+" then\n"+(arms[0][1]||[]).map(function(st){return sFun(st,d+1);}).join("\n");for(var i=1;i<arms.length;i++){o+="\n"+p+"else\n"+sFun({t:"If",arms:[arms[i]],els:null},d+1);}if(els){o+="\n"+p+"else\n"+els.map(function(st){return sFun(st,d+1);}).join("\n");}return o;}if(s.t==="While")return p+"while "+exprStr(s.cond,"functional")+" do\n"+(s.body||[]).map(function(st){return sFun(st,d+1);}).join("\n");if(s.t==="ForTo")return p+"for "+s.v+" in "+exprStr(s.start,"functional")+".."+exprStr(s.end,"functional")+" do\n"+(s.body||[]).map(function(st){return sFun(st,d+1);}).join("\n");if(s.t==="ForEach")return p+"for "+s.v+" in "+exprStr(s.count,"functional")+" do\n"+(s.body||[]).map(function(st){return sFun(st,d+1);}).join("\n");if(s.t==="Switch"){var o2=p+"match "+exprStr(s.expr,"functional")+" with";(s.cases||[]).forEach(function(c){o2+="\n"+p+"| "+exprStr(c[0],"functional")+" ->";if((c[1]||[]).length===1)o2+=" "+sFun(c[1][0],0).replace(/^\s+/,"");else o2+="\n"+(c[1]||[]).map(function(st){return sFun(st,d+1);}).join("\n");});if(s.def){o2+="\n"+p+"| _ ->";if(s.def.length===1)o2+=" "+sFun(s.def[0],0).replace(/^\s+/,"");else o2+="\n"+s.def.map(function(st){return sFun(st,d+1);}).join("\n");}return o2;}return p+"// "+s.t;}
 
   return {
     compile: function (src, lang) {
@@ -2050,6 +2710,9 @@
     compileBasic: function (src) { return { words: lowerToBytecode(compileBasic(src), true), il: compileBasic(src) }; },
     compilePython: function (src) { return { words: lowerToBytecode(compilePython(src), true), il: compilePython(src) }; },
     compileEnglish: function (src) { return { words: lowerToBytecode(compileEnglish(src), true), il: compileEnglish(src) }; },
+    compileCobol: function(src) { return { words: lowerToBytecode(compileCobol(src), true) }; },
+    compileReport: function(src) { return { words: lowerToBytecode(compileReport(src), true) }; },
+    compileFunctional: function(src) { return { words: lowerToBytecode(compileFunctional(src), true) }; },
     compileWithDebug: function (src, lang) {
       var dbg = {};
       var words = lowerToBytecode(compileIL(src, lang), true, null, true, dbg);
