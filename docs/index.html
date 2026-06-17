@@ -10923,7 +10923,7 @@ function compressBound(inputLen) {
     stmt: function (s) {
       var self = this;
       if (typeof s.pos === "number" && s.pos >= 0) this.b.curPos = s.pos;   // INV-25
-      if (s.t === "Let") this.assignTo(this.varOf(s.name), s.value);
+      if (s.t === "Let" || s.t === "Assign") this.assignTo(this.varOf(s.name), s.value);
       else if (s.t === "Dim") { var dv = this.varOf(s.name); if (s.init === null) this.b.const_(dv, 0); else this.assignTo(dv, s.init); }
       else if (s.t === "IncDec") { var iv = this.varOf(s.name); if (s.delta === 1) this.b.inc(iv); else this.b.arith("sub", iv, iv, new Imm(1)); }
       else if (s.t === "Label") this.b.label("lbl_" + s.name.toUpperCase());
@@ -11146,6 +11146,27 @@ function compressBound(inputLen) {
         var reg = this.eval(c.args[3]); var MM = m.toUpperCase();
         if (MM === "LOAD") this.b.load(reg, addr); else if (MM === "SAVE") this.b.save(reg, addr); else this.b.pipe(reg, addr);
         return reg;
+      }
+      if (ns != null && ns.toUpperCase() === "STORAGE" && m.toUpperCase() === "GETCARD") {
+        var gp = this.eval(c.args[0]), gc = this.eval(c.args[1]);
+        this.b.host("Storage", "UsePack", [gp], null);
+        var gd = want ? this.b.vreg() : null;
+        this.b.host("Storage", "EditCard", [gc], gd);
+        return gd;
+      }
+      if (ns != null && ns.toUpperCase() === "STORAGE" && m.toUpperCase() === "SAVECARD") {
+        var sc = this.eval(c.args[0]);
+        this.b.host("Storage", "EditCard", [sc], null);
+        var sd = want ? this.b.vreg() : null;
+        if (sd) this.b.const_(sd, 1);
+        return sd;
+      }
+      if (ns != null && ns.toUpperCase() === "STORAGE" && m.toUpperCase() === "QUERYCARDS") {
+        var qp = this.eval(c.args[0]), qq = this.eval(c.args[1]);
+        this.b.host("Storage", "UsePack", [qp], null);
+        var qd = want ? this.b.vreg() : null;
+        this.b.host("Storage", "QueryCard", [qq], qd);
+        return qd;
       }
       var self = this; var argregs = c.args.slice(0, 2).map(function (a) { return self.eval(a); });
       var dst = want ? this.b.vreg() : null;
@@ -11537,6 +11558,7 @@ function compressBound(inputLen) {
         if (lw === "true") return { t: "Num", value: 1 };
         if (lw === "false") return { t: "Num", value: 0 };
         if (this.at("op", ".") && this.peek(1).kind === "word" && this.peek(2).kind === "op" && this.peek(2).value === "(") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; }
+        if (this.at("op", "(")) return { t: "Call", ns: null, method: t.value, args: this.parseArgs() };
         return { t: "Var", name: t.value };
       }
       throw new Error("English: unexpected token " + t.value);
@@ -11639,11 +11661,11 @@ function compressBound(inputLen) {
 
   // ---- COBOL-style frontend -------------------------------------------------
   var COB_KW = {};
-  ["IDENTIFICATION","DIVISION","PROGRAM-ID","DATA","PROCEDURE","WORKING-STORAGE","SECTION","PIC","VALUE","MOVE","TO","COMPUTE","DISPLAY","IF","ELSE","END-IF","PERFORM","VARYING","FROM","BY","UNTIL","END-PERFORM","STOP","RUN","NOT","AND","OR","IS","GREATER","LESS","EQUAL","THAN"].forEach(function (k) { COB_KW[k] = 1; });
+  ["IDENTIFICATION","DIVISION","PROGRAM-ID","DATA","PROCEDURE","WORKING-STORAGE","SECTION","PIC","VALUE","MOVE","TO","COMPUTE","DISPLAY","IF","ELSE","END-IF","PERFORM","VARYING","FROM","BY","UNTIL","END-PERFORM","STOP","RUN","NOT","AND","OR","IS","GREATER","LESS","EQUAL","THAN","EVALUATE","WHEN","OTHER","END-EVALUATE","GO","MOD","EXIT","CYCLE"].forEach(function (k) { COB_KW[k] = 1; });
   var COB_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "<>":1 };
   var COB_ONE = "+-*/()<>=,.:";
   var COB_CMP = { "=":"EQ", "==":"EQ", "!=":"NE", "<>":"NE", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
-  var COB_PREC = { OR:1, AND:2, "+":5, "-":5, "*":6, "/":6 };
+  var COB_PREC = { OR:1, AND:2, "+":5, "-":5, "*":6, "/":6, MOD:6 };
   Object.keys(COB_CMP).forEach(function (k) { COB_PREC[k] = 3; });
   function cobtokenize(src) { return periodTokenize(src, COB_KW, COB_TWO, COB_ONE, "COBOL", { commentLineStar: true, commentInlineStarGt: true, allowHyphen: true, uppercase: true }); }
   function CobParser(toks) { this.toks = toks; this.i = 0; }
@@ -11695,15 +11717,27 @@ function compressBound(inputLen) {
       this.skipNl();
       return { t: "Let", name: name, value: init };
     },
+    collectGotoTargets: function () {
+      var labels = {};
+      for (var j = this.i; j < this.toks.length; j++) {
+        if (this.toks[j].kind === "kw" && this.toks[j].value === "GO" && this.toks[j + 1] && this.toks[j + 1].kind === "kw" && this.toks[j + 1].value === "TO" && this.toks[j + 2] && this.toks[j + 2].kind === "id") labels[this.toks[j + 2].value] = 1;
+      }
+      return labels;
+    },
     parseProcedureDivision: function () {
       var body = [], subs = [];
+      this.gotoTargets = this.collectGotoTargets();
       this.skipNl();
       while (!this.at("eof")) {
-        if (this.atParagraph()) subs.push(this.parseParagraph());
+        if (this.atParagraph()) {
+          if (this.gotoTargets && this.gotoTargets[this.peek().value]) body.push(this.parseLabelParagraph());
+          else subs.push(this.parseParagraph());
+        }
         else pushAst(body, this.parseStmt());
       }
       return { body: body, subs: subs };
     },
+    parseLabelParagraph: function () { var start = this.peek().pos, name = this.expectName(); this.expect("op", "."); this.skipNl(); return markAst({ t: "Label", name: name }, start); },
     parseParagraph: function () { var name = this.expectName(); this.expect("op", "."); this.skipNl(); return { t: "Sub", name: name, params: null, body: this.parseBlock([], true) }; },
     parseBlock: function (stopWords, stopOnParagraph) {
       var out = [];
@@ -11725,7 +11759,10 @@ function compressBound(inputLen) {
         if (t.value === "DISPLAY") return this.parseDisplay();
         if (t.value === "IF") return this.parseIf();
         if (t.value === "PERFORM") return this.parsePerform();
+        if (t.value === "EVALUATE") return this.parseEvaluate();
         if (t.value === "STOP") return this.parseStopRun();
+        if (t.value === "GO") return this.parseGoTo();
+        if (t.value === "EXIT") return this.parseExit();
       }
       if (t.kind === "id" && this.peek(1).kind === "op" && this.peek(1).value === "." && (this.peek(2).kind === "id" || this.peek(2).kind === "kw") && this.peek(3).kind === "op" && this.peek(3).value === "(") {
         var call = this.parseCallFromId(); this.endSimple(); return { t: "CallStmt", call: call };
@@ -11744,7 +11781,17 @@ function compressBound(inputLen) {
       this.expectKw("END-IF"); this.endSimple();
       return { t: "If", arms: arms, els: els };
     },
-    parsePerform: function () { this.expectKw("PERFORM"); if (this.atKw("VARYING")) return this.parsePerformVarying(); var name = this.expectName(); this.endSimple(); return { t: "Gosub", name: name, args: null }; },
+    parsePerform: function () { this.expectKw("PERFORM"); if (this.atKw("VARYING")) return this.parsePerformVarying(); if (this.atKw("UNTIL")) return this.parsePerformUntil(); var name = this.expectName(); this.endSimple(); return { t: "Gosub", name: name, args: null }; },
+    parseGoTo: function () { this.expectKw("GO"); if (this.atKw("TO")) this.next(); var name = this.expectName(); this.endSimple(); return { t: "Goto", label: name }; },
+    parseExit: function () { this.expectKw("EXIT"); if (this.atKw("PERFORM")) this.next(); var isCycle = false; if (this.atKw("CYCLE")) { this.next(); isCycle = true; } this.endSimple(); return { t: isCycle ? "Skip" : "Break" }; },
+    parsePerformUntil: function () {
+      this.expectKw("UNTIL");
+      var cond = this.parseExpr();
+      this.endHeader();
+      var body = this.parseBlock(["END-PERFORM"], false);
+      this.expectKw("END-PERFORM"); this.endSimple();
+      return { t: "While", cond: this.negateExpr(cond), body: body };
+    },
     parsePerformVarying: function () {
       this.expectKw("VARYING");
       var v = this.expectName();
@@ -11765,6 +11812,26 @@ function compressBound(inputLen) {
       }
       throw new Error("COBOL: unsupported PERFORM VARYING UNTIL condition");
     },
+    parseEvaluate: function () {
+      this.expectKw("EVALUATE");
+      var expr = this.parseExpr(), cases = [], def = null;
+      this.endHeader();
+      while (!this.atKw("END-EVALUATE")) {
+        this.expectKw("WHEN");
+        if (this.atKw("OTHER")) {
+          this.next();
+          this.endHeader();
+          def = this.parseBlock(["END-EVALUATE"], false);
+          break;
+        }
+        var val = this.parseExpr();
+        this.endHeader();
+        cases.push([val, this.parseBlock(["WHEN", "END-EVALUATE"], false)]);
+      }
+      this.expectKw("END-EVALUATE"); this.endSimple();
+      return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    negateExpr: function (expr) { return { t: "Cmp", cond: "EQ", lhs: expr, rhs: { t: "Num", value: 0 } }; },
     parseStopRun: function () { this.expectKw("STOP"); if (this.atKw("RUN")) this.next(); this.endSimple(); return { t: "Return" }; },
     parseCallFromId: function () { var ns = this.expectName(); this.expect("op", "."); var m = this.next(); if (m.kind !== "id" && m.kind !== "kw") throw new Error("COBOL: expected method after ."); return { t: "Call", ns: ns, method: m.value, args: this.parseArgs() }; },
     parseArgs: function () { this.expect("op", "("); var a = []; if (!this.at("op", ")")) { a.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); a.push(this.parseExpr()); } } this.expect("op", ")"); return a; },
@@ -11773,6 +11840,7 @@ function compressBound(inputLen) {
       if (t.kind === "op" && COB_PREC[t.value] !== undefined) return [COB_PREC[t.value], 1, COB_CMP[t.value] ? "cmp" : "bin", COB_CMP[t.value] || t.value];
       if (w === "AND") return [2, 1, "bin", "AND"];
       if (w === "OR") return [1, 1, "bin", "OR"];
+      if (w === "MOD") return [6, 1, "bin", "MOD"];
       if (w === "GREATER" && w1 === "THAN") { if (w2 === "OR" && w3 === "EQUAL" && w4 === "TO") return [3, 5, "cmp", "GE"]; return [3, 2, "cmp", "GT"]; }
       if (w === "LESS" && w1 === "THAN") { if (w2 === "OR" && w3 === "EQUAL" && w4 === "TO") return [3, 5, "cmp", "LE"]; return [3, 2, "cmp", "LT"]; }
       if (w === "EQUAL" && w1 === "TO") return [3, 2, "cmp", "EQ"];
@@ -11808,7 +11876,7 @@ function compressBound(inputLen) {
 
   // ---- Report/4GL frontend --------------------------------------------------
   var REP_KW = {};
-  ["DATA","TYPE","VALUE","IF","ELSE","ELSEIF","ENDIF","WRITE","FORM","ENDFORM","USING","PERFORM","CASE","WHEN","OTHERS","ENDCASE","LOOP","AT","INTO","WHERE","ENDLOOP","RETURN","EXIT","CONTINUE","AND","OR","NOT"].forEach(function (k) { REP_KW[k] = 1; });
+  ["DATA","TYPE","VALUE","IF","ELSE","ELSEIF","ENDIF","WRITE","FORM","ENDFORM","USING","PERFORM","CASE","WHEN","OTHERS","ENDCASE","LOOP","AT","INTO","WHERE","ENDLOOP","RETURN","EXIT","CONTINUE","AND","OR","NOT","WHILE","ENDWHILE","LABEL","GOTO","MOD"].forEach(function (k) { REP_KW[k] = 1; });
   var REP_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "<>":1 };
   var REP_ONE = "+-*/%()<>=,.:";
   var REP_CMP = { "=":"EQ", "==":"EQ", "!=":"NE", "<>":"NE", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
@@ -11857,6 +11925,9 @@ function compressBound(inputLen) {
         if (t.value === "PERFORM") return this.parsePerform();
         if (t.value === "CASE") return this.parseCase();
         if (t.value === "LOOP") return this.parseLoop();
+        if (t.value === "WHILE") return this.parseWhile();
+        if (t.value === "LABEL") return this.parseLabel();
+        if (t.value === "GOTO") return this.parseGoto();
         if (t.value === "RETURN") { this.next(); if (this.at("op", ".") || this.at("nl") || this.at("eof")) { this.endStmt(); return { t: "Return" }; } var rv = this.parseExpr(); this.endStmt(); return { t: "Return", value: rv }; }
         if (t.value === "EXIT") { this.next(); this.endStmt(); return { t: "Break" }; }
         if (t.value === "CONTINUE") { this.next(); this.endStmt(); return { t: "Skip" }; }
@@ -11932,6 +12003,16 @@ function compressBound(inputLen) {
       if (where) body = [{ t: "If", arms: [[where, body]], els: null }];
       return { t: "ForEach", v: v || this.freshTemp(), count: count, body: body };
     },
+    parseWhile: function () {
+      this.expectKw("WHILE");
+      var cond = this.parseExpr();
+      this.endStmt();
+      var body = this.parseBlockUntil(["ENDWHILE"]);
+      this.expectKw("ENDWHILE"); this.endStmt();
+      return { t: "While", cond: cond, body: body };
+    },
+    parseLabel: function () { this.expectKw("LABEL"); var name = this.expect("id").value; this.endStmt(); return { t: "Label", name: name }; },
+    parseGoto: function () { this.expectKw("GOTO"); var name = this.expect("id").value; this.endStmt(); return { t: "Goto", label: name }; },
     parseNameListUntilDot: function () { var a = []; while (!this.at("op", ".") && !this.at("eof")) { if (this.at("op", ",")) { this.next(); continue; } a.push(this.expect("id").value); } return a; },
     parseExprListUntilDot: function () { var a = []; while (!this.at("op", ".") && !this.at("eof")) { if (this.at("op", ",")) { this.next(); continue; } a.push(this.parseExpr()); } return a; },
     parseCallFromId: function () { var ns = this.expect("id").value; this.expect("op", "."); var m = this.next(); if (m.kind !== "id" && m.kind !== "kw") throw new Error("Report: expected method after ."); return { t: "Call", ns: ns, method: m.value, args: this.parseArgs() }; },
@@ -11941,6 +12022,7 @@ function compressBound(inputLen) {
       if (t.kind === "op" && REP_PREC[t.value] !== undefined) return [REP_PREC[t.value], 1, REP_CMP[t.value] ? "cmp" : "bin", REP_CMP[t.value] || (t.value === "%" ? "MOD" : t.value)];
       if (t.kind === "kw" && t.value === "AND") return [2, 1, "bin", "AND"];
       if (t.kind === "kw" && t.value === "OR") return [1, 1, "bin", "OR"];
+      if (t.kind === "kw" && t.value === "MOD") return [6, 1, "bin", "MOD"];
       return null;
     },
     parseExpr: function (minp) {
@@ -11971,7 +12053,7 @@ function compressBound(inputLen) {
 
   // ---- Functional frontend --------------------------------------------------
   var FUN_KW = {};
-  ["let","if","then","else","elif","match","with","for","in","do","while","printfn","printf","not","true","false","and","or","return","break","continue","skip","rec","mutable"].forEach(function (k) { FUN_KW[k] = 1; });
+  ["let","if","then","else","elif","match","with","for","in","do","while","printfn","printf","not","true","false","and","or","return","break","continue","skip","rec","mutable","goto","label"].forEach(function (k) { FUN_KW[k] = 1; });
   var FUN_TWO = { "==":1, "!=":1, "<>":1, "<=":1, ">=":1, "|>":1, "->":1, "..":1, "&&":1, "||":1 };
   var FUN_ONE = "+-*/%()<>=,.:|";
   var FUN_CMP = { "=":"EQ", "==":"EQ", "!=":"NE", "<>":"NE", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
@@ -12082,9 +12164,18 @@ function compressBound(inputLen) {
         if (kw === "while") return this.parseWhileStmt();
         if (kw === "for") return this.parseForStmt();
         if (kw === "match") return this.parseMatchStmt();
+        if (kw === "label") { this.next(); var lname = this.expect("id").value; this.expect("newline"); return { t: "Label", name: lname }; }
+        if (kw === "goto") { this.next(); var gname = this.expect("id").value; this.expect("newline"); return { t: "Goto", label: gname }; }
         if (kw === "return") { this.next(); if (this.at("newline")) { this.next(); return { t: "Return" }; } var rv = this.parseExpr(); this.expect("newline"); return { t: "Return", value: rv }; }
         if (kw === "break") { this.next(); this.expect("newline"); return { t: "Break" }; }
         if (kw === "continue" || kw === "skip") { this.next(); this.expect("newline"); return { t: "Skip" }; }
+      }
+      if (t.kind === "id" && this.peek(1).kind === "op" && this.peek(1).value === "=") {
+        var name = this.next().value;
+        this.next();
+        var value = this.parseExpr();
+        this.expect("newline");
+        return { t: "Assign", name: name, value: value };
       }
       var expr = this.parseExpr();
       this.expect("newline");
@@ -12097,10 +12188,12 @@ function compressBound(inputLen) {
       if (this.atKw("mutable")) this.next();
       var name = this.expect("id").value, params = [];
       while (this.at("id")) params.push(this.next().value);
+      var zeroParam = false;
+      if (this.at("op", "(") && this.peek(1).kind === "op" && this.peek(1).value === ")") { this.next(); this.next(); zeroParam = true; }
       this.expect("op", "=");
-      if (params.length) {
+      if (params.length || zeroParam) {
         if (!allowFunc) throw new Error("Functional: function definitions only allowed at top level");
-        return { t: "Sub", name: name, params: params, body: this.parseFunctionBody() };
+        return { t: "Sub", name: name, params: params.length ? params : null, body: this.parseFunctionBody() };
       }
       var value = this.parseBindingExpr();
       this.expect("newline");
@@ -12183,8 +12276,8 @@ function compressBound(inputLen) {
     },
     parseParenArgs: function () { this.expect("op", "("); var a = []; if (!this.at("op", ")")) { a.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); a.push(this.parseExpr()); } } this.expect("op", ")"); return a; },
     callableExpr: function (node) { return !!node && (node.t === "Var" || node.t === "Call" || node instanceof FunCallTarget); },
-    isAppArgStart: function (t) { if (t.kind === "num" || t.kind === "str" || t.kind === "id") return true; if (t.kind === "op" && (t.value === "(" || t.value === "-")) return true; return t.kind === "kw" && ["true","false","not"].indexOf(t.value.toLowerCase()) >= 0; },
-    lineStartsExpr: function () { var t = this.peek(); if (t.kind === "num" || t.kind === "str" || t.kind === "id") return true; if (t.kind === "op" && (t.value === "(" || t.value === "-")) return true; return t.kind === "kw" && ["if","true","false","not"].indexOf(t.value.toLowerCase()) >= 0; }
+    isAppArgStart: function (t) { if (t.kind === "num" || t.kind === "str" || t.kind === "id") return true; if (t.kind === "op" && t.value === "(") return true; return t.kind === "kw" && ["true","false","not"].indexOf(t.value.toLowerCase()) >= 0; },
+    lineStartsExpr: function () { var t = this.peek(); if (t.kind === "id" && this.peek(1).kind === "op" && this.peek(1).value === "=") return false; if (t.kind === "num" || t.kind === "str" || t.kind === "id") return true; if (t.kind === "op" && (t.value === "(" || t.value === "-")) return true; return t.kind === "kw" && ["if","true","false","not"].indexOf(t.value.toLowerCase()) >= 0; }
   };
   function compileFunctional(src) { return new BLowerer().lowerProgram(new FunParser(funtokenize(src)).parseProgram()); }
 
@@ -12230,12 +12323,22 @@ function compressBound(inputLen) {
       s = (q === "'") ? s.replace(/'/g, "\\'") : s.replace(/"/g, '\\"');
       return q + s + q;
     }
-    if (e.t === "Var") return e.name;
-    if (e.t === "Call") { var p = e.ns ? (e.ns + ".") : ""; return p + e.method + "(" + (e.args || []).map(function (a) { return exprStr(a, L); }).join(", ") + ")"; }
+    if (e.t === "Var") return targetName(e.name, L);
+    if (e.t === "Call") {
+      var p = e.ns ? (e.ns + ".") : "";
+      return p + e.method + "(" + (e.args || []).map(function (a) { return exprStr(a, L); }).join(", ") + ")";
+    }
     if (e.t === "Bin") {
       var op = e.op;
-      if (L === "basic" || L === "report" || L === "cobol") { if (op === "%" || op === "MOD") op = "MOD"; if (op === "&&" || op === "AND") op = "AND"; if (op === "||" || op === "OR") op = "OR"; }
-      else if (L === "functional") { if (op === "AND") op = "and"; if (op === "OR") op = "or"; if (op === "MOD") op = "%"; }
+      if (L === "basic" || L === "report" || L === "cobol") {
+        if (op === "%" || op === "MOD") op = "MOD";
+        if (op === "&&" || op === "AND") op = "AND";
+        if (op === "||" || op === "OR") op = "OR";
+      } else if (L === "python" || L === "functional" || L === "english") {
+        if (op === "&&" || op === "AND") op = "and";
+        else if (op === "||" || op === "OR") op = "or";
+        else if (op === "MOD") op = (L === "english" ? "modulo" : "%");
+      }
       return exprStr(e.lhs, L) + " " + op + " " + exprStr(e.rhs, L);
     }
     if (e.t === "Cmp") {
@@ -12248,26 +12351,315 @@ function compressBound(inputLen) {
       if (L === "basic") return "IIF(" + exprStr(e.cond, L) + ", " + exprStr(e.then, L) + ", " + exprStr(e.els, L) + ")";
       if (L === "python") return exprStr(e.then, L) + " if " + exprStr(e.cond, L) + " else " + exprStr(e.els, L);
       if (L === "functional") return "if " + exprStr(e.cond, L) + " then " + exprStr(e.then, L) + " else " + exprStr(e.els, L);
+      if (L === "english") return exprStr(e.then, L) + " if " + exprStr(e.cond, L) + " otherwise " + exprStr(e.els, L);
       return "(" + exprStr(e.cond, L) + " ? " + exprStr(e.then, L) + " : " + exprStr(e.els, L) + ")";
     }
-    if (e.t === "FieldRef") return e.obj + "." + e.field;
+    if (e.t === "FieldRef") return "Storage.GetField(" + exprStr({ t: "Str", value: e.field }, L) + ")";
+    if (e.t === "IncDec") {
+      var name = incDecName(e), delta = incDecDelta(e);
+      if (!name) return "?";
+      name = targetName(name, L);
+      if (L === "c") return e.prefix ? (delta >= 0 ? "++" : "--") + name : name + (delta >= 0 ? "++" : "--");
+      return name + (delta >= 0 ? " + " : " - ") + Math.abs(delta);
+    }
     return "?";
   }
-  function astToC(prog){var l=[],f=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")f.push(s);else l.push(sC(s,0));});f.forEach(function(fn){l.push("void "+fn.name+"("+(fn.params||[]).map(function(p){return "int "+p;}).join(", ")+") {");(fn.body||[]).forEach(function(s){l.push(sC(s,1));});l.push("}");});return l.join("\n");}
-  function sC(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Let"||s.t==="Dim")return p+"int "+s.name+" = "+exprStr(s.init||s.value||{t:"Num",value:0},"c")+";";if(s.t==="Assign")return p+s.name+" = "+exprStr(s.value,"c")+";";if(s.t==="IncDec")return p+s.name+(s.delta>0?"++":"--")+";";if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]];var els=s.els;var o=p+"if ("+exprStr(arms[0][0],"c")+") {\n";arms[0][1].forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";for(var i=1;i<arms.length;i++){o+=" else if ("+exprStr(arms[i][0],"c")+") {\n";arms[i][1].forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";}if(els){o+=" else {\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";}return o;}if(s.t==="While"){var o=p+"while ("+exprStr(s.cond,"c")+") {\n";s.body.forEach(function(st){o+=sC(st,d+1)+"\n";});return o+p+"}";}if(s.t==="ForTo")return p+"for ("+s.v+" = "+exprStr(s.start,"c")+"; "+s.v+" <= "+exprStr(s.end,"c")+"; "+s.v+"++) {\n"+s.body.map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="ForEach")return p+"for ("+s.v+" = 0; "+s.v+" < "+exprStr(s.count,"c")+"; "+s.v+"++) {\n"+s.body.map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="Return")return p+"return"+(s.value?" "+exprStr(s.value,"c"):"")+";";if(s.t==="Break")return p+"break;";if(s.t==="Skip"||s.t==="Continue")return p+"continue;";if(s.t==="Goto")return p+"goto "+s.label+";";if(s.t==="Label")return p+s.name+":";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"c");});return p+s.name+"("+a.join(", ")+");";}if(s.t==="CallStmt")return p+exprStr(s.call,"c")+";";if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print")return p+"print("+exprStr(s.expr.args[0],"c")+");";return s.expr?p+exprStr(s.expr,"c")+";":"";}if(s.t==="Print")return p+"print("+exprStr(s.value,"c")+");";if(s.t==="Switch"||s.t==="Dispatch"){var o=p+(s.t==="Dispatch"?"dispatch":"switch")+" ("+exprStr(s.expr,"c")+") {\n";(s.cases||[]).forEach(function(c){o+=p+"    case "+exprStr(c[0],"c")+": ";c[1].forEach(function(st){o+=sC(st,d+2)+"\n";});o+=p+"    break;\n";});if(s.def||s.els){o+=p+"    default: ";(s.def||s.els||[]).forEach(function(st){o+=sC(st,d+2)+"\n";});}return o+p+"}";}if(s.t==="DoLoop"||s.t==="DoWhile"){var cond=s.botCond||s.cond||{t:"Num",value:1};return p+"do {\n"+(s.body||[]).map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"} while ("+exprStr(cond,"c")+");";}if(s.t==="ServerMain")return (s.body||[]).map(function(st){return sC(st,d);}).join("\n");return p+"// "+s.t;}
-  function astToBasic(prog){var l=[],ss=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")ss.push(s);else l.push(sB(s,0));});ss.forEach(function(f){var pa=(f.params||[]).length?"("+f.params.join(", ")+")":"";l.push("SUB "+(f.name||"").toUpperCase()+pa);(f.body||[]).forEach(function(s){l.push(sB(s,1));});l.push("ENDSUB");});return l.join("\n");}
-  function sB(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim")return p+"DIM "+(s.name||"").toUpperCase()+(s.init!=null?" = "+exprStr(s.init,"basic"):"");if(s.t==="Let"||s.t==="Assign")return p+(s.name||"").toUpperCase()+" = "+exprStr(s.value,"basic");if(s.t==="IncDec")return p+(s.delta>0?"INC ":"DEC ")+(s.name||"").toUpperCase();if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]];var els=s.els;var o=p+"IF "+exprStr(arms[0][0],"basic")+" THEN\n";arms[0][1].forEach(function(st){o+=sB(st,d+1)+"\n";});for(var i=1;i<arms.length;i++){o+=p+"ELSEIF "+exprStr(arms[i][0],"basic")+" THEN\n";arms[i][1].forEach(function(st){o+=sB(st,d+1)+"\n";});}if(els){o+=p+"ELSE\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sB(st,d+1)+"\n";});}return o+p+"ENDIF";}if(s.t==="While"){var o=p+"WHILE "+exprStr(s.cond,"basic")+"\n";s.body.forEach(function(st){o+=sB(st,d+1)+"\n";});return o+p+"ENDWHILE";}if(s.t==="ForTo")return p+"FOR "+(s.v||"").toUpperCase()+" = "+exprStr(s.start,"basic")+" TO "+exprStr(s.end,"basic")+"\n"+s.body.map(function(st){return sB(st,d+1);}).join("\n")+"\n"+p+"NEXT";if(s.t==="ForEach")return p+"FOREACH "+(s.v||"").toUpperCase()+" IN "+exprStr(s.count,"basic")+"\n"+s.body.map(function(st){return sB(st,d+1);}).join("\n")+"\n"+p+"ENDFOREACH";if(s.t==="Return")return p+"RETURN"+(s.value?" "+exprStr(s.value,"basic"):"");if(s.t==="Break")return p+"BREAK";if(s.t==="Skip"||s.t==="Continue")return p+"SKIP";if(s.t==="Goto")return p+"GOTO "+(s.label||"").toUpperCase();if(s.t==="Label")return p+(s.name||"").toUpperCase()+":";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"basic");});return p+"GOSUB "+(s.name||"").toUpperCase()+(a.length?"("+a.join(", ")+")":"");}if(s.t==="CallStmt")return p+exprStr(s.call,"basic");if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print")return p+"PRINT "+exprStr(s.expr.args[0],"basic");return s.expr?p+exprStr(s.expr,"basic"):"";}if(s.t==="Print")return p+"PRINT "+exprStr(s.value,"basic");if(s.t==="Switch"||s.t==="Dispatch"){var o=p+(s.t==="Dispatch"?"DISPATCH ":"SWITCH ")+exprStr(s.expr,"basic")+"\n";(s.cases||[]).forEach(function(c){o+=p+"    CASE "+exprStr(c[0],"basic")+"\n";c[1].forEach(function(st){o+=sB(st,d+2)+"\n";});});if(s.def||s.els){o+=p+"    DEFAULT\n";(s.def||s.els||[]).forEach(function(st){o+=sB(st,d+2)+"\n";});}return o+p+"END"+(s.t==="Dispatch"?"DISPATCH":"SWITCH");}if(s.t==="DoLoop"||s.t==="DoWhile"){var cond=s.botCond||s.cond||{t:"Num",value:1};return p+"DO\n"+(s.body||[]).map(function(st){return sB(st,d+1);}).join("\n")+"\n"+p+"LOOP UNTIL "+exprStr(cond,"basic");}if(s.t==="ServerMain")return (s.body||[]).map(function(st){return sB(st,d);}).join("\n");return p+"' "+s.t;}
-  function astToPython(prog){var defs=[],body=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")defs.push(s);else body.push(sP(s,0));});var l=[];defs.forEach(function(f){l.push("def "+f.name+"("+(f.params||[]).join(", ")+"):");(f.body||[]).forEach(function(s){l.push(sP(s,1));});l.push("");});return l.concat(body).join("\n");}
-  function sP(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign")return p+s.name+" = "+exprStr(s.value||s.init||{t:"Num",value:0},"python");if(s.t==="IncDec")return p+s.name+" += "+s.delta;if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]];var els=s.els;var o=p+"if "+exprStr(arms[0][0],"python")+":\n";arms[0][1].forEach(function(st){o+=sP(st,d+1)+"\n";});for(var i=1;i<arms.length;i++){o+=p+"elif "+exprStr(arms[i][0],"python")+":\n";arms[i][1].forEach(function(st){o+=sP(st,d+1)+"\n";});}if(els){o+=p+"else:\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sP(st,d+1)+"\n";});}return o.trimEnd();}if(s.t==="While"){var o=p+"while "+exprStr(s.cond,"python")+":\n";s.body.forEach(function(st){o+=sP(st,d+1)+"\n";});return o.trimEnd();}if(s.t==="ForTo")return p+"for "+s.v+" in range("+exprStr(s.start,"python")+", "+exprStr(s.end,"python")+" + 1):\n"+s.body.map(function(st){return sP(st,d+1);}).join("\n");if(s.t==="ForEach")return p+"for "+s.v+" in range("+exprStr(s.count,"python")+"):\n"+s.body.map(function(st){return sP(st,d+1);}).join("\n");if(s.t==="Return")return p+"return"+(s.value?" "+exprStr(s.value,"python"):"");if(s.t==="Break")return p+"break";if(s.t==="Skip"||s.t==="Continue")return p+"continue";if(s.t==="Goto")return p+"goto "+s.label;if(s.t==="Label")return p+"label "+s.name;if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"python");});return p+s.name+"("+a.join(", ")+")";}if(s.t==="CallStmt")return p+exprStr(s.call,"python");if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print")return p+"print("+exprStr(s.expr.args[0],"python")+")";return s.expr?p+exprStr(s.expr,"python"):"";}if(s.t==="Print")return p+"print("+exprStr(s.value,"python")+")";if(s.t==="Switch"||s.t==="Dispatch"){var o=p+"match "+exprStr(s.expr,"python")+":\n";(s.cases||[]).forEach(function(c){o+=p+"    case "+exprStr(c[0],"python")+":\n";c[1].forEach(function(st){o+=sP(st,d+2)+"\n";});});if(s.def||s.els){o+=p+"    case _:\n";(s.def||s.els||[]).forEach(function(st){o+=sP(st,d+2)+"\n";});}return o.trimEnd();}if(s.t==="DoLoop"||s.t==="DoWhile"){var cond=s.botCond||s.cond||{t:"Num",value:1};return p+"do:\n"+(s.body||[]).map(function(st){return sP(st,d+1);}).join("\n")+"\nwhile "+exprStr(cond,"python");}if(s.t==="ServerMain")return (s.body||[]).map(function(st){return sP(st,d);}).join("\n");return p+"# "+s.t;}
-  function astToEnglish(prog){var l=[],defs=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")defs.push(s);else l.push(sE(s,0));});defs.forEach(function(f){var pa=(f.params||[]).length?"("+f.params.join(", ")+")":"";l.push("Define "+f.name+pa+":");(f.body||[]).forEach(function(s){l.push(sE(s,1));});});return l.join("\n");}
-  function sE(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign")return p+"Set "+s.name+" to "+exprStr(s.value||s.init||{t:"Num",value:0},"english")+".";if(s.t==="IncDec")return p+(s.delta>0?"Increase ":"Decrease ")+s.name+" by 1.";if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]];var els=s.els;var o=p+"If "+exprStr(arms[0][0],"english")+":\n";arms[0][1].forEach(function(st){o+=sE(st,d+1)+"\n";});if(els){o+=p+"Otherwise:\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sE(st,d+1)+"\n";});}return o.trimEnd();}if(s.t==="While"){var o=p+"While "+exprStr(s.cond,"english")+":\n";s.body.forEach(function(st){o+=sE(st,d+1)+"\n";});return o.trimEnd();}if(s.t==="ForTo"||s.t==="ForEach"){var n=s.count||s.end;return p+"For each "+(s.v||"i")+" from 0 to "+exprStr(n,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");}if(s.t==="Return")return p+"Return"+(s.value?" "+exprStr(s.value,"english"):"")+".";if(s.t==="Break")return p+"Stop.";if(s.t==="Skip"||s.t==="Continue")return p+"Skip.";if(s.t==="Goto")return p+"Go to "+s.label+".";if(s.t==="Label")return p+"Label "+s.name+".";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"english");});return p+"Call "+s.name+(a.length?"("+a.join(", ")+")":"")+".";} if(s.t==="CallStmt")return p+exprStr(s.call,"english")+".";if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print")return p+"Print "+exprStr(s.expr.args[0],"english")+".";return s.expr?p+exprStr(s.expr,"english")+".":"";}if(s.t==="Print")return p+"Print "+exprStr(s.value,"english")+".";if(s.t==="Switch"||s.t==="Dispatch"){var o=p+"Choose "+exprStr(s.expr,"english")+":\n";(s.cases||[]).forEach(function(c){o+=p+"    When "+exprStr(c[0],"english")+":\n";c[1].forEach(function(st){o+=sE(st,d+2)+"\n";});});if(s.def||s.els){o+=p+"    Otherwise:\n";(s.def||s.els||[]).forEach(function(st){o+=sE(st,d+2)+"\n";});}return o.trimEnd();}if(s.t==="DoLoop"||s.t==="DoWhile"){var cond=s.botCond||s.cond||{t:"Num",value:1};return p+"Repeat:\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n")+"\n"+p+"Until "+exprStr(cond,"english")+".";}if(s.t==="ServerMain")return (s.body||[]).map(function(st){return sE(st,d);}).join("\n");return p+"' "+s.t;}
+  function splitProgDefs(prog) {
+    var defs = [], body = [];
+    prog.forEach(function (s) { if (s.t === "Func" || s.t === "Sub") defs.push(s); else body.push(s); });
+    return { defs: defs, body: body };
+  }
+  function incDecName(s) {
+    if (!s) return null;
+    if (s.name) return s.name;
+    if (s.target && s.target.t === "Var") return s.target.name;
+    return null;
+  }
+  function incDecDelta(s) {
+    if (!s) return 0;
+    if (s.delta != null) return s.delta;
+    if (s.op === "++") return 1;
+    if (s.op === "--") return -1;
+    return 0;
+  }
+  function targetName(name, L) {
+    name = String(name || "");
+    var up = name.toUpperCase();
+    if (L === "cobol" && COB_KW[up]) return "v_" + name;
+    if (L === "report" && REP_KW[up]) return "v_" + name;
+    return name;
+  }
+  function targetLabel(name, L) { return targetName(name, L); }
+  function collectFieldObjs(e, out) {
+    if (!e) return;
+    if (e.t === "FieldRef") { out.push(e.obj); return; }
+    if (e.t === "Bin" || e.t === "Cmp") { collectFieldObjs(e.lhs, out); collectFieldObjs(e.rhs, out); return; }
+    if (e.t === "Ternary") { collectFieldObjs(e.cond, out); collectFieldObjs(e.then, out); collectFieldObjs(e.els, out); return; }
+    if (e.t === "Unary") { collectFieldObjs(e.operand, out); return; }
+    if (e.t === "Call") { (e.args || []).forEach(function (a) { collectFieldObjs(a, out); }); return; }
+    if (e.t === "IncDec") collectFieldObjs(e.target, out);
+  }
+  function singleFieldObj(e) {
+    var out = [];
+    collectFieldObjs(e, out);
+    if (!out.length) return null;
+    for (var i = 1; i < out.length; i++) if (out[i] !== out[0]) return null;
+    return out[0];
+  }
+  function doLoopCondExpr(s) {
+    var cond = s.botCond || s.cond || { t: "Num", value: 1 };
+    return (s.until || s.botUntil) ? { t: "Cmp", cond: "EQ", lhs: cond, rhs: { t: "Num", value: 0 } } : cond;
+  }
+  function cForClause(s) {
+    if (!s) return "";
+    if (s.t === "ExprStmt") return cForClause(s.expr);
+    if (s.t === "Decl" || s.t === "Let" || s.t === "Dim") return "int " + s.name + " = " + exprStr(s.init || s.value || { t: "Num", value: 0 }, "c");
+    if (s.t === "Assign") return s.name + " = " + exprStr(s.value, "c");
+    if (s.t === "IncDec") { var n = incDecName(s); return n ? (n + (incDecDelta(s) >= 0 ? "++" : "--")) : ""; }
+    return exprStr(s, "c");
+  }
+  function forLoopInfo(s) {
+    if (!s || s.t !== "For" || !s.init || !s.cond) return null;
+    var cmpMap = { "<": "LT", "<=": "LE", ">": "GT", ">=": "GE", "==": "EQ" };
+    var cmp = s.cond.cond || cmpMap[s.cond.op] || s.cond.op;
+    var lhs = s.cond.lhs, rhs = s.cond.rhs;
+    var v = (s.init && s.init.name) || (lhs && lhs.t === "Var" ? lhs.name : null) || incDecName(s.step);
+    if (!v || !rhs) return null;
+    var start = s.init.init || s.init.value || { t: "Num", value: 0 };
+    var end = rhs;
+    if (cmp === "LT") end = { t: "Bin", op: "-", lhs: rhs, rhs: { t: "Num", value: 1 } };
+    else if (cmp !== "LE") return null;
+    var stepNode = s.step && s.step.t === "ExprStmt" ? s.step.expr : s.step;
+    var step = { t: "Num", value: 1 };
+    if (stepNode && stepNode.t === "Assign" && stepNode.name === v && stepNode.value && stepNode.value.t === "Bin" && stepNode.value.lhs && stepNode.value.lhs.t === "Var" && stepNode.value.lhs.name === v) {
+      if (stepNode.value.op === "+") step = stepNode.value.rhs;
+      else if (stepNode.value.op === "-") step = { t: "Bin", op: "-", lhs: { t: "Num", value: 0 }, rhs: stepNode.value.rhs };
+    } else if (stepNode && stepNode.t === "IncDec") {
+      step = { t: "Num", value: incDecDelta(stepNode) || 1 };
+    }
+    return { v: v, start: start, end: end, step: step };
+  }
+  function stmtPlainCall(s) {
+    var call = null;
+    if (s && s.t === "CallStmt") call = s.call;
+    else if (s && s.t === "ExprStmt") call = s.expr;
+    return call && call.t === "Call" && !call.ns ? call : null;
+  }
+  function astToC(prog) {
+    var parts = splitProgDefs(prog), l = [];
+    parts.defs.forEach(function (fn) {
+      l.push("void " + fn.name + "(" + (fn.params || []).map(function (p) { return "int " + p; }).join(", ") + ") {");
+      (fn.body || []).forEach(function (s) { l.push(sC(s, 1)); });
+      l.push("}");
+    });
+    parts.body.forEach(function (s) { l.push(sC(s, 0)); });
+    return l.join("\n");
+  }
+  function sC(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Let"||s.t==="Dim")return p+"int "+s.name+" = "+exprStr(s.init||s.value||{t:"Num",value:0},"c")+";";if(s.t==="Assign")return p+s.name+" = "+exprStr(s.value,"c")+";";if(s.t==="IncDec")return p+s.name+(s.delta>0?"++":"--")+";";if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]];var els=s.els;var o=p+"if ("+exprStr(arms[0][0],"c")+") {\n";arms[0][1].forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";for(var i=1;i<arms.length;i++){o+=" else if ("+exprStr(arms[i][0],"c")+") {\n";arms[i][1].forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";}if(els){o+=" else {\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";}return o;}if(s.t==="While"){var o=p+"while ("+exprStr(s.cond,"c")+") {\n";s.body.forEach(function(st){o+=sC(st,d+1)+"\n";});return o+p+"}";}if(s.t==="ForTo")return p+"for ("+s.v+" = "+exprStr(s.start,"c")+"; "+s.v+" <= "+exprStr(s.end,"c")+"; "+s.v+"++) {\n"+s.body.map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="ForEach")return p+"for ("+s.v+" = 0; "+s.v+" < "+exprStr(s.count,"c")+"; "+s.v+"++) {\n"+s.body.map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="Return")return p+"return"+(s.value?" "+exprStr(s.value,"c"):"")+";";if(s.t==="Break")return p+"break;";if(s.t==="Skip"||s.t==="Continue")return p+"continue;";if(s.t==="Goto")return p+"goto "+s.label+";";if(s.t==="Label")return p+s.name+":";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"c");});return p+s.name+"("+a.join(", ")+");";}if(s.t==="CallStmt")return p+exprStr(s.call,"c")+";";if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print")return p+"print("+exprStr(s.expr.args[0],"c")+");";return s.expr?p+exprStr(s.expr,"c")+";":"";}if(s.t==="Print")return p+"print("+exprStr(s.value,"c")+");";if(s.t==="Switch"||s.t==="Dispatch"){var o=p+(s.t==="Dispatch"?"dispatch":"switch")+" ("+exprStr(s.expr,"c")+") {\n";(s.cases||[]).forEach(function(c){o+=p+"    case "+exprStr(c[0],"c")+": ";c[1].forEach(function(st){o+=sC(st,d+2)+"\n";});o+=p+"    break;\n";});if(s.def||s.els){o+=p+"    default: ";(s.def||s.els||[]).forEach(function(st){o+=sC(st,d+2)+"\n";});}return o+p+"}";}if(s.t==="DoLoop"||s.t==="DoWhile"){var cond=s.botCond||s.cond||{t:"Num",value:1};return p+"do {\n"+(s.body||[]).map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"} while ("+exprStr(cond,"c")+");";}if(s.t==="For")return p+"for ("+cForClause(s.init)+"; "+(s.cond?exprStr(s.cond,"c"):"")+"; "+cForClause(s.step)+") {\n"+(s.body||[]).map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="ServerMain")return (s.body||[]).map(function(st){return sC(st,d);}).join("\n");return p+"// "+s.t;}
+  function astToBasic(prog) {
+    var parts = splitProgDefs(prog), l = [];
+    parts.defs.forEach(function (f) {
+      var pa = (f.params || []).length ? "(" + f.params.join(", ") + ")" : "";
+      l.push("SUB " + (f.name || "").toUpperCase() + pa);
+      (f.body || []).forEach(function (s) { l.push(sB(s, 1)); });
+      l.push("ENDSUB");
+    });
+    parts.body.forEach(function (s) { l.push(sB(s, 0)); });
+    return l.join("\n");
+  }
+  function sB(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim")return p+"DIM "+(s.name||"").toUpperCase()+(s.init!=null?" = "+exprStr(s.init,"basic"):"");if(s.t==="Let"||s.t==="Assign")return p+(s.name||"").toUpperCase()+" = "+exprStr(s.value,"basic");if(s.t==="IncDec")return p+(s.delta>0?"INC ":"DEC ")+(s.name||"").toUpperCase();if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]];var els=s.els;var o=p+"IF "+exprStr(arms[0][0],"basic")+" THEN\n";arms[0][1].forEach(function(st){o+=sB(st,d+1)+"\n";});for(var i=1;i<arms.length;i++){o+=p+"ELSEIF "+exprStr(arms[i][0],"basic")+" THEN\n";arms[i][1].forEach(function(st){o+=sB(st,d+1)+"\n";});}if(els){o+=p+"ELSE\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sB(st,d+1)+"\n";});}return o+p+"ENDIF";}if(s.t==="While"){var o=p+"WHILE "+exprStr(s.cond,"basic")+"\n";s.body.forEach(function(st){o+=sB(st,d+1)+"\n";});return o+p+"ENDWHILE";}if(s.t==="ForTo")return p+"FOR "+(s.v||"").toUpperCase()+" = "+exprStr(s.start,"basic")+" TO "+exprStr(s.end,"basic")+"\n"+s.body.map(function(st){return sB(st,d+1);}).join("\n")+"\n"+p+"NEXT";if(s.t==="ForEach")return p+"FOREACH "+(s.v||"").toUpperCase()+" IN "+exprStr(s.count,"basic")+"\n"+s.body.map(function(st){return sB(st,d+1);}).join("\n")+"\n"+p+"ENDFOREACH";if(s.t==="Return")return p+"RETURN"+(s.value?" "+exprStr(s.value,"basic"):"");if(s.t==="Break")return p+"BREAK";if(s.t==="Skip"||s.t==="Continue")return p+"SKIP";if(s.t==="Goto")return p+"GOTO "+(s.label||"").toUpperCase();if(s.t==="Label")return p+(s.name||"").toUpperCase()+":";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"basic");});return p+"GOSUB "+(s.name||"").toUpperCase()+(a.length?"("+a.join(", ")+")":"");}if(s.t==="CallStmt")return p+exprStr(s.call,"basic");if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print")return p+"PRINT "+exprStr(s.expr.args[0],"basic");return s.expr?p+exprStr(s.expr,"basic"):"";}if(s.t==="Print")return p+"PRINT "+exprStr(s.value,"basic");if(s.t==="Switch"||s.t==="Dispatch"){var o=p+(s.t==="Dispatch"?"DISPATCH ":"SWITCH ")+exprStr(s.expr,"basic")+"\n";(s.cases||[]).forEach(function(c){o+=p+"    CASE "+exprStr(c[0],"basic")+"\n";c[1].forEach(function(st){o+=sB(st,d+2)+"\n";});});if(s.def||s.els){o+=p+"    DEFAULT\n";(s.def||s.els||[]).forEach(function(st){o+=sB(st,d+2)+"\n";});}return o+p+"END"+(s.t==="Dispatch"?"DISPATCH":"SWITCH");}if(s.t==="DoLoop"||s.t==="DoWhile"){var cond=s.botCond||s.cond||{t:"Num",value:1};return p+"DO\n"+(s.body||[]).map(function(st){return sB(st,d+1);}).join("\n")+"\n"+p+"LOOP UNTIL "+exprStr(cond,"basic");}if(s.t==="For"){var f=forLoopInfo(s);if(f)return p+"FOR "+f.v.toUpperCase()+" = "+exprStr(f.start,"basic")+" TO "+exprStr(f.end,"basic")+"\n"+(s.body||[]).map(function(st){return sB(st,d+1);}).join("\n")+"\n"+p+"NEXT";}if(s.t==="ServerMain")return (s.body||[]).map(function(st){return sB(st,d);}).join("\n");return p+"' "+s.t;}
+  function astToPython(prog){var parts=splitProgDefs(prog),l=[],body=[];parts.defs.forEach(function(f){l.push("def "+f.name+"("+(f.params||[]).join(", ")+"):");(f.body||[]).forEach(function(s){l.push(sP(s,1));});l.push("");});parts.body.forEach(function(s){body.push(sP(s,0));});return l.concat(body).join("\n");}
+  function sP(s,d){
+    var p="    ".repeat(d||0), v=s&&s.value||s&&s.init||{t:"Num",value:0}, obj;
+    if(!s)return"";
+    if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign"){obj=singleFieldObj(v);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"python")+")\n":"")+p+s.name+" = "+exprStr(v,"python");}
+    if(s.t==="FieldAssign"){var pyMethod=s.value&&s.value.t==="Str"?"SetFieldStr":"SetField";return p+"Storage.EditCard("+exprStr({t:"Var",name:s.obj},"python")+")\n"+p+"Storage."+pyMethod+"("+exprStr({t:"Str",value:s.field},"python")+", "+exprStr(s.value,"python")+")";}
+    if(s.t==="IncDec")return p+incDecName(s)+" "+(incDecDelta(s)>=0?"+=":"-=")+" "+Math.abs(incDecDelta(s));
+    if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]],els=s.els;var o=p+"if "+exprStr(arms[0][0],"python")+":\n";arms[0][1].forEach(function(st){o+=sP(st,d+1)+"\n";});for(var i=1;i<arms.length;i++){o+=p+"elif "+exprStr(arms[i][0],"python")+":\n";arms[i][1].forEach(function(st){o+=sP(st,d+1)+"\n";});}if(els){o+=p+"else:\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sP(st,d+1)+"\n";});}return o.trimEnd();}
+    if(s.t==="While"){var o2=p+"while "+exprStr(s.cond,"python")+":\n";s.body.forEach(function(st){o2+=sP(st,d+1)+"\n";});return o2.trimEnd();}
+    if(s.t==="ForTo")return p+"for "+s.v+" in range("+exprStr(s.start,"python")+", "+exprStr(s.end,"python")+" + 1):\n"+s.body.map(function(st){return sP(st,d+1);}).join("\n");
+    if(s.t==="ForEach")return p+"for "+s.v+" in range("+exprStr(s.count,"python")+"):\n"+s.body.map(function(st){return sP(st,d+1);}).join("\n");
+    if(s.t==="Return")return p+"return"+(s.value?" "+exprStr(s.value,"python"):"");
+    if(s.t==="Break")return p+"break";
+    if(s.t==="Skip"||s.t==="Continue")return p+"continue";
+    if(s.t==="Goto")return p+"goto "+targetLabel(s.label,"python");
+    if(s.t==="Label")return p+"label "+targetLabel(s.name,"python");
+    if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"python");});return p+s.name+"("+a.join(", ")+")";}
+    if(s.t==="CallStmt")return p+exprStr(s.call,"python");
+    if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print"){obj=singleFieldObj(s.expr.args[0]);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"python")+")\n":"")+p+"print("+exprStr(s.expr.args[0],"python")+")";}if(s.expr&&s.expr.t==="IncDec")return sP(s.expr,d);return s.expr?p+exprStr(s.expr,"python"):"";}
+    if(s.t==="Print"){obj=singleFieldObj(s.value);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"python")+")\n":"")+p+"print("+exprStr(s.value,"python")+")";}
+    if(s.t==="Switch"||s.t==="Dispatch"){var o3=p+"match "+exprStr(s.expr,"python")+":\n";(s.cases||[]).forEach(function(c){o3+=p+"    case "+exprStr(c[0],"python")+":\n";c[1].forEach(function(st){o3+=sP(st,d+2)+"\n";});});if(s.def||s.els){o3+=p+"    case _:\n";(s.def||s.els||[]).forEach(function(st){o3+=sP(st,d+2)+"\n";});}return o3.trimEnd();}
+    if(s.t==="DoLoop"||s.t==="DoWhile"){var cond=doLoopCondExpr(s), kw=(s.until||s.botUntil)?"until":"while";return p+"do:\n"+(s.body||[]).map(function(st){return sP(st,d+1);}).join("\n")+"\n"+kw+" "+exprStr((s.botCond||s.cond||{t:"Num",value:1}),"python");}
+    if(s.t==="For"){var f=forLoopInfo(s);if(f)return p+"for "+f.v+" in range("+exprStr(f.start,"python")+", "+exprStr(f.end,"python")+" + 1):\n"+(s.body||[]).map(function(st){return sP(st,d+1);}).join("\n");}
+    if(s.t==="ServerMain")return (s.body||[]).map(function(st){return sP(st,d);}).join("\n");
+    return p+"# "+s.t;
+  }
+  function astToEnglish(prog) {
+    var parts = splitProgDefs(prog), l = [];
+    parts.defs.forEach(function (f) {
+      var pa = (f.params || []).length ? "(" + f.params.join(", ") + ")" : "";
+      l.push("Define " + f.name + pa + ":");
+      (f.body || []).forEach(function (s) { l.push(sE(s, 1)); });
+    });
+    parts.body.forEach(function (s) { l.push(sE(s, 0)); });
+    return l.join("\n");
+  }
+  function sE(s,d){
+    var p="    ".repeat(d||0), v=s&&s.value||s&&s.init||{t:"Num",value:0}, obj;
+    if(!s)return"";
+    if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign"){obj=singleFieldObj(v);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"english")+").\n":"")+p+"Set "+s.name+" to "+exprStr(v,"english")+".";}
+    if(s.t==="FieldAssign"){var enMethod=s.value&&s.value.t==="Str"?"SetFieldStr":"SetField";return p+"Storage.EditCard("+exprStr({t:"Var",name:s.obj},"english")+").\n"+p+"Storage."+enMethod+"("+exprStr({t:"Str",value:s.field},"english")+", "+exprStr(s.value,"english")+").";}
+    if(s.t==="IncDec")return p+(incDecDelta(s)>=0?"Increase ":"Decrease ")+incDecName(s)+" by "+Math.abs(incDecDelta(s))+".";
+    if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]],els=s.els;var o=p+"If "+exprStr(arms[0][0],"english")+":\n";arms[0][1].forEach(function(st){o+=sE(st,d+1)+"\n";});if(els){o+=p+"Otherwise:\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sE(st,d+1)+"\n";});}return o.trimEnd();}
+    if(s.t==="While"){var o2=p+"While "+exprStr(s.cond,"english")+":\n";s.body.forEach(function(st){o2+=sE(st,d+1)+"\n";});return o2.trimEnd();}
+    if(s.t==="ForTo"||s.t==="ForEach"){var n=s.count||s.end,start=s.count?{t:"Num",value:0}:s.start;return p+"For each "+(s.v||"i")+" from "+exprStr(start,"english")+" to "+exprStr(n,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");}
+    if(s.t==="Return")return p+"Return"+(s.value?" "+exprStr(s.value,"english"):"")+".";
+    if(s.t==="Break")return p+"Stop.";
+    if(s.t==="Skip"||s.t==="Continue")return p+"Skip.";
+    if(s.t==="Goto")return p+"Go to "+targetLabel(s.label,"english")+".";
+    if(s.t==="Label")return p+"Label "+targetLabel(s.name,"english")+".";
+    if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"english");});return p+"Call "+s.name+(a.length?"("+a.join(", ")+")":"")+".";}
+    if(s.t==="CallStmt"){var c=stmtPlainCall(s);if(c)return p+"Call "+c.method+((c.args||[]).length?"("+c.args.map(function(x){return exprStr(x,"english");}).join(", ")+")":"")+".";return p+exprStr(s.call,"english")+".";}
+    if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print"){obj=singleFieldObj(s.expr.args[0]);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"english")+").\n":"")+p+"Print "+exprStr(s.expr.args[0],"english")+".";}if(s.expr&&s.expr.t==="IncDec")return sE(s.expr,d);var c2=stmtPlainCall(s);if(c2)return p+"Call "+c2.method+((c2.args||[]).length?"("+c2.args.map(function(x){return exprStr(x,"english");}).join(", ")+")":"")+".";return s.expr?p+exprStr(s.expr,"english")+".":"";}
+    if(s.t==="Print"){obj=singleFieldObj(s.value);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"english")+").\n":"")+p+"Print "+exprStr(s.value,"english")+".";}
+    if(s.t==="Switch"||s.t==="Dispatch"){var o3=p+"Choose "+exprStr(s.expr,"english")+":\n";(s.cases||[]).forEach(function(c){o3+=p+"    When "+exprStr(c[0],"english")+":\n";c[1].forEach(function(st){o3+=sE(st,d+2)+"\n";});});if(s.def||s.els){o3+=p+"    Otherwise:\n";(s.def||s.els||[]).forEach(function(st){o3+=sE(st,d+2)+"\n";});}return o3.trimEnd();}
+    if(s.t==="DoLoop"||s.t==="DoWhile"){var kw=(s.until||s.botUntil)?"Until ":"While ";return p+"Repeat:\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n")+"\n"+p+kw+exprStr((s.botCond||s.cond||{t:"Num",value:1}),"english")+".";}
+    if(s.t==="For"){var f=forLoopInfo(s);if(f)return p+"For each "+f.v+" from "+exprStr(f.start,"english")+" to "+exprStr(f.end,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");}
+    if(s.t==="ServerMain")return (s.body||[]).map(function(st){return sE(st,d);}).join("\n");
+    return p+"' "+s.t;
+  }
 
-  function astToCobol(prog){var main=[],subs=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")subs.push(s);else main.push(s);});var l=["IDENTIFICATION DIVISION.","PROGRAM-ID. PICO.","PROCEDURE DIVISION."];main.forEach(function(s){l.push(sCob(s,1));});subs.forEach(function(f){l.push((f.name||"SUB")+".");(f.body||[]).forEach(function(s){l.push(sCob(s,1));});});return l.join("\n");}
-  function sCob(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign")return p+"COMPUTE "+s.name+" = "+exprStr(s.value||s.init||{t:"Num",value:0},"cobol")+".";if(s.t==="Print")return p+"DISPLAY "+exprStr(s.value,"cobol")+".";if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print")return p+"DISPLAY "+exprStr(s.expr.args[0],"cobol")+".";return s.expr?p+exprStr(s.expr,"cobol")+".":"";}if(s.t==="Gosub")return p+"PERFORM "+s.name+".";if(s.t==="CallStmt")return p+exprStr(s.call,"cobol")+".";if(s.t==="Return")return p+"STOP RUN.";if(s.t==="IncDec")return p+"COMPUTE "+s.name+" = "+s.name+" + "+s.delta+".";if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]],els=s.els,o=p+"IF "+exprStr(arms[0][0],"cobol");arms[0][1].forEach(function(st){o+="\n"+sCob(st,d+1);});for(var i=1;i<arms.length;i++){o+="\n"+p+"ELSE\n"+p+"    IF "+exprStr(arms[i][0],"cobol");arms[i][1].forEach(function(st){o+="\n"+sCob(st,d+2);});o+="\n"+p+"    END-IF.";}if(els){o+="\n"+p+"ELSE";(Array.isArray(els)?els:[els]).forEach(function(st){o+="\n"+sCob(st,d+1);});}return o+"\n"+p+"END-IF.";}if(s.t==="While")return p+"PERFORM UNTIL NOT ("+exprStr(s.cond,"cobol")+")\n"+(s.body||[]).map(function(st){return sCob(st,d+1);}).join("\n")+"\n"+p+"END-PERFORM.";if(s.t==="ForTo"){var step=s.step?exprStr(s.step,"cobol"):"1";return p+"PERFORM VARYING "+s.v+" FROM "+exprStr(s.start,"cobol")+" BY "+step+" UNTIL "+s.v+" > "+exprStr(s.end,"cobol")+"\n"+(s.body||[]).map(function(st){return sCob(st,d+1);}).join("\n")+"\n"+p+"END-PERFORM.";}if(s.t==="ForEach")return p+"PERFORM VARYING "+s.v+" FROM 0 BY 1 UNTIL "+s.v+" >= "+exprStr(s.count,"cobol")+"\n"+(s.body||[]).map(function(st){return sCob(st,d+1);}).join("\n")+"\n"+p+"END-PERFORM.";if(s.t==="Break")return p+"EXIT PERFORM.";if(s.t==="Skip"||s.t==="Continue")return p+"EXIT PERFORM CYCLE.";if(s.t==="Goto")return p+"GO TO "+s.label+".";if(s.t==="Label")return p+s.name+".";if(s.t==="Switch"){var arms2=[];(s.cases||[]).forEach(function(c){arms2.push([{t:"Cmp",cond:"EQ",lhs:s.expr,rhs:c[0]},c[1]]);});return sCob({t:"If",arms:arms2,els:s.def},d);}if(s.t==="ServerMain")return (s.body||[]).map(function(st){return sCob(st,d);}).join("\n");return p+"*> "+s.t;}
-  function astToReport(prog){var l=[],subs=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")subs.push(s);else l.push(sRep(s,0));});subs.forEach(function(f){var pa=(f.params&&f.params.length)?" USING "+f.params.join(" "):"";l.push("FORM "+f.name+pa+".");(f.body||[]).forEach(function(s){l.push(sRep(s,1));});l.push("ENDFORM.");});return l.join("\n");}
-  function sRep(s,d){var p="  ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign")return p+s.name+" = "+exprStr(s.value||s.init||{t:"Num",value:0},"report")+".";if(s.t==="Print")return p+"WRITE "+exprStr(s.value,"report")+".";if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print")return p+"WRITE "+exprStr(s.expr.args[0],"report")+".";return s.expr?p+exprStr(s.expr,"report")+".":"";}if(s.t==="IncDec")return p+s.name+" = "+s.name+" + "+s.delta+".";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"report");});return p+"PERFORM "+s.name+(a.length?" USING "+a.join(" "):"")+".";}if(s.t==="CallStmt")return p+exprStr(s.call,"report")+".";if(s.t==="Return")return p+"RETURN.";if(s.t==="Break")return p+"EXIT.";if(s.t==="Skip"||s.t==="Continue")return p+"CONTINUE.";if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]],els=s.els,o=p+"IF "+exprStr(arms[0][0],"report")+".";arms[0][1].forEach(function(st){o+="\n"+sRep(st,d+1);});for(var i=1;i<arms.length;i++){o+="\n"+p+"ELSEIF "+exprStr(arms[i][0],"report")+".";arms[i][1].forEach(function(st){o+="\n"+sRep(st,d+1);});}if(els){o+="\n"+p+"ELSE.";(Array.isArray(els)?els:[els]).forEach(function(st){o+="\n"+sRep(st,d+1);});}return o+"\n"+p+"ENDIF.";}if(s.t==="Switch"){var o2=p+"CASE "+exprStr(s.expr,"report")+"."; (s.cases||[]).forEach(function(c){o2+="\n"+p+"WHEN "+exprStr(c[0],"report")+"."; (c[1]||[]).forEach(function(st){o2+="\n"+sRep(st,d+1);});}); if(s.def){o2+="\n"+p+"WHEN OTHERS."; s.def.forEach(function(st){o2+="\n"+sRep(st,d+1);});} return o2+"\n"+p+"ENDCASE.";}if(s.t==="ForEach")return p+"LOOP AT "+exprStr(s.count,"report")+" INTO "+(s.v||"I")+".\n"+(s.body||[]).map(function(st){return sRep(st,d+1);}).join("\n")+"\n"+p+"ENDLOOP.";if(s.t==="ForTo"){var cnt={t:"Bin",op:"+",lhs:{t:"Bin",op:"-",lhs:s.end,rhs:s.start},rhs:{t:"Num",value:1}};return p+"LOOP AT "+exprStr(cnt,"report")+" INTO "+(s.v||"I")+".\n"+(s.body||[]).map(function(st){return sRep(st,d+1);}).join("\n")+"\n"+p+"ENDLOOP.";}return p+"* "+s.t;}
-  function astToFunctional(prog){var defs=[],body=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")defs.push(s);else body.push(s);});var l=[];defs.forEach(function(f){var pa=(f.params||[]).join(" ");if((f.body||[]).length===1&&f.body[0].t==="Return"&&f.body[0].value)l.push("let "+f.name+(pa?" "+pa:"")+" = "+exprStr(f.body[0].value,"functional"));else{l.push("let "+f.name+(pa?" "+pa:"")+" =");(f.body||[]).forEach(function(s){l.push(sFun(s,1));});}l.push("");});body.forEach(function(s){l.push(sFun(s,0));});return l.join("\n").replace(/\n+$/,"");}
-  function sFun(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign")return p+"let "+s.name+" = "+exprStr(s.value||s.init||{t:"Num",value:0},"functional");if(s.t==="Print")return p+"printfn "+exprStr(s.value,"functional");if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print")return p+"printfn "+exprStr(s.expr.args[0],"functional");return s.expr?p+exprStr(s.expr,"functional"):"";}if(s.t==="IncDec")return p+"let "+s.name+" = "+s.name+" + "+s.delta;if(s.t==="Return")return p+(s.value?"return "+exprStr(s.value,"functional"):"return");if(s.t==="Break")return p+"break";if(s.t==="Skip"||s.t==="Continue")return p+"continue";if(s.t==="CallStmt")return p+exprStr(s.call,"functional");if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"functional");});return p+s.name+"("+a.join(", ")+")";}if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]],els=s.els,o=p+"if "+exprStr(arms[0][0],"functional")+" then\n"+(arms[0][1]||[]).map(function(st){return sFun(st,d+1);}).join("\n");for(var i=1;i<arms.length;i++){o+="\n"+p+"else\n"+sFun({t:"If",arms:[arms[i]],els:null},d+1);}if(els){o+="\n"+p+"else\n"+els.map(function(st){return sFun(st,d+1);}).join("\n");}return o;}if(s.t==="While")return p+"while "+exprStr(s.cond,"functional")+" do\n"+(s.body||[]).map(function(st){return sFun(st,d+1);}).join("\n");if(s.t==="ForTo")return p+"for "+s.v+" in "+exprStr(s.start,"functional")+".."+exprStr(s.end,"functional")+" do\n"+(s.body||[]).map(function(st){return sFun(st,d+1);}).join("\n");if(s.t==="ForEach")return p+"for "+s.v+" in "+exprStr(s.count,"functional")+" do\n"+(s.body||[]).map(function(st){return sFun(st,d+1);}).join("\n");if(s.t==="Switch"){var o2=p+"match "+exprStr(s.expr,"functional")+" with";(s.cases||[]).forEach(function(c){o2+="\n"+p+"| "+exprStr(c[0],"functional")+" ->";if((c[1]||[]).length===1)o2+=" "+sFun(c[1][0],0).replace(/^\s+/,"");else o2+="\n"+(c[1]||[]).map(function(st){return sFun(st,d+1);}).join("\n");});if(s.def){o2+="\n"+p+"| _ ->";if(s.def.length===1)o2+=" "+sFun(s.def[0],0).replace(/^\s+/,"");else o2+="\n"+s.def.map(function(st){return sFun(st,d+1);}).join("\n");}return o2;}return p+"// "+s.t;}
+  function astToCobol(prog){
+    var main=[],subs=[];
+    prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")subs.push(s);else main.push(s);});
+    var l=["IDENTIFICATION DIVISION.","PROGRAM-ID. PICO.","PROCEDURE DIVISION."];
+    main.forEach(function(s){l.push(sCob(s,1));});
+    subs.forEach(function(f){
+      l.push((f.name||"SUB")+".");
+      (f.params||[]).forEach(function(p,i){l.push(sCob({t:"Assign",name:p,value:{t:"Var",name:"__arg"+i+"__"}},1));});
+      (f.body||[]).forEach(function(s){l.push(sCob(s,1));});
+    });
+    return l.join("\n");
+  }
+  function sCob(s,d){
+    var p="    ".repeat(d||0), value=s&&(s.value||s.init||{t:"Num",value:0}), obj, arms, els, o, f, once, loop, cond;
+    if(!s)return"";
+    if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign"){
+      var cobName=targetName(s.name,"cobol");
+      if(value&&value.t==="Ternary")return p+"IF "+exprStr(value.cond,"cobol")+"\n"+p+"    COMPUTE "+cobName+" = "+exprStr(value.then,"cobol")+".\n"+p+"ELSE\n"+p+"    COMPUTE "+cobName+" = "+exprStr(value.els,"cobol")+".\n"+p+"END-IF.";
+      obj=singleFieldObj(value);
+      return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"cobol")+").\n":"")+p+"COMPUTE "+cobName+" = "+exprStr(value,"cobol")+".";
+    }
+    if(s.t==="FieldAssign"){var cobMethod=s.value&&s.value.t==="Str"?"SetFieldStr":"SetField";return p+"Storage.EditCard("+exprStr({t:"Var",name:s.obj},"cobol")+").\n"+p+"Storage."+cobMethod+"("+exprStr({t:"Str",value:s.field},"cobol")+", "+exprStr(s.value,"cobol")+").";}
+    if(s.t==="Print"){obj=singleFieldObj(s.value);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"cobol")+").\n":"")+p+"DISPLAY "+exprStr(s.value,"cobol")+".";}
+    if(s.t==="ExprStmt"){
+      if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print"){obj=singleFieldObj(s.expr.args[0]);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"cobol")+").\n":"")+p+"DISPLAY "+exprStr(s.expr.args[0],"cobol")+".";}
+      if(s.expr&&s.expr.t==="IncDec")return sCob(s.expr,d);
+      var ec=stmtPlainCall(s);
+      if(ec&&!(ec.args||[]).length)return p+"PERFORM "+ec.method+".";
+      return s.expr?p+exprStr(s.expr,"cobol")+".":"";
+    }
+    if(s.t==="Gosub")return p+"PERFORM "+s.name+".";
+    if(s.t==="CallStmt"){var cc=stmtPlainCall(s);if(cc&&!(cc.args||[]).length)return p+"PERFORM "+cc.method+".";return p+exprStr(s.call,"cobol")+".";}
+    if(s.t==="Return")return s.value?p+"COMPUTE __ret__ = "+exprStr(s.value,"cobol")+".\n"+p+"STOP RUN.":p+"STOP RUN.";
+    if(s.t==="IncDec"){var cobInc=targetName(incDecName(s),"cobol"),cobDelta=incDecDelta(s);return p+"COMPUTE "+cobInc+" = "+cobInc+(cobDelta>=0?" + ":" - ")+Math.abs(cobDelta)+".";}
+    if(s.t==="If"){arms=s.arms||[[s.cond,s.then]];els=s.els;o=p+"IF "+exprStr(arms[0][0],"cobol");arms[0][1].forEach(function(st){o+="\n"+sCob(st,d+1);});for(var i=1;i<arms.length;i++){o+="\n"+p+"ELSE\n"+p+"    IF "+exprStr(arms[i][0],"cobol");arms[i][1].forEach(function(st){o+="\n"+sCob(st,d+2);});o+="\n"+p+"    END-IF.";}if(els){o+="\n"+p+"ELSE";(Array.isArray(els)?els:[els]).forEach(function(st){o+="\n"+sCob(st,d+1);});}return o+"\n"+p+"END-IF.";}
+    if(s.t==="While")return p+"PERFORM UNTIL NOT ("+exprStr(s.cond,"cobol")+")\n"+(s.body||[]).map(function(st){return sCob(st,d+1);}).join("\n")+"\n"+p+"END-PERFORM.";
+    if(s.t==="ForTo"){var cobV=targetName(s.v,"cobol"),step=s.step?exprStr(s.step,"cobol"):"1";return p+"PERFORM VARYING "+cobV+" FROM "+exprStr(s.start,"cobol")+" BY "+step+" UNTIL "+cobV+" > "+exprStr(s.end,"cobol")+"\n"+(s.body||[]).map(function(st){return sCob(st,d+1);}).join("\n")+"\n"+p+"END-PERFORM.";}
+    if(s.t==="ForEach"){var cobEach=targetName(s.v,"cobol");return p+"PERFORM VARYING "+cobEach+" FROM 0 BY 1 UNTIL "+cobEach+" >= "+exprStr(s.count,"cobol")+"\n"+(s.body||[]).map(function(st){return sCob(st,d+1);}).join("\n")+"\n"+p+"END-PERFORM.";}
+    if(s.t==="Break")return p+"EXIT PERFORM.";
+    if(s.t==="Skip"||s.t==="Continue")return p+"EXIT PERFORM CYCLE.";
+    if(s.t==="Goto")return p+"GO TO "+targetLabel(s.label,"cobol")+".";
+    if(s.t==="Label")return p+targetLabel(s.name,"cobol")+".";
+    if(s.t==="Switch"||s.t==="Dispatch"){o=p+"EVALUATE "+exprStr(s.expr,"cobol");(s.cases||[]).forEach(function(c){o+="\n"+p+"WHEN "+exprStr(c[0],"cobol");(c[1]||[]).forEach(function(st){o+="\n"+sCob(st,d+1);});});if(s.def){o+="\n"+p+"WHEN OTHER";s.def.forEach(function(st){o+="\n"+sCob(st,d+1);});}return o+"\n"+p+"END-EVALUATE.";}
+    if(s.t==="DoLoop"||s.t==="DoWhile"){cond=doLoopCondExpr(s);once=(s.body||[]).map(function(st){return sCob(st,d);}).join("\n");loop=p+"PERFORM UNTIL NOT ("+exprStr(cond,"cobol")+")\n"+(s.body||[]).map(function(st){return sCob(st,d+1);}).join("\n")+"\n"+p+"END-PERFORM.";return once+(once&&loop?"\n":"")+loop;}
+    if(s.t==="For"){f=forLoopInfo(s);if(f){var cobFor=targetName(f.v,"cobol");return p+"PERFORM VARYING "+cobFor+" FROM "+exprStr(f.start,"cobol")+" BY "+exprStr(f.step,"cobol")+" UNTIL "+cobFor+" > "+exprStr(f.end,"cobol")+"\n"+(s.body||[]).map(function(st){return sCob(st,d+1);}).join("\n")+"\n"+p+"END-PERFORM.";}}
+    if(s.t==="ServerMain")return (s.body||[]).map(function(st){return sCob(st,d);}).join("\n");
+    return p+"*> "+s.t;
+  }
+  function astToReport(prog){
+    var l=[],subs=[];
+    prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")subs.push(s);else l.push(sRep(s,0));});
+    subs.forEach(function(f){
+      var pa=(f.params&&f.params.length)?" USING "+f.params.map(function(p){return targetName(p,"report");}).join(" "):"";
+      l.push("FORM "+f.name+pa+".");
+      (f.body||[]).forEach(function(s){l.push(sRep(s,1));});
+      l.push("ENDFORM.");
+    });
+    return l.join("\n");
+  }
+  function sRep(s,d){
+    var p="  ".repeat(d||0), value=s&&(s.value||s.init||{t:"Num",value:0}), obj, arms, els, o, f, once, loop, cond;
+    if(!s)return"";
+    if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign"){
+      var repName=targetName(s.name,"report");
+      if(value&&value.t==="Ternary")return p+"IF "+exprStr(value.cond,"report")+".\n"+p+"  "+repName+" = "+exprStr(value.then,"report")+".\n"+p+"ELSE.\n"+p+"  "+repName+" = "+exprStr(value.els,"report")+".\n"+p+"ENDIF.";
+      obj=singleFieldObj(value);
+      return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"report")+").\n":"")+p+repName+" = "+exprStr(value,"report")+".";
+    }
+    if(s.t==="FieldAssign"){var repMethod=s.value&&s.value.t==="Str"?"SetFieldStr":"SetField";return p+"Storage.EditCard("+exprStr({t:"Var",name:s.obj},"report")+").\n"+p+"Storage."+repMethod+"("+exprStr({t:"Str",value:s.field},"report")+", "+exprStr(s.value,"report")+").";}
+    if(s.t==="Print"){obj=singleFieldObj(s.value);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"report")+").\n":"")+p+"WRITE "+exprStr(s.value,"report")+".";}
+    if(s.t==="ExprStmt"){
+      if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print"){obj=singleFieldObj(s.expr.args[0]);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"report")+").\n":"")+p+"WRITE "+exprStr(s.expr.args[0],"report")+".";}
+      if(s.expr&&s.expr.t==="IncDec")return sRep(s.expr,d);
+      var ec=stmtPlainCall(s);if(ec)return p+"PERFORM "+ec.method+((ec.args||[]).length?" USING "+ec.args.map(function(x){return exprStr(x,"report");}).join(" "):"")+".";
+      return s.expr?p+exprStr(s.expr,"report")+".":"";
+    }
+    if(s.t==="IncDec"){var repInc=targetName(incDecName(s),"report"),repDelta=incDecDelta(s);return p+repInc+" = "+repInc+(repDelta>=0?" + ":" - ")+Math.abs(repDelta)+".";}
+    if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"report");});return p+"PERFORM "+s.name+(a.length?" USING "+a.join(" "):"")+".";}
+    if(s.t==="CallStmt"){var cc=stmtPlainCall(s);if(cc)return p+"PERFORM "+cc.method+((cc.args||[]).length?" USING "+cc.args.map(function(x){return exprStr(x,"report");}).join(" "):"")+".";return p+exprStr(s.call,"report")+".";}
+    if(s.t==="Return")return p+"RETURN"+(s.value?" "+exprStr(s.value,"report"):"")+".";
+    if(s.t==="Break")return p+"EXIT.";
+    if(s.t==="Skip"||s.t==="Continue")return p+"CONTINUE.";
+    if(s.t==="If"){arms=s.arms||[[s.cond,s.then]];els=s.els;o=p+"IF "+exprStr(arms[0][0],"report")+".";arms[0][1].forEach(function(st){o+="\n"+sRep(st,d+1);});for(var i=1;i<arms.length;i++){o+="\n"+p+"ELSEIF "+exprStr(arms[i][0],"report")+".";arms[i][1].forEach(function(st){o+="\n"+sRep(st,d+1);});}if(els){o+="\n"+p+"ELSE.";(Array.isArray(els)?els:[els]).forEach(function(st){o+="\n"+sRep(st,d+1);});}return o+"\n"+p+"ENDIF.";}
+    if(s.t==="While")return p+"WHILE "+exprStr(s.cond,"report")+".\n"+(s.body||[]).map(function(st){return sRep(st,d+1);}).join("\n")+"\n"+p+"ENDWHILE.";
+    if(s.t==="Switch"||s.t==="Dispatch"){o=p+"CASE "+exprStr(s.expr,"report")+".";(s.cases||[]).forEach(function(c){o+="\n"+p+"WHEN "+exprStr(c[0],"report")+"."; (c[1]||[]).forEach(function(st){o+="\n"+sRep(st,d+1);});});if(s.def){o+="\n"+p+"WHEN OTHERS.";s.def.forEach(function(st){o+="\n"+sRep(st,d+1);});}return o+"\n"+p+"ENDCASE.";}
+    if(s.t==="ForEach")return p+"LOOP AT "+exprStr(s.count,"report")+" INTO "+targetName(s.v||"I","report")+".\n"+(s.body||[]).map(function(st){return sRep(st,d+1);}).join("\n")+"\n"+p+"ENDLOOP.";
+    if(s.t==="ForTo"){var repLoop=targetName(s.v||"I","report"),repTmp="__"+repLoop+"_loop",repCnt={t:"Bin",op:"+",lhs:{t:"Bin",op:"-",lhs:s.end,rhs:s.start},rhs:{t:"Num",value:1}},repVal={t:"Bin",op:"+",lhs:s.start,rhs:{t:"Var",name:repTmp}};return p+"LOOP AT "+exprStr(repCnt,"report")+" INTO "+repTmp+".\n"+p+"  "+repLoop+" = "+exprStr(repVal,"report")+".\n"+(s.body||[]).map(function(st){return sRep(st,d+1);}).join("\n")+"\n"+p+"ENDLOOP.";}
+    if(s.t==="Goto")return p+"GOTO "+targetLabel(s.label,"report")+".";
+    if(s.t==="Label")return p+"LABEL "+targetLabel(s.name,"report")+".";
+    if(s.t==="DoLoop"||s.t==="DoWhile"){cond=doLoopCondExpr(s);once=(s.body||[]).map(function(st){return sRep(st,d);}).join("\n");loop=p+"WHILE "+exprStr(cond,"report")+".\n"+(s.body||[]).map(function(st){return sRep(st,d+1);}).join("\n")+"\n"+p+"ENDWHILE.";return once+(once&&loop?"\n":"")+loop;}
+    if(s.t==="For"){f=forLoopInfo(s);if(f){var repFor=targetName(f.v,"report"),cnt2={t:"Bin",op:"+",lhs:{t:"Bin",op:"-",lhs:f.end,rhs:f.start},rhs:{t:"Num",value:1}},tmp="__"+repFor+"_loop",loopVal={t:"Bin",op:"+",lhs:f.start,rhs:{t:"Var",name:tmp}},body=(s.body||[]).map(function(st){return sRep(st,d+1);}).join("\n");return p+"LOOP AT "+exprStr(cnt2,"report")+" INTO "+tmp+".\n"+p+"  "+repFor+" = "+exprStr(loopVal,"report")+".\n"+body+"\n"+p+"ENDLOOP.";}}
+    return p+"* "+s.t;
+  }
+  function astToFunctional(prog){
+    var defs=[],body=[];
+    prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")defs.push(s);else body.push(s);});
+    var l=[];
+    defs.forEach(function(f){
+      var pa=(f.params||[]).join(" ");
+      if((f.body||[]).length===1&&f.body[0].t==="Return"&&f.body[0].value)l.push("let "+f.name+(pa?" "+pa:" ()")+" = "+exprStr(f.body[0].value,"functional"));
+      else{l.push("let "+f.name+(pa?" "+pa:" ()")+" =");(f.body||[]).forEach(function(s){l.push(sFun(s,1));});}
+      l.push("");
+    });
+    body.forEach(function(s){l.push(sFun(s,0));});
+    return l.join("\n").replace(/\n+$/,"");
+  }
+  function sFun(s,d){
+    var p="    ".repeat(d||0), value=s&&(s.value||s.init||{t:"Num",value:0}), obj, arms, els, o, f, once, loop, cond;
+    if(!s)return"";
+    if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"){obj=singleFieldObj(value);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"functional")+")\n":"")+p+"let "+s.name+" = "+exprStr(value,"functional");}
+    if(s.t==="Assign"){obj=singleFieldObj(s.value);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"functional")+")\n":"")+p+s.name+" = "+exprStr(s.value,"functional");}
+    if(s.t==="FieldAssign"){var funMethod=s.value&&s.value.t==="Str"?"SetFieldStr":"SetField";return p+"Storage.EditCard("+exprStr({t:"Var",name:s.obj},"functional")+")\n"+p+"Storage."+funMethod+"("+exprStr({t:"Str",value:s.field},"functional")+", "+exprStr(s.value,"functional")+")";}
+    if(s.t==="Print"){obj=singleFieldObj(s.value);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"functional")+")\n":"")+p+"printfn "+exprStr(s.value,"functional");}
+    if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print"){obj=singleFieldObj(s.expr.args[0]);return(obj?p+"Storage.EditCard("+exprStr({t:"Var",name:obj},"functional")+")\n":"")+p+"printfn "+exprStr(s.expr.args[0],"functional");}if(s.expr&&s.expr.t==="IncDec")return sFun(s.expr,d);return s.expr?p+exprStr(s.expr,"functional"):"";}
+    if(s.t==="IncDec"){var funInc=incDecName(s),funDelta=incDecDelta(s);return p+funInc+" = "+funInc+(funDelta>=0?" + ":" - ")+Math.abs(funDelta);}
+    if(s.t==="Return")return p+(s.value?"return "+exprStr(s.value,"functional"):"return");
+    if(s.t==="Break")return p+"break";
+    if(s.t==="Skip"||s.t==="Continue")return p+"continue";
+    if(s.t==="CallStmt")return p+exprStr(s.call,"functional");
+    if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"functional");});return p+s.name+"("+a.join(", ")+")";}
+    if(s.t==="Goto")return p+"goto "+targetLabel(s.label,"functional");
+    if(s.t==="Label")return p+"label "+targetLabel(s.name,"functional");
+    if(s.t==="If"){arms=s.arms||[[s.cond,s.then]];els=s.els;o=p+"if "+exprStr(arms[0][0],"functional")+" then\n"+(arms[0][1]||[]).map(function(st){return sFun(st,d+1);}).join("\n");for(var i=1;i<arms.length;i++){o+="\n"+p+"else\n"+sFun({t:"If",arms:[arms[i]],els:null},d+1);}if(els){o+="\n"+p+"else\n"+els.map(function(st){return sFun(st,d+1);}).join("\n");}return o;}
+    if(s.t==="While")return p+"while "+exprStr(s.cond,"functional")+" do\n"+(s.body||[]).map(function(st){return sFun(st,d+1);}).join("\n");
+    if(s.t==="ForTo")return p+"for "+s.v+" in "+exprStr(s.start,"functional")+".."+exprStr(s.end,"functional")+" do\n"+(s.body||[]).map(function(st){return sFun(st,d+1);}).join("\n");
+    if(s.t==="ForEach")return p+"for "+s.v+" in "+exprStr(s.count,"functional")+" do\n"+(s.body||[]).map(function(st){return sFun(st,d+1);}).join("\n");
+    if(s.t==="Switch"||s.t==="Dispatch"){o=p+"match "+exprStr(s.expr,"functional")+" with";(s.cases||[]).forEach(function(c){o+="\n"+p+"| "+exprStr(c[0],"functional")+" ->";if((c[1]||[]).length===1)o+=" "+sFun(c[1][0],0).replace(/^\s+/,"");else o+="\n"+(c[1]||[]).map(function(st){return sFun(st,d+1);}).join("\n");});if(s.def){o+="\n"+p+"| _ ->";if(s.def.length===1)o+=" "+sFun(s.def[0],0).replace(/^\s+/,"");else o+="\n"+s.def.map(function(st){return sFun(st,d+1);}).join("\n");}return o;}
+    if(s.t==="DoLoop"||s.t==="DoWhile"){cond=doLoopCondExpr(s);once=(s.body||[]).map(function(st){return sFun(st,d);}).join("\n");loop=p+"while "+exprStr(cond,"functional")+" do\n"+(s.body||[]).map(function(st){return sFun(st,d+1);}).join("\n");return once+(once&&loop?"\n":"")+loop;}
+    if(s.t==="For"){f=forLoopInfo(s);if(f)return p+"for "+f.v+" in "+exprStr(f.start,"functional")+".."+exprStr(f.end,"functional")+" do\n"+(s.body||[]).map(function(st){return sFun(st,d+1);}).join("\n");}
+    return p+"// "+s.t;
+  }
 
   return {
     compile: function (src, lang) {
