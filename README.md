@@ -75,7 +75,8 @@ PicoScript runs inside picoweb/PIOS as deterministic, bounded userland logic for
 | `picoscript_vm.py` | **PicoVM**: Python reference runtime for the 16-opcode ISA |
 | `picoscript_build.py` | unified driver: source → `run` / `emit il\|bytecode\|c\|js` / `native` / `stats` |
 | `picoscript_metrics.py` | IL/bytecode size, opcode histogram, static + (profiled) dynamic cycle estimates, C/JS backend sizes |
-| `vm/picovm.h` `vm/picovm.c` | portable **C VM** for bare metal (RP2354B/PIOS); freestanding-clean |
+| `vm/picovm.h` `vm/picovm.c` | portable **C VM** for bare metal (RP2354B/PIOS); freestanding-clean. Native `Req.*`/`Resp.*`, `pv_storage_hook` |
+| `vm/picovm_pool.c` `vm/picovm_pool.h` | thread-pooled **native HTTP server** runtime (accept loop, HTTP parse, per-worker arena). See `docs/NATIVE_HTTP_SERVER.md` |
 | `vm/picovm.js` | **JS VM** for browser/Node debugging (step API; 32-bit parity) |
 | `vm/picoc.js` | **In-browser compiler**: all four frontends → bytecode (byte-identical to Python) |
 | `vm/pico_hooks.h` `vm/pico_hooks.js` | auto-generated host-hook codes (kept in sync with `picoscript_lang.py`) |

@@ -32,6 +32,15 @@ where that was my only objection I implemented a representative op to prove it.
 (Already present: `Io`, `Json`, `Xml`, `Queue`, `Random`, `Req`, `Resp`, `Span`,
 `Storage`, `Utf8Reader`, `Utf8Writer`.)
 
+> **Native HTTP server (C runtime).** `Req.*` (`Method/Path/Header/BodySpan/
+> BodyLen/Param/ParamCount/Principal`) and `Resp.*` (`Status/Header/Write/End`)
+> are now implemented natively in `vm/picovm.c`, fed by the thread-pooled
+> `vm/picovm_pool.c` HTTP runtime — so a PicoScript program compiles via
+> `lower_to_c` to a standalone native HTTP server. Storage stays host-injected
+> via the `pv_storage_hook` extension point. `Req.Principal()` reads the trusted
+> `X-Forge-Principal` header (authentication stays in the host/kernel/proxy).
+> See `docs/NATIVE_HTTP_SERVER.md`.
+
 > **Correction:** I previously claimed codes >0xFF "can't be dispatched (8-bit
 > aliasing)". **That was wrong.** The lowerer emits `EXT_HOST_HOOK_BASE (0x6000)
 > | (code & 0xFFF)` for codes >0xFF and the VM decodes `imm16 & 0xFFF`, so
