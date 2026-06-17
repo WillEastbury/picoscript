@@ -188,105 +188,39 @@
   <div class="view active" id="view-guide">
     <div style="display:flex;flex:1;overflow:hidden">
       <div class="sidebar" id="guideTree"></div>
-      <div class="card-area" id="guideContent"></div>
-    </div>
-    <div class="dbg-bar" id="guideDbgBar">
-      <button class="active" onclick="gToggleDbg(this,'gdbg-disasm')">Disassembly</button>
-      <button onclick="gToggleDbg(this,'gdbg-regs')">Registers</button>
-      <button onclick="gToggleDbg(this,'gdbg-output')">Output</button>
-      <button style="margin-left:auto" onclick="gCollapseDbg()">&#9660;</button>
-    </div>
-    <div class="dbg-panels" id="guideDbgPanels" style="max-height:180px">
-      <div class="dbg-panel active" id="gdbg-disasm"><div class="listing" id="glisting"></div><div class="state" id="gstate"></div></div>
-      <div class="dbg-panel" id="gdbg-regs"><div class="regs" id="gregs"></div></div>
-      <div class="dbg-panel" id="gdbg-output"><div class="out" id="gout"></div></div>
-    </div>
-  </div>
-  <!-- PLAYGROUND VIEW -->
-  <div class="view" id="view-play">
-    <div class="ide-wrap">
-      <div class="file-sidebar" id="fileSidebar">
-        <div class="file-head">Files <button title="Collapse files" onclick="filesToggle()">&#9664;</button></div>
-        <div class="file-body">
-          <div class="file-actions">
-            <button class="ghost" onclick="psFilesNew()">New</button>
-            <button class="ghost" onclick="psFilesOpen()">Open</button>
-            <button class="act" onclick="psFilesSave()">Save</button>
-            <button class="ghost" onclick="psFilesSaveAs()">Save as</button>
-            <button class="ghost" onclick="psFilesRename()">Rename</button>
-            <button class="ghost" onclick="psFilesDelete()">Delete</button>
+      <div class="card-area" id="guideContent">
+        <!-- Reference sections are rendered here when clicked from sidebar -->
+        <div class="ref-inline" id="refInlineContent" style="display:none">
+          <div class="ref-section" id="ref-overview" style="display:none">
+            <h2 style="color:var(--accent);margin-bottom:10px">Overview</h2>
+            <p style="color:var(--muted);font-size:13px;max-width:750px;line-height:1.7">
+              <b>PicoScript</b> compiles from seven interchangeable surface syntaxes (C, BASIC, Python, English, COBOL, Report, Functional)
+              to a single 16-opcode 32-bit bytecode. Programs run on embedded VMs, can be AOT-compiled to C or JS,
+              and are designed for request-response workloads on bare-metal or browser runtimes.<br><br>
+              <b>Why?</b> One semantic model, seven reading styles. A diverse team picks the syntax they know and
+              produces byte-identical output. The compiler is ~10KB JS, zero dependencies.<br><br>
+              <b>Use case:</b> Sandboxed, deterministic compute capsules that handle HTTP requests, store data in
+              PicoWAL cards, and produce responses with memory safety enforced by the kernel.
+            </p>
           </div>
-          <div class="file-list" id="fileList"></div>
-          <div class="file-status" id="fileStatus"></div>
-        </div>
-      </div>
-      <div class="ide-editor">
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-          <select id="example" style="width:auto"></select>
-          <select id="lang" style="width:auto"><option value="c">C-style</option><option value="basic">BASIC</option><option value="python">Python</option><option value="english">English</option></select>
-        </div>
-        <div id="monaco" style="flex:1;border:1px solid #2c313f;border-radius:6px;overflow:hidden;min-height:120px"></div>
-        <textarea id="src" style="flex:1;display:none;min-height:120px" spellcheck="false"></textarea>
-        <div class="controls">
-          <button class="act" onclick="compileSrc(true)">Compile &amp; Run &#9654;</button>
-          <button class="ghost" onclick="compileSrc(false)">Compile &amp; Step</button>
-          <button class="ghost" onclick="dbgStep()">Step</button>
-          <button class="ghost" onclick="dbgReset()">Reset</button>
-        </div>
-        <div id="cerr" class="cerr"></div>
-      </div>
-    </div>
-    <div class="dbg-bar" id="playDbgBar">
-      <button class="active" onclick="pToggleDbg(this,'pdbg-disasm')">Disassembly</button>
-      <button onclick="pToggleDbg(this,'pdbg-regs')">Registers</button>
-      <button onclick="pToggleDbg(this,'pdbg-watches')">Watches</button>
-      <button onclick="pToggleDbg(this,'pdbg-cards')">Cards</button>
-      <button onclick="pToggleDbg(this,'pdbg-output')">Output</button>
-      <button style="margin-left:auto" onclick="pCollapseDbg()">&#9660;</button>
-    </div>
-    <div class="dbg-panels" id="playDbgPanels" style="max-height:200px">
-      <div class="dbg-panel active" id="pdbg-disasm"><div class="listing" id="listing"></div><div class="state" id="state"></div></div>
-      <div class="dbg-panel" id="pdbg-regs"><div class="regs" id="regs"></div></div>
-      <div class="dbg-panel" id="pdbg-watches"><table class="wal"><thead><tr><th>var</th><th>reg</th><th>value</th></tr></thead><tbody id="watches"></tbody></table></div>
-      <div class="dbg-panel" id="pdbg-cards"><table class="wal"><tbody id="walbody"></tbody></table><button class="ghost" style="margin-top:6px" onclick="walClear()">Clear</button></div>
-      <div class="dbg-panel" id="pdbg-output"><div class="out" id="out"></div></div>
-    </div>
-  </div>
-  <!-- REFERENCE VIEW -->
-  <div class="view" id="view-ref">
-    <div class="ref-wrap">
-      <div class="sidebar" id="refTree"></div>
-      <div class="ref-content" id="refContent">
-        <div class="ref-section active" id="ref-overview">
-          <h2 style="color:var(--accent);margin-bottom:10px">Overview</h2>
-          <p style="color:var(--muted);font-size:13px;max-width:750px;line-height:1.7">
-            <b>PicoScript</b> compiles from four interchangeable surface syntaxes (C-style, BASIC, Python, English)
-            to a single 16-opcode 32-bit bytecode. Programs run on embedded VMs, can be AOT-compiled to C or JS,
-            and are designed for request-response workloads on bare-metal or browser runtimes.<br><br>
-            <b>Why?</b> One semantic model, four reading styles. A diverse team picks the syntax they know and
-            produces byte-identical output. The compiler is ~3KB JS, zero dependencies.<br><br>
-            <b>Use case:</b> Sandboxed, deterministic compute capsules that handle HTTP requests, store data in
-            PicoWAL cards, and produce responses with memory safety enforced by the kernel.
-          </p>
-        </div>
-        <div class="ref-section" id="ref-syntax"><h2 style="color:var(--accent);margin-bottom:10px">Language Syntax</h2><div id="syntaxContent"></div></div>
-        <div class="ref-section" id="ref-namespaces"><h2 style="color:var(--accent);margin-bottom:10px">Namespaces &amp; Methods</h2><p style="color:var(--muted);font-size:12px;margin-bottom:14px">Every built-in namespace and method. Call as <code>Namespace.Method(args)</code>.</p><div id="nsContent"></div></div>
-        <div class="ref-section" id="ref-bindings">
-          <h2 style="color:var(--accent);margin-bottom:10px">Bindings &amp; I/O</h2>
-          <div style="color:var(--muted);font-size:13px;max-width:750px;line-height:1.7">
-            <p><b>Network binding:</b> A capsule is bound to a port by the kernel. The kernel handles TCP/TLS, parses HTTP, and delivers a request descriptor via FIFO. Read with <code>Req.*</code>, respond with <code>Resp.*</code>.</p>
-            <p style="margin-top:10px"><b>PicoWAL cards:</b> Persistent card packs via PicoBinarySerializer. Use <code>Storage.UsePack/AddCard/SetField/QueryCard</code>.</p>
-            <p style="margin-top:10px"><b>FIFO:</b> Inbound (request descriptors) and outbound (response graph). All inter-capsule communication is kernel-mediated.</p>
-            <p style="margin-top:10px"><b>Zero-copy:</b> The kernel manages memory via descriptors and leases. <code>Lease.Acquire/GetSpan</code> reads without copying. The programmer does <b>not</b> manage DMA directly. Invariants: one owner (I2), sealed immutability (I3), validated leases (I4), eventual release (I8).</p>
-            <p style="margin-top:14px"><b>GPIO (devices):</b> Pins carry an analog value in [0,1024]. Hooks <code>Gpio.SetDir/GetDir/SetPull/GetPull/Write/Read/Count</code>. Readable BASIC DSL: <code>GPIO DIR 2 = OUT</code>, <code>GPIO PULL 5 = UP</code>, <code>GPIO WRITE 2 = 1024</code>; reads <code>GPIO READ 2</code> / <code>GPIO DIR 2</code> / <code>GPIO COUNT</code>. The playground renders a live labelled pin header.</p>
-            <p style="margin-top:10px"><b>Cards / storage DSL:</b> a readable BASIC split &mdash; <b>STORE</b> writes, <b>LOAD</b> reads. Writes: <code>STORE USE PACK 1</code>, <code>DIM A NEW CARD</code>, <code>STORE SET "qty" = 42</code>, <code>STORE DELETE CARD id</code>. Reads: <code>DIM A = LOAD CARD id</code>, <code>LOAD "qty"</code> / <code>LOAD "qty" AS TEXT</code>, <code>LOAD QUERY "qty &gt; 40"</code>, <code>LOAD RESULT 0</code>. Typed pack schemas via <code>Storage.GetSchemaForPack/SetSchemaForPack</code> + the playground schema designer.</p>
-            <p style="margin-top:10px"><b>Server entry:</b> mark an endpoint with <code>Server.Main { ... }</code> (C) or <code>SERVER ... ENDSERVER</code> (BASIC); the compiler guarantees the request-context + status + body bytecode the kernel worker expects.</p>
-            <p style="margin-top:10px"><b>Capsules:</b> a capsule is a pack namespace (packs 1024&ndash;4095). Card 0 holds a deterministic manifest; source = card 1000+N, bytecode = 10000+N. Runtime hooks <code>Pack.Use/Card.Read/Write/Address/Fifo.Open/Send/Recv/Poll</code> (capability <code>CAP_CAPSULE</code>). Author manifests with <code>picocapsule</code> (Python + byte-identical <code>vm/picocapsule.js</code>); full contract in <code>docs/PIOS_CAPSULE_HANDOFF.md</code>.</p>
+          <div class="ref-section" id="ref-syntax" style="display:none"><h2 style="color:var(--accent);margin-bottom:10px">Language Syntax</h2><div id="syntaxContent"></div></div>
+          <div class="ref-section" id="ref-namespaces" style="display:none"><h2 style="color:var(--accent);margin-bottom:10px">Namespaces &amp; Methods</h2><p style="color:var(--muted);font-size:12px;margin-bottom:14px">Every built-in namespace and method. Call as <code>Namespace.Method(args)</code>.</p><div id="nsContent"></div></div>
+          <div class="ref-section" id="ref-bindings" style="display:none">
+            <h2 style="color:var(--accent);margin-bottom:10px">Bindings &amp; I/O</h2>
+            <div style="color:var(--muted);font-size:13px;max-width:750px;line-height:1.7">
+              <p><b>Network binding:</b> A capsule is bound to a port by the kernel. The kernel handles TCP/TLS, parses HTTP, and delivers a request descriptor via FIFO. Read with <code>Req.*</code>, respond with <code>Resp.*</code>.</p>
+              <p style="margin-top:10px"><b>PicoWAL cards:</b> Persistent card packs via PicoBinarySerializer. Use <code>Storage.UsePack/AddCard/SetField/QueryCard</code>.</p>
+              <p style="margin-top:10px"><b>FIFO:</b> Inbound (request descriptors) and outbound (response graph). All inter-capsule communication is kernel-mediated.</p>
+              <p style="margin-top:10px"><b>Zero-copy:</b> The kernel manages memory via descriptors and leases. <code>Lease.Acquire/GetSpan</code> reads without copying.</p>
+              <p style="margin-top:14px"><b>GPIO (devices):</b> Pins carry an analog value in [0,1024]. Hooks <code>Gpio.SetDir/GetDir/SetPull/GetPull/Write/Read/Count</code>.</p>
+              <p style="margin-top:10px"><b>Cards / storage DSL:</b> BASIC: <b>STORE</b> writes, <b>LOAD</b> reads. Typed pack schemas via the playground schema designer.</p>
+              <p style="margin-top:10px"><b>Server entry:</b> <code>Server.Main { ... }</code> (C) or <code>SERVER ... ENDSERVER</code> (BASIC); <code>ON Net.Connection:</code> for event-driven servers.</p>
+              <p style="margin-top:10px"><b>Capsules:</b> a capsule is a pack namespace (packs 1024&ndash;4095). Runtime hooks <code>Pack.Use/Card.Read/Write/Fifo.Open/Send/Recv</code>.</p>
+            </div>
           </div>
-        </div>
-        <div class="ref-section" id="ref-samples"><h2 style="color:var(--accent);margin-bottom:10px">Application Samples</h2><div id="samplesContent"></div></div>
-        <div class="ref-section" id="ref-internals"><h2 style="color:var(--accent);margin-bottom:10px">Deep Technical Internals <span class="badge">implementer</span></h2><p style="color:var(--muted);font-size:12px;margin-bottom:10px">For contributors. Not required for app authors.</p><div class="docpanel active" style="display:block" id="doc-internals-inline"></div></div>
-        <div class="ref-section" id="ref-rawdocs"><h2 style="color:var(--accent);margin-bottom:10px">Source Documentation</h2><div class="docnav"><button class="docnav-btn active" onclick="showDoc('readme')" data-doc="readme">README</button><button class="docnav-btn" onclick="showDoc('tutorial')" data-doc="tutorial">Tutorial</button><button class="docnav-btn" onclick="showDoc('spec')" data-doc="spec">Language Spec</button><button class="docnav-btn" onclick="showDoc('arch')" data-doc="arch">Compiler Architecture</button><button class="docnav-btn" onclick="showDoc('editor')" data-doc="editor">Editor Contract</button><button class="docnav-btn" onclick="showDoc('agent')" data-doc="agent">Agent Prompt</button><button class="docnav-btn" onclick="showDoc('selfhost')" data-doc="selfhost">Self-Hosting</button><button class="docnav-btn" onclick="showDoc('iobinding')" data-doc="iobinding">PIOS I/O Binding</button><button class="docnav-btn" onclick="showDoc('iointegration')" data-doc="iointegration">PIOS Integration</button><button class="docnav-btn" onclick="showDoc('systems')" data-doc="systems">Systems Language</button><button class="docnav-btn" onclick="showDoc('strings')" data-doc="strings">Strings & Templates</button><button class="docnav-btn" onclick="showDoc('nsstatus')" data-doc="nsstatus">Namespace Status</button><button class="docnav-btn" onclick="showDoc('internals')" data-doc="internals">Internals</button></div><div class="docpanel active" id="doc-readme"><h1 id="picoscript">PicoScript</h1>
+          <div class="ref-section" id="ref-samples" style="display:none"><h2 style="color:var(--accent);margin-bottom:10px">Application Samples</h2><div id="samplesContent"></div></div>
+          <div class="ref-section" id="ref-internals" style="display:none"><h2 style="color:var(--accent);margin-bottom:10px">Deep Technical Internals <span class="badge">implementer</span></h2><p style="color:var(--muted);font-size:12px;margin-bottom:10px">For contributors. Not required for app authors.</p><div class="docpanel active" style="display:block" id="doc-internals-inline"></div></div>
+          <div class="ref-section" id="ref-rawdocs" style="display:none"><h2 style="color:var(--accent);margin-bottom:10px">Source Documentation</h2><div class="docnav"><button class="docnav-btn active" onclick="showDoc('readme')" data-doc="readme">README</button><button class="docnav-btn" onclick="showDoc('tutorial')" data-doc="tutorial">Tutorial</button><button class="docnav-btn" onclick="showDoc('spec')" data-doc="spec">Language Spec</button><button class="docnav-btn" onclick="showDoc('arch')" data-doc="arch">Compiler Architecture</button><button class="docnav-btn" onclick="showDoc('editor')" data-doc="editor">Editor Contract</button><button class="docnav-btn" onclick="showDoc('agent')" data-doc="agent">Agent Prompt</button><button class="docnav-btn" onclick="showDoc('selfhost')" data-doc="selfhost">Self-Hosting</button><button class="docnav-btn" onclick="showDoc('iobinding')" data-doc="iobinding">PIOS I/O Binding</button><button class="docnav-btn" onclick="showDoc('iointegration')" data-doc="iointegration">PIOS Integration</button><button class="docnav-btn" onclick="showDoc('systems')" data-doc="systems">Systems Language</button><button class="docnav-btn" onclick="showDoc('strings')" data-doc="strings">Strings & Templates</button><button class="docnav-btn" onclick="showDoc('nsstatus')" data-doc="nsstatus">Namespace Status</button><button class="docnav-btn" onclick="showDoc('internals')" data-doc="internals">Internals</button></div><div class="docpanel active" id="doc-readme"><h1 id="picoscript">PicoScript</h1>
 <p>PicoScript is a small deterministic language for embedded and edge programs in
 the Pico stack. It is designed for code that must run the same way in a browser,
 on a host, and on bare metal.</p>
@@ -5043,7 +4977,69 @@ lowering convention or host contract.</p>
 <li>Cross-target tests: <code>tests/test_pipeline.py</code>.</li>
 <li>Size/cycle reporting: <code>picoscript_metrics.py</code>.</li>
 </ul></div></div>
+        </div>
       </div>
+    </div>
+    <div class="dbg-bar" id="guideDbgBar">
+      <button class="active" onclick="gToggleDbg(this,'gdbg-disasm')">Disassembly</button>
+      <button onclick="gToggleDbg(this,'gdbg-regs')">Registers</button>
+      <button onclick="gToggleDbg(this,'gdbg-output')">Output</button>
+      <button style="margin-left:auto" onclick="gCollapseDbg()">&#9660;</button>
+    </div>
+    <div class="dbg-panels" id="guideDbgPanels" style="max-height:180px">
+      <div class="dbg-panel active" id="gdbg-disasm"><div class="listing" id="glisting"></div><div class="state" id="gstate"></div></div>
+      <div class="dbg-panel" id="gdbg-regs"><div class="regs" id="gregs"></div></div>
+      <div class="dbg-panel" id="gdbg-output"><div class="out" id="gout"></div></div>
+    </div>
+  </div>
+  <!-- PLAYGROUND VIEW -->
+  <div class="view" id="view-play">
+    <div class="ide-wrap">
+      <div class="file-sidebar" id="fileSidebar">
+        <div class="file-head">Files <button title="Collapse files" onclick="filesToggle()">&#9664;</button></div>
+        <div class="file-body">
+          <div class="file-actions">
+            <button class="ghost" onclick="psFilesNew()">New</button>
+            <button class="ghost" onclick="psFilesOpen()">Open</button>
+            <button class="act" onclick="psFilesSave()">Save</button>
+            <button class="ghost" onclick="psFilesSaveAs()">Save as</button>
+            <button class="ghost" onclick="psFilesRename()">Rename</button>
+            <button class="ghost" onclick="psFilesDelete()">Delete</button>
+          </div>
+          <div class="file-list" id="fileList"></div>
+          <div class="file-status" id="fileStatus"></div>
+        </div>
+      </div>
+      <div class="ide-editor">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+          <select id="example" style="width:auto"></select>
+          <select id="lang" style="width:auto"><option value="c">C-style</option><option value="basic">BASIC</option><option value="python">Python</option><option value="english">English</option></select>
+        </div>
+        <div id="monaco" style="flex:1;border:1px solid #2c313f;border-radius:6px;overflow:hidden;min-height:120px"></div>
+        <textarea id="src" style="flex:1;display:none;min-height:120px" spellcheck="false"></textarea>
+        <div class="controls">
+          <button class="act" onclick="compileSrc(true)">Compile &amp; Run &#9654;</button>
+          <button class="ghost" onclick="compileSrc(false)">Compile &amp; Step</button>
+          <button class="ghost" onclick="dbgStep()">Step</button>
+          <button class="ghost" onclick="dbgReset()">Reset</button>
+        </div>
+        <div id="cerr" class="cerr"></div>
+      </div>
+    </div>
+    <div class="dbg-bar" id="playDbgBar">
+      <button class="active" onclick="pToggleDbg(this,'pdbg-disasm')">Disassembly</button>
+      <button onclick="pToggleDbg(this,'pdbg-regs')">Registers</button>
+      <button onclick="pToggleDbg(this,'pdbg-watches')">Watches</button>
+      <button onclick="pToggleDbg(this,'pdbg-cards')">Cards</button>
+      <button onclick="pToggleDbg(this,'pdbg-output')">Output</button>
+      <button style="margin-left:auto" onclick="pCollapseDbg()">&#9660;</button>
+    </div>
+    <div class="dbg-panels" id="playDbgPanels" style="max-height:200px">
+      <div class="dbg-panel active" id="pdbg-disasm"><div class="listing" id="listing"></div><div class="state" id="state"></div></div>
+      <div class="dbg-panel" id="pdbg-regs"><div class="regs" id="regs"></div></div>
+      <div class="dbg-panel" id="pdbg-watches"><table class="wal"><thead><tr><th>var</th><th>reg</th><th>value</th></tr></thead><tbody id="watches"></tbody></table></div>
+      <div class="dbg-panel" id="pdbg-cards"><table class="wal"><tbody id="walbody"></tbody></table><button class="ghost" style="margin-top:6px" onclick="walClear()">Clear</button></div>
+      <div class="dbg-panel" id="pdbg-output"><div class="out" id="out"></div></div>
     </div>
   </div>
   <!-- Flyout triggers -->
@@ -12521,22 +12517,45 @@ function buildGuideTree(){
     g.items.forEach(function(idx){if(idx<DATA.length) html+='<div class="tree-item'+(idx===0?' active':'')+'" data-idx="'+idx+'" onclick="showGuideCard('+idx+')">'+esc(DATA[idx].title)+'</div>';});
   });
   html+='<div class="group-title">Reference</div>';
-  REF_SECTIONS.forEach(function(id,i){html+='<div class="tree-item" onclick="showView(\'ref\');showRefSection(\''+id+'\')">'+REF_LABELS[i]+'</div>';});
+  REF_SECTIONS.forEach(function(id,i){html+='<div class="tree-item" data-ref="'+id+'" onclick="showRefInline(\''+id+'\')">'+REF_LABELS[i]+'</div>';});
   document.getElementById('guideTree').innerHTML=html;
 }
 function showGuideCard(idx){
   CUR_GUIDE_CARD=idx;
   var d=DATA[idx],lang=CUR_LANG;if(!d[lang]) lang=d.c?'c':'basic';
-  var SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle'};
-  document.getElementById('guideContent').innerHTML=
-    '<div class="card-title">'+(idx+1)+'. '+esc(d.title)+'</div>'+
+  var SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cstyle',report:'bstyle',functional:'pystyle'};
+  // Auto-translate source to current language if not pre-built
+  var src;
+  if(d[lang]){src=d[lang].src;}
+  else if(typeof PicoCompile!=='undefined'&&PicoCompile.translate){
+    var fromLang=d.c?'c':(d.basic?'basic':(d.python?'python':'english'));
+    var fromSrc=d[fromLang]?d[fromLang].src:'';
+    src=PicoCompile.translate(fromSrc,fromLang,lang);
+  } else {src=null;}
+  // Hide ref inline, show guide card
+  var ri=document.getElementById('refInlineContent');if(ri)ri.style.display='none';
+  document.querySelectorAll('.ref-section').forEach(function(s){s.style.display='none';});
+  var gc=document.getElementById('guideContent');
+  var cardHtml='<div class="card-title">'+(idx+1)+'. '+esc(d.title)+'</div>'+
     '<div class="card-desc">'+d.desc+'</div>'+
-    (d[lang]?'<pre class="'+SC[lang]+'">'+esc(d[lang].src)+'</pre>':'<pre style="color:var(--muted)">(not available)</pre>')+
+    (src?'<pre class="'+(SC[lang]||'cstyle')+'">'+esc(src)+'</pre>':'<pre style="color:var(--muted)">(not available in this dialect)</pre>')+
     '<div class="run-area"><button class="act" onclick="guideRun('+idx+')">Run &#9654;</button>'+
     '<button class="ghost" onclick="guideStep('+idx+')">Step</button>'+
     '<button class="ghost" onclick="guideEdit('+idx+')">Edit in Playground</button>'+
     '<span class="out" id="gcardout'+idx+'"></span></div>';
-  document.querySelectorAll('#guideTree .tree-item').forEach(function(el){el.classList.toggle('active',parseInt(el.getAttribute('data-idx'))===idx);});
+  // Insert before refInlineContent if it exists, else set innerHTML
+  if(ri){var wrapper=gc.querySelector('.guide-card-wrap');if(!wrapper){wrapper=document.createElement('div');wrapper.className='guide-card-wrap';gc.insertBefore(wrapper,ri);}wrapper.innerHTML=cardHtml;}
+  else{gc.innerHTML=cardHtml;}
+  document.querySelectorAll('#guideTree .tree-item').forEach(function(el){el.classList.toggle('active',parseInt(el.getAttribute('data-idx'))===idx);el.classList.remove('ref-active');});
+}
+function showRefInline(id){
+  // Hide guide card, show ref section inline
+  var gc=document.getElementById('guideContent');
+  var wrapper=gc.querySelector('.guide-card-wrap');if(wrapper)wrapper.innerHTML='';
+  var ri=document.getElementById('refInlineContent');if(ri)ri.style.display='block';
+  document.querySelectorAll('.ref-section').forEach(function(s){s.style.display='none';});
+  var sec=document.getElementById(id);if(sec)sec.style.display='block';
+  document.querySelectorAll('#guideTree .tree-item').forEach(function(el){el.classList.remove('active');el.classList.toggle('ref-active',el.getAttribute('data-ref')===id);});
 }
 
 var GDBG={words:[],disasm:[],vm:null};
@@ -12550,7 +12569,16 @@ function guideRun(i){
   document.getElementById('guideDbgPanels').classList.remove('collapsed');
 }
 function guideStep(i){var d=DATA[i],lang=CUR_LANG;if(!d[lang])lang='basic';GDBG.words=d[lang].words.map(function(h){return parseInt(h,16)>>>0;});GDBG.disasm=d[lang].disasm.slice();GDBG.vm=new PicoVM();GDBG.vm.load(GDBG.words);gRender();document.getElementById('guideDbgPanels').classList.remove('collapsed');}
-function guideEdit(i){var d=DATA[i],lang=CUR_LANG;if(!d[lang])lang='basic';document.getElementById('lang').value=lang;onLangChange();setSrc(d[lang].src);showView('play');compileSrc(false);}
+function guideEdit(i){
+  var d=DATA[i],lang=CUR_LANG;
+  if(d[lang]){document.getElementById('lang').value=lang;onLangChange();setSrc(d[lang].src);}
+  else if(typeof PicoCompile!=='undefined'&&PicoCompile.translate){
+    var fromLang=d.c?'c':(d.basic?'basic':'python');
+    var src=PicoCompile.translate(d[fromLang].src,fromLang,lang);
+    document.getElementById('lang').value=lang;onLangChange();setSrc(src);
+  } else {var fl=d.c?'c':'basic';document.getElementById('lang').value=fl;onLangChange();setSrc(d[fl].src);}
+  showView('play');compileSrc(false);
+}
 function gRender(){
   var vm=GDBG.vm;if(!vm)return;
   document.getElementById('glisting').innerHTML=GDBG.disasm.map(function(t,idx){return '<div class="row'+(idx===vm.pc?' pc':'')+'">'+String(idx).padStart(3,' ')+'  '+esc(t)+'</div>';}).join('');
@@ -12805,7 +12833,7 @@ function toggleToolPin(){
 var REF_SECTIONS=['ref-overview','ref-syntax','ref-namespaces','ref-bindings','ref-samples','ref-internals','ref-rawdocs'];
 var REF_LABELS=['Overview','Language Syntax','Namespaces','Bindings & I/O','App Samples','Internals','Source Docs'];
 function buildRefTree(){var html='<div class="group-title">Reference</div>';REF_SECTIONS.forEach(function(id,i){html+='<div class="tree-item'+(i===0?' active':'')+'" data-ref="'+id+'" onclick="showRefSection(\''+id+'\')">'+REF_LABELS[i]+(id==='ref-internals'?' <span class="badge" style="font-size:8px">impl</span>':'')+'</div>';});document.getElementById('refTree').innerHTML=html;}
-function showRefSection(id){document.querySelectorAll('.ref-section').forEach(function(s){s.classList.remove('active');});document.getElementById(id).classList.add('active');document.querySelectorAll('#refTree .tree-item').forEach(function(el){el.classList.toggle('active',el.getAttribute('data-ref')===id);});}
+function showRefSection(id){showRefInline(id);} // backward compat
 function showDoc(k){document.querySelectorAll('.docpanel').forEach(function(e){e.classList.remove('active');});document.querySelectorAll('.docnav-btn').forEach(function(e){e.classList.remove('active');});document.getElementById('doc-'+k).classList.add('active');var btn=document.querySelector('.docnav-btn[data-doc="'+k+'"]');if(btn)btn.classList.add('active');}
 
 // Namespace reference
