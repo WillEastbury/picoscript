@@ -557,13 +557,15 @@ function showView(v){
   var ft=document.getElementById('flyoutTriggers');
   if(ft) ft.style.display=(v==='play')?'flex':'none';
 }
+var CUR_REF_SECTION=null;
 function setLang(lang){
   CUR_LANG=lang;
   document.querySelectorAll('#langToggle button').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-lang')===lang);});
   document.getElementById('lang').value=lang;
   if(typeof onLangChange==='function') onLangChange();
-  showGuideCard(CUR_GUIDE_CARD);
-  renderSyntaxRef(); renderSamples();
+  // If a reference section is showing, stay on it; otherwise refresh guide card
+  if(CUR_REF_SECTION){renderSyntaxRef();renderSamples();}
+  else{showGuideCard(CUR_GUIDE_CARD);renderSyntaxRef();renderSamples();}
 }
 
 var GROUPS=[{name:'Basics',items:[0]},{name:'Control Flow',items:[1,2,3,4,10,11]},{name:'Operators',items:[5]},{name:'Dispatch / State Machine',items:[6,7]},{name:'Subroutines',items:[8,9]},{name:'I/O & Cards',items:[12,13,14,15,16]},{name:'Streams & Events',items:[17,18,19,20,21]},{name:'AI & Hardware',items:[22,23,24,25]},{name:'Functions & Errors',items:[26,27]},{name:'OS & Web Hooks',items:[28,29]}];
@@ -579,9 +581,9 @@ function buildGuideTree(){
 }
 function showGuideCard(idx){
   CUR_GUIDE_CARD=idx;
+  CUR_REF_SECTION=null;  // we're in guide mode
   var d=DATA[idx],lang=CUR_LANG;if(!d[lang]) lang=d.c?'c':'basic';
   var SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cstyle',report:'bstyle',functional:'pystyle'};
-  // Auto-translate source to current language if not pre-built
   var src;
   if(d[lang]){src=d[lang].src;}
   else if(typeof PicoCompile!=='undefined'&&PicoCompile.translate){
@@ -589,7 +591,6 @@ function showGuideCard(idx){
     var fromSrc=d[fromLang]?d[fromLang].src:'';
     src=PicoCompile.translate(fromSrc,fromLang,lang);
   } else {src=null;}
-  // Hide ref inline, show guide card
   var ri=document.getElementById('refInlineContent');if(ri)ri.style.display='none';
   document.querySelectorAll('.ref-section').forEach(function(s){s.style.display='none';});
   var gc=document.getElementById('guideContent');
@@ -600,13 +601,12 @@ function showGuideCard(idx){
     '<button class="ghost" onclick="guideStep('+idx+')">Step</button>'+
     '<button class="ghost" onclick="guideEdit('+idx+')">Edit in Playground</button>'+
     '<span class="out" id="gcardout'+idx+'"></span></div>';
-  // Insert before refInlineContent if it exists, else set innerHTML
   if(ri){var wrapper=gc.querySelector('.guide-card-wrap');if(!wrapper){wrapper=document.createElement('div');wrapper.className='guide-card-wrap';gc.insertBefore(wrapper,ri);}wrapper.innerHTML=cardHtml;}
   else{gc.innerHTML=cardHtml;}
   document.querySelectorAll('#guideTree .tree-item').forEach(function(el){el.classList.toggle('active',parseInt(el.getAttribute('data-idx'))===idx);el.classList.remove('ref-active');});
 }
 function showRefInline(id){
-  // Hide guide card, show ref section inline
+  CUR_REF_SECTION=id;  // we're in ref mode
   var gc=document.getElementById('guideContent');
   var wrapper=gc.querySelector('.guide-card-wrap');if(wrapper)wrapper.innerHTML='';
   var ri=document.getElementById('refInlineContent');if(ri)ri.style.display='block';
