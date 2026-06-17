@@ -502,7 +502,20 @@
     parseProgram: function () { var s = []; while (this.peek().kind !== "eof") s.push(this.parseToplevel()); return s; },
     parseToplevel: function () {
       var t = this.peek();
-      if (t.kind === "kw" && t.value === "void") { this.next(); var name = this.next().value; this.expect("("); this.expect(")"); return { t: "Func", name: name, body: this.parseBlock() }; }
+      if (t.kind === "kw" && t.value === "void") {
+        this.next(); var name = this.next().value; this.expect("(");
+        var params = [];
+        if (!this.accept(")")) {
+          while (true) {
+            var pt = this.peek();
+            if (pt.kind === "kw" && pt.value === "int") this.next();
+            params.push(this.next().value);
+            if (!this.accept(",")) break;
+          }
+          this.expect(")");
+        }
+        return { t: "Func", name: name, body: this.parseBlock(), params: params.length ? params : null };
+      }
       return this.parseStmt();
     },
     parseBlock: function () { this.expect("{"); var s = []; while (!this.accept("}")) { if (this.peek().kind === "eof") throw new Error("C: unterminated block"); s.push(this.parseStmt()); } return s; },
@@ -691,10 +704,16 @@
     varOf: function (name) { var k = name.toLowerCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
     lowerProgram: function (prog) {
       var self = this, body = [];
-      prog.forEach(function (s) { if (s.t === "Func") self.funcs.push(s); else body.push(s); });
+      this._funcParams = {};
+      prog.forEach(function (s) { if (s.t === "Func") { self.funcs.push(s); self._funcParams[s.name.toLowerCase()] = s.params || []; } else body.push(s); });
       body.forEach(function (s) { self.stmt(s); });
       this.b.ret();
-      this.funcs.forEach(function (f) { self.b.label("fn_" + f.name.toLowerCase()); f.body.forEach(function (s) { self.stmt(s); }); self.b.ret(); });
+      this.funcs.forEach(function (f) {
+        self.b.label("fn_" + f.name.toLowerCase());
+        (f.params || []).forEach(function (p, i) { var pv = self.varOf(p); var av = self.varOf("__arg" + i + "__"); self.b.mov(pv, av); });
+        f.body.forEach(function (s) { self.stmt(s); });
+        self.b.ret();
+      });
       return this.b.insts;
     },
     stmt: function (s) {
@@ -883,7 +902,12 @@
         if (C_ALIASES[ak] && !this.funcs.some(function (f) { return f.name.toLowerCase() === ak; })) {
           return this.lowerCall({ t: "Call", ns: C_ALIASES[ak][0], method: C_ALIASES[ak][1], args: c.args }, want);
         }
-        this.b.call("fn_" + m.toLowerCase()); return null;
+        // pass args via arg-passing regs
+        var params = (this._funcParams || {})[ak] || [];
+        for (var ai = 0; ai < c.args.length; ai++) { var aav = this.varOf("__arg" + ai + "__"); this.assignTo(aav, c.args[ai]); }
+        this.b.call("fn_" + m.toLowerCase());
+        if (want) return this.varOf("__ret__");
+        return null;
       }
       if (ns.toUpperCase() === "NET") {
         var M = m.toUpperCase();
@@ -989,10 +1013,19 @@
         if (kw === "SWITCH") return this.parseSwitch();
       if (kw === "DISPATCH") return this.parseDispatch();
         if (kw === "GOTO") { this.next(); var nm = this.next().value; this.endLine(); return { t: "Goto", label: nm }; }
-        if (kw === "GOSUB") { this.next(); var nm2 = this.next().value; this.endLine(); return { t: "Gosub", name: nm2 }; }
+        if (kw === "GOSUB") {
+          this.next(); var nm2 = this.next().value;
+          var gArgs = null;
+          if (this.peek().kind === "op" && this.peek().value === "(") { gArgs = this.parseArgs(); }
+          this.endLine(); return { t: "Gosub", name: nm2, args: gArgs };
+        }
         if (kw === "SUB") return this.parseSub();
         if (kw === "SERVER") return this.parseServer();
-        if (kw === "RETURN") { this.next(); this.endLine(); return { t: "Return" }; }
+        if (kw === "RETURN") {
+          this.next();
+          if (this.peek().kind === "nl" || this.peek().kind === "eof") { this.endLine(); return { t: "Return" }; }
+          var rv = this.parseExpr(); this.endLine(); return { t: "Return", value: rv };
+        }
         if (kw === "BREAK") { this.next(); this.endLine(); return { t: "Break" }; }
         if (kw === "SKIP") { this.next(); this.endLine(); return { t: "Skip" }; }
         if (kw === "PRINT") { this.next(); var v = this.parseExpr(); this.endLine(); return { t: "Print", value: v }; }
@@ -1221,7 +1254,20 @@
       }
       this.eatKw("ENDDISPATCH"); this.endLine(); return { t: "Dispatch", expr: expr, cases: cases, def: def };
     },
-    parseSub: function () { this.eatKw("SUB"); var name = this.next().value; this.endLine(); var body = this.parseBlock("ENDSUB"); this.eatKw("ENDSUB"); this.endLine(); return { t: "Sub", name: name, body: body }; },
+    parseSub: function () {
+      this.eatKw("SUB"); var name = this.next().value;
+      var params = null;
+      if (this.peek().kind === "op" && this.peek().value === "(") {
+        this.next(); params = [];
+        if (!(this.peek().kind === "op" && this.peek().value === ")")) {
+          params.push(this.next().value);
+          while (this.peek().kind === "op" && this.peek().value === ",") { this.next(); params.push(this.next().value); }
+        }
+        this.eatOp(")");
+      }
+      this.endLine(); var body = this.parseBlock("ENDSUB"); this.eatKw("ENDSUB"); this.endLine();
+      return { t: "Sub", name: name, body: body, params: params };
+    },
     parseServer: function () { this.eatKw("SERVER"); this.endLine(); var body = this.parseBlock("ENDSERVER"); this.eatKw("ENDSERVER"); this.endLine(); return { t: "ServerMain", body: body }; },
     parseCallFromId: function () { var ns = this.next().value; this.eatOp("."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
     parseArgs: function () { this.eatOp("("); var a = []; if (!(this.peek().kind === "op" && this.peek().value === ")")) { a.push(this.parseExpr()); while (this.peek().kind === "op" && this.peek().value === ",") { this.next(); a.push(this.parseExpr()); } } this.eatOp(")"); return a; },
@@ -1289,10 +1335,16 @@
     varOf: function (name) { var k = name.toUpperCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
     lowerProgram: function (prog) {
       var self = this, body = [];
-      prog.forEach(function (s) { if (s.t === "Sub") self.subs.push(s); else body.push(s); });
+      this._subParams = {};
+      prog.forEach(function (s) { if (s.t === "Sub") { self.subs.push(s); self._subParams[s.name.toLowerCase()] = s.params || []; } else body.push(s); });
       body.forEach(function (s) { self.stmt(s); });
       this.b.ret();
-      this.subs.forEach(function (sub) { self.b.label("sub_" + sub.name.toUpperCase()); sub.body.forEach(function (s) { self.stmt(s); }); self.b.ret(); });
+      this.subs.forEach(function (sub) {
+        self.b.label("sub_" + sub.name.toUpperCase());
+        (sub.params || []).forEach(function (p, i) { var pv = self.varOf(p); var av = self.varOf("__arg" + i + "__"); self.b.mov(pv, av); });
+        sub.body.forEach(function (s) { self.stmt(s); });
+        self.b.ret();
+      });
       return this.b.insts;
     },
     stmt: function (s) {
@@ -1303,8 +1355,11 @@
       else if (s.t === "IncDec") { var iv = this.varOf(s.name); if (s.delta === 1) this.b.inc(iv); else this.b.arith("sub", iv, iv, new Imm(1)); }
       else if (s.t === "Label") this.b.label("lbl_" + s.name.toUpperCase());
       else if (s.t === "Goto") this.b.jmp("lbl_" + s.label.toUpperCase());
-      else if (s.t === "Gosub") this.b.call("sub_" + s.name.toUpperCase());
-      else if (s.t === "Return") this.b.ret();
+      else if (s.t === "Gosub") {
+        if (s.args) { for (var gi = 0; gi < s.args.length; gi++) { this.assignTo(this.varOf("__arg" + gi + "__"), s.args[gi]); } }
+        this.b.call("sub_" + s.name.toUpperCase());
+      }
+      else if (s.t === "Return") { if (s.value != null) { var rv = this.eval(s.value); this.b.mov(this.varOf("__ret__"), rv); } this.b.ret(); }
       else if (s.t === "Break") this.lowerBreak();
       else if (s.t === "Skip") this.lowerSkip();
       else if (s.t === "If") this.lowerIf(s);
@@ -1484,6 +1539,12 @@
       if (ns == null) {
         var key = m.toLowerCase();
         var isSub = this.subs.some(function (s) { return s.name.toLowerCase() === key; });
+        if (isSub) {
+          for (var si = 0; si < c.args.length; si++) { this.assignTo(this.varOf("__arg" + si + "__"), c.args[si]); }
+          this.b.call("sub_" + m.toUpperCase());
+          if (want) return this.varOf("__ret__");
+          return null;
+        }
         if (BP_RADIX[key] && !isSub) {
           var r = BP_RADIX[key], cm = r[0], prefix = r[1], upper = r[2];
           var val = this.eval(c.args[0]);
@@ -1606,7 +1667,11 @@
         if (kw === "goto") { this.next(); var gl = this.expect("id").value; this.expect("newline"); return { t: "Goto", label: gl }; }
         if (kw === "label") { this.next(); var ll = this.expect("id").value; this.expect("newline"); return { t: "Label", name: ll }; }
         if (kw === "def") return this.parseDef();
-        if (kw === "return") { this.next(); this.expect("newline"); return { t: "Return" }; }
+        if (kw === "return") {
+          this.next();
+          if (this.at("newline")) { this.next(); return { t: "Return" }; }
+          var rv = this.parseExpr(); this.expect("newline"); return { t: "Return", value: rv };
+        }
         if (kw === "break") { this.next(); this.expect("newline"); return { t: "Break" }; }
         if (kw === "continue") { this.next(); this.expect("newline"); return { t: "Skip" }; }
         if (kw === "pass") { this.next(); this.expect("newline"); return null; }
@@ -1618,7 +1683,7 @@
         if (nx.kind === "op" && nx.value === "=") { var nm = this.next().value; this.next(); var vv = this.parseExpr(); this.expect("newline"); return { t: "Let", name: nm, value: vv }; }
         if (nx.kind === "op" && PY_AUG[nx.value]) { var an = this.next().value; var op = PY_AUG[this.next().value]; var rhs = this.parseExpr(); this.expect("newline"); return { t: "Let", name: an, value: { t: "Bin", op: op, lhs: { t: "Var", name: an }, rhs: rhs } }; }
         if (nx.kind === "op" && nx.value === ".") { var call = this.parseCallFromId(); this.expect("newline"); return { t: "CallStmt", call: call }; }
-        if (nx.kind === "op" && nx.value === "(") { var gn = this.next().value; var gargs = this.parseArgs(); this.expect("newline"); if (gargs.length === 0) return { t: "Gosub", name: gn }; return { t: "CallStmt", call: { t: "Call", ns: null, method: gn, args: gargs } }; }
+        if (nx.kind === "op" && nx.value === "(") { var gn = this.next().value; var gargs = this.parseArgs(); this.expect("newline"); return { t: "Gosub", name: gn, args: gargs.length ? gargs : null }; }
       }
       throw new Error("Python: cannot parse statement at " + t.value);
     },
@@ -1670,7 +1735,13 @@
       this.expect("newline");
       return { t: "DoLoop", topCond: null, topUntil: false, botCond: cond, botUntil: until, body: body };
     },
-    parseDef: function () { this.expectKw("def"); var name = this.expect("id").value; this.expect("op", "("); this.expect("op", ")"); return { t: "Sub", name: name, body: this.parseSuite() }; },
+    parseDef: function () {
+      this.expectKw("def"); var name = this.expect("id").value; this.expect("op", "(");
+      var params = [];
+      if (!this.at("op", ")")) { params.push(this.expect("id").value); while (this.at("op", ",")) { this.next(); params.push(this.expect("id").value); } }
+      this.expect("op", ")");
+      return { t: "Sub", name: name, body: this.parseSuite(), params: params.length ? params : null };
+    },
     parseCallFromId: function () { var ns = this.next().value; this.expect("op", "."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
     parseArgs: function () { this.expect("op", "("); var a = []; if (!this.at("op", ")")) { a.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); a.push(this.parseExpr()); } } this.expect("op", ")"); return a; },
     parseExpr: function (minp) {
@@ -1758,10 +1829,26 @@
           this.next();
           if (this.atWord("a", "an", "the")) this.next();
           if (this.atWord("routine", "subroutine", "procedure", "function")) { this.next(); if (this.atWord("called", "named")) this.next(); }
-          var dn = this.expect("word").value; return { t: "Sub", name: dn, body: this.parseSuite() };
+          var dn = this.expect("word").value;
+          var dparams = null;
+          if (this.at("op", "(")) {
+            this.next(); dparams = [];
+            if (!this.at("op", ")")) { dparams.push(this.expect("word").value); while (this.at("op", ",")) { this.next(); dparams.push(this.expect("word").value); } }
+            this.expect("op", ")");
+          }
+          return { t: "Sub", name: dn, body: this.parseSuite(), params: dparams };
         }
-        if (w === "do" || w === "call") { this.next(); var cn = this.expect("word").value; this.endStmt(); return { t: "Gosub", name: cn }; }
-        if (w === "return") { this.next(); this.endStmt(); return { t: "Return" }; }
+        if (w === "do" || w === "call") {
+          this.next(); var cn = this.expect("word").value;
+          var cargs = null;
+          if (this.at("op", "(")) { this.next(); cargs = []; if (!this.at("op", ")")) { cargs.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); cargs.push(this.parseExpr()); } } this.expect("op", ")"); }
+          this.endStmt(); return { t: "Gosub", name: cn, args: cargs };
+        }
+        if (w === "return") {
+          this.next();
+          if (this.at("newline") || this.at("eof") || this.at("op", ".")) { this.endStmt(); return { t: "Return" }; }
+          var rv = this.parseExpr(); this.endStmt(); return { t: "Return", value: rv };
+        }
         if (w === "stop" || w === "break") { this.next(); if (this.atWord("out")) this.next(); this.endStmt(); return { t: "Break" }; }
         if (w === "skip" || w === "continue") { this.next(); this.endStmt(); return { t: "Skip" }; }
         if (this.peek(1).kind === "op" && this.peek(1).value === "." && this.peek(2).kind === "word" && this.peek(3).kind === "op" && this.peek(3).value === "(") { var call = this.parseCallFromWord(); this.endStmt(); return { t: "CallStmt", call: call }; }

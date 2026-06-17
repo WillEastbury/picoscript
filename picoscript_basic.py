@@ -237,15 +237,16 @@ class Label:
     name: str
 @dataclass
 class Gosub:
-    name: str
+    name: str; args: list = None      # args for parameterised calls (None = no-args compat)
 @dataclass
 class Sub:
-    name: str; body: list
+    name: str; body: list; params: list = None   # params = parameter names (None = legacy)
 @dataclass
 class ServerMain:
     body: list                       # transparent server-entry wrapper; lowers body inline
 @dataclass
-class Return: pass
+class Return:
+    value: object = None              # optional return expression
 @dataclass
 class Break: pass
 @dataclass
@@ -366,13 +367,20 @@ class Parser:
             if kw == "GOTO":
                 self.next(); name = self.next().value; self.end_line(); return Goto(name)
             if kw == "GOSUB":
-                self.next(); name = self.next().value; self.end_line(); return Gosub(name)
+                self.next(); name = self.next().value
+                args = None
+                if self.peek().kind == "op" and self.peek().value == "(":
+                    args = self.parse_args()
+                self.end_line(); return Gosub(name, args)
             if kw == "SUB":
                 return self.parse_sub()
             if kw == "SERVER":
                 return self.parse_server()
             if kw == "RETURN":
-                self.next(); self.end_line(); return Return()
+                self.next()
+                if self.peek().kind in ("nl", "eof"):
+                    self.end_line(); return Return()
+                v = self.parse_expr(); self.end_line(); return Return(v)
             if kw == "BREAK":
                 self.next(); self.end_line(); return Break()
             if kw == "SKIP":
@@ -833,10 +841,19 @@ class Parser:
     def parse_sub(self) -> Sub:
         self.eat_kw("SUB")
         name = self.next().value
+        params = None
+        if self.peek().kind == "op" and self.peek().value == "(":
+            self.next()  # eat (
+            params = []
+            if not (self.peek().kind == "op" and self.peek().value == ")"):
+                params.append(self.next().value)
+                while self.peek().kind == "op" and self.peek().value == ",":
+                    self.next(); params.append(self.next().value)
+            self.eat_op(")")
         self.end_line()
         body = self.parse_block("ENDSUB")
         self.eat_kw("ENDSUB"); self.end_line()
-        return Sub(name, body)
+        return Sub(name, body, params)
 
     def parse_server(self) -> ServerMain:
         # SERVER ... ENDSERVER -- BASIC server-entry block (the no-braces form of
@@ -966,11 +983,16 @@ class Lowerer:
         body = [s for s in prog if not isinstance(s, Sub)]
         self.subs = [s for s in prog if isinstance(s, Sub)]
         self._sub_names = {s.name.lower() for s in self.subs}
+        self._sub_params = {s.name.lower(): (s.params or []) for s in self.subs}
         for s in body:
             self.stmt(s)
         self.b.ret()
         for sub in self.subs:
             self.b.label(f"sub_{sub.name.upper()}")
+            for i, p in enumerate(sub.params or []):
+                pv = self.var(p)
+                av = self.var(f"__arg{i}__")
+                self.b.mov(pv, av)
             for s in sub.body:
                 self.stmt(s)
             self.b.ret()
@@ -999,8 +1021,15 @@ class Lowerer:
         elif isinstance(s, Goto):
             self.b.jmp(f"lbl_{s.label.upper()}")
         elif isinstance(s, Gosub):
+            if s.args:
+                for i, arg in enumerate(s.args):
+                    av = self.var(f"__arg{i}__")
+                    self.assign_to(av, arg)
             self.b.call(f"sub_{s.name.upper()}")
         elif isinstance(s, Return):
+            if s.value is not None:
+                rv = self.eval(s.value)
+                self.b.mov(self.var("__ret__"), rv)
             self.b.ret()
         elif isinstance(s, Break):
             self.lower_break()
@@ -1337,6 +1366,16 @@ class Lowerer:
         if ns is None:
             key = method.lower()
             subs = getattr(self, "_sub_names", set())
+            # Local subroutine call (takes priority if name matches a SUB)
+            if key in subs:
+                params = self._sub_params.get(key, [])
+                for i, arg in enumerate(c.args):
+                    av = self.var(f"__arg{i}__")
+                    self.assign_to(av, arg)
+                self.b.call(f"sub_{method.upper()}")
+                if want_value:
+                    return self.var("__ret__")
+                return None
             if key in BP_RADIX and key not in subs:
                 cm, prefix, upper = BP_RADIX[key]
                 val = self.eval(c.args[0])

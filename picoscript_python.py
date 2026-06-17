@@ -257,7 +257,10 @@ class Parser:
             if kw == "def":
                 return self.parse_def()
             if kw == "return":
-                self.next(); self.expect("newline"); return Return()
+                self.next()
+                if self.at("newline"):
+                    self.next(); return Return()
+                v = self.parse_expr(); self.expect("newline"); return Return(v)
             if kw == "break":
                 self.next(); self.expect("newline"); return Break()
             if kw == "continue":
@@ -292,15 +295,12 @@ class Parser:
                 call = self.parse_call_from_id()
                 self.expect("newline")
                 return CallStmt(call)
-            # bare call:  name() -> subroutine (Gosub);  name(args...) -> host/alias call
+            # bare call:  name(args...) -> subroutine call (Gosub with args)
             if nxt.kind == "op" and nxt.value == "(":
                 name = self.next().value
                 args = self.parse_args()
                 self.expect("newline")
-                if not args:
-                    from picoscript_basic import Gosub
-                    return Gosub(name)
-                return CallStmt(Call(None, name, args))
+                return Gosub(name, args if args else None)
         raise SyntaxError(f"line {t.line}: cannot parse statement at {t.value!r}")
 
     def parse_if(self) -> If:
@@ -408,9 +408,15 @@ class Parser:
         self.expect_kw("def")
         name = self.expect("id").value
         self.expect("op", "(")
+        params = []
+        if not self.at("op", ")"):
+            params.append(self.expect("id").value)
+            while self.at("op", ","):
+                self.next()
+                params.append(self.expect("id").value)
         self.expect("op", ")")
         body = self.parse_suite()
-        return Sub(name, body)
+        return Sub(name, body, params if params else None)
 
     def parse_call_from_id(self) -> Call:
         ns = self.next().value

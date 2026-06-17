@@ -207,7 +207,7 @@ class ExprStmt:
     expr: object
 @dataclass
 class Func:
-    name: str; body: list
+    name: str; body: list; params: list = None   # params = parameter names (None = legacy)
 
 
 # ── parser (recursive descent + Pratt expressions) ──────────────────────────
@@ -252,13 +252,24 @@ class Parser:
 
     def parse_toplevel(self) -> object:
         t = self.peek()
-        # void name() { } subroutine
+        # void name(params) { } subroutine
         if t.kind == "kw" and t.value == "void":
             self.next()
             name = self.next().value
-            self.expect("("); self.expect(")")
+            self.expect("(")
+            params = []
+            if not self.accept(")"):
+                # parse comma-separated param names (with optional type prefix)
+                while True:
+                    pt = self.peek()
+                    if pt.kind == "kw" and pt.value == "int":
+                        self.next()  # skip type prefix
+                    params.append(self.next().value)
+                    if not self.accept(","):
+                        break
+                self.expect(")")
             body = self.parse_block()
-            return Func(name, body)
+            return Func(name, body, params if params else None)
         return self.parse_stmt()
 
     def parse_block(self) -> List[object]:
@@ -591,11 +602,17 @@ class Lowerer:
         body = [s for s in prog if not isinstance(s, Func)]
         self.funcs = [s for s in prog if isinstance(s, Func)]
         self._func_names = {f.name.lower() for f in self.funcs}
+        self._func_params = {f.name.lower(): (f.params or []) for f in self.funcs}
         for s in body:
             self.stmt(s)
         self.b.ret()
         for f in self.funcs:
             self.b.label(f"fn_{f.name.lower()}")
+            # bind parameters: read from arg-passing regs into named locals
+            for i, p in enumerate(f.params or []):
+                pv = self.var(p)
+                av = self.var(f"__arg{i}__")
+                self.b.mov(pv, av)
             for s in f.body:
                 self.stmt(s)
             self.b.ret()
@@ -953,7 +970,14 @@ class Lowerer:
             if key in C_ALIASES and key not in getattr(self, "_func_names", set()):
                 a_ns, a_m = C_ALIASES[key]
                 return self.lower_call(Call(a_ns, a_m, c.args), want_value)
+            # pass arguments via arg-passing regs
+            params = self._func_params.get(key, [])
+            for i, arg in enumerate(c.args):
+                av = self.var(f"__arg{i}__")
+                self.assign_to(av, arg)
             self.b.call(f"fn_{method.lower()}")
+            if want_value:
+                return self.var("__ret__")
             return None
         # Net.*  (namespace + method case-insensitive)
         if ns.upper() == "NET":

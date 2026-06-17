@@ -296,12 +296,34 @@ class Parser:
                     if self.at_word("called", "named"):
                         self.next()
                 name = self.expect("word").value
-                return Sub(name, self.parse_suite())
+                params = None
+                if self.at("op", "("):
+                    self.next()
+                    params = []
+                    if not self.at("op", ")"):
+                        params.append(self.expect("word").value)
+                        while self.at("op", ","):
+                            self.next(); params.append(self.expect("word").value)
+                    self.expect("op", ")")
+                return Sub(name, self.parse_suite(), params if params else None)
             if w in ("do", "call"):
-                self.next(); name = self.expect("word").value; self.end_stmt()
-                return Gosub(name)
+                self.next(); name = self.expect("word").value
+                args = None
+                if self.at("op", "("):
+                    self.next()
+                    args = []
+                    if not self.at("op", ")"):
+                        args.append(self.parse_expr())
+                        while self.at("op", ","):
+                            self.next(); args.append(self.parse_expr())
+                    self.expect("op", ")")
+                self.end_stmt()
+                return Gosub(name, args)
             if w == "return":
-                self.next(); self.end_stmt(); return Return()
+                self.next()
+                if self.at("newline") or self.at("eof") or self.at("op", "."):
+                    self.end_stmt(); return Return()
+                v = self.parse_expr(); self.end_stmt(); return Return(v)
             if w in ("stop", "break"):
                 self.next()
                 if self.at_word("out"):
