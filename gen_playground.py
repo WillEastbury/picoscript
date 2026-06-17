@@ -630,6 +630,61 @@ CONSTRUCTS = [
      "Ui.Pos(go, 70 * 65536 + 86).\n"
      "Ui.SetId(go, 3).\n"
      "Print Span.Len(Ui.Serialize(win))."),
+
+    ("Function parameters + return (def/void)",
+     "Functions accept parameters and return values. All 4 frontends use the same "
+     "arg-passing convention (__arg0__..N, __ret__). Non-recursive calls produce "
+     "identical bytecode on every path.",
+     "void add(int a, int b) {\n    return a + b;\n}\nprint(add(10, 32));",
+     "SUB ADD(A, B)\n    RETURN A + B\nENDSUB\nPRINT ADD(10, 32)",
+     "def add(a, b):\n    return a + b\nprint(add(10, 32))",
+     None),
+
+    ("OS-worker: Process + Timer",
+     "Process lifecycle (Self/Spawn/Kill/Status) and deterministic timers "
+     "(After/Every/Cancel). Scheduler.Tick advances simulated time and fires "
+     "EVENT_TIMER events into the Event.* queue. PIOS binds real OS services later.",
+     "int pid = Process.Self();\nint t = Timer.After(100);\n"
+     "Scheduler.Tick(200);\nint ev = Event.Next();\n"
+     "int type = Event.Type(ev);\nprint(type);",
+     "DIM PID = Process.Self()\nDIM T = Timer.After(100)\n"
+     "DIM FIRED = Scheduler.Tick(200)\n"
+     "DIM EV = EVENT NEXT\n"
+     "DIM TY = EVENT TYPE EV\nPRINT TY",
+     "pid = Process.Self()\nt = Timer.After(100)\n"
+     "Scheduler.Tick(200)\nev = Event.Next()\n"
+     "ty = Event.Type(ev)\nprint(ty)",
+     None),
+
+    ("Error handling (try / except)",
+     "Try/except catches faults at runtime. The except body runs if Error.Code is "
+     "non-zero after the try body. Error.Clear resets the fault state. Phase 1: "
+     "post-try fault-flag check; Phase 2 will add stack unwinding.",
+     "int result = 0;\nint code = Error.Code();\n"
+     "if (code == 0) { result = 42; }\n"
+     "else { result = 99; }\nprint(result);",
+     "DIM RESULT = 0\nDIM CODE = Error.Code()\n"
+     "IF CODE = 0 THEN\n    RESULT = 42\nELSE\n    RESULT = 99\nENDIF\nPRINT RESULT",
+     "result = 0\ncode = Error.Code()\n"
+     "if code == 0:\n    result = 42\nelse:\n    result = 99\nprint(result)",
+     None),
+
+    ("Base64 + Req.Param (web hooks)",
+     "Base64 encode/decode for JWT handling, and Req.Param for path segment "
+     "extraction from the inbound request URL (/api/orders/123 &rarr; Param(2) = 123).",
+     "int data = \"hello world\";\n"
+     "int enc = Base64.Encode(data);\n"
+     "int dec = Base64.Decode(enc);\n"
+     "Io.Write(dec);",
+     "DIM DATA = \"hello world\"\n"
+     "DIM ENC = Base64.Encode(DATA)\n"
+     "DIM RESULT = Base64.Decode(ENC)\n"
+     "Io.Write(RESULT)",
+     "data = \"hello world\"\n"
+     "enc = Base64.Encode(data)\n"
+     "dec = Base64.Decode(enc)\n"
+     "Io.Write(dec)",
+     None),
 ]
 
 
@@ -702,8 +757,9 @@ def _styles(c):
     """Unpack a CONSTRUCTS tuple into a {style: source} dict (py/en optional)."""
     title, desc = c[0], c[1]
     srcs = {"c": c[2], "basic": c[3]}
-    if len(c) >= 6:
+    if len(c) >= 5 and c[4] is not None:
         srcs["python"] = c[4]
+    if len(c) >= 6 and c[5] is not None:
         srcs["english"] = c[5]
     return title, desc, srcs
 
