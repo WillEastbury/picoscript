@@ -1484,6 +1484,92 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
             if (ctx->out_len < PV_MAX_OUT) ctx->out[ctx->out_len++] = pv_arena_get(ctx, p + (uint32_t)i);
         return;
     }
+    /* ---- Req.* : read the native HTTP request context (ctx->req_*) ---------- */
+    if (hook == PV_HOOK_REQ_METHOD) {
+        ctx->regs[rd] = pv_span_from_cbytes(ctx, ctx->req_method, ctx->req_method_len);
+        return;
+    }
+    if (hook == PV_HOOK_REQ_PATH) {
+        ctx->regs[rd] = pv_span_from_cbytes(ctx, ctx->req_path, ctx->req_path_len);
+        return;
+    }
+    if (hook == PV_HOOK_REQ_HEADER) {
+        /* arg span = header name; search ctx->req_headers case-insensitively for
+         * "name:" at a line start, return the trimmed value span (0 if absent). */
+        int h = ctx->regs[rs1];
+        uint32_t np = pv_span_p(ctx, h);
+        int32_t nn = pv_span_n(ctx, h);
+        const char *hdr = ctx->req_headers;
+        int hl = ctx->req_headers_len;
+        ctx->regs[rd] = 0;
+        if (hdr && hl > 0 && nn > 0) {
+            int i = 0;
+            while (i < hl) {
+                int ls = i;                       /* line start */
+                while (i < hl && hdr[i] != '\n') i++;
+                int le = i;                       /* line end (at \n) */
+                if (le > ls && hdr[le - 1] == '\r') le--;
+                /* match name (case-insensitive) followed by ':' */
+                int j = 0, match = 1;
+                while (j < nn) {
+                    if (ls + j >= le) { match = 0; break; }
+                    uint8_t a = (uint8_t)hdr[ls + j];
+                    uint8_t b = pv_arena_get(ctx, np + (uint32_t)j);
+                    if (a >= 'A' && a <= 'Z') a = (uint8_t)(a - 'A' + 'a');
+                    if (b >= 'A' && b <= 'Z') b = (uint8_t)(b - 'A' + 'a');
+                    if (a != b) { match = 0; break; }
+                    j++;
+                }
+                if (match && ls + nn < le && hdr[ls + nn] == ':') {
+                    int vs = ls + nn + 1;
+                    while (vs < le && (hdr[vs] == ' ' || hdr[vs] == '\t')) vs++;
+                    ctx->regs[rd] = pv_span_from_cbytes(ctx, hdr + vs, le - vs);
+                    return;
+                }
+                i++;  /* skip the \n */
+            }
+        }
+        return;
+    }
+    if (hook == PV_HOOK_REQ_BODYSPAN || hook == PV_HOOK_REQ_BODYSLICE) {
+        ctx->regs[rd] = pv_span_from_cbytes(ctx, ctx->req_body, ctx->req_body_len);
+        return;
+    }
+    if (hook == PV_HOOK_REQ_BODYLEN || hook == PV_HOOK_REQ_BODYCOUNT) {
+        ctx->regs[rd] = ctx->req_body_len > 0 ? ctx->req_body_len : 0;
+        return;
+    }
+    if (hook == PV_HOOK_REQ_BODYMODE || hook == PV_HOOK_REQ_SEQ || hook == PV_HOOK_REQ_PRINCIPAL) {
+        ctx->regs[rd] = 0;
+        return;
+    }
+    if (hook == PV_HOOK_REQ_PARAMCOUNT) {
+        /* number of non-empty '/'-separated path segments */
+        const char *p = ctx->req_path; int pl = ctx->req_path_len, n = 0, i = 0;
+        while (i < pl) {
+            while (i < pl && p[i] == '/') i++;
+            if (i < pl && p[i] != '?') { n++; while (i < pl && p[i] != '/' && p[i] != '?') i++; }
+            if (i < pl && p[i] == '?') break;
+        }
+        ctx->regs[rd] = n;
+        return;
+    }
+    if (hook == PV_HOOK_REQ_PARAM) {
+        /* 0-based path segment by index (stops at '?'); 0 span if out of range */
+        int want = ctx->regs[rs1];
+        const char *p = ctx->req_path; int pl = ctx->req_path_len, idx = 0, i = 0;
+        ctx->regs[rd] = 0;
+        while (i < pl) {
+            while (i < pl && p[i] == '/') i++;
+            if (i >= pl || p[i] == '?') break;
+            int s = i;
+            while (i < pl && p[i] != '/' && p[i] != '?') i++;
+            if (idx == want) { ctx->regs[rd] = pv_span_from_cbytes(ctx, p + s, i - s); return; }
+            idx++;
+        }
+        return;
+    }
+
     /* Resp.Write: same as Io.Write — append span bytes to ctx->out */
     if (hook == PV_HOOK_RESP_WRITE) {
         int h = ctx->regs[rs1];

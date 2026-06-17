@@ -260,6 +260,72 @@ int pv_send_http_response(pv_socket_t conn_fd, pv_ctx *ctx)
     return hlen + ctx->out_len;
 }
 
+/* Parse an HTTP/1.1 request in `buf` (length n) and point ctx->req_* at it.
+ * Reads the request line (METHOD SP PATH SP VERSION CRLF), the header block,
+ * and the body after CRLFCRLF. Reads more from the socket if Content-Length
+ * indicates the body is not yet fully buffered. The buffer must outlive the
+ * handler call (it is the worker's persistent reqbuf). */
+static void pv_http_parse_request(pv_ctx *ctx, char *buf, int n, pv_socket_t fd, int cap)
+{
+    ctx->req_method = ""; ctx->req_method_len = 0;
+    ctx->req_path = "/";  ctx->req_path_len = 1;
+    ctx->req_headers = ""; ctx->req_headers_len = 0;
+    ctx->req_body = ""; ctx->req_body_len = 0;
+    if (n <= 0) return;
+
+    int i = 0;
+    int ms = 0; while (i < n && buf[i] != ' ') i++;        /* method */
+    ctx->req_method = buf + ms; ctx->req_method_len = i - ms;
+    if (i < n) i++;                                         /* skip space */
+    int ps = i; while (i < n && buf[i] != ' ' && buf[i] != '\r' && buf[i] != '\n') i++;
+    ctx->req_path = buf + ps; ctx->req_path_len = i - ps;
+    /* advance to end of request line */
+    while (i < n && buf[i] != '\n') i++;
+    if (i < n) i++;                                         /* past first \n */
+
+    int hs = i;                                            /* header block start */
+    /* find CRLFCRLF (end of headers) */
+    int he = -1;
+    for (int k = hs; k + 3 < n; k++) {
+        if (buf[k] == '\r' && buf[k+1] == '\n' && buf[k+2] == '\r' && buf[k+3] == '\n') { he = k; break; }
+    }
+    if (he < 0) { ctx->req_headers = buf + hs; ctx->req_headers_len = n - hs; return; }
+    ctx->req_headers = buf + hs; ctx->req_headers_len = he - hs;
+
+    int body_start = he + 4;
+    /* Determine Content-Length (case-insensitive) from the header block. */
+    long content_len = 0;
+    for (int k = hs; k < he; ) {
+        int ls = k; while (k < he && buf[k] != '\n') k++;
+        int le = k; if (le > ls && buf[le-1] == '\r') le--;
+        const char *name = "content-length:";
+        int nl = 15, m = 1;
+        for (int j = 0; j < nl; j++) {
+            if (ls + j >= le) { m = 0; break; }
+            char a = buf[ls + j]; if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+            if (a != name[j]) { m = 0; break; }
+        }
+        if (m) {
+            int vs = ls + nl; while (vs < le && (buf[vs] == ' ' || buf[vs] == '\t')) vs++;
+            content_len = 0;
+            while (vs < le && buf[vs] >= '0' && buf[vs] <= '9') content_len = content_len * 10 + (buf[vs++] - '0');
+            break;
+        }
+        if (k < he) k++;
+    }
+    int have = n - body_start;
+    /* Read the rest of the body if it didn't all arrive in the first recv. */
+    while (content_len > have && body_start + have < cap - 1) {
+        int got = pv_socket_read(fd, buf + body_start + have, cap - 1 - (body_start + have));
+        if (got <= 0) break;
+        have += got;
+        n += got;
+    }
+    ctx->req_body = buf + body_start;
+    ctx->req_body_len = (int)(content_len > 0 ? (content_len < have ? content_len : have) : have);
+    if (ctx->req_body_len < 0) ctx->req_body_len = 0;
+}
+
 #ifdef _WIN32
 static DWORD WINAPI pv_worker_main(LPVOID arg)
 #else
@@ -281,12 +347,14 @@ static void *pv_worker_main(void *arg)
         pthread_mutex_unlock(&w->lock);
 #endif
         w->ctx.regs[0] = (int32_t)(intptr_t)w->conn_fd;
-        /* Drain the HTTP request before dispatching — TCP requires reading
-           the input; closing without recv triggers RST → "connection aborted". */
+        /* Read + parse the HTTP request into the worker's persistent reqbuf so
+           PicoScript Req.Method()/Req.Path()/Req.Header()/Req.BodySpan() resolve
+           natively while the handler runs. */
         {
-            char _req[8192];
-            int _rn = pv_socket_read(w->conn_fd, _req, sizeof(_req) - 1);
-            (void)_rn;  /* TODO: parse request, install Req.* context */
+            int rn = pv_socket_read(w->conn_fd, w->reqbuf, (int)sizeof(w->reqbuf) - 1);
+            if (rn < 0) rn = 0;
+            w->reqbuf[rn] = '\0';
+            pv_http_parse_request(&w->ctx, w->reqbuf, rn, w->conn_fd, (int)sizeof(w->reqbuf));
         }
         if (w->owner && w->owner->handler) (void)w->owner->handler(&w->ctx);
         (void)pv_send_http_response(w->conn_fd, &w->ctx);

@@ -44,9 +44,14 @@ typedef int64_t (*pv_handler_fn)(pv_ctx *ctx);
 typedef struct pv_pool pv_pool;
 typedef struct pv_worker pv_worker;
 
+#ifndef PV_POOL_REQ_MAX
+#define PV_POOL_REQ_MAX (64u * 1024u)   /* per-worker HTTP request buffer */
+#endif
+
 struct pv_worker {
     pv_ctx ctx;
     uint8_t arena[PV_POOL_ARENA_SIZE];
+    char reqbuf[PV_POOL_REQ_MAX];        /* recv buffer; ctx->req_* point into this */
     pv_socket_t conn_fd;
     volatile int busy;
     volatile int stop;
