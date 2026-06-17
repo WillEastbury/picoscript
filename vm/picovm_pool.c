@@ -308,7 +308,13 @@ static void pv_http_parse_request(pv_ctx *ctx, char *buf, int n, pv_socket_t fd,
         if (m) {
             int vs = ls + nl; while (vs < le && (buf[vs] == ' ' || buf[vs] == '\t')) vs++;
             content_len = 0;
-            while (vs < le && buf[vs] >= '0' && buf[vs] <= '9') content_len = content_len * 10 + (buf[vs++] - '0');
+            /* Overflow-safe parse: a Content-Length can never exceed the request
+               buffer, so cap there and treat anything larger as the cap. */
+            while (vs < le && buf[vs] >= '0' && buf[vs] <= '9') {
+                content_len = content_len * 10 + (buf[vs++] - '0');
+                if (content_len > cap) { content_len = cap; break; }
+            }
+            if (content_len < 0) content_len = 0;
             break;
         }
         if (k < he) k++;

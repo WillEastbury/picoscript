@@ -173,6 +173,11 @@ static void pv_arena_put(pv_ctx *ctx, uint32_t *k, uint8_t b)
 static int pv_arena_finish(pv_ctx *ctx, uint32_t k)
 {
     if (ctx->no_alloc) { ctx->fault = PV_FAULT_ALLOC; ctx->halted = 1; return 0; }  /* INV-5 */
+    /* Ceiling: never let the bump pointer run past the arena, so later span
+       reads can't be handed an out-of-bounds [ptr,ptr+len) range. */
+    if (ctx->mem_size > 0 && (uint64_t)ctx->arena_top + k > (uint64_t)ctx->mem_size) {
+        ctx->fault = PV_FAULT_ALLOC; ctx->halted = 1; return 0;
+    }
     int h = pv_span_make(ctx, ctx->arena_top, (int32_t)k);
     ctx->arena_top += k;
     return h;
