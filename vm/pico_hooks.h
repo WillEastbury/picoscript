@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0xEA65A775
+#define PV_HOOK_TABLE_VERSION 0x7650E03D
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -435,5 +435,40 @@
 #define PV_HOOK_TEXTRENDER_HOLE                  0x267
 #define PV_HOOK_TEXTRENDER_BR                    0x268
 #define PV_HOOK_MODEL_READTENSORROW              0x270
+#define PV_HOOK_PROCESS_SELF                     0x280
+#define PV_HOOK_PROCESS_PARENT                   0x281
+#define PV_HOOK_PROCESS_SPAWN                    0x282
+#define PV_HOOK_PROCESS_EXIT                     0x283
+#define PV_HOOK_PROCESS_KILL                     0x284
+#define PV_HOOK_PROCESS_STATUS                   0x285
+#define PV_HOOK_PROCESS_WAIT                     0x286
+#define PV_HOOK_PROCESS_ARGS                     0x287
+#define PV_HOOK_ENV_GET                          0x288
+#define PV_HOOK_ENV_SET                          0x289
+#define PV_HOOK_ENV_COUNT                        0x28A
+#define PV_HOOK_ENV_KEY                          0x28B
+#define PV_HOOK_TIMER_AFTER                      0x290
+#define PV_HOOK_TIMER_EVERY                      0x291
+#define PV_HOOK_TIMER_CANCEL                     0x292
+#define PV_HOOK_TIMER_ELAPSED                    0x293
+#define PV_HOOK_SCHEDULER_TICK                   0x294
+#define PV_HOOK_PRINCIPAL_CURRENT                0x2A0
+#define PV_HOOK_PRINCIPAL_HASROLE                0x2A1
+#define PV_HOOK_PRINCIPAL_CLAIMS                 0x2A2
+#define PV_HOOK_CAPABILITY_HAS                   0x2A3
+#define PV_HOOK_CAPABILITY_REQUEST               0x2A4
+#define PV_HOOK_CAPABILITY_DROP                  0x2A5
+#define PV_HOOK_SANDBOX_DENY                     0x2A6
+#define PV_HOOK_ERROR_SETHANDLER                 0x2B0
+#define PV_HOOK_ERROR_HASHANDLER                 0x2B1
+#define PV_HOOK_ERROR_CODE                       0x2B2
+#define PV_HOOK_ERROR_DETAIL                     0x2B3
+#define PV_HOOK_ERROR_RESUME                     0x2B4
+#define PV_HOOK_ERROR_CLEAR                      0x2B5
+#define PV_HOOK_CAPSULE_CALL                     0x2C0
+#define PV_HOOK_CAPSULE_SCHEDULE                 0x2C1
+#define PV_HOOK_CAPSULE_JUMP                     0x2C2
+#define PV_HOOK_CAPSULE_LOADMODULE               0x2C3
+#define PV_HOOK_CAPSULE_RUNMODULE                0x2C4
 
 #endif

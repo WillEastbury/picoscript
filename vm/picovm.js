@@ -42,12 +42,14 @@
 
   // Binding capability classes (INV-17). Bit values match vm/picovm.h PV_CAP_* and
   // picoscript_vm.CAP_*; pure computation needs none (class 0, always allowed).
-  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024, CAPSULE: 2048, DEVICE: 4096, DMA: 8192, EVENT: 16384, UI: 32768 };
-  var CAP_ALL = 0xFFFF;
+  var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024, CAPSULE: 2048, DEVICE: 4096, DMA: 8192, EVENT: 16384, UI: 32768, PROCESS: 65536, TIMER: 131072, PRINCIPAL: 262144, CAPSULE_EXEC: 524288 };
+  var CAP_ALL = 0xFFFFF;
   var CAP_BY_NS = { Kernel: CAP.KERNEL, Queue: CAP.QUEUE, Random: CAP.RANDOM,
     Req: CAP.NET, Resp: CAP.NET, Net: CAP.NET, Storage: CAP.STORAGE, DateTime: CAP.TIME,
     Context: CAP.CONTEXT, Auth: CAP.AUTH, X509: CAP.AUTH, Environment: CAP.ENV, Locale: CAP.ENV, Gpio: CAP.GPIO,
-    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Stream: CAP.DMA, Event: CAP.EVENT, Ui: CAP.UI };
+    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Stream: CAP.DMA, Event: CAP.EVENT, Ui: CAP.UI,
+    Process: CAP.PROCESS, Env: CAP.PROCESS, Timer: CAP.TIMER, Scheduler: CAP.TIMER,
+    Principal: CAP.PRINCIPAL, Capability: CAP.PRINCIPAL, Sandbox: CAP.PRINCIPAL, Capsule: CAP.CAPSULE_EXEC };
   function hookCap(name) {   // "Ns.Method" -> required capability class (0 = pure)
     var dot = name.indexOf("."), ns = name.slice(0, dot), m = name.slice(dot + 1);
     if (ns === "Maths" && (m === "Random" || m === "RandomRange")) return CAP.RANDOM;
@@ -143,7 +145,18 @@
     this.verify();                       // INV-10: verify before execution
     while (!this.halted && this.pc < this.program.length) {
       if (this.steps >= this.maxSteps) throw picoFault(FAULT.STEP_BUDGET, this.pc, 0, "step budget exceeded");
-      this.step();
+      try {
+        this.step();
+      } catch (ex) {
+        if (ex.fault !== undefined && this._errState && this._errState.handlerPc) {
+          this._errState.code = ex.fault;
+          this._errState.detail = ex.detail || 0;
+          this._errState.resumePc = (ex.pc || 0) + 1;
+          this.pc = this._errState.handlerPc;
+        } else {
+          throw ex;
+        }
+      }
     }
     return this;
   };
@@ -436,6 +449,16 @@
       if (this._textio(name.slice(0, dot), name.slice(dot + 1), rd, rs1, rs2)) return;
     }
     if (name.indexOf("TextRender.") === 0) { if (this._textrender(name.slice(11), rd, rs1, rs2)) return; }
+    // ---- OS-worker: Process/Env, Timer/Scheduler, Principal/Capability/Sandbox, Error, Capsule ----
+    if (name.indexOf("Process.") === 0) { if (this._processEnv("Process", name.slice(8), rd, rs1, rs2)) return; }
+    if (name.indexOf("Env.") === 0) { if (this._processEnv("Env", name.slice(4), rd, rs1, rs2)) return; }
+    if (name.indexOf("Timer.") === 0) { if (this._timerScheduler("Timer", name.slice(6), rd, rs1, rs2)) return; }
+    if (name.indexOf("Scheduler.") === 0) { if (this._timerScheduler("Scheduler", name.slice(10), rd, rs1, rs2)) return; }
+    if (name.indexOf("Principal.") === 0) { if (this._principalCap("Principal", name.slice(10), rd, rs1, rs2)) return; }
+    if (name.indexOf("Capability.") === 0) { if (this._principalCap("Capability", name.slice(11), rd, rs1, rs2)) return; }
+    if (name.indexOf("Sandbox.") === 0) { if (this._principalCap("Sandbox", name.slice(8), rd, rs1, rs2)) return; }
+    if (name.indexOf("Error.") === 0) { if (this._errorHook(name.slice(6), rd, rs1, rs2)) return; }
+    if (name.indexOf("Capsule.") === 0) { if (this._capsuleExec(name.slice(8), rd, rs1, rs2)) return; }
     this.log.push("host " + name + " R" + rd + " R" + rs1);
   };
 
@@ -452,6 +475,10 @@
     var s = this.spans[handle];
     if (!s) return "";
     return new TextDecoder("utf-8").decode(this.mem.subarray(s.ptr, s.ptr + s.len));
+  };
+  PicoVM.prototype._strToBytes = function (str) {
+    var b = new TextEncoder().encode(str);
+    return Array.from(b);
   };
 
   PicoVM.prototype._strSpan = function (text) {
@@ -1982,6 +2009,208 @@
       }
     }
     return parts.join("");
+  };
+
+  // -- Process.*/Env.* OS-worker process lifecycle (mirrors HostApi._process_env) ----
+  PicoVM.prototype._processEnv = function (ns, method, rd, rs1, rs2) {
+    if (!this._proc) this._proc = { seq: 0, self: 1, parent: 0, table: {}, args: [], envVars: {} };
+    var p = this._proc;
+    if (ns === "Process") {
+      if (method === "Self") { this.regs[rd] = p.self; return true; }
+      if (method === "Parent") { this.regs[rd] = p.parent; return true; }
+      if (method === "Spawn") {
+        p.seq++;
+        var pid = p.seq + 100;
+        p.table[pid] = { status: 0, exitCode: 0, pack: this.regs[rs1] >>> 0, entry: this.regs[rs2] >>> 0 };
+        this.log.push("Process.Spawn pack=" + (this.regs[rs1] >>> 0) + " entry=" + (this.regs[rs2] >>> 0) + " -> pid=" + pid);
+        this.regs[rd] = pid; return true;
+      }
+      if (method === "Exit") {
+        var code = this.regs[rs1] | 0;
+        p.table[p.self] = { status: 1, exitCode: code, pack: 0, entry: 0 };
+        this.log.push("Process.Exit code=" + code);
+        this.halted = true; return true;
+      }
+      if (method === "Kill") {
+        var kp = p.table[this.regs[rs1] >>> 0];
+        if (kp && kp.status === 0) { kp.status = 2; kp.exitCode = -1; this.regs[rd] = 1; }
+        else this.regs[rd] = 0;
+        return true;
+      }
+      if (method === "Status") {
+        var sp = p.table[this.regs[rs1] >>> 0];
+        this.regs[rd] = sp ? sp.status : 1; return true;
+      }
+      if (method === "Wait") {
+        var wp = p.table[this.regs[rs1] >>> 0];
+        this.regs[rd] = wp ? (wp.exitCode | 0) : 0; return true;
+      }
+      if (method === "Args") { this.regs[rd] = this._newSpanBytes(p.args); return true; }
+    }
+    if (ns === "Env") {
+      if (method === "Get") {
+        var key = this._spanStr(this.regs[rs1]);
+        var val = p.envVars[key];
+        if (val !== undefined) { this.regs[rd] = this._newSpanBytes(this._strToBytes(val)); }
+        else { this.regs[rd] = 0; this.hostStatus = 1; }
+        return true;
+      }
+      if (method === "Set") {
+        p.envVars[this._spanStr(this.regs[rs1])] = this._spanStr(this.regs[rs2]);
+        this.regs[rd] = 1; return true;
+      }
+      if (method === "Count") {
+        this.regs[rd] = Object.keys(p.envVars).length; return true;
+      }
+      if (method === "Key") {
+        var keys = Object.keys(p.envVars).sort();
+        var idx = this.regs[rs1] >>> 0;
+        if (idx < keys.length) { this.regs[rd] = this._newSpanBytes(this._strToBytes(keys[idx])); }
+        else { this.regs[rd] = 0; this.hostStatus = 1; }
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // -- Timer.*/Scheduler.* timers and deterministic scheduler (mirrors HostApi._timer_scheduler) ----
+  PicoVM.prototype._timerScheduler = function (ns, method, rd, rs1, rs2) {
+    if (!this._tmr) this._tmr = { seq: 0, timers: {}, elapsedMs: 0 };
+    var t = this._tmr;
+    if (ns === "Timer") {
+      if (method === "After") {
+        t.seq++; var ms = this.regs[rs1] >>> 0;
+        t.timers[t.seq] = { ms: ms, repeat: false, remaining: ms, active: true };
+        this.regs[rd] = t.seq; return true;
+      }
+      if (method === "Every") {
+        t.seq++; var ms2 = this.regs[rs1] >>> 0;
+        t.timers[t.seq] = { ms: ms2, repeat: true, remaining: ms2, active: true };
+        this.regs[rd] = t.seq; return true;
+      }
+      if (method === "Cancel") {
+        var ti = t.timers[this.regs[rs1] >>> 0];
+        if (ti) { ti.active = false; this.regs[rd] = 1; }
+        else this.regs[rd] = 0;
+        return true;
+      }
+      if (method === "Elapsed") { this.regs[rd] = t.elapsedMs >>> 0; return true; }
+    }
+    if (ns === "Scheduler") {
+      if (method === "Tick") {
+        var delta = this.regs[rs1] >>> 0;
+        t.elapsedMs += delta;
+        var fired = 0;
+        if (!this._ev) this._ev = { recs: {}, queue: [], seq: 0, sliceOffset: 0, sliceLen: 0 };
+        var e = this._ev;
+        var handles = Object.keys(t.timers);
+        for (var i = 0; i < handles.length; i++) {
+          var h = handles[i] | 0, ti2 = t.timers[h];
+          if (!ti2.active) continue;
+          ti2.remaining -= delta;
+          while (ti2.remaining <= 0 && ti2.active) {
+            fired++;
+            e.seq++;
+            e.recs[e.seq] = { type: 100, target: h, data: null, span: 0 };
+            e.queue.push(e.seq);
+            if (ti2.repeat) ti2.remaining += ti2.ms;
+            else { ti2.active = false; break; }
+          }
+        }
+        this.regs[rd] = fired; return true;
+      }
+    }
+    return false;
+  };
+
+  // -- Principal.*/Capability.*/Sandbox.* identity & authz harness (mirrors HostApi._principal_cap) ----
+  PicoVM.prototype._principalCap = function (ns, method, rd, rs1, rs2) {
+    if (!this._auth) this._auth = { name: "anonymous", roles: [], claims: {}, denied: 0 };
+    var a = this._auth;
+    if (ns === "Principal") {
+      if (method === "Current") { this.regs[rd] = this._newSpanBytes(this._strToBytes(a.name)); return true; }
+      if (method === "HasRole") {
+        var role = this._spanStr(this.regs[rs1]);
+        this.regs[rd] = a.roles.indexOf(role) >= 0 ? 1 : 0; return true;
+      }
+      if (method === "Claims") {
+        var ks = Object.keys(a.claims).sort();
+        var pairs = ks.map(function (k) { return k + "=" + a.claims[k]; }).join(";");
+        this.regs[rd] = this._newSpanBytes(this._strToBytes(pairs)); return true;
+      }
+    }
+    if (ns === "Capability") {
+      if (method === "Has") {
+        var cb = this.regs[rs1] >>> 0;
+        this.regs[rd] = ((this.caps & cb) && !(a.denied & cb)) ? 1 : 0; return true;
+      }
+      if (method === "Request") {
+        var cb2 = this.regs[rs1] >>> 0;
+        if (a.denied & cb2) this.regs[rd] = 0;
+        else { this.caps |= cb2; this.regs[rd] = 1; }
+        return true;
+      }
+      if (method === "Drop") {
+        this.caps &= ~(this.regs[rs1] >>> 0);
+        this.regs[rd] = 1; return true;
+      }
+    }
+    if (ns === "Sandbox") {
+      if (method === "Deny") {
+        var cb3 = this.regs[rs1] >>> 0;
+        a.denied |= cb3; this.caps &= ~cb3;
+        this.regs[rd] = 1; return true;
+      }
+    }
+    return false;
+  };
+
+  // -- Error.* global error handler + fault inspection (mirrors HostApi._error_hook) ----
+  PicoVM.prototype._errorHook = function (method, rd, rs1, rs2) {
+    if (!this._errState) this._errState = { handlerPc: 0, code: 0, detail: 0, resumePc: 0 };
+    var es = this._errState;
+    if (method === "SetHandler") { es.handlerPc = this.regs[rs1] >>> 0; this.regs[rd] = 1; return true; }
+    if (method === "HasHandler") { this.regs[rd] = es.handlerPc ? 1 : 0; return true; }
+    if (method === "Code") { this.regs[rd] = es.code >>> 0; return true; }
+    if (method === "Detail") { this.regs[rd] = es.detail >>> 0; return true; }
+    if (method === "Resume") {
+      es.code = 0; es.detail = 0;
+      if (es.resumePc) { this.pc = es.resumePc; es.resumePc = 0; }
+      this.regs[rd] = 1; return true;
+    }
+    if (method === "Clear") { es.code = 0; es.detail = 0; this.regs[rd] = 1; return true; }
+    return false;
+  };
+
+  // -- Capsule.* inter-card module switching (mirrors HostApi._capsule_exec) ----
+  PicoVM.prototype._capsuleExec = function (method, rd, rs1, rs2) {
+    if (!this._capExec) this._capExec = { seq: 0, modules: {}, schedules: [] };
+    var c = this._capExec;
+    if (method === "Call") {
+      this.log.push("Capsule.Call pack=" + (this.regs[rs1] >>> 0) + " card=" + (this.regs[rs2] >>> 0));
+      this.regs[rd] = 0; return true;
+    }
+    if (method === "Schedule") {
+      c.schedules.push({ pack: this.regs[rs1] >>> 0, card: this.regs[rs2] >>> 0 });
+      this.log.push("Capsule.Schedule pack=" + (this.regs[rs1] >>> 0) + " card=" + (this.regs[rs2] >>> 0));
+      this.regs[rd] = 1; return true;
+    }
+    if (method === "Jump") {
+      this.log.push("Capsule.Jump pack=" + (this.regs[rs1] >>> 0) + " card=" + (this.regs[rs2] >>> 0));
+      this.halted = true; return true;
+    }
+    if (method === "LoadModule") {
+      c.seq++; var h = c.seq;
+      c.modules[h] = { pack: this.regs[rs1] >>> 0, card: this.regs[rs2] >>> 0 };
+      this.log.push("Capsule.LoadModule pack=" + (this.regs[rs1] >>> 0) + " card=" + (this.regs[rs2] >>> 0) + " -> handle=" + h);
+      this.regs[rd] = h; return true;
+    }
+    if (method === "RunModule") {
+      var m = c.modules[this.regs[rs1] >>> 0];
+      if (m) this.log.push("Capsule.RunModule handle=" + (this.regs[rs1] >>> 0) + " pack=" + m.pack + " card=" + m.card);
+      this.regs[rd] = 0; return true;
+    }
+    return false;
   };
 
   // ── module container: embedded + checked ABI version (INV-23) ─────────────

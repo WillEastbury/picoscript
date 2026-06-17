@@ -419,6 +419,64 @@ NAMESPACE_MAP = {
         "Hole": OP_NOOP,
         "Br": OP_NOOP,
     },
+    # OS-worker process lifecycle (0x0280-0x028B)
+    "Process": {
+        "Self": OP_NOOP,
+        "Parent": OP_NOOP,
+        "Spawn": OP_NOOP,
+        "Exit": OP_NOOP,
+        "Kill": OP_NOOP,
+        "Status": OP_NOOP,
+        "Wait": OP_NOOP,
+        "Args": OP_NOOP,
+    },
+    "Env": {
+        "Get": OP_NOOP,
+        "Set": OP_NOOP,
+        "Count": OP_NOOP,
+        "Key": OP_NOOP,
+    },
+    # Timers and scheduler (0x0290-0x0294)
+    "Timer": {
+        "After": OP_NOOP,
+        "Every": OP_NOOP,
+        "Cancel": OP_NOOP,
+        "Elapsed": OP_NOOP,
+    },
+    "Scheduler": {
+        "Tick": OP_NOOP,
+    },
+    # Principal / Capability / Sandbox (0x02A0-0x02A6)
+    "Principal": {
+        "Current": OP_NOOP,
+        "HasRole": OP_NOOP,
+        "Claims": OP_NOOP,
+    },
+    "Capability": {
+        "Has": OP_NOOP,
+        "Request": OP_NOOP,
+        "Drop": OP_NOOP,
+    },
+    "Sandbox": {
+        "Deny": OP_NOOP,
+    },
+    # Error handling (0x02B0-0x02B5)
+    "Error": {
+        "Code": OP_NOOP,
+        "Detail": OP_NOOP,
+        "Resume": OP_NOOP,
+        "Clear": OP_NOOP,
+        "SetHandler": OP_NOOP,
+        "HasHandler": OP_NOOP,
+    },
+    # Capsule execution / inter-card module switch (0x02C0-0x02C4)
+    "Capsule": {
+        "Call": OP_NOOP,
+        "Schedule": OP_NOOP,
+        "Jump": OP_NOOP,
+        "LoadModule": OP_NOOP,
+        "RunModule": OP_NOOP,
+    },
     "Maths": {
         "Sin":            OP_NOOP,
         "Cos":            OP_NOOP,
@@ -795,6 +853,50 @@ HOST_HOOK_CODES = {
     ("TextRender", "Empty"):    0x0266,   # rs1=writer                   />
     ("TextRender", "Hole"):     0x0267,   # rs1=model key=value rs2=key   escaped value
     ("TextRender", "Br"):       0x0268,   # rs1=writer                   <br/>
+    # Process lifecycle (0x0280-0x0287): OS-worker process table.
+    ("Process", "Self"):         0x0280,   # rd=pid of this process
+    ("Process", "Parent"):       0x0281,   # rd=pid of parent process
+    ("Process", "Spawn"):        0x0282,   # rs1=pack rs2=entry           rd=pid
+    ("Process", "Exit"):         0x0283,   # rs1=exit code                (terminates current)
+    ("Process", "Kill"):         0x0284,   # rs1=pid                      rd=ok
+    ("Process", "Status"):       0x0285,   # rs1=pid                      rd=0 running/1 exited/2 faulted
+    ("Process", "Wait"):         0x0286,   # rs1=pid                      rd=exit code
+    ("Process", "Args"):         0x0287,   # rd=span (launch arguments)
+    # Env key-value (0x0288-0x028B): process environment variables.
+    ("Env", "Get"):              0x0288,   # rs1=key-span                 rd=value-span (0=not found)
+    ("Env", "Set"):              0x0289,   # rs1=key-span rs2=value-span  rd=ok
+    ("Env", "Count"):            0x028A,   # rd=number of env vars
+    ("Env", "Key"):              0x028B,   # rs1=index                    rd=key-span
+    # Timer (0x0290-0x0293): one-shot and repeating timers.
+    ("Timer", "After"):          0x0290,   # rs1=ms                       rd=handle
+    ("Timer", "Every"):          0x0291,   # rs1=ms                       rd=handle
+    ("Timer", "Cancel"):         0x0292,   # rs1=handle                   rd=ok
+    ("Timer", "Elapsed"):        0x0293,   # rd=simulated elapsed ms
+    # Scheduler (0x0294): deterministic time advancement (test helper).
+    ("Scheduler", "Tick"):       0x0294,   # rs1=ms delta                 rd=number of timers fired
+    # Principal (0x02A0-0x02A2): identity/role queries.
+    ("Principal", "Current"):    0x02A0,   # rd=span (principal name)
+    ("Principal", "HasRole"):    0x02A1,   # rs1=role-span                rd=0/1
+    ("Principal", "Claims"):     0x02A2,   # rd=span (key=value pairs)
+    # Capability (0x02A3-0x02A5): dynamic cap query/request/drop.
+    ("Capability", "Has"):       0x02A3,   # rs1=cap-id                   rd=0/1
+    ("Capability", "Request"):   0x02A4,   # rs1=cap-id                   rd=ok/0
+    ("Capability", "Drop"):      0x02A5,   # rs1=cap-id                   rd=ok
+    # Sandbox (0x02A6): revoke a capability for the current process.
+    ("Sandbox", "Deny"):         0x02A6,   # rs1=cap-id                   rd=ok
+    # Error handling (0x02B0-0x02B5): global error handler + fault inspection.
+    ("Error", "SetHandler"):     0x02B0,   # rs1=handler PC (label addr)  rd=ok
+    ("Error", "HasHandler"):     0x02B1,   # rd=0/1
+    ("Error", "Code"):           0x02B2,   # rd=last fault code (0=none)
+    ("Error", "Detail"):         0x02B3,   # rd=last fault detail value
+    ("Error", "Resume"):         0x02B4,   # rd=ok (clear fault and continue at fault PC+1)
+    ("Error", "Clear"):          0x02B5,   # rd=ok (clear fault code without resuming)
+    # Capsule execution (0x02C0-0x02C4): inter-card module switching.
+    ("Capsule", "Call"):         0x02C0,   # rs1=pack rs2=card            rd=result
+    ("Capsule", "Schedule"):     0x02C1,   # rs1=pack rs2=card            rd=ok (bind to event)
+    ("Capsule", "Jump"):         0x02C2,   # rs1=pack rs2=card            (transfer execution)
+    ("Capsule", "LoadModule"):   0x02C3,   # rs1=pack rs2=card            rd=moduleHandle
+    ("Capsule", "RunModule"):    0x02C4,   # rs1=handle                   rd=result
     # Arena scopes (0x7C-0x7E): bump-arena mark / rewind / reset for request-scoped
     # allocation -- Mark() snapshots the arena, Rewind(mark) reclaims everything since,
     # Reset() drops all arena spans back to the base. Frees the span/string namespaces

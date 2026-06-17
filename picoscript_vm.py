@@ -593,7 +593,12 @@ CAP_DEVICE  = 1 << 12           # Device.* (enumerate/open a streaming device)
 CAP_DMA     = 1 << 13           # Stream.* (DMA-ring buffers)
 CAP_EVENT   = 1 << 14           # Event.* (reactive event queue; UI/async dispatch)
 CAP_UI      = 1 << 15           # Ui.* (retained scene tree / remote windowing)
-CAP_ALL     = 0xFFFF            # default grant: every binding (host restricts to gate)
+CAP_PROCESS = 1 << 16           # Process.*/Env.* (process lifecycle, environment vars)
+CAP_TIMER   = 1 << 17           # Timer.*/Scheduler.* (timers, deterministic time)
+CAP_PRINCIPAL = 1 << 18         # Principal.*/Capability.*/Sandbox.* (identity, authz)
+CAP_ERROR   = 0                 # Error.* is a pure language primitive -- no cap needed
+CAP_CAPSULE_EXEC = 1 << 19     # Capsule.* execution (inter-card module switching)
+CAP_ALL     = 0xFFFFF           # default grant: every binding (host restricts to gate)
 
 _CAP_BY_NS = {
     "Kernel": CAP_KERNEL, "Queue": CAP_QUEUE, "Random": CAP_RANDOM,
@@ -605,6 +610,10 @@ _CAP_BY_NS = {
     "Device": CAP_DEVICE, "Stream": CAP_DMA,
     "Event": CAP_EVENT, "Ui": CAP_UI,
     "Search": CAP_STORAGE,
+    "Process": CAP_PROCESS, "Env": CAP_PROCESS,
+    "Timer": CAP_TIMER, "Scheduler": CAP_TIMER,
+    "Principal": CAP_PRINCIPAL, "Capability": CAP_PRINCIPAL, "Sandbox": CAP_PRINCIPAL,
+    "Capsule": CAP_CAPSULE_EXEC,
 }
 
 
@@ -718,6 +727,31 @@ class HostApi:
         # to it so a reused server VM never leaks (set_arena_base() can move it
         # forward after one-time setup such as Template.Compile).
         self._handler_mark: Optional[tuple] = None
+        # -- OS-worker: Process/Env lifecycle --
+        self._process_seq = 0          # next fake pid
+        self._process_self = 1         # current process pid
+        self._process_parent = 0       # parent pid (0 = root)
+        self._process_table: Dict[int, dict] = {}   # pid -> {status, exit_code, pack, entry}
+        self._process_args: bytes = b""              # launch arguments
+        self._env_vars: Dict[str, str] = {}          # process environment key-value
+        # -- OS-worker: Timer/Scheduler --
+        self._timer_seq = 0
+        self._timers: Dict[int, dict] = {}  # handle -> {ms, repeat, remaining, active}
+        self._elapsed_ms = 0                # simulated monotonic clock
+        # -- OS-worker: Principal/Capability/Sandbox --
+        self._principal_name: str = "anonymous"
+        self._principal_roles: List[str] = []
+        self._principal_claims: Dict[str, str] = {}
+        self._sandbox_denied: int = 0    # bitmask of denied capabilities
+        # -- OS-worker: Error handling --
+        self._error_handler_pc: int = 0  # 0 = unset
+        self._error_code: int = 0        # last fault code (0=none)
+        self._error_detail: int = 0      # last fault detail
+        self._error_resume_pc: int = 0   # pc to resume from after fault
+        # -- OS-worker: Capsule execution --
+        self._capsule_modules: Dict[int, dict] = {}  # handle -> {pack, card, bytecode}
+        self._capsule_seq = 0
+        self._capsule_schedules: List[dict] = []     # [{pack, card, eventType}]
 
     @property
     def store(self):
@@ -970,6 +1004,23 @@ class HostApi:
                 return
         if ns == "TextRender":
             if self._textrender(vm, method, rd, rs1, rs2):
+                return
+        # OS-worker: Process/Env, Timer/Scheduler, Principal/Capability/Sandbox,
+        # Error handling, Capsule execution.
+        if ns in ("Process", "Env"):
+            if self._process_env(vm, ns, method, rd, rs1, rs2):
+                return
+        if ns in ("Timer", "Scheduler"):
+            if self._timer_scheduler(vm, ns, method, rd, rs1, rs2):
+                return
+        if ns in ("Principal", "Capability", "Sandbox"):
+            if self._principal_cap(vm, ns, method, rd, rs1, rs2):
+                return
+        if ns == "Error":
+            if self._error_hook(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Capsule":
+            if self._capsule_exec(vm, method, rd, rs1, rs2):
                 return
         # Unknown hook: record and continue (host-fillable primitive).
         self.log.append(f"host {ns}.{method} rd=R{rd} rs1=R{rs1} rs2=R{rs2} imm={imm16:#06x}")
@@ -3089,6 +3140,253 @@ class HostApi:
             self._psc1_int(out, b"y", nd["y"])
         return bytes(out)
 
+    # -- Process.*/Env.* OS-worker process lifecycle -------------------------
+    def _process_env(self, vm: "PicoVM", ns: str, method: str, rd, rs1, rs2) -> bool:
+        if ns == "Process":
+            if method == "Self":
+                vm.regs[rd] = self._process_self
+                return True
+            if method == "Parent":
+                vm.regs[rd] = self._process_parent
+                return True
+            if method == "Spawn":
+                self._process_seq += 1
+                pid = self._process_seq + 100  # fake pids start at 101
+                pack_id = vm.regs[rs1] & MASK32
+                entry = vm.regs[rs2] & MASK32
+                self._process_table[pid] = {"status": 0, "exit_code": 0,
+                                            "pack": pack_id, "entry": entry}
+                self.log.append(f"Process.Spawn pack={pack_id} entry={entry} -> pid={pid}")
+                vm.regs[rd] = pid
+                return True
+            if method == "Exit":
+                code = _sx32(vm.regs[rs1])
+                self._process_table[self._process_self] = {"status": 1, "exit_code": code,
+                                                           "pack": 0, "entry": 0}
+                self.log.append(f"Process.Exit code={code}")
+                raise Halt()
+            if method == "Kill":
+                pid = vm.regs[rs1] & MASK32
+                p = self._process_table.get(pid)
+                if p and p["status"] == 0:
+                    p["status"] = 2; p["exit_code"] = -1
+                    vm.regs[rd] = 1
+                else:
+                    vm.regs[rd] = 0
+                return True
+            if method == "Status":
+                pid = vm.regs[rs1] & MASK32
+                p = self._process_table.get(pid)
+                vm.regs[rd] = p["status"] if p else 1  # unknown pid -> exited
+                return True
+            if method == "Wait":
+                pid = vm.regs[rs1] & MASK32
+                p = self._process_table.get(pid)
+                vm.regs[rd] = (p["exit_code"] & MASK32) if p else 0
+                return True
+            if method == "Args":
+                vm.regs[rd] = self._new_span_bytes(vm, self._process_args)
+                return True
+        if ns == "Env":
+            if method == "Get":
+                key = self._span_str(vm, vm.regs[rs1])
+                val = self._env_vars.get(key)
+                if val is not None:
+                    vm.regs[rd] = self._new_span_bytes(vm, val.encode("utf-8"))
+                else:
+                    vm.regs[rd] = 0
+                    self.host_status = 1  # NOT_FOUND
+                return True
+            if method == "Set":
+                key = self._span_str(vm, vm.regs[rs1])
+                val = self._span_str(vm, vm.regs[rs2])
+                self._env_vars[key] = val
+                vm.regs[rd] = 1
+                return True
+            if method == "Count":
+                vm.regs[rd] = len(self._env_vars)
+                return True
+            if method == "Key":
+                idx = vm.regs[rs1] & MASK32
+                keys = sorted(self._env_vars.keys())
+                if idx < len(keys):
+                    vm.regs[rd] = self._new_span_bytes(vm, keys[idx].encode("utf-8"))
+                else:
+                    vm.regs[rd] = 0
+                    self.host_status = 1
+                return True
+        return False
+
+    # -- Timer.*/Scheduler.* timers and deterministic scheduler ---------------
+    def _timer_scheduler(self, vm: "PicoVM", ns: str, method: str, rd, rs1, rs2) -> bool:
+        if ns == "Timer":
+            if method == "After":
+                self._timer_seq += 1
+                h = self._timer_seq
+                ms = vm.regs[rs1] & MASK32
+                self._timers[h] = {"ms": ms, "repeat": False,
+                                   "remaining": ms, "active": True}
+                vm.regs[rd] = h
+                return True
+            if method == "Every":
+                self._timer_seq += 1
+                h = self._timer_seq
+                ms = vm.regs[rs1] & MASK32
+                self._timers[h] = {"ms": ms, "repeat": True,
+                                   "remaining": ms, "active": True}
+                vm.regs[rd] = h
+                return True
+            if method == "Cancel":
+                h = vm.regs[rs1] & MASK32
+                t = self._timers.get(h)
+                if t:
+                    t["active"] = False
+                    vm.regs[rd] = 1
+                else:
+                    vm.regs[rd] = 0
+                return True
+            if method == "Elapsed":
+                vm.regs[rd] = self._elapsed_ms & MASK32
+                return True
+        if ns == "Scheduler":
+            if method == "Tick":
+                delta = vm.regs[rs1] & MASK32
+                self._elapsed_ms += delta
+                fired = 0
+                for h, t in list(self._timers.items()):
+                    if not t["active"]:
+                        continue
+                    t["remaining"] -= delta
+                    while t["remaining"] <= 0 and t["active"]:
+                        fired += 1
+                        # Inject EVENT_TIMER (type=100) with target=timer_handle
+                        self._event_seq += 1
+                        ev = self._event_seq
+                        self.events[ev] = {"type": 100, "target": h,
+                                           "data": None, "span": 0}
+                        self.event_queue.append(ev)
+                        if t["repeat"]:
+                            t["remaining"] += t["ms"]
+                        else:
+                            t["active"] = False
+                            break
+                vm.regs[rd] = fired
+                return True
+        return False
+
+    # -- Principal.*/Capability.*/Sandbox.* identity & authz harness ----------
+    def _principal_cap(self, vm: "PicoVM", ns: str, method: str, rd, rs1, rs2) -> bool:
+        if ns == "Principal":
+            if method == "Current":
+                vm.regs[rd] = self._new_span_bytes(vm, self._principal_name.encode("utf-8"))
+                return True
+            if method == "HasRole":
+                role = self._span_str(vm, vm.regs[rs1])
+                vm.regs[rd] = 1 if role in self._principal_roles else 0
+                return True
+            if method == "Claims":
+                pairs = ";".join(f"{k}={v}" for k, v in sorted(self._principal_claims.items()))
+                vm.regs[rd] = self._new_span_bytes(vm, pairs.encode("utf-8"))
+                return True
+        if ns == "Capability":
+            if method == "Has":
+                cap_bit = vm.regs[rs1] & MASK32
+                denied = self._sandbox_denied
+                has = (self.caps & cap_bit) and not (denied & cap_bit)
+                vm.regs[rd] = 1 if has else 0
+                return True
+            if method == "Request":
+                cap_bit = vm.regs[rs1] & MASK32
+                if self._sandbox_denied & cap_bit:
+                    vm.regs[rd] = 0  # denied by sandbox
+                else:
+                    self.caps |= cap_bit
+                    vm.regs[rd] = 1
+                return True
+            if method == "Drop":
+                cap_bit = vm.regs[rs1] & MASK32
+                self.caps &= ~cap_bit
+                vm.regs[rd] = 1
+                return True
+        if ns == "Sandbox":
+            if method == "Deny":
+                cap_bit = vm.regs[rs1] & MASK32
+                self._sandbox_denied |= cap_bit
+                self.caps &= ~cap_bit
+                vm.regs[rd] = 1
+                return True
+        return False
+
+    # -- Error.* global error handler + fault inspection ---------------------
+    def _error_hook(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "SetHandler":
+            self._error_handler_pc = vm.regs[rs1] & MASK32
+            vm.regs[rd] = 1
+            return True
+        if method == "HasHandler":
+            vm.regs[rd] = 1 if self._error_handler_pc else 0
+            return True
+        if method == "Code":
+            vm.regs[rd] = self._error_code & MASK32
+            return True
+        if method == "Detail":
+            vm.regs[rd] = self._error_detail & MASK32
+            return True
+        if method == "Resume":
+            self._error_code = 0
+            self._error_detail = 0
+            if self._error_resume_pc:
+                vm.pc = self._error_resume_pc
+                self._error_resume_pc = 0
+            vm.regs[rd] = 1
+            return True
+        if method == "Clear":
+            self._error_code = 0
+            self._error_detail = 0
+            vm.regs[rd] = 1
+            return True
+        return False
+
+    # -- Capsule.* inter-card module switching --------------------------------
+    def _capsule_exec(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "Call":
+            pack = vm.regs[rs1] & MASK32
+            card = vm.regs[rs2] & MASK32
+            self.log.append(f"Capsule.Call pack={pack} card={card}")
+            vm.regs[rd] = 0  # simulated: no actual bytecode to run
+            return True
+        if method == "Schedule":
+            pack = vm.regs[rs1] & MASK32
+            card = vm.regs[rs2] & MASK32
+            self._capsule_schedules.append({"pack": pack, "card": card})
+            self.log.append(f"Capsule.Schedule pack={pack} card={card}")
+            vm.regs[rd] = 1
+            return True
+        if method == "Jump":
+            pack = vm.regs[rs1] & MASK32
+            card = vm.regs[rs2] & MASK32
+            self.log.append(f"Capsule.Jump pack={pack} card={card}")
+            raise Halt()  # transfer execution ends current program
+        if method == "LoadModule":
+            pack = vm.regs[rs1] & MASK32
+            card = vm.regs[rs2] & MASK32
+            self._capsule_seq += 1
+            h = self._capsule_seq
+            self._capsule_modules[h] = {"pack": pack, "card": card, "bytecode": None}
+            self.log.append(f"Capsule.LoadModule pack={pack} card={card} -> handle={h}")
+            vm.regs[rd] = h
+            return True
+        if method == "RunModule":
+            h = vm.regs[rs1] & MASK32
+            m = self._capsule_modules.get(h)
+            if m:
+                self.log.append(f"Capsule.RunModule handle={h} pack={m['pack']} card={m['card']}")
+                vm.regs[rd] = 0  # simulated: no bytecode
+            else:
+                vm.regs[rd] = 0
+            return True
+        return False
+
 
 class Halt(Exception):
     pass
@@ -3169,7 +3467,16 @@ class PicoVM:
                     raise PicoFault(PV_FAULT_STEP_BUDGET, self.pc, 0,
                                     f"step budget exceeded ({self.max_steps})")
                 self.steps += 1
-                self._step()
+                try:
+                    self._step()
+                except PicoFault as pf:
+                    if self.host._error_handler_pc:
+                        self.host._error_code = pf.code
+                        self.host._error_detail = pf.detail
+                        self.host._error_resume_pc = pf.pc + 1
+                        self.pc = self.host._error_handler_pc
+                    else:
+                        raise
         except Halt:
             self.halted = True
         return self
