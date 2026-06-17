@@ -235,7 +235,7 @@
         <div class="out" id="psunit" style="font-size:13px;margin-top:6px"></div>
       </div>
       <div class="dbg-panel" id="dbg-src">
-        <select id="lang" style="width:auto;margin-bottom:6px">
+        <select id="lang" style="display:none">
           <option value="c">C-style</option><option value="basic">BASIC</option>
           <option value="python">Python</option><option value="english">English</option>
         </select>
@@ -6563,6 +6563,33 @@ function compressBound(inputLen) {
          : compileC(src);
   }
 
+  // ── Cross-language translator ──────────────────────────────────────────
+  function translate(src, fromLang, toLang) {
+    if (fromLang === toLang) return src;
+    var ast;
+    try {
+      if (fromLang === "c") ast = new CParser(ctokenize(src)).parseProgram();
+      else if (fromLang === "basic") ast = new BParser(btokenize(src)).parseProgram();
+      else if (fromLang === "python") ast = new PyParser(pytokenize(src)).parseProgram();
+      else if (fromLang === "english") ast = new EnParser(entokenize(src)).parseProgram();
+      else return src;
+    } catch (e) { return src; }
+    if (toLang === "c") return astToC(ast);
+    if (toLang === "basic") return astToBasic(ast);
+    if (toLang === "python") return astToPython(ast);
+    if (toLang === "english") return astToEnglish(ast);
+    return src;
+  }
+  function exprStr(e, L) { if (!e) return "0"; if (e.t==="Num") return String(e.value); if (e.t==="Str") return '"'+e.value+'"'; if (e.t==="Var") return e.name; if (e.t==="Call"){var p=e.ns?(e.ns+"."):"";;return p+e.method+"("+e.args.map(function(a){return exprStr(a,L);}).join(", ")+")";} if(e.t==="Bin"){var op=e.op;if(L==="basic"){if(op==="%")op=" MOD ";if(op==="&&")op=" AND ";if(op==="||")op=" OR ";}return exprStr(e.lhs,L)+" "+op+" "+exprStr(e.rhs,L);} if(e.t==="Cmp"){var m={EQ:"==",NE:"!=",LT:"<",GT:">",LE:"<=",GE:">="};var bm={EQ:"=",NE:"<>",LT:"<",GT:">",LE:"<=",GE:">="};return exprStr(e.lhs,L)+" "+(L==="basic"?(bm[e.cond]||e.cond):(m[e.cond]||e.cond))+" "+exprStr(e.rhs,L);} if(e.t==="Ternary"){if(L==="basic")return "IIF("+exprStr(e.cond,L)+", "+exprStr(e.then,L)+", "+exprStr(e.els,L)+")";if(L==="python")return exprStr(e.then,L)+" if "+exprStr(e.cond,L)+" else "+exprStr(e.els,L);return "("+exprStr(e.cond,L)+" ? "+exprStr(e.then,L)+" : "+exprStr(e.els,L)+")";} if(e.t==="FieldRef")return e.obj+"."+e.field; return "?"; }
+  function astToC(prog){var l=[],f=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")f.push(s);else l.push(sC(s,0));});f.forEach(function(fn){l.push("void "+fn.name+"("+(fn.params||[]).map(function(p){return "int "+p;}).join(", ")+") {");(fn.body||[]).forEach(function(s){l.push(sC(s,1));});l.push("}");});return l.join("\n");}
+  function sC(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Let"||s.t==="Dim")return p+"int "+s.name+" = "+exprStr(s.init||s.value||{t:"Num",value:0},"c")+";";if(s.t==="Assign")return p+s.name+" = "+exprStr(s.value,"c")+";";if(s.t==="IncDec")return p+s.name+(s.delta>0?"++":"--")+";";if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]];var els=s.els;var o=p+"if ("+exprStr(arms[0][0],"c")+") {\n";arms[0][1].forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";for(var i=1;i<arms.length;i++){o+=" else if ("+exprStr(arms[i][0],"c")+") {\n";arms[i][1].forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";}if(els){o+=" else {\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";}return o;}if(s.t==="While"){var o=p+"while ("+exprStr(s.cond,"c")+") {\n";s.body.forEach(function(st){o+=sC(st,d+1)+"\n";});return o+p+"}";}if(s.t==="ForTo")return p+"for ("+s.v+" = "+exprStr(s.start,"c")+"; "+s.v+" <= "+exprStr(s.end,"c")+"; "+s.v+"++) {\n"+s.body.map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="ForEach")return p+"for ("+s.v+" = 0; "+s.v+" < "+exprStr(s.count,"c")+"; "+s.v+"++) {\n"+s.body.map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="Return")return p+"return"+(s.value?" "+exprStr(s.value,"c"):"")+";";if(s.t==="Break")return p+"break;";if(s.t==="Skip"||s.t==="Continue")return p+"continue;";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"c");});return p+s.name+"("+a.join(", ")+");";}if(s.t==="CallStmt")return p+exprStr(s.call,"c")+";";if(s.t==="Print")return p+"print("+exprStr(s.value,"c")+");";return p+"// "+s.t;}
+  function astToBasic(prog){var l=[],ss=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")ss.push(s);else l.push(sB(s,0));});ss.forEach(function(f){var pa=(f.params||[]).length?"("+f.params.join(", ")+")":"";l.push("SUB "+(f.name||"").toUpperCase()+pa);(f.body||[]).forEach(function(s){l.push(sB(s,1));});l.push("ENDSUB");});return l.join("\n");}
+  function sB(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim")return p+"DIM "+(s.name||"").toUpperCase()+(s.init!=null?" = "+exprStr(s.init,"basic"):"");if(s.t==="Let"||s.t==="Assign")return p+(s.name||"").toUpperCase()+" = "+exprStr(s.value,"basic");if(s.t==="IncDec")return p+(s.delta>0?"INC ":"DEC ")+(s.name||"").toUpperCase();if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]];var els=s.els;var o=p+"IF "+exprStr(arms[0][0],"basic")+" THEN\n";arms[0][1].forEach(function(st){o+=sB(st,d+1)+"\n";});for(var i=1;i<arms.length;i++){o+=p+"ELSEIF "+exprStr(arms[i][0],"basic")+" THEN\n";arms[i][1].forEach(function(st){o+=sB(st,d+1)+"\n";});}if(els){o+=p+"ELSE\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sB(st,d+1)+"\n";});}return o+p+"ENDIF";}if(s.t==="While"){var o=p+"WHILE "+exprStr(s.cond,"basic")+"\n";s.body.forEach(function(st){o+=sB(st,d+1)+"\n";});return o+p+"ENDWHILE";}if(s.t==="ForTo")return p+"FOR "+(s.v||"").toUpperCase()+" = "+exprStr(s.start,"basic")+" TO "+exprStr(s.end,"basic")+"\n"+s.body.map(function(st){return sB(st,d+1);}).join("\n")+"\n"+p+"NEXT";if(s.t==="ForEach")return p+"FOREACH "+(s.v||"").toUpperCase()+" IN "+exprStr(s.count,"basic")+"\n"+s.body.map(function(st){return sB(st,d+1);}).join("\n")+"\n"+p+"ENDFOREACH";if(s.t==="Return")return p+"RETURN"+(s.value?" "+exprStr(s.value,"basic"):"");if(s.t==="Break")return p+"BREAK";if(s.t==="Skip"||s.t==="Continue")return p+"SKIP";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"basic");});return p+"GOSUB "+(s.name||"").toUpperCase()+(a.length?"("+a.join(", ")+")":"");}if(s.t==="CallStmt")return p+exprStr(s.call,"basic");if(s.t==="Print")return p+"PRINT "+exprStr(s.value,"basic");return p+"' "+s.t;}
+  function astToPython(prog){var defs=[],body=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")defs.push(s);else body.push(sP(s,0));});var l=[];defs.forEach(function(f){l.push("def "+f.name+"("+(f.params||[]).join(", ")+"):");(f.body||[]).forEach(function(s){l.push(sP(s,1));});l.push("");});return l.concat(body).join("\n");}
+  function sP(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign")return p+s.name+" = "+exprStr(s.value||s.init||{t:"Num",value:0},"python");if(s.t==="IncDec")return p+s.name+" += "+s.delta;if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]];var els=s.els;var o=p+"if "+exprStr(arms[0][0],"python")+":\n";arms[0][1].forEach(function(st){o+=sP(st,d+1)+"\n";});for(var i=1;i<arms.length;i++){o+=p+"elif "+exprStr(arms[i][0],"python")+":\n";arms[i][1].forEach(function(st){o+=sP(st,d+1)+"\n";});}if(els){o+=p+"else:\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sP(st,d+1)+"\n";});}return o.trimEnd();}if(s.t==="While"){var o=p+"while "+exprStr(s.cond,"python")+":\n";s.body.forEach(function(st){o+=sP(st,d+1)+"\n";});return o.trimEnd();}if(s.t==="ForTo")return p+"for "+s.v+" in range("+exprStr(s.start,"python")+", "+exprStr(s.end,"python")+" + 1):\n"+s.body.map(function(st){return sP(st,d+1);}).join("\n");if(s.t==="ForEach")return p+"for "+s.v+" in range("+exprStr(s.count,"python")+"):\n"+s.body.map(function(st){return sP(st,d+1);}).join("\n");if(s.t==="Return")return p+"return"+(s.value?" "+exprStr(s.value,"python"):"");if(s.t==="Break")return p+"break";if(s.t==="Skip"||s.t==="Continue")return p+"continue";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"python");});return p+s.name+"("+a.join(", ")+")";}if(s.t==="CallStmt")return p+exprStr(s.call,"python");if(s.t==="Print")return p+"print("+exprStr(s.value,"python")+")";return p+"# "+s.t;}
+  function astToEnglish(prog){var l=[],defs=[];prog.forEach(function(s){if(s.t==="Func"||s.t==="Sub")defs.push(s);else l.push(sE(s,0));});defs.forEach(function(f){var pa=(f.params||[]).length?"("+f.params.join(", ")+")":"";l.push("Define "+f.name+pa+":");(f.body||[]).forEach(function(s){l.push(sE(s,1));});});return l.join("\n");}
+  function sE(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Dim"||s.t==="Let"||s.t==="Assign")return p+"Set "+s.name+" to "+exprStr(s.value||s.init||{t:"Num",value:0},"english")+".";if(s.t==="IncDec")return p+(s.delta>0?"Increase ":"Decrease ")+s.name+" by 1.";if(s.t==="If"){var o=p+"If "+exprStr(s.arms[0][0],"english")+":\n";s.arms[0][1].forEach(function(st){o+=sE(st,d+1)+"\n";});if(s.els){o+=p+"Otherwise:\n";s.els.forEach(function(st){o+=sE(st,d+1)+"\n";});}return o.trimEnd();}if(s.t==="While"){var o=p+"While "+exprStr(s.cond,"english")+":\n";s.body.forEach(function(st){o+=sE(st,d+1)+"\n";});return o.trimEnd();}if(s.t==="ForTo"||s.t==="ForEach"){var n=s.count||s.end;return p+"For each "+(s.v||"i")+" from 0 to "+exprStr(n,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");}if(s.t==="Return")return p+"Return"+(s.value?" "+exprStr(s.value,"english"):"")+".";if(s.t==="Break")return p+"Stop.";if(s.t==="Skip"||s.t==="Continue")return p+"Skip.";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"english");});return p+"Call "+s.name+(a.length?"("+a.join(", ")+")":"")+".";} if(s.t==="CallStmt")return p+exprStr(s.call,"english")+".";if(s.t==="Print")return p+"Print "+exprStr(s.value,"english")+".";return p+"' "+s.t;}
+
   return {
     compile: function (src, lang) {
       var il = compileIL(src, lang);
@@ -6582,6 +6609,7 @@ function compressBound(inputLen) {
       var words = lowerToBytecode(compileIL(src, lang), true, null, true, dbg);
       return { words: words, debug: dbg };
     },
+    translate: translate,
     symbolize: symbolize,
     offsetToLineCol: offsetToLineCol,
     sourceLineText: sourceLineText,
@@ -6798,11 +6826,23 @@ function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/
 
 // ---- language toggle -------------------------------------------------------
 function setLang(lang){
+  var oldLang = CUR_LANG;
   CUR_LANG = lang;
   document.querySelectorAll('#langToggle button').forEach(function(b){
     b.classList.toggle('active', b.getAttribute('data-lang')===lang);
   });
-  document.getElementById('lang').value = lang;
+  var sel = document.getElementById('lang');
+  if (sel) sel.value = lang;
+  // auto-translate editor content to new language
+  var src = getSrc();
+  if (src && oldLang !== lang) {
+    var m = sampleMatch(src);
+    if (m && DATA[m.idx][lang]) { setSrc(DATA[m.idx][lang].src); }
+    else if (typeof PicoCompile !== 'undefined' && PicoCompile.translate) {
+      var translated = PicoCompile.translate(src, oldLang, lang);
+      if (translated && translated !== src) setSrc(translated);
+    }
+  }
   if(typeof onLangChange==='function') onLangChange();
   showCard(CUR_CARD);
 }
@@ -7095,9 +7135,8 @@ function sampleMatch(src){
   return null;
 }
 function editorLangChange(){
-  var newLang=document.getElementById('lang').value, m=sampleMatch(getSrc());
-  if(m && DATA[m.idx][newLang]){ setSrc(DATA[m.idx][newLang].src); compileSrc(true); }
-  else { onLangChange(); }
+  var newLang=document.getElementById('lang').value;
+  setLang(newLang);  // unify: editor dropdown drives the same setLang as the top bar
 }
 
 // ---- localStorage-backed playground files ----------------------------------

@@ -1037,7 +1037,7 @@ PAGE = r"""<!DOCTYPE html>
         <div class="out" id="psunit" style="font-size:13px;margin-top:6px"></div>
       </div>
       <div class="dbg-panel" id="dbg-src">
-        <select id="lang" style="width:auto;margin-bottom:6px">
+        <select id="lang" style="display:none">
           <option value="c">C-style</option><option value="basic">BASIC</option>
           <option value="python">Python</option><option value="english">English</option>
         </select>
@@ -1111,11 +1111,23 @@ function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/
 
 // ---- language toggle -------------------------------------------------------
 function setLang(lang){
+  var oldLang = CUR_LANG;
   CUR_LANG = lang;
   document.querySelectorAll('#langToggle button').forEach(function(b){
     b.classList.toggle('active', b.getAttribute('data-lang')===lang);
   });
-  document.getElementById('lang').value = lang;
+  var sel = document.getElementById('lang');
+  if (sel) sel.value = lang;
+  // auto-translate editor content to new language
+  var src = getSrc();
+  if (src && oldLang !== lang) {
+    var m = sampleMatch(src);
+    if (m && DATA[m.idx][lang]) { setSrc(DATA[m.idx][lang].src); }
+    else if (typeof PicoCompile !== 'undefined' && PicoCompile.translate) {
+      var translated = PicoCompile.translate(src, oldLang, lang);
+      if (translated && translated !== src) setSrc(translated);
+    }
+  }
   if(typeof onLangChange==='function') onLangChange();
   showCard(CUR_CARD);
 }
@@ -1408,9 +1420,8 @@ function sampleMatch(src){
   return null;
 }
 function editorLangChange(){
-  var newLang=document.getElementById('lang').value, m=sampleMatch(getSrc());
-  if(m && DATA[m.idx][newLang]){ setSrc(DATA[m.idx][newLang].src); compileSrc(true); }
-  else { onLangChange(); }
+  var newLang=document.getElementById('lang').value;
+  setLang(newLang);  // unify: editor dropdown drives the same setLang as the top bar
 }
 
 // ---- localStorage-backed playground files ----------------------------------
