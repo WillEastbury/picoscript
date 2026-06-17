@@ -18,8 +18,12 @@
 #define PV_NUM_REGS   16
 #define PV_MAX_CARDS  2048      /* open-addressed; must be a power of two */
 #define PV_MAX_CALL   256
-#define PV_MAX_OUT    8192
+#ifndef PV_MAX_OUT
+#define PV_MAX_OUT    8192      /* response/output buffer; override for large bodies */
+#endif
+#ifndef PV_MAX_SPANS
 #define PV_MAX_SPANS  1024      /* span table: handle = 1-based index, 0 = null */
+#endif
 #define PV_MAX_WRITERS 16       /* Utf8Writer / Json / Xml handles */
 #define PV_MAX_READERS 16       /* Utf8Reader handles */
 #define PV_JSON_DEPTH  32       /* nested object/array depth per writer */

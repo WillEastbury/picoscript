@@ -121,6 +121,8 @@
   .file-badge { font-size:9px; font-weight:700; border-radius:8px; padding:1px 5px; color:#0f1117; }
   .file-badge.c { background:var(--c); } .file-badge.basic { background:var(--b); }
   .file-badge.python { background:var(--py); } .file-badge.english { background:var(--en); }
+  .file-badge.cobol { background:var(--cob); } .file-badge.report { background:var(--rpt); }
+  .file-badge.functional { background:var(--fn); }
   .file-meta { color:var(--muted); font-size:10px; margin-top:3px; }
   .file-empty,.file-status { color:var(--muted); font-size:11px; line-height:1.4; }
   .cerr { font-family:monospace; font-size:11px; min-height:14px; }
@@ -7696,12 +7698,13 @@ function setLang(lang){
   if (sel) sel.value = lang;
   // auto-translate editor content to new language
   var src = getSrc();
-  if (src && oldLang !== lang) {
+  if (src && src.trim() && oldLang !== lang) {
     var m = sampleMatch(src);
-    if (m && DATA[m.idx][lang]) { setSrc(DATA[m.idx][lang].src); }
-    else if (typeof PicoCompile !== 'undefined' && PicoCompile.translate) {
+    if (m && DATA[m.idx][lang]) {
+      setSrc(DATA[m.idx][lang].src);
+    } else if (typeof PicoCompile !== 'undefined' && PicoCompile.translate) {
       var translated = PicoCompile.translate(src, oldLang, lang);
-      if (translated && translated !== src) setSrc(translated);
+      if (translated) setSrc(translated);
     }
   }
   if(typeof onLangChange==='function') onLangChange();
