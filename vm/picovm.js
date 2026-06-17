@@ -2320,5 +2320,183 @@
   PicoVM.MODULE_MAGIC = MODULE_MAGIC;
   PicoVM.MODULE_ABI_VERSION = MODULE_ABI_VERSION;
 
+
+  // PicoVM.Pool -- simulated worker pool for Node.js.
+  var _poolRequire = (typeof module !== "undefined" && module.exports && typeof require === "function") ? require : null;
+  var _poolHttp = null;
+  var _poolBuffer = (typeof Buffer !== "undefined") ? Buffer : null;
+  try {
+    if (_poolRequire) {
+      _poolHttp = _poolRequire("http");
+      _poolBuffer = _poolRequire("buffer").Buffer;
+    }
+  } catch (e) {
+    _poolHttp = null;
+  }
+
+  function poolSpanBuffer(vm, payload) {
+    if (!_poolBuffer || !payload) return "";
+    if (payload.span !== undefined && typeof vm._spanBytes === "function") {
+      return _poolBuffer.from(vm._spanBytes(payload.span));
+    }
+    return _poolBuffer.from(String(payload.text || ""), "utf8");
+  }
+
+  function poolResponseFromVM(vm) {
+    var graph = (typeof vm.getResponseGraph === "function") ? vm.getResponseGraph() : [];
+    var status = (vm.httpStatus >= 0) ? vm.httpStatus : 200;
+    var headers = {};
+    var trailers = {};
+    var bodyParts = [];
+    var i, d, name, value;
+    if (vm.httpType) headers["content-type"] = vm.httpType;
+    for (i = 0; i < graph.length; i++) {
+      d = graph[i];
+      if (d.kind === "DESC_PREAMBLE" && d.subtype === "STATUS") status = (d.payload && d.payload.code) || status;
+      else if (d.kind === "DESC_HEADER" && d.payload) {
+        name = String(d.payload.name && d.payload.name.text || "").toLowerCase();
+        value = String(d.payload.value && d.payload.value.text || "");
+        if (name) headers[name] = value;
+      } else if (d.kind === "DESC_TRAILER" && d.payload) {
+        name = String(d.payload.name && d.payload.name.text || "");
+        value = String(d.payload.value && d.payload.value.text || "");
+        if (name) trailers[name] = value;
+      } else if (d.kind === "DESC_BODY") {
+        bodyParts.push(poolSpanBuffer(vm, d.payload));
+      } else if (d.kind === "DESC_ABORT") {
+        status = (d.payload && d.payload.code) || 500;
+        bodyParts = [];
+      }
+    }
+    if (!bodyParts.length && vm.output && vm.output.length && _poolBuffer) {
+      bodyParts.push(_poolBuffer.from(vm.output));
+    }
+    if (!headers["content-type"]) headers["content-type"] = vm.httpType || "application/octet-stream";
+    return {
+      status: status,
+      headers: headers,
+      trailers: trailers,
+      body: _poolBuffer ? _poolBuffer.concat(bodyParts) : bodyParts.join("")
+    };
+  }
+
+  PicoVM.Pool = function (opts) {
+    opts = opts || {};
+    this.size = Math.max(1, Math.min(64, opts.workers || 8));
+    this.handler = (typeof opts.handler === "function") ? opts.handler : function () {};
+    this.vmOptions = opts.vmOptions || {};
+    this.server = null;
+    this.pending = [];
+    this.seq = 1;
+    this.available = !!(_poolHttp && _poolBuffer);
+    this.workers = [];
+    for (var i = 0; i < this.size; i++) {
+      this.workers.push({ id: i, busy: false, vm: new PicoVM(this.vmOptions) });
+    }
+  };
+
+  PicoVM.Pool.prototype._freshVM = function () {
+    return new PicoVM(this.vmOptions);
+  };
+
+  PicoVM.Pool.prototype._findIdleWorker = function () {
+    for (var i = 0; i < this.workers.length; i++) if (!this.workers[i].busy) return this.workers[i];
+    return null;
+  };
+
+  PicoVM.Pool.prototype._resetWorker = function (worker) {
+    worker.vm = this._freshVM();
+    worker.busy = false;
+  };
+
+  PicoVM.Pool.prototype._dispatch = function () {
+    var worker, job;
+    while (this.pending.length) {
+      worker = this._findIdleWorker();
+      if (!worker) return;
+      job = this.pending.shift();
+      this._runWorker(worker, job);
+    }
+  };
+
+  PicoVM.Pool.prototype._runWorker = function (worker, job) {
+    var self = this;
+    var vm = worker.vm;
+    worker.busy = true;
+    vm.setRequestContext(job.ctx);
+    Promise.resolve()
+      .then(function () { return self.handler(vm); })
+      .then(function () {
+        var response = poolResponseFromVM(vm);
+        job.res.statusCode = response.status;
+        Object.keys(response.headers).forEach(function (key) { job.res.setHeader(key, response.headers[key]); });
+        if (Object.keys(response.trailers).length && typeof job.res.addTrailers === "function") {
+          try { job.res.addTrailers(response.trailers); } catch (e) { }
+        }
+        job.res.end(response.body);
+      })
+      .catch(function (err) {
+        job.res.statusCode = 500;
+        job.res.setHeader("content-type", "text/plain; charset=utf-8");
+        job.res.end(String((err && err.stack) || err));
+      })
+      .finally(function () {
+        self._resetWorker(worker);
+        self._dispatch();
+      });
+  };
+
+  PicoVM.Pool.prototype.listen = function (port, cb) {
+    var self = this;
+    if (!this.available) {
+      if (typeof cb === "function") cb(new Error("PicoVM.Pool is only available in Node.js"));
+      return null;
+    }
+    if (this.server) return this.server;
+    this.server = _poolHttp.createServer(function (req, res) {
+      var chunks = [];
+      req.on("data", function (chunk) { chunks.push(chunk); });
+      req.on("end", function () {
+        var host = (req.headers && req.headers.host) || "127.0.0.1";
+        var url = new URL(req.url || "/", "http://" + host);
+        self.pending.push({
+          res: res,
+          ctx: {
+            seq: self.seq++,
+            principal: req.socket && req.socket.remoteAddress || "",
+            method: req.method || "GET",
+            path: url.pathname || "/",
+            headers: req.headers || {},
+            bodyMode: 0,
+            body: chunks
+          }
+        });
+        self._dispatch();
+      });
+      req.on("error", function (err) {
+        res.statusCode = 400;
+        res.end(String((err && err.message) || err));
+      });
+    });
+    this.server.listen(port, cb);
+    return this.server;
+  };
+
+  PicoVM.Pool.prototype.stop = function (cb) {
+    if (!this.server) {
+      if (typeof cb === "function") cb();
+      return;
+    }
+    var server = this.server;
+    this.server = null;
+    server.close(cb);
+  };
+
+  // PIOS binding: instead of Node http.createServer, the PIOS kernel
+  // posts to the worker's mailbox on accept. The worker WFIs until woken,
+  // reads the request from the IPC FIFO, runs the handler, posts the
+  // response back, then WFIs again. No OS threads — PIOS uses hardware
+  // thread contexts (one per core) with cooperative scheduling.
+
   return PicoVM;
 });
