@@ -152,6 +152,10 @@ static uint8_t pv_arena_get(pv_ctx *ctx, uint32_t a)
 {
     return (ctx->mem && a < (uint32_t)ctx->mem_size) ? ctx->mem[a] : 0;
 }
+/* App-installable storage backend (Storage.*/Search.* card packs). NULL by
+ * default; a native deployment sets this to compile in its own pack/card store.
+ * Return non-zero if the hook was handled. */
+pv_storage_fn pv_storage_hook = 0;
 static int pv_span_make(pv_ctx *ctx, uint32_t ptr, int32_t len)
 {
     if (len < 0) len = 0;
@@ -1343,6 +1347,14 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
     /* INV-17: bindings are not ambient -- deny the hook unless its class is granted. */
     uint32_t need = pv_hook_cap(hook);
     if (need && !(ctx->caps & need)) { pv_set_fault(ctx, PV_FAULT_CAPABILITY, ctx->cur_pc, hook); return; }
+    /* Storage.* (0x60-0x6F) / Search.* card packs (0x1A0-0x1A4): delegate to the
+     * app-provided storage backend if one is installed (pv_storage_hook). Lets a
+     * native binary compile in its own pack/card store (e.g. file-backed or
+     * PicoWAL) without coupling it to the runtime. */
+    if (pv_storage_hook &&
+        ((hook >= 0x60 && hook <= 0x6F) || (hook >= 0x1A0 && hook <= 0x1A4))) {
+        if (pv_storage_hook(ctx, hook, rd, rs1, rs2)) return;
+    }
     if (hook == PV_HOOK_RANDOM_U32) {
         uint64_t x = ctx->rng_state;
         x ^= (x << 13) & MASK32;

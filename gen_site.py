@@ -904,19 +904,31 @@ function buildNsRef(){
   document.getElementById('nsContent').innerHTML=html;
 }
 function renderSyntaxRef(){
-  var lang=CUR_LANG,SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle'};
+  var lang=CUR_LANG,SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cstyle',report:'bstyle',functional:'pystyle'};
   var html='<p style="color:var(--muted);font-size:12px;margin-bottom:12px">Showing <b>'+lang.toUpperCase()+'</b>. Toggle dialect above.</p>';
-  DATA.forEach(function(d,i){if(!d[lang])return;html+='<div style="margin-bottom:14px"><div style="font-weight:600;font-size:13px;margin-bottom:3px">'+(i+1)+'. '+esc(d.title)+'</div><pre class="'+SC[lang]+'" style="max-width:700px">'+esc(d[lang].src)+'</pre></div>';});
+  DATA.forEach(function(d,i){
+    var src;
+    if(d[lang]){src=d[lang].src;}
+    else if(typeof PicoCompile!=='undefined'&&PicoCompile.translate){var fl=d.c?'c':(d.basic?'basic':'python');src=PicoCompile.translate(d[fl].src,fl,lang);}
+    else return;
+    if(!src)return;
+    html+='<div style="margin-bottom:14px"><div style="font-weight:600;font-size:13px;margin-bottom:3px">'+(i+1)+'. '+esc(d.title)+'</div><pre class="'+(SC[lang]||'cstyle')+'" style="max-width:700px">'+esc(src)+'</pre></div>';
+  });
   document.getElementById('syntaxContent').innerHTML=html;
 }
 function renderSamples(){
-  var lang=CUR_LANG,SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle'};
+  var lang=CUR_LANG,SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cstyle',report:'bstyle',functional:'pystyle'};
   var samples=[
     {title:'PicoWAL API Server',desc:'CRUD API routing by method',c:'int method = Req.Method();\nStorage.UsePack(1);\nif (method == 2) {\n    int id = Storage.AddCard();\n    Resp.Status(201);\n    print(id);\n} else {\n    int n = Storage.QueryCard(0);\n    Resp.Status(200);\n    print(n);\n}\nResp.End();',basic:"DIM METHOD = Req.Method()\nStorage.UsePack(1)\nIF METHOD EQ 2 THEN\n    DIM ID = Storage.AddCard()\n    Resp.Status(201)\n    PRINT ID\nELSE\n    DIM N = Storage.QueryCard(0)\n    Resp.Status(200)\n    PRINT N\nENDIF\nResp.End()",python:'method = Req.Method()\nStorage.UsePack(1)\nif method == 2:\n    id = Storage.AddCard()\n    Resp.Status(201)\n    print(id)\nelse:\n    n = Storage.QueryCard(0)\n    Resp.Status(200)\n    print(n)\nResp.End()',english:'Set method to Req.Method().\nStorage.UsePack(1).\nIf method is 2:\n    Set id to Storage.AddCard().\n    Resp.Status(201).\n    Print id.\nOtherwise:\n    Set n to Storage.QueryCard(0).\n    Resp.Status(200).\n    Print n.\nResp.End().'},
     {title:'Template Web Server',desc:'Load template card, render page',c:'Resp.Status(200);\nResp.Header(0);\nStorage.UsePack(2);\nStorage.EditCard(1);\nint tpl = Storage.GetField(0);\nprint(tpl);\nResp.End();',basic:"Resp.Status(200)\nResp.Header(0)\nStorage.UsePack(2)\nStorage.EditCard(1)\nDIM TPL = Storage.GetField(0)\nPRINT TPL\nResp.End()",python:'Resp.Status(200)\nResp.Header(0)\nStorage.UsePack(2)\nStorage.EditCard(1)\ntpl = Storage.GetField(0)\nprint(tpl)\nResp.End()',english:'Resp.Status(200).\nResp.Header(0).\nStorage.UsePack(2).\nStorage.EditCard(1).\nSet tpl to Storage.GetField(0).\nPrint tpl.\nResp.End().'},
     {title:'App Status Page',desc:'JSON stats with request counter',c:'Resp.Status(200);\nStorage.UsePack(3);\nStorage.EditCard(1);\nint count = Storage.GetField(0);\ncount++;\nStorage.SetField(0, count);\nprint(count);\nResp.End();',basic:"Resp.Status(200)\nStorage.UsePack(3)\nStorage.EditCard(1)\nDIM COUNT = Storage.GetField(0)\nINC COUNT\nStorage.SetField(0, COUNT)\nPRINT COUNT\nResp.End()",python:'Resp.Status(200)\nStorage.UsePack(3)\nStorage.EditCard(1)\ncount = Storage.GetField(0)\ncount += 1\nStorage.SetField(0, count)\nprint(count)\nResp.End()',english:'Resp.Status(200).\nStorage.UsePack(3).\nStorage.EditCard(1).\nSet count to Storage.GetField(0).\nIncrease count by 1.\nStorage.SetField(0, count).\nPrint count.\nResp.End().'}
   ];
-  var html='';samples.forEach(function(s){var src=s[lang]||s.c;html+='<div style="margin-bottom:18px"><div style="font-weight:600;font-size:14px;margin-bottom:3px">'+esc(s.title)+'</div><div style="color:var(--muted);font-size:12px;margin-bottom:6px">'+esc(s.desc)+'</div><pre class="'+SC[lang]+'" style="max-width:700px">'+esc(src)+'</pre></div>';});
+  var html='';samples.forEach(function(s){
+    var src=s[lang];
+    if(!src&&typeof PicoCompile!=='undefined'&&PicoCompile.translate){src=PicoCompile.translate(s.c,'c',lang);}
+    if(!src)src=s.c;
+    html+='<div style="margin-bottom:18px"><div style="font-weight:600;font-size:14px;margin-bottom:3px">'+esc(s.title)+'</div><div style="color:var(--muted);font-size:12px;margin-bottom:6px">'+esc(s.desc)+'</div><pre class="'+(SC[lang]||'cstyle')+'" style="max-width:700px">'+esc(src)+'</pre></div>';
+  });
   document.getElementById('samplesContent').innerHTML=html;
 }
 
