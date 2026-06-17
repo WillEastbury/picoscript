@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0x7650E03D
+#define PV_HOOK_TABLE_VERSION 0x5BBB670D
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -186,6 +186,10 @@
 #define PV_HOOK_DATETIME_GETDAYOFWEEK            0xB8
 #define PV_HOOK_DATETIME_GETDAYOFYEAR            0xB9
 #define PV_HOOK_DATETIME_UNIXTIMESTAMP           0xBA
+#define PV_HOOK_DATETIME_DIFFDAYS                0xBB
+#define PV_HOOK_DATETIME_YEAR                    0xBC
+#define PV_HOOK_DATETIME_MONTH                   0xBD
+#define PV_HOOK_DATETIME_DAY                     0xBE
 #define PV_HOOK_LOCALE_GETCURRENTLOCALE          0xC0
 #define PV_HOOK_LOCALE_SETLOCALE                 0xC1
 #define PV_HOOK_LOCALE_FORMATCURRENCY            0xC2
@@ -338,6 +342,8 @@
 #define PV_HOOK_EVENT_SETSLICE                   0x1B3
 #define PV_HOOK_EVENT_DATASLICE                  0x1B4
 #define PV_HOOK_EVENT_DATALEN                    0x1B5
+#define PV_HOOK_REQ_PARAM                        0x1B6
+#define PV_HOOK_REQ_PARAMCOUNT                   0x1B7
 #define PV_HOOK_QUERY_BUILDLOOKUPFILTER          0x1C0
 #define PV_HOOK_QUERY_BUILDMANYTOMANYMAP         0x1C1
 #define PV_HOOK_SEARCH_CLEAR                     0x1D0
@@ -470,5 +476,8 @@
 #define PV_HOOK_CAPSULE_JUMP                     0x2C2
 #define PV_HOOK_CAPSULE_LOADMODULE               0x2C3
 #define PV_HOOK_CAPSULE_RUNMODULE                0x2C4
+#define PV_HOOK_BASE64_ENCODE                    0x2D0
+#define PV_HOOK_BASE64_DECODE                    0x2D1
+#define PV_HOOK_BASE64_URLDECODE                 0x2D2
 
 #endif

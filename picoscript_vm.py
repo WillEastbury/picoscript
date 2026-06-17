@@ -1022,6 +1022,15 @@ class HostApi:
         if ns == "Capsule":
             if self._capsule_exec(vm, method, rd, rs1, rs2):
                 return
+        if ns == "Base64":
+            if self._base64(vm, method, rd, rs1, rs2):
+                return
+        if ns == "DateTime" and method in ("DiffDays", "Year", "Month", "Day"):
+            if self._datetime_ext(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Req" and method in ("Param", "ParamCount"):
+            if self._req_param(vm, method, rd, rs1, rs2):
+                return
         # Unknown hook: record and continue (host-fillable primitive).
         self.log.append(f"host {ns}.{method} rd=R{rd} rs1=R{rs1} rs2=R{rs2} imm={imm16:#06x}")
 
@@ -3384,6 +3393,84 @@ class HostApi:
                 vm.regs[rd] = 0  # simulated: no bytecode
             else:
                 vm.regs[rd] = 0
+            return True
+        return False
+
+    # -- Base64 encode/decode ------------------------------------------------
+    def _base64(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        import base64
+        if method == "Encode":
+            data = self._span_raw(vm, vm.regs[rs1])
+            enc = base64.b64encode(bytes(data))
+            vm.regs[rd] = self._new_span_bytes(vm, enc)
+            return True
+        if method == "Decode":
+            data = self._span_raw(vm, vm.regs[rs1])
+            try:
+                dec = base64.b64decode(bytes(data))
+            except Exception:
+                dec = b""
+                self.host_status = 2  # PARSE_ERROR
+            vm.regs[rd] = self._new_span_bytes(vm, dec)
+            return True
+        if method == "UrlDecode":
+            data = self._span_raw(vm, vm.regs[rs1])
+            s = bytes(data).decode("ascii", "replace")
+            s = s.replace("-", "+").replace("_", "/")
+            pad = (4 - len(s) % 4) % 4
+            s += "=" * pad
+            try:
+                dec = base64.b64decode(s)
+            except Exception:
+                dec = b""
+                self.host_status = 2
+            vm.regs[rd] = self._new_span_bytes(vm, dec)
+            return True
+        return False
+
+    # -- DateTime extended (DiffDays, Year, Month, Day) ----------------------
+    def _datetime_ext(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        import datetime
+        if method == "DiffDays":
+            a = _sx32(vm.regs[rs1])  # millis
+            b = _sx32(vm.regs[rs2])  # millis
+            diff_ms = a - b
+            vm.regs[rd] = (diff_ms // 86400000) & MASK32
+            return True
+        ms = _sx32(vm.regs[rs1])
+        try:
+            dt = datetime.datetime.utcfromtimestamp(ms / 1000.0)
+        except (ValueError, OSError, OverflowError):
+            vm.regs[rd] = 0
+            return True
+        if method == "Year":
+            vm.regs[rd] = dt.year
+            return True
+        if method == "Month":
+            vm.regs[rd] = dt.month
+            return True
+        if method == "Day":
+            vm.regs[rd] = dt.day
+            return True
+        return False
+
+    # -- Req.Param / Req.ParamCount ------------------------------------------
+    def _req_param(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        ctx = self.request_context
+        path = ""
+        if ctx and "path" in ctx:
+            path = ctx["path"]
+        segments = [s for s in path.split("/") if s]
+        if method == "ParamCount":
+            vm.regs[rd] = len(segments)
+            return True
+        if method == "Param":
+            idx = vm.regs[rs1] & MASK32
+            if idx < len(segments):
+                vm.regs[rd] = self._new_span_bytes(vm, segments[idx].encode("utf-8"))
+            else:
+                vm.regs[rd] = 0
+                self.host_status = 1  # NOT_FOUND
             return True
         return False
 

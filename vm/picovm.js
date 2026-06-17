@@ -459,6 +459,9 @@
     if (name.indexOf("Sandbox.") === 0) { if (this._principalCap("Sandbox", name.slice(8), rd, rs1, rs2)) return; }
     if (name.indexOf("Error.") === 0) { if (this._errorHook(name.slice(6), rd, rs1, rs2)) return; }
     if (name.indexOf("Capsule.") === 0) { if (this._capsuleExec(name.slice(8), rd, rs1, rs2)) return; }
+    if (name.indexOf("Base64.") === 0) { if (this._base64(name.slice(7), rd, rs1, rs2)) return; }
+    if (name === "DateTime.DiffDays" || name === "DateTime.Year" || name === "DateTime.Month" || name === "DateTime.Day") { if (this._datetimeExt(name.slice(9), rd, rs1, rs2)) return; }
+    if (name === "Req.Param" || name === "Req.ParamCount") { if (this._reqParam(name.slice(4), rd, rs1, rs2)) return; }
     this.log.push("host " + name + " R" + rd + " R" + rs1);
   };
 
@@ -2209,6 +2212,72 @@
       var m = c.modules[this.regs[rs1] >>> 0];
       if (m) this.log.push("Capsule.RunModule handle=" + (this.regs[rs1] >>> 0) + " pack=" + m.pack + " card=" + m.card);
       this.regs[rd] = 0; return true;
+    }
+    return false;
+  };
+
+  // -- Base64.* encode/decode (mirrors HostApi._base64) ----
+  PicoVM.prototype._base64 = function (method, rd, rs1, rs2) {
+    if (typeof btoa === "undefined" && typeof Buffer === "undefined") return false;
+    if (method === "Encode") {
+      var data = this._spanBytes(this.regs[rs1]);
+      var str = "";
+      for (var i = 0; i < data.length; i++) str += String.fromCharCode(data[i]);
+      var enc = (typeof btoa !== "undefined") ? btoa(str) : Buffer.from(data).toString("base64");
+      this.regs[rd] = this._newSpanBytes(this._strToBytes(enc));
+      return true;
+    }
+    if (method === "Decode" || method === "UrlDecode") {
+      var b64 = this._spanStr(this.regs[rs1]);
+      if (method === "UrlDecode") {
+        b64 = b64.replace(/-/g, "+").replace(/_/g, "/");
+        var pad = (4 - b64.length % 4) % 4;
+        for (var p = 0; p < pad; p++) b64 += "=";
+      }
+      try {
+        var dec;
+        if (typeof atob !== "undefined") {
+          var raw = atob(b64); dec = [];
+          for (var j = 0; j < raw.length; j++) dec.push(raw.charCodeAt(j));
+        } else {
+          var buf = Buffer.from(b64, "base64"); dec = Array.from(buf);
+        }
+        this.regs[rd] = this._newSpanBytes(dec);
+      } catch (e) {
+        this.regs[rd] = this._newSpanBytes([]);
+        this.hostStatus = 2;
+      }
+      return true;
+    }
+    return false;
+  };
+
+  // -- DateTime extended (DiffDays/Year/Month/Day) (mirrors HostApi._datetime_ext) ----
+  PicoVM.prototype._datetimeExt = function (method, rd, rs1, rs2) {
+    if (method === "DiffDays") {
+      var a = this.regs[rs1] | 0, b = this.regs[rs2] | 0;
+      this.regs[rd] = ((a - b) / 86400000) | 0;
+      return true;
+    }
+    var ms = this.regs[rs1] | 0;
+    var dt = new Date(ms);
+    if (method === "Year") { this.regs[rd] = dt.getUTCFullYear(); return true; }
+    if (method === "Month") { this.regs[rd] = dt.getUTCMonth() + 1; return true; }
+    if (method === "Day") { this.regs[rd] = dt.getUTCDate(); return true; }
+    return false;
+  };
+
+  // -- Req.Param / Req.ParamCount (mirrors HostApi._req_param) ----
+  PicoVM.prototype._reqParam = function (method, rd, rs1, rs2) {
+    var ctx = this._reqCtx || {};
+    var path = ctx.path || "";
+    var segs = path.split("/").filter(function (s) { return s.length > 0; });
+    if (method === "ParamCount") { this.regs[rd] = segs.length; return true; }
+    if (method === "Param") {
+      var idx = this.regs[rs1] >>> 0;
+      if (idx < segs.length) { this.regs[rd] = this._newSpanBytes(this._strToBytes(segs[idx])); }
+      else { this.regs[rd] = 0; this.hostStatus = 1; }
+      return true;
     }
     return false;
   };

@@ -477,6 +477,12 @@ NAMESPACE_MAP = {
         "LoadModule": OP_NOOP,
         "RunModule": OP_NOOP,
     },
+    # PicoForge host hooks (GAP 4)
+    "Base64": {
+        "Encode": OP_NOOP,
+        "Decode": OP_NOOP,
+        "UrlDecode": OP_NOOP,
+    },
     "Maths": {
         "Sin":            OP_NOOP,
         "Cos":            OP_NOOP,
@@ -503,6 +509,10 @@ NAMESPACE_MAP = {
         "GetDayOfWeek":   OP_NOOP,
         "GetDayOfYear":   OP_NOOP,
         "UnixTimestamp":  OP_NOOP,
+        "DiffDays":       OP_NOOP,
+        "Year":           OP_NOOP,
+        "Month":          OP_NOOP,
+        "Day":            OP_NOOP,
     },
     "Locale": {
         "GetCurrentLocale": OP_NOOP,
@@ -897,6 +907,18 @@ HOST_HOOK_CODES = {
     ("Capsule", "Jump"):         0x02C2,   # rs1=pack rs2=card            (transfer execution)
     ("Capsule", "LoadModule"):   0x02C3,   # rs1=pack rs2=card            rd=moduleHandle
     ("Capsule", "RunModule"):    0x02C4,   # rs1=handle                   rd=result
+    # Base64 encode/decode (0x02D0-0x02D2): pure/deterministic string transform.
+    ("Base64", "Encode"):        0x02D0,   # rs1=span                     rd=base64 span
+    ("Base64", "Decode"):        0x02D1,   # rs1=base64 span              rd=decoded span
+    ("Base64", "UrlDecode"):     0x02D2,   # rs1=base64url span           rd=decoded span
+    # DateTime extended (0xBB-0xBE): pure given input.
+    ("DateTime", "DiffDays"):    0xBB,     # rs1=millis_a rs2=millis_b    rd=days
+    ("DateTime", "Year"):        0xBC,     # rs1=millis                   rd=year
+    ("DateTime", "Month"):       0xBD,     # rs1=millis                   rd=month (1-12)
+    ("DateTime", "Day"):         0xBE,     # rs1=millis                   rd=day (1-31)
+    # Req path parameter extraction (0x01B6-0x01B7)
+    ("Req", "Param"):            0x01B6,   # rs1=index                    rd=span (path segment)
+    ("Req", "ParamCount"):       0x01B7,   #                              rd=segment count
     # Arena scopes (0x7C-0x7E): bump-arena mark / rewind / reset for request-scoped
     # allocation -- Mark() snapshots the arena, Rewind(mark) reclaims everything since,
     # Reset() drops all arena spans back to the base. Frees the span/string namespaces

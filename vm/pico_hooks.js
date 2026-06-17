@@ -190,6 +190,10 @@
       0xB8: "DateTime.GetDayOfWeek",
       0xB9: "DateTime.GetDayOfYear",
       0xBA: "DateTime.UnixTimestamp",
+      0xBB: "DateTime.DiffDays",
+      0xBC: "DateTime.Year",
+      0xBD: "DateTime.Month",
+      0xBE: "DateTime.Day",
       0xC0: "Locale.GetCurrentLocale",
       0xC1: "Locale.SetLocale",
       0xC2: "Locale.FormatCurrency",
@@ -342,6 +346,8 @@
       0x1B3: "Event.SetSlice",
       0x1B4: "Event.DataSlice",
       0x1B5: "Event.DataLen",
+      0x1B6: "Req.Param",
+      0x1B7: "Req.ParamCount",
       0x1C0: "Query.BuildLookupFilter",
       0x1C1: "Query.BuildManyToManyMap",
       0x1D0: "Search.Clear",
@@ -474,6 +480,9 @@
       0x2C2: "Capsule.Jump",
       0x2C3: "Capsule.LoadModule",
       0x2C4: "Capsule.RunModule",
+      0x2D0: "Base64.Encode",
+      0x2D1: "Base64.Decode",
+      0x2D2: "Base64.UrlDecode",
     }
   };
   if (typeof module !== "undefined" && module.exports) { module.exports = H; }
