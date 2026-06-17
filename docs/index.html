@@ -6,7 +6,7 @@
 <title>PicoScript &mdash; IDE, Guide &amp; Reference</title>
 <style>
   :root { --accent:#667eea; --bg:#0f1117; --panel:#1a1d27; --panel2:#232734;
-          --text:#e6e8ef; --muted:#9aa0ad; --c:#7ee787; --b:#79c0ff; --py:#ffd866; --en:#f0a3ff;
+          --text:#e6e8ef; --muted:#9aa0ad; --c:#7ee787; --b:#79c0ff; --py:#ffd866; --en:#f0a3ff; --cob:#ff9f7f; --rpt:#66e0cc; --fn:#a0d0ff;
           --warn:#ffd866; --err:#ff7b72; --sidebar-w:220px; --flyout-w:380px; }
   * { box-sizing:border-box; margin:0; padding:0; }
   html,body { height:100%; overflow:hidden; }
@@ -29,6 +29,9 @@
   .lang-toggle button[data-lang="basic"].active { background:var(--b); color:#0f1117; }
   .lang-toggle button[data-lang="python"].active { background:var(--py); color:#0f1117; }
   .lang-toggle button[data-lang="english"].active { background:var(--en); color:#0f1117; }
+  .lang-toggle button[data-lang="cobol"].active { background:var(--cob); color:#0f1117; }
+  .lang-toggle button[data-lang="report"].active { background:var(--rpt); color:#0f1117; }
+  .lang-toggle button[data-lang="functional"].active { background:var(--fn); color:#0f1117; }
   .pill { display:inline-block; padding:2px 7px; border-radius:10px; font-size:10px; font-weight:600;
           background:#2c313f; color:var(--muted); }
   .main { display:flex; flex:1; overflow:hidden; position:relative; }
@@ -54,6 +57,9 @@
   .card-area pre.bstyle { color:#cfe4ff; border-left:3px solid var(--b); }
   .card-area pre.pystyle { color:#f5e6a8; border-left:3px solid var(--py); }
   .card-area pre.enstyle { color:#f3d4ff; border-left:3px solid var(--en); }
+  .card-area pre.cobstyle { color:#ffd4c2; border-left:3px solid var(--cob); }
+  .card-area pre.rptstyle { color:#c2f5e9; border-left:3px solid var(--rpt); }
+  .card-area pre.fnstyle { color:#c8e4ff; border-left:3px solid var(--fn); }
   .run-area { display:flex; align-items:center; gap:8px; margin-top:10px; }
   .out { font-family:"SF Mono",Consolas,monospace; font-size:12px; color:var(--warn); }
   button.act { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:6px 12px;
@@ -12506,9 +12512,9 @@ function setLang(lang){
   document.querySelectorAll('#langToggle button').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-lang')===lang);});
   document.getElementById('lang').value=lang;
   if(typeof onLangChange==='function') onLangChange();
-  // If a reference section is showing, stay on it; otherwise refresh guide card
-  if(CUR_REF_SECTION){renderSyntaxRef();renderSamples();}
-  else{showGuideCard(CUR_GUIDE_CARD);renderSyntaxRef();renderSamples();}
+  renderSyntaxRef(); renderSamples();
+  if(CUR_REF_SECTION){showRefInline(CUR_REF_SECTION);}
+  else{showGuideCard(CUR_GUIDE_CARD);}
 }
 
 var GROUPS=[{name:'Basics',items:[0]},{name:'Control Flow',items:[1,2,3,4,10,11]},{name:'Operators',items:[5]},{name:'Dispatch / State Machine',items:[6,7]},{name:'Subroutines',items:[8,9]},{name:'I/O & Cards',items:[12,13,14,15,16]},{name:'Streams & Events',items:[17,18,19,20,21]},{name:'AI & Hardware',items:[22,23,24,25]},{name:'Functions & Errors',items:[26,27]},{name:'OS & Web Hooks',items:[28,29]}];
@@ -12526,7 +12532,7 @@ function showGuideCard(idx){
   CUR_GUIDE_CARD=idx;
   CUR_REF_SECTION=null;
   var d=DATA[idx],lang=CUR_LANG;
-  var SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cstyle',report:'bstyle',functional:'pystyle'};
+  var SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cobstyle',report:'rptstyle',functional:'fnstyle'};
   var src;
   if(d[lang]){src=d[lang].src;}
   else if(typeof PicoCompile!=='undefined'&&PicoCompile.translate){
@@ -12847,7 +12853,7 @@ function buildNsRef(){
   document.getElementById('nsContent').innerHTML=html;
 }
 function renderSyntaxRef(){
-  var lang=CUR_LANG,SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cstyle',report:'bstyle',functional:'pystyle'};
+  var lang=CUR_LANG,SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cobstyle',report:'rptstyle',functional:'fnstyle'};
   var html='<p style="color:var(--muted);font-size:12px;margin-bottom:12px">Showing <b>'+lang.toUpperCase()+'</b>. Toggle dialect above.</p>';
   DATA.forEach(function(d,i){
     var src;
@@ -12860,7 +12866,7 @@ function renderSyntaxRef(){
   document.getElementById('syntaxContent').innerHTML=html;
 }
 function renderSamples(){
-  var lang=CUR_LANG,SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cstyle',report:'bstyle',functional:'pystyle'};
+  var lang=CUR_LANG,SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cobstyle',report:'rptstyle',functional:'fnstyle'};
   var samples=[
     {title:'PicoWAL API Server',desc:'CRUD API routing by method',c:'int method = Req.Method();\nStorage.UsePack(1);\nif (method == 2) {\n    int id = Storage.AddCard();\n    Resp.Status(201);\n    print(id);\n} else {\n    int n = Storage.QueryCard(0);\n    Resp.Status(200);\n    print(n);\n}\nResp.End();',basic:"DIM METHOD = Req.Method()\nStorage.UsePack(1)\nIF METHOD EQ 2 THEN\n    DIM ID = Storage.AddCard()\n    Resp.Status(201)\n    PRINT ID\nELSE\n    DIM N = Storage.QueryCard(0)\n    Resp.Status(200)\n    PRINT N\nENDIF\nResp.End()",python:'method = Req.Method()\nStorage.UsePack(1)\nif method == 2:\n    id = Storage.AddCard()\n    Resp.Status(201)\n    print(id)\nelse:\n    n = Storage.QueryCard(0)\n    Resp.Status(200)\n    print(n)\nResp.End()',english:'Set method to Req.Method().\nStorage.UsePack(1).\nIf method is 2:\n    Set id to Storage.AddCard().\n    Resp.Status(201).\n    Print id.\nOtherwise:\n    Set n to Storage.QueryCard(0).\n    Resp.Status(200).\n    Print n.\nResp.End().'},
     {title:'Template Web Server',desc:'Load template card, render page',c:'Resp.Status(200);\nResp.Header(0);\nStorage.UsePack(2);\nStorage.EditCard(1);\nint tpl = Storage.GetField(0);\nprint(tpl);\nResp.End();',basic:"Resp.Status(200)\nResp.Header(0)\nStorage.UsePack(2)\nStorage.EditCard(1)\nDIM TPL = Storage.GetField(0)\nPRINT TPL\nResp.End()",python:'Resp.Status(200)\nResp.Header(0)\nStorage.UsePack(2)\nStorage.EditCard(1)\ntpl = Storage.GetField(0)\nprint(tpl)\nResp.End()',english:'Resp.Status(200).\nResp.Header(0).\nStorage.UsePack(2).\nStorage.EditCard(1).\nSet tpl to Storage.GetField(0).\nPrint tpl.\nResp.End().'},

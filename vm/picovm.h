@@ -86,7 +86,7 @@ typedef struct pv_ctx pv_ctx;
  * `hook` is the low byte of imm16; operands are register indices + imm16. */
 typedef void (*pv_host_fn)(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16);
 
-/* App-installable storage backend for Storage.*/Search.* card-pack hooks.
+/* App-installable storage backend for Storage and Search card-pack hooks.
  * Return non-zero if the hook was handled (else the runtime treats it as a
  * no-op returning 0). A native binary sets pv_storage_hook to compile in its
  * own pack/card store without modifying the runtime. */

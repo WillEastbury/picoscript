@@ -152,9 +152,9 @@ static uint8_t pv_arena_get(pv_ctx *ctx, uint32_t a)
 {
     return (ctx->mem && a < (uint32_t)ctx->mem_size) ? ctx->mem[a] : 0;
 }
-/* App-installable storage backend (Storage.*/Search.* card packs). NULL by
- * default; a native deployment sets this to compile in its own pack/card store.
- * Return non-zero if the hook was handled. */
+/* App-installable storage backend for Storage and Search card-pack hooks.
+ * NULL by default; a native deployment sets this to compile in its own
+ * pack/card store. Return non-zero if the hook was handled. */
 pv_storage_fn pv_storage_hook = 0;
 static int pv_span_make(pv_ctx *ctx, uint32_t ptr, int32_t len)
 {

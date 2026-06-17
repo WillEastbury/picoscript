@@ -808,7 +808,7 @@ PAGE = r"""<!DOCTYPE html>
 <title>PicoScript WebIDE &amp; Language Guide</title>
 <style>
   :root { --accent:#667eea; --bg:#0f1117; --panel:#1a1d27; --panel2:#232734;
-          --text:#e6e8ef; --muted:#9aa0ad; --c:#7ee787; --b:#79c0ff; --py:#ffd866; --en:#f0a3ff;
+          --text:#e6e8ef; --muted:#9aa0ad; --c:#7ee787; --b:#79c0ff; --py:#ffd866; --en:#f0a3ff; --cob:#ff9f7f; --rpt:#66e0cc; --fn:#a0d0ff;
           --warn:#ffd866; --err:#ff7b72; --sidebar-w:240px; }
   * { box-sizing:border-box; margin:0; padding:0; }
   html,body { height:100%; overflow:hidden; }
@@ -827,6 +827,9 @@ PAGE = r"""<!DOCTYPE html>
   .lang-toggle button[data-lang="basic"].active { background:var(--b); color:#0f1117; }
   .lang-toggle button[data-lang="python"].active { background:var(--py); color:#0f1117; }
   .lang-toggle button[data-lang="english"].active { background:var(--en); color:#0f1117; }
+  .lang-toggle button[data-lang="cobol"].active { background:var(--cob); color:#0f1117; }
+  .lang-toggle button[data-lang="report"].active { background:var(--rpt); color:#0f1117; }
+  .lang-toggle button[data-lang="functional"].active { background:var(--fn); color:#0f1117; }
   .pill { display:inline-block; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:600;
           background:#2c313f; color:var(--muted); }
   /* main layout */
@@ -854,6 +857,9 @@ PAGE = r"""<!DOCTYPE html>
   .card-view pre.bstyle { color:#cfe4ff; border-left:3px solid var(--b); }
   .card-view pre.pystyle { color:#f5e6a8; border-left:3px solid var(--py); }
   .card-view pre.enstyle { color:#f3d4ff; border-left:3px solid var(--en); }
+  .card-view pre.cobstyle { color:#ffd4c2; border-left:3px solid var(--cob); }
+  .card-view pre.rptstyle { color:#c2f5e9; border-left:3px solid var(--rpt); }
+  .card-view pre.fnstyle { color:#c8e4ff; border-left:3px solid var(--fn); }
   .card-view .run-area { display:flex; align-items:center; gap:10px; margin-top:12px; }
   .card-view .out { font-family:"SF Mono",Consolas,monospace; font-size:12px; color:var(--warn); }
   button.act { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:7px 14px;
@@ -1158,7 +1164,7 @@ function showCard(idx){
   CUR_CARD = idx;
   var d = DATA[idx];
   var lang = CUR_LANG;
-  var STYLE_CLASS = {c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cstyle',report:'bstyle',functional:'pystyle'};
+  var STYLE_CLASS = {c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cobstyle',report:'rptstyle',functional:'fnstyle'};
   var src;
   if(d[lang]){src=d[lang].src;}
   else if(typeof PicoCompile!=='undefined'&&PicoCompile.translate){
