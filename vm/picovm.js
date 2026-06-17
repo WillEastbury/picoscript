@@ -362,6 +362,8 @@
     }
     if (name.indexOf("Tensor.") === 0) { if (this._tensor(name.slice(7), rd, rs1, rs2)) return; }
     if (name.indexOf("BitLinear.") === 0) { if (this._bitlinear(name.slice(10), rd, rs1, rs2)) return; }
+    if (name.indexOf("Quant.") === 0) { if (this._quant(name.slice(6), rd, rs1, rs2)) return; }
+    if (name.indexOf("Attention.") === 0) { if (this._attention(name.slice(10), rd, rs1, rs2)) return; }
     if (name.indexOf("Tokenizer.") === 0) { if (this._tokenizer(name.slice(10), rd, rs1, rs2)) return; }
     if (name.indexOf("Model.") === 0) { if (this._model(name.slice(6), rd, rs1, rs2)) return; }
     if (name.indexOf("Kv.") === 0) { if (this._kv(name.slice(3), rd, rs1, rs2)) return; }
@@ -1480,6 +1482,25 @@
     return false;
   };
 
+  PicoVM.prototype._quant = function (method, rd, rs1, rs2) {
+    var data = (method === "GroupScale") ? [] : this._spanBytes(this.regs[rs1]);
+    if (method === "AbsMax") { var mx = 0; for (var i = 0; i < Math.floor(data.length / 4); i++) mx = Math.max(mx, Math.abs(i32beAt(data, i))); this.regs[rd] = mx; return true; }
+    if (method === "QuantI8") { var scale = Math.max(1, this.regs[rs2] | 0), out = []; for (var q = 0; q < Math.floor(data.length / 4); q++) { var v = (i32beAt(data, q) / scale) | 0; out.push(v < -128 ? 128 : (v > 127 ? 255 : (v & 255))); } this.regs[rd] = this._newSpanBytes(out); return true; }
+    if (method === "DequantI8") { var sc = this.regs[rs2] | 0, vals = data.map(function (b) { return i8(b) * sc; }); this.regs[rd] = this._newSpanBytes(packI32(vals)); return true; }
+    if (method === "ApplyScale") { var as = this.regs[rs2] | 0, av = []; for (var a = 0; a < Math.floor(data.length / 4); a++) av.push(Math.imul(i32beAt(data, a), as)); this.regs[rd] = this._newSpanBytes(packI32(av)); return true; }
+    if (method === "GroupScale") { var spec = this.regs[rs1] >>> 0, n = (spec >>> 16) & 0xFFFF, group = Math.max(1, spec & 0xFFFF), gv = []; for (var g = 0; g < n; g += group) gv.push(Math.min(group, n - g)); this.regs[rd] = this._newSpanBytes(packI32(gv)); return true; }
+    return false;
+  };
+
+  PicoVM.prototype._attention = function (method, rd, rs1, rs2) {
+    if (!this._attn) this._attn = { heads: 1, dim: 0 };
+    if (method === "SetShape") { this._attn = { heads: Math.max(1, this.regs[rs1] | 0), dim: Math.max(0, this.regs[rs2] | 0) }; this.regs[rd] = 1; return true; }
+    if (method === "Scores") { var q = this._spanBytes(this.regs[rs1]), k = this._spanBytes(this.regs[rs2]), dim = this._attn.dim || Math.min(q.length, k.length), rows = Math.floor(k.length / Math.max(1, dim)), vals = []; for (var r = 0; r < rows; r++) { var acc = 0, base = r * dim; for (var c = 0; c < dim; c++) if (c < q.length && base + c < k.length) acc = (acc + i8(q[c]) * i8(k[base + c])) | 0; vals.push(acc); } this.regs[rd] = this._newSpanBytes(packI32(vals)); return true; }
+    if (method === "Mix") { var w = this._spanBytes(this.regs[rs1]), v = this._spanBytes(this.regs[rs2]), d = this._attn.dim || 1, nr = Math.min(Math.floor(w.length / 4), Math.floor(v.length / d)), out = []; for (var mc = 0; mc < d; mc++) { var sum = 0; for (var mr = 0; mr < nr; mr++) sum += i32beAt(w, mr) * i8(v[mr * d + mc]); out.push((sum >> 15) | 0); } this.regs[rd] = this._newSpanBytes(packI32(out)); return true; }
+    if (method === "Attend") { if (!this._attention("Scores", rd, rs1, rs2)) return false; return this._tensor("SoftmaxI32", rd, rd, 0); }
+    return false;
+  };
+
   PicoVM.prototype._tokenizer = function (method, rd, rs1, rs2) {
     if (!this._tok) this._tok = [];
     if (method === "EncodeBytes") { var d = this._spanBytes(this.regs[rs1]); this._tok = d.map(function (b) { return b + 3; }); this.regs[rd] = this._tok.length; return true; }
@@ -1502,13 +1523,18 @@
     return false;
   };
   PicoVM.prototype._kv = function (method, rd, rs1, rs2) {
-    if (!this._kvState) this._kvState = { k: {}, v: {}, shape: [0,0,0] };
-    var kv = this._kvState, key = (((this.regs[rs1] >>> 16) & 0xFFFF) + ":" + (this.regs[rs1] & 0xFFFF));
+    if (!this._kvState) this._kvState = { k: {}, v: {}, shape: [0,0,0], head: 0 };
+    var kv = this._kvState, key = (((this.regs[rs1] >>> 16) & 0xFFFF) + ":" + (this.regs[rs1] & 0xFFFF) + ":0"), hkey = (((this.regs[rs1] >>> 16) & 0xFFFF) + ":" + (this.regs[rs1] & 0xFFFF) + ":" + kv.head);
     if (method === "SetShape") { kv.shape = [this.regs[rs1] | 0, this.regs[rs2] | 0, this.regs[rs2] | 0]; this.regs[rd] = 1; return true; }
+    if (method === "SetHead") { kv.head = Math.max(0, this.regs[rs1] | 0); this.regs[rd] = kv.head; return true; }
     if (method === "WriteK") { kv.k[key] = this._spanBytes(this.regs[rs2]); this.regs[rd] = 1; return true; }
     if (method === "WriteV") { kv.v[key] = this._spanBytes(this.regs[rs2]); this.regs[rd] = 1; return true; }
+    if (method === "WriteKH") { kv.k[hkey] = this._spanBytes(this.regs[rs2]); this.regs[rd] = 1; return true; }
+    if (method === "WriteVH") { kv.v[hkey] = this._spanBytes(this.regs[rs2]); this.regs[rd] = 1; return true; }
     if (method === "ReadK") { this.regs[rd] = this._newSpanBytes(kv.k[key] || []); return true; }
     if (method === "ReadV") { this.regs[rd] = this._newSpanBytes(kv.v[key] || []); return true; }
+    if (method === "ReadKH") { this.regs[rd] = this._newSpanBytes(kv.k[hkey] || []); return true; }
+    if (method === "ReadVH") { this.regs[rd] = this._newSpanBytes(kv.v[hkey] || []); return true; }
     if (method === "Len") { this.regs[rd] = Object.keys(kv.k).length + Object.keys(kv.v).length; return true; }
     if (method === "Clear") { kv.k = {}; kv.v = {}; this.regs[rd] = 1; return true; }
     return false;
@@ -1517,6 +1543,7 @@
     if (!this._sampTemp) this._sampTemp = 256;
     if (method === "Temperature") { this._sampTemp = Math.max(1, this.regs[rs1] | 0); this.regs[rd] = this._sampTemp; return true; }
     if (method === "ArgMax") return this._tensor("ArgMaxI32", rd, rs1, rs2);
+    if (method === "ArgMaxRows") { if (!this._tensor("MatVecI8", rd, rs1, rs2)) return false; return this._tensor("ArgMaxI32", rd, rd, 0); }
     if (method === "TopK") { var d = this._spanBytes(this.regs[rs1]), k = Math.max(1, this.regs[rs2] | 0), vals = []; for (var i = 0; i < Math.floor(d.length/4); i++) vals.push([i32beAt(d,i),i]); vals.sort(function(a,b){return (b[0]-a[0])||(a[1]-b[1]);}); this.regs[rd]=this._newSpanBytes(packI32(vals.slice(0,k).map(function(x){return x[1];}))); return true; }
     return false;
   };

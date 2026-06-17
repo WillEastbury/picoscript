@@ -346,6 +346,8 @@ M33 DSP, desktop SIMD, or a future tensor accelerator.
 | `Tensor.RoPEI32(x, cosSin)` | pairwise RoPE rotation using Q15 cos/sin |
 | `Tensor.SoftmaxI32(logits)` | deterministic Q15 attention weights |
 | `Tensor.ArgMaxI32(logits)` | index of the largest int32 |
+| `Attention.Scores/Mix/Attend` | streaming attention score/mix helpers |
+| `Quant.AbsMax/QuantI8/DequantI8/ApplyScale/GroupScale` | quantization and group-scale helpers |
 | `BitLinear.MatVecTernary(weights, act)` | BitNet-style ternary matvec |
 | `BitLinear.MatVecBitmap(weights, act)` | bitmap trit rows (`zero_mask` + `minus_mask`) |
 | `BitLinear.MatVecBase3(weights, act)` | base-3 packed trit rows |
@@ -390,6 +392,11 @@ Kv.WriteV((layer << 16) | pos, vSpan);
 
 int logits = Tensor.MatVecI8(lmHeadRows, hidden);
 int next = Sampling.ArgMax(logits);
+
+Attention.SetShape(heads, headDim);
+int scores = Attention.Scores(query, kRows);
+int weights = Tensor.SoftmaxI32(scores);
+int context = Attention.Mix(weights, vRows);
 ```
 
 ## 14. Picowal PR78 facades

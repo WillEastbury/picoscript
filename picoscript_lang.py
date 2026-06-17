@@ -169,6 +169,7 @@ NAMESPACE_MAP = {
         "JournalReplay": OP_NOOP,
     },
     "Tensor": {
+        "HasAccel": OP_NOOP,
         "SetShape": OP_NOOP,
         "DotI8": OP_NOOP,
         "MatVecI8": OP_NOOP,
@@ -182,10 +183,24 @@ NAMESPACE_MAP = {
         "ArgMaxI32": OP_NOOP,
     },
     "BitLinear": {
+        "HasFormat": OP_NOOP,
         "SetShape": OP_NOOP,
         "MatVecTernary": OP_NOOP,
         "MatVecBitmap": OP_NOOP,
         "MatVecBase3": OP_NOOP,
+    },
+    "Quant": {
+        "AbsMax": OP_NOOP,
+        "QuantI8": OP_NOOP,
+        "DequantI8": OP_NOOP,
+        "ApplyScale": OP_NOOP,
+        "GroupScale": OP_NOOP,
+    },
+    "Attention": {
+        "SetShape": OP_NOOP,
+        "Scores": OP_NOOP,
+        "Mix": OP_NOOP,
+        "Attend": OP_NOOP,
     },
     "Tokenizer": {
         "EncodeBytes": OP_NOOP,
@@ -206,13 +221,19 @@ NAMESPACE_MAP = {
         "SetShape": OP_NOOP,
         "WriteK": OP_NOOP,
         "WriteV": OP_NOOP,
+        "WriteKH": OP_NOOP,
+        "WriteVH": OP_NOOP,
         "ReadK": OP_NOOP,
         "ReadV": OP_NOOP,
+        "ReadKH": OP_NOOP,
+        "ReadVH": OP_NOOP,
+        "SetHead": OP_NOOP,
         "Len": OP_NOOP,
         "Clear": OP_NOOP,
     },
     "Sampling": {
         "ArgMax": OP_NOOP,
+        "ArgMaxRows": OP_NOOP,
         "TopK": OP_NOOP,
         "Temperature": OP_NOOP,
     },
@@ -680,6 +701,7 @@ HOST_HOOK_CODES = {
     ("Search", "JournalNumber"):0x020A,
     ("Search", "JournalReplay"):0x020B,
     # Tensor/matrix primitives for deterministic inference kernels.
+    ("Tensor", "HasAccel"):     0x01EB,   # rs1=name-span                  rd=1 if host advertises accel
     ("Tensor", "SetShape"):     0x01E0,   # rs1=rows/len rs2=cols          rd=ok
     ("Tensor", "DotI8"):        0x01E1,   # rs1=a-span rs2=b-span          rd=int32 dot
     ("Tensor", "MatVecI8"):     0x01E2,   # rs1=matrix i8 span rs2=vec i8  rd=span<int32_be>
@@ -692,6 +714,7 @@ HOST_HOOK_CODES = {
     ("Tensor", "SoftmaxI32"):   0x01E9,   # rs1=logits i32be               rd=span<Q15 i32be>
     ("Tensor", "ArgMaxI32"):    0x01EA,   # rs1=i32be span                 rd=index
     # BitLinear / BitNet-style ternary weights (2-bit packed; 4 weights/byte).
+    ("BitLinear", "HasFormat"): 0x01F4,   # rs1=format id/name             rd=1 if supported
     ("BitLinear", "SetShape"):  0x01F0,   # rs1=rows rs2=cols              rd=ok
     ("BitLinear", "MatVecTernary"): 0x01F1,# rs1=packed weights rs2=i8 vec rd=span<int32_be>
     ("BitLinear", "MatVecBitmap"): 0x01F2, # rs1=zero/minus bitmaps rs2=i8  rd=span<int32_be>
@@ -708,6 +731,11 @@ HOST_HOOK_CODES = {
     ("Model", "TensorRows"):     0x0224,
     ("Model", "TensorCols"):     0x0225,
     ("Model", "TensorFormat"):   0x0226,
+    ("Quant", "AbsMax"):         0x0228,
+    ("Quant", "QuantI8"):        0x0229,
+    ("Quant", "DequantI8"):      0x022A,
+    ("Quant", "ApplyScale"):     0x022B,
+    ("Quant", "GroupScale"):     0x022C,
     ("Kv", "SetShape"):          0x0230,
     ("Kv", "WriteK"):            0x0231,
     ("Kv", "WriteV"):            0x0232,
@@ -715,9 +743,19 @@ HOST_HOOK_CODES = {
     ("Kv", "ReadV"):             0x0234,
     ("Kv", "Len"):               0x0235,
     ("Kv", "Clear"):             0x0236,
+    ("Kv", "SetHead"):           0x0237,
+    ("Kv", "WriteKH"):           0x0238,
+    ("Kv", "WriteVH"):           0x0239,
+    ("Kv", "ReadKH"):            0x023A,
+    ("Kv", "ReadVH"):            0x023B,
     ("Sampling", "ArgMax"):      0x0240,
     ("Sampling", "TopK"):        0x0241,
     ("Sampling", "Temperature"): 0x0242,
+    ("Sampling", "ArgMaxRows"):  0x0243,
+    ("Attention", "SetShape"):   0x0250,
+    ("Attention", "Scores"):     0x0251,
+    ("Attention", "Mix"):        0x0252,
+    ("Attention", "Attend"):     0x0253,
     # Thread hints (0x70)
     ("Thread", "YieldCounted"): 0x70,
     # Io / output (0x71-0x72)

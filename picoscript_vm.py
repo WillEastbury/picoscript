@@ -664,9 +664,11 @@ class HostApi:
         self.model_config: Dict[int, int] = {}
         self.model_tensors: Dict[int, dict] = {}
         self.kv_shape = {"layers": 0, "positions": 0, "dim": 0}
+        self.kv_head = 0
         self.kv_k: Dict[tuple, bytes] = {}
         self.kv_v: Dict[tuple, bytes] = {}
         self.sampling_temp = 256
+        self.attn_shape = {"heads": 1, "dim": 0}
         self.gpio: Dict[int, dict] = {}   # reference GPIO emulator: pin -> {dir,pull,value}
         self.schemas: Dict[int, bytes] = {}   # per-pack typed-field schema span bytes (0x60/0x61)
         self.blob_cards: Dict[tuple, bytearray] = {}  # (pack, card) -> large-card bytes for slice tests/sim
@@ -805,6 +807,12 @@ class HostApi:
                 return
         if ns == "BitLinear":
             if self._bitlinear(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Quant":
+            if self._quant(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Attention":
+            if self._attention(vm, method, rd, rs1, rs2):
                 return
         if ns == "Tokenizer":
             if self._tokenizer(vm, method, rd, rs1, rs2):
@@ -1916,6 +1924,10 @@ class HostApi:
         return bytes(out)
 
     def _tensor(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "HasAccel":
+            # Reference VM is scalar-only but supports every Tensor hook semantically.
+            vm.regs[rd] = 1 if self._span_str(vm, vm.regs[rs1]).lower() in ("scalar", "vm") else 0
+            return True
         if method == "SetShape":
             self.tensor_rows = max(0, _sx32(vm.regs[rs1]))
             self.tensor_cols = max(0, _sx32(vm.regs[rs2]))
@@ -2010,6 +2022,10 @@ class HostApi:
         return 1 if code == 1 else (-1 if code == 2 else 0)
 
     def _bitlinear(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "HasFormat":
+            fmt = vm.regs[rs1] & MASK32
+            vm.regs[rd] = 1 if fmt in (1, 2, 3) else 0
+            return True
         if method == "SetShape":
             self.bitlinear_rows = max(0, _sx32(vm.regs[rs1]))
             self.bitlinear_cols = max(0, _sx32(vm.regs[rs2]))
@@ -2077,6 +2093,46 @@ class HostApi:
             return True
         return False
 
+    def _quant(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        data = self._span_raw(vm, vm.regs[rs1]) if method != "GroupScale" else b""
+        if method == "AbsMax":
+            n = len(data) // 4
+            vm.regs[rd] = max((abs(self._i32be_at(data, i)) for i in range(n)), default=0) & MASK32
+            return True
+        if method == "QuantI8":
+            scale = max(1, _sx32(vm.regs[rs2]))
+            vals = []
+            for i in range(len(data) // 4):
+                q = int(self._i32be_at(data, i) / scale)
+                vals.append(0 if q < -128 else (255 if q > 127 else (q & 0xFF)))
+            vm.regs[rd] = self._new_span_bytes(vm, bytes(vals))
+            return True
+        if method == "DequantI8":
+            scale = _sx32(vm.regs[rs2])
+            vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack([self._i8(b) * scale for b in data]))
+            return True
+        if method == "ApplyScale":
+            scale = _sx32(vm.regs[rs2])
+            vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack([self._i32be_at(data, i) * scale for i in range(len(data) // 4)]))
+            return True
+        if method == "GroupScale":
+            # Pack two 16-bit settings into rs1: high=elements, low=group size.
+            spec = vm.regs[rs1] & MASK32
+            n = (spec >> 16) & 0xFFFF
+            group = max(1, spec & 0xFFFF)
+            vals = []
+            for start in range(0, n, group):
+                end = min(n, start + group)
+                vals.append(end - start)
+            vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack(vals))
+            return True
+        return False
+
+    def _kv_key(self, reg: int, head: Optional[int] = None) -> tuple:
+        layer = (reg >> 16) & 0xFFFF
+        pos = reg & 0xFFFF
+        return (layer, pos, self.kv_head if head is None else head)
+
     def _tokenizer(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
         if method == "EncodeBytes":
             data = self._span_raw(vm, vm.regs[rs1])
@@ -2128,15 +2184,28 @@ class HostApi:
         if method == "SetShape":
             self.kv_shape = {"layers": _sx32(vm.regs[rs1]), "positions": _sx32(vm.regs[rs2]), "dim": _sx32(vm.regs[rs2])}
             vm.regs[rd] = 1; return True
-        key = ((_sx32(vm.regs[rs1]) >> 16) & 0xFFFF, _sx32(vm.regs[rs1]) & 0xFFFF)
+        if method == "SetHead":
+            self.kv_head = max(0, _sx32(vm.regs[rs1]))
+            vm.regs[rd] = self.kv_head
+            return True
+        key = self._kv_key(_sx32(vm.regs[rs1]), 0)
+        hkey = self._kv_key(_sx32(vm.regs[rs1]))
         if method == "WriteK":
             self.kv_k[key] = self._span_raw(vm, vm.regs[rs2]); vm.regs[rd] = 1; return True
         if method == "WriteV":
             self.kv_v[key] = self._span_raw(vm, vm.regs[rs2]); vm.regs[rd] = 1; return True
+        if method == "WriteKH":
+            self.kv_k[hkey] = self._span_raw(vm, vm.regs[rs2]); vm.regs[rd] = 1; return True
+        if method == "WriteVH":
+            self.kv_v[hkey] = self._span_raw(vm, vm.regs[rs2]); vm.regs[rd] = 1; return True
         if method == "ReadK":
             vm.regs[rd] = self._new_span_bytes(vm, self.kv_k.get(key, b"")); return True
         if method == "ReadV":
             vm.regs[rd] = self._new_span_bytes(vm, self.kv_v.get(key, b"")); return True
+        if method == "ReadKH":
+            vm.regs[rd] = self._new_span_bytes(vm, self.kv_k.get(hkey, b"")); return True
+        if method == "ReadVH":
+            vm.regs[rd] = self._new_span_bytes(vm, self.kv_v.get(hkey, b"")); return True
         if method == "Len":
             vm.regs[rd] = len(self.kv_k) + len(self.kv_v); return True
         if method == "Clear":
@@ -2149,12 +2218,73 @@ class HostApi:
             vm.regs[rd] = self.sampling_temp; return True
         if method == "ArgMax":
             return self._tensor(vm, "ArgMaxI32", rd, rs1, rs2)
+        if method == "ArgMaxRows":
+            # rs1=matrix i8 rows, rs2=activation i8. Uses Tensor shape.
+            old_rd = rd
+            tmp = self._tensor(vm, "MatVecI8", rd, rs1, rs2)
+            if not tmp:
+                return False
+            h = vm.regs[old_rd]
+            return self._tensor(vm, "ArgMaxI32", rd, 0, 0) if False else self._argmax_span(vm, rd, h)
         if method == "TopK":
             data = self._span_raw(vm, vm.regs[rs1])
             k = max(1, _sx32(vm.regs[rs2]))
             vals = [(self._i32be_at(data, i), i) for i in range(len(data) // 4)]
             vals.sort(key=lambda x: (-x[0], x[1]))
             vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack([idx for _v, idx in vals[:k]]))
+            return True
+        return False
+
+    def _argmax_span(self, vm: "PicoVM", rd, handle: int) -> bool:
+        data = self._span_raw(vm, handle)
+        best_i, best_v = 0, None
+        for i in range(len(data) // 4):
+            v = self._i32be_at(data, i)
+            if best_v is None or v > best_v:
+                best_i, best_v = i, v
+        vm.regs[rd] = best_i
+        return True
+
+    def _attention(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "SetShape":
+            self.attn_shape = {"heads": max(1, _sx32(vm.regs[rs1])), "dim": max(0, _sx32(vm.regs[rs2]))}
+            vm.regs[rd] = 1
+            return True
+        if method == "Scores":
+            q = self._span_raw(vm, vm.regs[rs1])
+            k = self._span_raw(vm, vm.regs[rs2])
+            dim = self.attn_shape.get("dim", 0) or min(len(q), len(k))
+            nkeys = len(k) // max(1, dim)
+            vals = []
+            for r in range(nkeys):
+                acc = 0
+                base = r * dim
+                for c in range(dim):
+                    if c < len(q) and base + c < len(k):
+                        acc += self._i8(q[c]) * self._i8(k[base + c])
+                vals.append(acc)
+            vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack(vals))
+            return True
+        if method == "Mix":
+            weights = self._span_raw(vm, vm.regs[rs1])
+            values = self._span_raw(vm, vm.regs[rs2])
+            dim = self.attn_shape.get("dim", 0) or 1
+            n = min(len(weights) // 4, len(values) // max(1, dim))
+            out = []
+            for c in range(dim):
+                acc = 0
+                for r in range(n):
+                    w = self._i32be_at(weights, r)
+                    acc += w * self._i8(values[r * dim + c])
+                out.append(_sx32(acc >> 15))
+            vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack(out))
+            return True
+        if method == "Attend":
+            if not self._attention(vm, "Scores", rd, rs1, rs2):
+                return False
+            score_span = vm.regs[rd]
+            if not self._tensor(vm, "SoftmaxI32", rd, score_span, 0):
+                return False
             return True
         return False
 

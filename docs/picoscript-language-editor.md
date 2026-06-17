@@ -289,6 +289,8 @@ The editor can derive completions from the language namespace table:
 | `Event.` | `Post`, `Next`, `Type`, `Target`, `Data`, `SetData`, `Count`, `SetSlice`, `DataSlice`, `DataLen` |
 | `Tensor.` | `SetShape`, `DotI8`, `MatVecI8`, `AddI32`, `MulI32`, `ScaleI32`, `ReluI32`, `RmsNormI32`, `RoPEI32`, `SoftmaxI32`, `ArgMaxI32` |
 | `BitLinear.` | `SetShape`, `MatVecTernary`, `MatVecBitmap`, `MatVecBase3` |
+| `Quant.` | `AbsMax`, `QuantI8`, `DequantI8`, `ApplyScale`, `GroupScale` |
+| `Attention.` | `SetShape`, `Scores`, `Mix`, `Attend` |
 | `Tokenizer.` | `EncodeBytes`, `DecodeBytes`, `Count`, `Token` |
 | `Model.` | `SetConfig`, `GetConfig`, `TensorView`, `TensorOffset`, `TensorRows`, `TensorCols`, `TensorFormat` |
 | `Kv.` | `SetShape`, `WriteK`, `WriteV`, `ReadK`, `ReadV`, `Len`, `Clear` |
@@ -452,6 +454,9 @@ another accelerator.
   covers BitNet-style ternary rows.
 - `Tensor.AddI32/MulI32/ScaleI32/ReluI32/RmsNormI32/RoPEI32/SoftmaxI32/ArgMaxI32`
   cover residuals, gated FFN, normalization, RoPE, attention weights and logits.
+- `Quant.*` covers activation quantization/dequantization and group-scale helpers.
+- `Attention.*` covers query-key scoring and weighted value mixing without requiring
+  a script to materialize a full attention matrix.
 
 All tensor outputs are spans of big-endian int32 values unless the method returns
 a scalar register (`DotI8`, `ArgMaxI32`).
