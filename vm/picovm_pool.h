@@ -5,9 +5,20 @@
 #include "picovm.h"
 #include <stdint.h>
 
-#define PV_POOL_MAX 64
+/* PV_POOL_SLOTS bounds the statically-allocated worker array (and thus BSS).
+   PV_POOL_ARENA_SIZE is the per-worker request arena. Both are overridable at
+   compile time (e.g. -DPV_POOL_SLOTS=8 -DPV_POOL_ARENA_SIZE=131072) so the
+   binary's BSS footprint scales to the deployment target. */
+#ifndef PV_POOL_SLOTS
+#define PV_POOL_SLOTS 64
+#endif
+#define PV_POOL_MAX PV_POOL_SLOTS
+#ifndef PV_POOL_DEFAULT
 #define PV_POOL_DEFAULT 8
+#endif
+#ifndef PV_POOL_ARENA_SIZE
 #define PV_POOL_ARENA_SIZE (512u * 1024u)
+#endif
 
 #if defined(PIOS) || (defined(__STDC_HOSTED__) && __STDC_HOSTED__)
 # ifdef _WIN32
