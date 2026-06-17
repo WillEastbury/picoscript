@@ -983,8 +983,11 @@ PAGE = r"""<!DOCTYPE html>
     <button data-lang="basic" onclick="setLang('basic')">BASIC</button>
     <button data-lang="python" onclick="setLang('python')">Python</button>
     <button data-lang="english" onclick="setLang('english')">English</button>
+    <button data-lang="cobol" onclick="setLang('cobol')">COBOL</button>
+    <button data-lang="report" onclick="setLang('report')">Report</button>
+    <button data-lang="functional" onclick="setLang('functional')">Functional</button>
   </div>
-  <span class="pill">case-insensitive</span>
+  <span class="pill">7 languages</span>
   <span class="pill">same bytecode</span>
   <a href="index.html" style="margin-left:auto;font-size:11px;color:var(--accent);text-decoration:none">&#128214; Full language guide &amp; reference &#8599;</a>
 </div>
@@ -1040,6 +1043,8 @@ PAGE = r"""<!DOCTYPE html>
         <select id="lang" style="display:none">
           <option value="c">C-style</option><option value="basic">BASIC</option>
           <option value="python">Python</option><option value="english">English</option>
+          <option value="cobol">COBOL</option><option value="report">Report</option>
+          <option value="functional">Functional</option>
         </select>
         <textarea id="src" style="height:100px" spellcheck="false"></textarea>
         <div class="controls">
@@ -1047,6 +1052,7 @@ PAGE = r"""<!DOCTYPE html>
           <button class="ghost" onclick="compileSrc(false)">Compile &amp; Step</button>
           <button class="ghost" onclick="dbgStep()">Step</button>
           <button class="ghost" onclick="dbgReset()">Reset</button>
+          <button class="ghost" onclick="psUndo()" title="Undo to previous save">&#8617; Undo</button>
         </div>
         <div id="cerr" class="cerr"></div>
       </div>
@@ -1502,6 +1508,30 @@ function psFilesDelete(name,skipConfirm){
   if(!skipConfirm&&typeof confirm==='function'&&!confirm('Delete "'+name+'"?')) return false;
   delete files[name]; filesWrite(files); if(ACTIVE_FILE===name)filesSetActive(''); filesRender(); filesStatus('Deleted '+name); return true;
 }
+
+// ---- Simple undo history (per file, localStorage-backed) -------------------
+var PS_UNDO_KEY='picoscript.undo.v1';
+function undoRead(){var ls=filesSafeLocalStorage();if(!ls)return {};try{return JSON.parse(ls.getItem(PS_UNDO_KEY)||'{}');}catch(e){return {};}}
+function undoWrite(h){var ls=filesSafeLocalStorage();if(!ls)return;try{ls.setItem(PS_UNDO_KEY,JSON.stringify(h));}catch(e){}}
+function undoPush(name,src){
+  var h=undoRead(); if(!h[name])h[name]=[];
+  var stack=h[name]; if(stack.length>0&&stack[stack.length-1].src===src)return;
+  stack.push({src:src,ts:Date.now()}); if(stack.length>50)stack.splice(0,stack.length-50);
+  undoWrite(h);
+}
+function undoPop(name){
+  var h=undoRead(); if(!h[name]||h[name].length<2)return null;
+  h[name].pop(); var prev=h[name][h[name].length-1]; undoWrite(h); return prev;
+}
+function undoCount(name){var h=undoRead();return (h[name]||[]).length;}
+function psUndo(){
+  var name=ACTIVE_FILE; if(!name){filesStatus('No file to undo',true);return;}
+  var prev=undoPop(name); if(!prev){filesStatus('Nothing to undo',true);return;}
+  setSrc(prev.src); filesStatus('Undo to '+new Date(prev.ts).toLocaleTimeString());
+}
+// Hook save to push undo
+var _origSave=psFilesSave;
+psFilesSave=function(name){undoPush(ACTIVE_FILE||name||'',getSrc());return _origSave(name);};
 
 function compileSrc(run){
   var lang=document.getElementById('lang').value, src=getSrc();

@@ -348,15 +348,17 @@ PAGE = r"""<!DOCTYPE html>
 <div class="topbar">
   <h1>PicoScript</h1>
   <div class="tabs">
-    <button class="tab active" onclick="showView('guide')">Guide</button>
+    <button class="tab active" onclick="showView('guide')">Guide &amp; Reference</button>
     <button class="tab" onclick="showView('play')">Playground</button>
-    <button class="tab" onclick="showView('ref')">Reference</button>
   </div>
   <div class="lang-toggle" id="langToggle">
     <button data-lang="c" class="active" onclick="setLang('c')">C &#123;&#125;</button>
     <button data-lang="basic" onclick="setLang('basic')">BASIC</button>
     <button data-lang="python" onclick="setLang('python')">Python</button>
     <button data-lang="english" onclick="setLang('english')">English</button>
+    <button data-lang="cobol" onclick="setLang('cobol')">COBOL</button>
+    <button data-lang="report" onclick="setLang('report')">Report</button>
+    <button data-lang="functional" onclick="setLang('functional')">Functional</button>
   </div>
 </div>
 <div class="main">
@@ -554,7 +556,7 @@ function showView(v){
   document.querySelectorAll('.view').forEach(function(e){e.classList.remove('active');});
   document.getElementById('view-'+v).classList.add('active');
   document.querySelectorAll('.tabs .tab').forEach(function(b){b.classList.remove('active');});
-  var idx={guide:0,play:1,ref:2}[v]||0;
+  var idx={guide:0,play:1}[v]||0;
   document.querySelectorAll('.tabs .tab')[idx].classList.add('active');
   var ft=document.getElementById('flyoutTriggers');
   if(ft) ft.style.display=(v==='play')?'flex':'none';
@@ -568,13 +570,15 @@ function setLang(lang){
   renderSyntaxRef(); renderSamples();
 }
 
-var GROUPS=[{name:'Basics',items:[0]},{name:'Control Flow',items:[1,2,3,4,10,11]},{name:'Operators',items:[5]},{name:'Dispatch / State Machine',items:[6,7]},{name:'Subroutines',items:[8,9]},{name:'I/O & Cards',items:[12,13]}];
+var GROUPS=[{name:'Basics',items:[0]},{name:'Control Flow',items:[1,2,3,4,10,11]},{name:'Operators',items:[5]},{name:'Dispatch / State Machine',items:[6,7]},{name:'Subroutines',items:[8,9]},{name:'I/O & Cards',items:[12,13,14,15,16]},{name:'Streams & Events',items:[17,18,19,20,21]},{name:'AI & Hardware',items:[22,23,24,25]},{name:'Functions & Errors',items:[26,27]},{name:'OS & Web Hooks',items:[28,29]}];
 function buildGuideTree(){
   var html='';
   GROUPS.forEach(function(g){
     html+='<div class="group-title">'+esc(g.name)+'</div>';
     g.items.forEach(function(idx){if(idx<DATA.length) html+='<div class="tree-item'+(idx===0?' active':'')+'" data-idx="'+idx+'" onclick="showGuideCard('+idx+')">'+esc(DATA[idx].title)+'</div>';});
   });
+  html+='<div class="group-title">Reference</div>';
+  REF_SECTIONS.forEach(function(id,i){html+='<div class="tree-item" onclick="showView(\'ref\');showRefSection(\''+id+'\')">'+REF_LABELS[i]+'</div>';});
   document.getElementById('guideTree').innerHTML=html;
 }
 function showGuideCard(idx){
@@ -594,7 +598,7 @@ function showGuideCard(idx){
 
 var GDBG={words:[],disasm:[],vm:null};
 function guideRun(i){
-  var d=DATA[i],styles=['c','basic','python','english'],parts=[],ref=null,same=true;
+  var d=DATA[i],styles=['c','basic','python','english','cobol','report','functional'],parts=[],ref=null,same=true;
   styles.forEach(function(s){if(!d[s])return;var o=runWords(d[s].words).outputInts();if(ref===null)ref=JSON.stringify(o);else if(JSON.stringify(o)!==ref)same=false;parts.push(s+' \u2192 ['+o.join(', ')+']');});
   var el=document.getElementById('gcardout'+i);if(el)el.innerHTML=parts.join(' &nbsp; ')+'  '+(same?'&#10003;':'&#9888;');
   var lang=CUR_LANG;if(!d[lang])lang='basic';
