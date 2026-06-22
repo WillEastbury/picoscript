@@ -156,6 +156,7 @@
       0x8A: "String.StartsWith",
       0x8B: "String.EndsWith",
       0x8C: "String.SetReplace",
+    0x8D: "String.Eq",
       0x90: "Number.Parse",
       0x91: "Number.ToString",
       0x92: "Number.ToHex",

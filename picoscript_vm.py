@@ -1088,6 +1088,8 @@ class HostApi:
             R[rd] = 1 if a.startswith(self._span_raw(vm, R[rs2])) else 0; return True
         if method == "EndsWith":
             R[rd] = 1 if a.endswith(self._span_raw(vm, R[rs2])) else 0; return True
+        if method == "Eq":
+            R[rd] = 1 if a == self._span_raw(vm, R[rs2]) else 0; return True
         if method == "ToUpper":
             R[rd] = self._new_span_bytes(vm, bytes(c - 32 if 97 <= c <= 122 else c for c in a)); return True
         if method == "ToLower":

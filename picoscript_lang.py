@@ -991,6 +991,7 @@ HOST_HOOK_CODES = {
     ("String", "StartsWith"):   0x8A,
     ("String", "EndsWith"):     0x8B,
     ("String", "SetReplace"):   0x8C,
+    ("String", "Eq"):           0x8D,
     # Number library (0x90-0x9A)
     ("Number", "Parse"):        0x90,
     ("Number", "ToString"):     0x91,
