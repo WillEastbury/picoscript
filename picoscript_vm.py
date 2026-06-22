@@ -604,6 +604,7 @@ _CAP_BY_NS = {
     "Kernel": CAP_KERNEL, "Queue": CAP_QUEUE, "Random": CAP_RANDOM,
     "Req": CAP_NET, "Resp": CAP_NET, "Net": CAP_NET,
     "Storage": CAP_STORAGE, "DateTime": CAP_TIME, "Context": CAP_CONTEXT,
+    "Data": CAP_STORAGE,
     "Auth": CAP_AUTH, "X509": CAP_AUTH, "Environment": CAP_ENV, "Locale": CAP_ENV,
     "Gpio": CAP_GPIO,
     "Pack": CAP_CAPSULE, "Card": CAP_CAPSULE, "Fifo": CAP_CAPSULE,

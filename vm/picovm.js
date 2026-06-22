@@ -387,6 +387,12 @@
     if (name.indexOf("Storage.") === 0) {
       if (this._storage(name.slice(8), rd, rs1, rs2)) return;
     }
+    // ---- Data.* host-bound read: the browser has no server data, so return
+    //      empty/0 and let the authoritative server enforce data-dependent rules.
+    if (name.indexOf("Data.") === 0) {
+      this.regs[rd] = (name.slice(5) === "FieldStr") ? this._strSpan("") : 0;
+      return;
+    }
     // ---- program-level GPIO emulator: Gpio.* (reference; PIOS injects real driver)
     if (name.indexOf("Gpio.") === 0) {
       if (this._gpio(name.slice(5), rd, rs1, rs2)) return;

@@ -750,6 +750,11 @@ HOST_HOOK_CODES = {
     ("Storage", "GetFieldStr"): 0x6D,
     ("Storage", "QueryResult"): 0x6E,
     ("Storage", "Ready"):       0x6F,
+    # Forge read-only data binding (host-registered, RBAC-projected). Lookup a
+    # record then read its fields; lets validation/hooks "load related" data.
+    ("Data", "Lookup"):         0x0300,   # rs1=entity span rs2=id span -> rd=handle (0=none)
+    ("Data", "FieldNum"):       0x0301,   # rs1=handle rs2=field span   -> rd=int
+    ("Data", "FieldStr"):       0x0302,   # rs1=handle rs2=field span   -> rd=span
     # Large-card slice hooks (0x01A0-0x01A3): SetSlice(offset,len), CardLen(card),
     # ReadSlice(card)->span, WriteSlice(card,span)->ok. Extended hostcall page.
     ("Storage", "SetSlice"):    0x01A0,
