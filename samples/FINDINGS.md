@@ -170,6 +170,14 @@ These are the bindings a real webserver + DB server want, and none exist yet:
 > durable store: WAL appended to LBAs, fsync on commit, replay on boot. The
 > store *logic* in this sample is already written against that future contract.
 
+> **Boot-tier simulation already in the sample:** `picowal-in-picoscript/boot_demo.py`
+> prototypes exactly this by injecting a WAL image file (`picowal.img`) into the
+> VM arena at startup and snapshotting it back — standing in for the `Block.*`/
+> NVMe binding. It gives real durability across reboots (records grow 1→2→3…)
+> with **code and data in separate tiers** (the engine bytecode is the immutable
+> boot image; only the WAL is persisted). Replace the file injection with a real
+> `Block.*` device and `boot_store.ppy` is unchanged.
+
 ---
 
 ## 5. Scorecard

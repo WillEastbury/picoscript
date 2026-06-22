@@ -33,6 +33,39 @@ The **crash + replay** block is the interesting part: it wipes the slot table
 and rebuilds it purely by walking the append-only WAL, proving write-ahead /
 recovery semantics — implemented in PicoScript, not the host.
 
+## Durability across reboots (boot-tier simulation)
+
+`store_demo.py` is in-memory only. `boot_demo.py` makes it **durable** by
+simulating the immutable boot/NVMe tier with a file the host injects into the VM
+arena at startup — like a bootloader reading a boot partition, or Python loading
+a module image:
+
+```
+python boot_demo.py          # fresh image, 3 simulated reboots -> 1, 2, 3
+python boot_demo.py --keep    # keep the image -> continues 4, 5, 6
+```
+
+```
+--- reboot 1 ---  format: no image -- initializing fresh   records=1
+--- reboot 2 ---  mount: existing image found -- replaying WAL   records=2
+--- reboot 3 ---  mount: existing image found -- replaying WAL   records=3
+picowal.img on disk: 44 bytes  <- the durable WAL (code is NOT in it)
+```
+
+Each reboot builds a **fresh VM**; only `picowal.img` carries state between them
+(and across separate processes), so the growing record count proves the WAL
+survived. Two tiers, kept separate to avoid the chicken-and-egg:
+
+- **CODE** = the engine's bytecode, compiled and loaded by the host — the
+  immutable boot image. *Never stored in the WAL.*
+- **DATA** = an append-only WAL persisted to `picowal.img`, injected into the
+  arena before `run()` and snapshotted back after.
+
+Only the WAL is durable; the slot table is a **volatile projection** rebuilt by
+replaying the log on boot — real write-ahead-log semantics. The host injection
+stands in for the missing `Block.*`/NVMe binding: swap it for a real device and
+nothing in `boot_store.ppy` changes.
+
 ## Gaps surfaced (see ../FINDINGS.md)
 
 - **No durable persistence primitive** — the headline finding. Everything lives
