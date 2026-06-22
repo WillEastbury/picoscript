@@ -3459,7 +3459,10 @@ class HostApi:
         ctx = self.request_context
         path = ""
         if ctx and "path" in ctx:
-            path = ctx["path"]
+            raw = ctx["path"]
+            # request_context stores path as a span handle (see Req.Path), so
+            # decode it; tolerate a bare string for direct/testing callers.
+            path = self._span_str(vm, raw) if isinstance(raw, int) else str(raw)
         segments = [s for s in path.split("/") if s]
         if method == "ParamCount":
             vm.regs[rd] = len(segments)
@@ -3523,6 +3526,38 @@ class PicoVM:
         self.cur_pc = 0
         self.halted = False
         self.steps = 0
+        self._verified = False               # INV-10 verify is cached per program
+
+    def reset_for_request(self) -> "PicoVM":
+        """Restore per-request execution state for warm reuse in a server loop.
+
+        Reuses the loaded program, the 'mem' arena buffer, and the cached
+        verification result (skips the O(program) re-verify). Only the volatile
+        execution state is cleared, so a kept-warm VM can serve request after
+        request without reconstruction. Pair with HostApi.install_request_context.
+        """
+        regs = self.regs
+        for i in range(len(regs)):
+            regs[i] = 0
+        # NOTE: self.cards (the Storage.* card table) is deliberately NOT cleared
+        # -- it is the persistent store and must survive across warm requests.
+        self.call_stack.clear()
+        self.output.clear()
+        self.http_status = None
+        self.http_type = None
+        self.arena_top = 0x8000
+        self.spans = [None]
+        self.pc = 0
+        self.cur_pc = 0
+        self.halted = False
+        self.waiting = False
+        self.retval = 0
+        self.steps = 0
+        h = self.host
+        h._handler_mark = None               # let install re-capture the arena base
+        h.host_status = 0
+        h.const_floor = getattr(h, "const_floor", self.arena_bytes)
+        return self
 
     def _verify(self):
         """INV-10: reject static out-of-range JUMP/CALL/BRANCH targets before execution
@@ -3545,7 +3580,9 @@ class PicoVM:
     def run(self, words: Optional[List[int]] = None) -> "PicoVM":
         if words is not None:
             self.load(words)
-        self._verify()                       # INV-10: verify before execution
+        if not getattr(self, "_verified", False):
+            self._verify()                   # INV-10: verify once, then cache
+            self._verified = True
         try:
             while not self.halted:
                 if self.pc >= len(self.program):

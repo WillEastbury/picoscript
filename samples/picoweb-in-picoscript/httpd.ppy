@@ -1,0 +1,88 @@
+# picoweb-in-picoscript — an HTTP server written entirely in PicoScript.
+#
+# EXPERIMENT: how much of an HTTP server can the language express natively, and
+# where does it fight back? Everything below — request inspection, routing,
+# path params, JSON/HTML response building — is PicoScript. The only host-
+# injected pieces are the raw socket pump (Net.*) and the request context the
+# pool fills before each call (Req.* reads it).
+#
+# Runs three ways from this one source:
+#   - bytecode VM        (run_demo.py installs a request context)
+#   - native binary      (lower_to_c + the picovm_pool.c thread pool)
+#   - browser            (lower_to_js)
+#
+# GAPS hit while writing this are tagged  # GAP:  inline and collected in README.
+
+# ---- helpers ---------------------------------------------------------------
+
+def send(status, ctype, body):
+    Resp.Status(status)
+    Resp.Header("content-type", ctype)
+    Resp.Write(body)
+    Resp.End()
+
+def not_found():
+    # GAP: no string interpolation — every fragment is a separate Resp.Write or
+    # a String.Concat. A real framework wants `f"..."`-style building.
+    send(404, "application/json", "{\"error\":\"not_found\"}")
+
+# ---- routes ----------------------------------------------------------------
+
+def route_home():
+    send(200, "text/html", "<!doctype html><h1>picoweb-in-picoscript</h1><p>Served by a PicoScript program.</p>")
+
+def route_ping():
+    send(200, "application/json", "{\"pong\":true,\"engine\":\"picoscript\"}")
+
+def route_echo(seg):
+    # Reflect a path segment back as JSON. String.Concat builds the body since
+    # there is no concatenation operator and Resp.Write of an int is a no-op.
+    body = String.Concat("{\"echo\":\"", seg)
+    body = String.Concat(body, "\"}")
+    send(200, "application/json", body)
+
+def route_headers():
+    # Demonstrate reading a request header natively.
+    ua = Req.Header("user-agent")
+    body = String.Concat("{\"user_agent\":\"", ua)
+    body = String.Concat(body, "\"}")
+    send(200, "application/json", body)
+
+def route_create():
+    # POST body echo — proves Req.BodySpan reaches the handler natively.
+    body = Req.BodySpan(0)
+    Resp.Status(201)
+    Resp.Header("content-type", "application/json")
+    Resp.Write("{\"received\":")
+    Resp.Write(body)
+    Resp.Write("}")
+    Resp.End()
+
+# ---- dispatch --------------------------------------------------------------
+# GAP: no map/dict and no function-pointer values, so the route table cannot be
+# data ("GET /api/ping" -> route_ping). It must be an if/elif chain keyed on
+# (method, path segments). This is the single biggest webserver-shaped gap.
+
+method = Req.Method()
+seg0 = Req.Param(0)
+seg1 = Req.Param(1)
+n = Req.ParamCount()
+
+if n == 0:
+    route_home()
+elif String.StartsWith(seg0, "api"):
+    if String.StartsWith(seg1, "ping"):
+        route_ping()
+    elif String.StartsWith(seg1, "headers"):
+        route_headers()
+    elif String.StartsWith(seg1, "echo"):
+        route_echo(Req.Param(2))
+    elif String.StartsWith(seg1, "create"):
+        if String.StartsWith(method, "POST"):
+            route_create()
+        else:
+            send(405, "application/json", "{\"error\":\"method_not_allowed\"}")
+    else:
+        not_found()
+else:
+    not_found()

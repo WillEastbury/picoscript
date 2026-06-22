@@ -1,0 +1,206 @@
+# picowal-in-picoscript — a write-ahead-logged key/value store written entirely
+# in PicoScript. No Storage.* host calls: this *implements* the store logic
+# (slots, byte-packed records, an append-only WAL, and crash-recovery replay)
+# directly on the raw Memory.* / Span.* primitives.
+#
+# Key model mirrors real PicoWAL: a value is addressed by (pack:u16, card:u32).
+# Real PicoWAL allows 508-byte values; this demo caps at VALUE_MAX below because
+# of the 16-bit Span.Make window (see README GAP table) — the *logic* is the same.
+#
+# Run:  python store_demo.py     (drives this on the bytecode VM)
+#
+# GAPS hit while writing this are tagged  # GAP:  inline and collected in README.
+
+# ---- layout (must stay in the low 64KB so Span.Make can view it) -----------
+# GAP: Span.Make truncates its pointer to 16 bits, but Memory.* addresses the
+# whole arena. A real store wants a host-provided block/heap binding, not this
+# cramped 64KB window shared with the span bump-allocator.
+TABLE_BASE = 0xC000
+SLOT = 80          # 1 state + 2 pack + 4 card + 2 len + 64 value (padded)
+VALUE_MAX = 64
+NUM_SLOTS = 16
+WAL_BASE = 0xD000
+
+wal_top = WAL_BASE
+
+# ---- byte packing (no bitwise operators, so do it with arithmetic) ---------
+# GAP: PicoScript has no <<, >>, &, |, ^. Multi-byte integers must be packed
+# and unpacked with *256 / /256 / %256. Tedious and error-prone for a DB engine.
+def put_u16(addr, v):
+    Memory.Set(addr, v / 256 % 256)
+    Memory.Set(addr + 1, v % 256)
+
+def get_u16(addr):
+    return Memory.Get(addr) * 256 + Memory.Get(addr + 1)
+
+def put_u32(addr, v):
+    Memory.Set(addr, v / 16777216 % 256)
+    Memory.Set(addr + 1, v / 65536 % 256)
+    Memory.Set(addr + 2, v / 256 % 256)
+    Memory.Set(addr + 3, v % 256)
+
+def get_u32(addr):
+    return Memory.Get(addr) * 16777216 + Memory.Get(addr + 1) * 65536 + Memory.Get(addr + 2) * 256 + Memory.Get(addr + 3)
+
+# ---- slot helpers ----------------------------------------------------------
+def slot_addr(i):
+    return TABLE_BASE + i * SLOT
+
+def find_slot(pack, card):
+    # GAP: no map/dict, so every lookup is an O(n) linear scan. A real index
+    # (hash/B-tree) must be hand-built in raw memory — there is no primitive.
+    i = 0
+    while i < NUM_SLOTS:
+        a = slot_addr(i)
+        if Memory.Get(a) == 1:
+            if get_u16(a + 1) == pack:
+                if get_u32(a + 3) == card:
+                    return i
+        i = i + 1
+    return -1
+
+def find_free():
+    i = 0
+    while i < NUM_SLOTS:
+        if Memory.Get(slot_addr(i)) != 1:
+            return i
+        i = i + 1
+    return -1
+
+def write_value(addr, span, n):
+    i = 0
+    while i < n:
+        Memory.Set(addr + i, Span.Get(span, i))
+        i = i + 1
+
+# ---- table mutations (shared by live puts and WAL replay) ------------------
+def apply_put(pack, card, span, n):
+    i = find_slot(pack, card)
+    if i < 0:
+        i = find_free()
+    if i < 0:
+        return -1
+    a = slot_addr(i)
+    Memory.Set(a, 1)
+    put_u16(a + 1, pack)
+    put_u32(a + 3, card)
+    put_u16(a + 7, n)
+    write_value(a + 9, span, n)
+    return i
+
+def apply_delete(pack, card):
+    i = find_slot(pack, card)
+    if i >= 0:
+        Memory.Set(slot_addr(i), 2)
+    return i
+
+def table_clear():
+    i = 0
+    while i < NUM_SLOTS:
+        Memory.Set(slot_addr(i), 0)
+        i = i + 1
+
+# ---- write-ahead log -------------------------------------------------------
+def wal_append(op, pack, card, span, n):
+    Memory.Set(wal_top, op)
+    wal_top = wal_top + 1
+    put_u16(wal_top, pack)
+    wal_top = wal_top + 2
+    put_u32(wal_top, card)
+    wal_top = wal_top + 4
+    put_u16(wal_top, n)
+    wal_top = wal_top + 2
+    i = 0
+    while i < n:
+        Memory.Set(wal_top + i, Span.Get(span, i))
+        i = i + 1
+    wal_top = wal_top + n
+
+# ---- public API (WAL first, then table — true write-ahead ordering) --------
+def store_put(pack, card, span):
+    n = Span.Len(span)
+    if n > VALUE_MAX:
+        n = VALUE_MAX
+    wal_append(1, pack, card, span, n)
+    apply_put(pack, card, span, n)
+
+def store_delete(pack, card):
+    wal_append(2, pack, card, "", 0)
+    apply_delete(pack, card)
+
+def store_get(pack, card):
+    i = find_slot(pack, card)
+    if i < 0:
+        return 0
+    a = slot_addr(i)
+    n = get_u16(a + 7)
+    return Span.Make(a + 9, n)
+
+def list_count(pack):
+    c = 0
+    i = 0
+    while i < NUM_SLOTS:
+        a = slot_addr(i)
+        if Memory.Get(a) == 1:
+            if get_u16(a + 1) == pack:
+                c = c + 1
+        i = i + 1
+    return c
+
+# Crash recovery: wipe the table and rebuild it purely by replaying the WAL.
+def replay():
+    table_clear()
+    p = WAL_BASE
+    while p < wal_top:
+        op = Memory.Get(p)
+        p = p + 1
+        pk = get_u16(p)
+        p = p + 2
+        cd = get_u32(p)
+        p = p + 4
+        n = get_u16(p)
+        p = p + 2
+        if op == 1:
+            apply_put(pk, cd, Span.Make(p, n), n)
+        elif op == 2:
+            apply_delete(pk, cd)
+        p = p + n
+
+# ---- self-test report ------------------------------------------------------
+def line(tag, text):
+    Io.Write(tag)
+    Io.Write(text)
+    Io.Write("\n")
+
+def show_get(tag, pack, card):
+    h = store_get(pack, card)
+    Io.Write(tag)
+    if h == 0:
+        Io.Write("<none>")
+    else:
+        Io.Write(h)
+    Io.Write("\n")
+
+table_clear()
+wal_top = WAL_BASE
+
+store_put(1, 100, "hello")
+store_put(1, 200, "world")
+store_put(2, 100, "other-pack")
+
+show_get("get(1,100)      = ", 1, 100)
+show_get("get(1,200)      = ", 1, 200)
+show_get("get(2,100)      = ", 2, 100)
+line("list(pack=1)    = ", Number.ToString(list_count(1)))
+
+store_delete(1, 100)
+line("after delete(1,100) list(pack=1) = ", Number.ToString(list_count(1)))
+show_get("get(1,100)      = ", 1, 100)
+
+# Simulate a crash: blow away the table, then recover from the WAL alone.
+table_clear()
+line("after crash list(pack=1) = ", Number.ToString(list_count(1)))
+replay()
+line("after replay list(pack=1) = ", Number.ToString(list_count(1)))
+show_get("get(1,200) post-replay = ", 1, 200)
+show_get("get(1,100) post-replay = ", 1, 100)

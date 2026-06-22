@@ -1042,9 +1042,16 @@ class Lowerer:
             self.b.jmp(f"lbl_{s.label.upper()}")
         elif isinstance(s, Gosub):
             if s.args:
-                for i, arg in enumerate(s.args):
-                    av = self.var(f"__arg{i}__")
-                    self.assign_to(av, arg)
+                # Evaluate each argument into a fresh temp first, then stage the
+                # temps into the shared __arg slots immediately before the call.
+                # The temps span any nested calls in later arguments, so the
+                # allocator pins them (il spans_call) and they survive -- whereas
+                # writing __arg{i}__ eagerly would be clobbered by those calls.
+                tmps = []
+                for arg in s.args:
+                    t = self.b.vreg(); self.b.mov(t, self.eval(arg)); tmps.append(t)
+                for i, t in enumerate(tmps):
+                    self.b.mov(self.var(f"__arg{i}__"), t)
             self.b.call(f"sub_{s.name.upper()}")
         elif isinstance(s, Return):
             if s.value is not None:
@@ -1441,12 +1448,20 @@ class Lowerer:
             # Local subroutine call (takes priority if name matches a SUB)
             if key in subs:
                 params = self._sub_params.get(key, [])
-                for i, arg in enumerate(c.args):
-                    av = self.var(f"__arg{i}__")
-                    self.assign_to(av, arg)
+                # Stage args through fresh temps (see Gosub note): a nested call
+                # in a later argument must not clobber an earlier __arg slot.
+                tmps = []
+                for arg in c.args:
+                    t = self.b.vreg(); self.b.mov(t, self.eval(arg)); tmps.append(t)
+                for i, t in enumerate(tmps):
+                    self.b.mov(self.var(f"__arg{i}__"), t)
                 self.b.call(f"sub_{method.upper()}")
                 if want_value:
-                    return self.var("__ret__")
+                    # Copy the shared __ret__ slot into a fresh temp so callers
+                    # can compose results (e.g. f() + g()) without the second
+                    # call overwriting the first's return value.
+                    rt = self.b.vreg(); self.b.mov(rt, self.var("__ret__"))
+                    return rt
                 return None
             if key in BP_RADIX and key not in subs:
                 cm, prefix, upper = BP_RADIX[key]
