@@ -1,10 +1,71 @@
-# PicoScript named constants, enums, and localization
+# PicoScript constants, enums, and locale guide
 
 PicoScript ships a built-in constant catalog (`NAMED_CONSTANTS`) and localized
 metadata (`NAMED_CONSTANT_I18N`) from `picoscript_lang.py`.
 
 These constants resolve in all four frontends (C, BASIC, Python, English) and
 in the browser compiler (`vm/picoc.js`) with Python/JS bytecode parity.
+
+Use this guide when you know a hook takes a number, but you want readable source:
+
+```text
+Net.Status(STATUS_NOT_FOUND).
+```
+
+Instead of:
+
+```text
+Net.Status(404).
+```
+
+The browser editor autocomplete includes these constants. Start typing `STATUS_`,
+`METHOD_`, `TZ_`, `CURRENCY_`, `COUNTRY_`, `COLOR_`, `INT32_`, or `MASK` in any
+dialect.
+
+## Quick use
+
+| Need | Use | Example |
+|------|-----|---------|
+| HTTP request method | `METHOD_*` or `HTTP_METHOD_*` | `METHOD_POST` |
+| HTTP response status | `STATUS_*` or `HTTP_STATUS_*` | `STATUS_NOT_FOUND` |
+| Time zone | `TZ_*` | `TZ_EUROPE_LONDON` |
+| Currency | `CURRENCY_*` | `CURRENCY_USD` |
+| Country | `COUNTRY_*` | `COUNTRY_GB` |
+| Unit / color | `UOM_*`, `COLOR_*` | `UOM_METER`, `COLOR_BLUE` |
+| Integer bounds/masks | `INT*_MAX`, `UINT*_MAX`, `MASK*` | `INT32_MAX`, `MASK16` |
+
+## Same HTTP status in each dialect
+
+```c
+Net.Status(STATUS_NOT_FOUND);
+```
+
+```basic
+NET.STATUS(STATUS_NOT_FOUND)
+```
+
+```python
+Net.Status(STATUS_NOT_FOUND)
+```
+
+```text
+Net.Status(STATUS_NOT_FOUND).
+```
+
+```cobol
+Net.Status(STATUS_NOT_FOUND).
+```
+
+```text
+Net.Status(STATUS_NOT_FOUND).
+```
+
+```fsharp
+Net.Status(STATUS_NOT_FOUND)
+```
+
+The Report dialect and English dialect both use period-terminated statements, so
+their compact host-call form is the same shape.
 
 ## Canonical built-in families
 
@@ -135,7 +196,26 @@ Semantics:
   overridden by `Locale.SetLocale`.
 - Number/currency formatting is roundtrip-safe (no grouping, explicit decimal scale).
 
-## User-defined constants and enums (all frontends)
+Example:
+
+```c
+int lang = "en-GB";
+int tz = "UTC";
+Locale.SetLocale(lang, tz);
+Io.Write(Locale.GetCurrentLocale());   // en-GB@UTC
+Io.Write(Locale.FormatDate(0, 0));     // 1970-01-01 +00:00
+Io.Write(Locale.FormatCurrency(12345, CURRENCY_USD)); // USD 123.45
+```
+
+## User-defined constants and enums
+
+User constants and enums are compile-time names for integers. They do not allocate
+runtime storage and they lower to the same bytecode as numeric literals.
+
+Declaration syntax is implemented in the four core frontends (C, BASIC, Python,
+English). All seven dialects can consume built-in constants and generated enum
+aliases such as `HTTPCODE_OK`. For cross-dialect code, prefer the generated
+`ENUM_MEMBER` alias; C-style can also use dotted enum members (`HttpCode.OK`).
 
 ### C-style (`.pc`)
 
@@ -182,6 +262,35 @@ Define enum HttpCode:
     ACCEPTED.
 Io.WriteByte(RETRY).
 Io.WriteByte(HTTPCODE_OK).
+```
+
+### COBOL (`.cob`)
+
+COBOL currently consumes the same constants and enum aliases, but user enum
+declarations should be authored in one of the four core frontends and then used
+through the `ENUM_MEMBER` alias from COBOL.
+
+```cobol
+IDENTIFICATION DIVISION.
+PROGRAM-ID. HTTP-CONST.
+PROCEDURE DIVISION.
+Net.Status(STATUS_CREATED).
+Io.WriteByte(HTTPCODE_OK).
+STOP RUN.
+```
+
+### Report / 4GL (`.rpt`)
+
+```text
+DATA STATUS VALUE STATUS_CREATED.
+Net.Status(STATUS).
+```
+
+### Functional (`.pfn`)
+
+```fsharp
+let status = STATUS_CREATED
+Net.Status(status)
 ```
 
 Enum members are available as compile-time constants. For cross-language source,

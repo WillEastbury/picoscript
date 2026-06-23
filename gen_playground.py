@@ -12,6 +12,7 @@ file:// with no server.
 
 import json
 import os
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +36,45 @@ def s32(v):
 
 def out_ints(vm):
     return [s32(int.from_bytes(b, "big")) for b in vm.output]
+
+
+ALL_STYLES = ("c", "basic", "python", "english", "cobol", "report", "functional")
+COMPILERS = {
+    "c": compile_c,
+    "basic": compile_basic,
+    "python": compile_python,
+    "english": compile_english,
+    "cobol": compile_cobol,
+    "report": compile_report,
+    "functional": compile_functional,
+}
+_TRANSLATE_CACHE = {}
+
+
+def translate_style(src: str, from_lang: str, to_lang: str):
+    """Use the browser compiler's translator so generated guide data covers all 7 dialects."""
+    if from_lang == to_lang:
+        return src
+    key = (src, from_lang, to_lang)
+    if key in _TRANSLATE_CACHE:
+        return _TRANSLATE_CACHE[key]
+    js = (
+        "const P=require('./vm/picoc.js');"
+        f"const src={json.dumps(src)};"
+        f"const out=P.translate(src,{json.dumps(from_lang)},{json.dumps(to_lang)});"
+        "process.stdout.write(out);"
+    )
+    try:
+        r = subprocess.run(["node", "-e", js], cwd=ROOT, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        _TRANSLATE_CACHE[key] = None
+        return None
+    if r.returncode != 0:
+        _TRANSLATE_CACHE[key] = None
+        return None
+    out = r.stdout
+    _TRANSLATE_CACHE[key] = out if out and out != src else None
+    return _TRANSLATE_CACHE[key]
 
 
 def c_save_bytes(base, data):
@@ -930,18 +970,9 @@ def disasm_lines(words):
 
 def build_example(srcs):
     """srcs: dict of style -> source. Compiles each, returns per-style example data."""
-    comps = {
-        "c": compile_c,
-        "basic": compile_basic,
-        "python": compile_python,
-        "english": compile_english,
-        "cobol": compile_cobol,
-        "report": compile_report,
-        "functional": compile_functional,
-    }
     examples = {}
     for style, src in srcs.items():
-        words = lower_to_bytecode_safe(comps[style](src))
+        words = lower_to_bytecode_safe(COMPILERS[style](src))
         vm = PicoVM().run(words)
         examples[style] = {
             "src": src,
@@ -967,6 +998,25 @@ def _styles(c):
         srcs["report"] = c[7]
     if len(c) >= 9 and c[8] is not None:
         srcs["functional"] = c[8]
+    base_lang = "c" if "c" in srcs else next(iter(srcs))
+    base_src = srcs[base_lang]
+    try:
+        base_out = out_ints(PicoVM().run(lower_to_bytecode_safe(COMPILERS[base_lang](base_src))))
+    except Exception:
+        base_out = None
+    for style in ALL_STYLES:
+        if style in srcs:
+            continue
+        translated = translate_style(base_src, base_lang, style)
+        if translated:
+            try:
+                words = lower_to_bytecode_safe(COMPILERS[style](translated))
+                translated_out = out_ints(PicoVM().run(words))
+            except Exception:
+                continue
+            if base_out is not None and translated_out != base_out:
+                continue
+            srcs[style] = translated
     return title, desc, srcs
 
 
