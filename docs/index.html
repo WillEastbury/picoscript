@@ -111,8 +111,16 @@
     overflow:auto; font-family:"SF Mono",Consolas,monospace; font-size:11.5px; }
   .listing .row { padding:2px 10px; white-space:pre; color:var(--muted); }
   .listing .row.pc { background:#2d3550; color:#fff; }
+  .listing .row.bp { color:#ffd866; cursor:pointer; }
+  .listing .row.bp:before { content:'● '; color:#ff7b72; }
+  .listing .row:not(.bp):before { content:'  '; }
+  .source-active-line { background:rgba(102,126,234,.22); }
+  .source-breakpoint-line { background:rgba(255,123,114,.12); }
+  .breakpoint-glyph { background:#ff7b72; border-radius:50%; width:9px !important; height:9px !important; margin-left:5px; margin-top:4px; }
   .regs { display:grid; grid-template-columns:repeat(4,1fr); gap:2px 8px; font-family:"SF Mono",monospace; font-size:11.5px; }
   .regs .r { color:var(--muted); } .regs .r b { color:var(--text); }
+  .debug-grid { display:grid; grid-template-columns:2fr 1fr 1.3fr; gap:10px; align-items:start; }
+  .debug-section h4 { margin:0 0 6px; font-size:11px; color:var(--accent); text-transform:uppercase; letter-spacing:.06em; }
   .state { font-family:"SF Mono",Consolas,monospace; font-size:11px; color:var(--muted); margin-top:4px; }
   table { border-collapse:collapse; width:100%; font-size:12px; }
   .wal td,.wal th { border:1px solid #2c313f; padding:3px 8px; text-align:left; font-family:"SF Mono",monospace; }
@@ -169,7 +177,7 @@
   .badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:700;
     background:#3d2b00; color:#ffd866; margin-left:8px; }
   ::-webkit-scrollbar { width:8px; height:8px; } ::-webkit-scrollbar-thumb { background:#3a4150; border-radius:4px; }
-  @media (max-width:900px){ .sidebar{width:180px;} .tool-panel{width:320px;} .main.tool-pinned .view.active{padding-right:320px;} .regs{grid-template-columns:repeat(2,1fr);} }
+  @media (max-width:900px){ .sidebar{width:180px;} .tool-panel{width:320px;} .main.tool-pinned .view.active{padding-right:320px;} .regs{grid-template-columns:repeat(2,1fr);} .debug-grid{grid-template-columns:1fr;} }
 </style>
 </head>
 <body>
@@ -8500,15 +8508,17 @@ lowering convention or host contract.</p>
       </div>
     </div>
     <div class="dbg-bar" id="guideDbgBar">
-      <button class="active" onclick="gToggleDbg(this,'gdbg-disasm')">Disassembly</button>
-      <button onclick="gToggleDbg(this,'gdbg-regs')">Registers</button>
+      <button class="active" onclick="gToggleDbg(this,'gdbg-debug')">Debug</button>
       <button onclick="gToggleDbg(this,'gdbg-output')">Output</button>
       <button style="margin-left:auto" onclick="gCollapseDbg()">&#9660;</button>
     </div>
     <div class="dbg-panels" id="guideDbgPanels" style="max-height:180px">
-      <div class="dbg-panel active" id="gdbg-disasm"><div class="listing" id="glisting"></div><div class="state" id="gstate"></div></div>
-      <div class="dbg-panel" id="gdbg-regs"><div class="regs" id="gregs"></div></div>
-      <div class="dbg-panel" id="gdbg-output"><div class="out" id="gout"></div></div>
+      <div class="dbg-panel active" id="gdbg-debug"><div class="debug-grid">
+        <div class="debug-section"><h4>Disassembly</h4><div class="listing" id="glisting"></div></div>
+        <div class="debug-section"><h4>Registers</h4><div class="regs" id="gregs"></div></div>
+        <div class="debug-section"><h4>Watches</h4><table class="wal"><thead><tr><th>var</th><th>reg</th><th>value</th></tr></thead><tbody id="gwatches"></tbody></table></div>
+      </div><div class="state vm-state"></div></div>
+      <div class="dbg-panel" id="gdbg-output"><div class="out" id="gout"></div><div class="state vm-state"></div></div>
     </div>
   </div>
   <!-- PLAYGROUND VIEW -->
@@ -8546,19 +8556,19 @@ lowering convention or host contract.</p>
       </div>
     </div>
     <div class="dbg-bar" id="playDbgBar">
-      <button class="active" onclick="pToggleDbg(this,'pdbg-disasm')">Disassembly</button>
-      <button onclick="pToggleDbg(this,'pdbg-regs')">Registers</button>
-      <button onclick="pToggleDbg(this,'pdbg-watches')">Watches</button>
+      <button class="active" onclick="pToggleDbg(this,'pdbg-debug')">Debug</button>
       <button onclick="pToggleDbg(this,'pdbg-cards')">Cards</button>
       <button onclick="pToggleDbg(this,'pdbg-output')">Output</button>
       <button style="margin-left:auto" onclick="pCollapseDbg()">&#9660;</button>
     </div>
     <div class="dbg-panels" id="playDbgPanels" style="max-height:200px">
-      <div class="dbg-panel active" id="pdbg-disasm"><div class="listing" id="listing"></div><div class="state" id="state"></div></div>
-      <div class="dbg-panel" id="pdbg-regs"><div class="regs" id="regs"></div></div>
-      <div class="dbg-panel" id="pdbg-watches"><table class="wal"><thead><tr><th>var</th><th>reg</th><th>value</th></tr></thead><tbody id="watches"></tbody></table></div>
-      <div class="dbg-panel" id="pdbg-cards"><table class="wal"><tbody id="walbody"></tbody></table><button class="ghost" style="margin-top:6px" onclick="walClear()">Clear</button></div>
-      <div class="dbg-panel" id="pdbg-output"><div class="out" id="out"></div></div>
+      <div class="dbg-panel active" id="pdbg-debug"><div class="debug-grid">
+        <div class="debug-section"><h4>Disassembly</h4><div class="listing" id="listing"></div></div>
+        <div class="debug-section"><h4>Registers</h4><div class="regs" id="regs"></div></div>
+        <div class="debug-section"><h4>Watches</h4><table class="wal"><thead><tr><th>var</th><th>reg</th><th>value</th></tr></thead><tbody id="watches"></tbody></table></div>
+      </div><div class="state vm-state"></div></div>
+      <div class="dbg-panel" id="pdbg-cards"><table class="wal"><tbody id="walbody"></tbody></table><button class="ghost" style="margin-top:6px" onclick="walClear()">Clear</button><div class="state vm-state"></div></div>
+      <div class="dbg-panel" id="pdbg-output"><div class="out" id="out"></div><div class="state vm-state"></div></div>
     </div>
   </div>
   <!-- Flyout triggers -->
@@ -16978,8 +16988,9 @@ function compressBound(inputLen) {
     },
     compileDebug: function (src, lang) {
       var vars = {};
-      var words = lowerToBytecode(compileIL(src, lang), true, vars);
-      return { words: words, vars: vars };
+      var dbg = {};
+      var words = lowerToBytecode(compileIL(src, lang), true, vars, true, dbg);
+      return { words: words, vars: vars, debug: dbg };
     },
     compileC: function (src) { return { words: lowerToBytecode(compileC(src), true), il: compileC(src) }; },
     compileBasic: function (src) { return { words: lowerToBytecode(compileBasic(src), true), il: compileBasic(src) }; },
@@ -17291,16 +17302,16 @@ function showRefInline(id){
   document.querySelectorAll('#guideTree .tree-item').forEach(function(el){el.classList.remove('active');el.classList.toggle('ref-active',el.getAttribute('data-ref')===id);});
 }
 
-var GDBG={words:[],disasm:[],vm:null};
+var GDBG={words:[],disasm:[],vm:null,debug:{},src:'',bps:{}};
 function guideRun(i){
   var d=DATA[i],lang=CUR_LANG;if(!d[lang])lang='basic';
   var o=runWords(d[lang].words).outputInts();
   var el=document.getElementById('gcardout'+i);if(el)el.innerHTML=lang+' \u2192 ['+o.join(', ')+']';
-  GDBG.words=d[lang].words.map(function(h){return parseInt(h,16)>>>0;});GDBG.disasm=d[lang].disasm.slice();
-  GDBG.vm=new PicoVM();GDBG.vm.load(GDBG.words);var g=0;while(GDBG.vm.step()&&g++<200000){}gRender();
+  GDBG.words=d[lang].words.map(function(h){return parseInt(h,16)>>>0;});GDBG.disasm=d[lang].disasm.slice();GDBG.src=d[lang].src||'';try{GDBG.debug=PicoCompile.compileDebug(GDBG.src,lang).debug||{};}catch(e){GDBG.debug={};}
+  GDBG.vm=new PicoVM();GDBG.vm.load(GDBG.words);var g=0;while(GDBG.vm.step()&&g++<200000){if(GDBG.bps[GDBG.vm.pc])break;}gRender();
   document.getElementById('guideDbgPanels').classList.remove('collapsed');
 }
-function guideStep(i){var d=DATA[i],lang=CUR_LANG;if(!d[lang])lang='basic';GDBG.words=d[lang].words.map(function(h){return parseInt(h,16)>>>0;});GDBG.disasm=d[lang].disasm.slice();GDBG.vm=new PicoVM();GDBG.vm.load(GDBG.words);gRender();document.getElementById('guideDbgPanels').classList.remove('collapsed');}
+function guideStep(i){var d=DATA[i],lang=CUR_LANG;if(!d[lang])lang='basic';GDBG.words=d[lang].words.map(function(h){return parseInt(h,16)>>>0;});GDBG.disasm=d[lang].disasm.slice();GDBG.src=d[lang].src||'';try{GDBG.debug=PicoCompile.compileDebug(GDBG.src,lang).debug||{};}catch(e){GDBG.debug={};}GDBG.vm=new PicoVM();GDBG.vm.load(GDBG.words);gRender();document.getElementById('guideDbgPanels').classList.remove('collapsed');}
 function guideEdit(i){
   var d=DATA[i],lang=CUR_LANG;
   if(d[lang]){document.getElementById('lang').value=lang;onLangChange();setSrc(d[lang].src);}
@@ -17313,19 +17324,40 @@ function guideEdit(i){
 }
 function gRender(){
   var vm=GDBG.vm;if(!vm)return;
-  document.getElementById('glisting').innerHTML=GDBG.disasm.map(function(t,idx){return '<div class="row'+(idx===vm.pc?' pc':'')+'">'+String(idx).padStart(3,' ')+'  '+esc(t)+'</div>';}).join('');
+  document.getElementById('glisting').innerHTML=GDBG.disasm.map(function(t,idx){var rec=GDBG.debug&&GDBG.debug[idx],lc=rec?PicoCompile.offsetToLineCol(GDBG.src,rec[0]):[0,0],sym=lc[0]?('  ; L'+lc[0]+':'+lc[1]+' '+PicoCompile.sourceLineText(GDBG.src,rec[0]).trim()):'';return '<div class="row'+(idx===vm.pc?' pc':'')+(GDBG.bps[idx]?' bp':'')+'" onclick="gToggleBp('+idx+')" title="click to toggle breakpoint">'+String(idx).padStart(3,' ')+'  '+esc(t+sym)+'</div>';}).join('');
   var pcrow=document.querySelector('#glisting .row.pc');if(pcrow)pcrow.scrollIntoView({block:'nearest'});
-  document.getElementById('gregs').innerHTML=Array.from(vm.regs).map(function(v,idx){return '<div class="r">R'+idx+' <b>'+v+'</b></div>';}).join('');
-  document.getElementById('gstate').textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted;
+  document.getElementById('gregs').innerHTML='<div class="r">PC <b>'+vm.pc+'</b></div>'+Array.from(vm.regs).map(function(v,idx){return '<div class="r">R'+idx+' <b>'+v+'</b></div>';}).join('');
+  var gw=document.getElementById('gwatches');if(gw)gw.innerHTML='<tr><td colspan="3" style="color:var(--muted)">(guide sample)</td></tr>';
+  document.querySelectorAll('#guideDbgPanels .vm-state').forEach(function(el){el.textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted;});
   document.getElementById('gout').textContent='output: ['+vm.outputInts().join(', ')+']';
 }
+function gToggleBp(pc){GDBG.bps[pc]?delete GDBG.bps[pc]:GDBG.bps[pc]=1;gRender();}
 function gToggleDbg(btn,pid){document.querySelectorAll('#guideDbgBar button').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');document.querySelectorAll('#guideDbgPanels .dbg-panel').forEach(function(p){p.classList.remove('active');});var el=document.getElementById(pid);if(el)el.classList.add('active');document.getElementById('guideDbgPanels').classList.remove('collapsed');}
 function gCollapseDbg(){document.getElementById('guideDbgPanels').classList.toggle('collapsed');}
 
 // playground debugger
-var DBG={words:[],disasm:[],vm:null,vars:{}};
+var DBG={words:[],disasm:[],vm:null,vars:{},debug:{},src:'',pcBps:{},sourceBps:{},pcLines:{},lineToPcs:{},srcDecorations:[]};
 function pToggleDbg(btn,pid){document.querySelectorAll('#playDbgBar button').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');document.querySelectorAll('#playDbgPanels .dbg-panel').forEach(function(p){p.classList.remove('active');});var el=document.getElementById(pid);if(el)el.classList.add('active');document.getElementById('playDbgPanels').classList.remove('collapsed');}
 function pCollapseDbg(){document.getElementById('playDbgPanels').classList.toggle('collapsed');}
+
+function rebuildDebugMaps(){
+  DBG.pcLines={}; DBG.lineToPcs={};
+  Object.keys(DBG.debug||{}).forEach(function(k){
+    var pc=parseInt(k,10), rec=DBG.debug[k], off=rec&&rec[0];
+    var lc=PicoCompile.offsetToLineCol(DBG.src||'', off);
+    if(lc&&lc[0]){DBG.pcLines[pc]=lc[0];(DBG.lineToPcs[lc[0]]=DBG.lineToPcs[lc[0]]||[]).push(pc);}
+  });
+}
+function pcHasBreakpoint(pc){return !!(DBG.pcBps[pc] || DBG.sourceBps[DBG.pcLines[pc]]);}
+function toggleBp(pc){DBG.pcBps[pc]?delete DBG.pcBps[pc]:DBG.pcBps[pc]=1;render();}
+function toggleSourceBreakpoint(line){if(!line)return;DBG.sourceBps[line]?delete DBG.sourceBps[line]:DBG.sourceBps[line]=1;updateSourceDecorations();render();}
+function updateSourceDecorations(){
+  if(!EDITOR||!EDITOR.deltaDecorations)return;
+  var decos=[], active=(DBG.vm&&DBG.pcLines)?DBG.pcLines[DBG.vm.pc]:0;
+  Object.keys(DBG.sourceBps||{}).forEach(function(k){var ln=parseInt(k,10);if(ln>0)decos.push({range:new monaco.Range(ln,1,ln,1),options:{isWholeLine:true,className:'source-breakpoint-line',glyphMarginClassName:'breakpoint-glyph',glyphMarginHoverMessage:{value:'Breakpoint: line '+ln}}});});
+  if(active>0)decos.push({range:new monaco.Range(active,1,active,1),options:{isWholeLine:true,className:'source-active-line'}});
+  DBG.srcDecorations=EDITOR.deltaDecorations(DBG.srcDecorations||[],decos);
+}
 
 function runWords(hex){var vm=new PicoVM();vm.run(hex.map(function(h){return parseInt(h,16)>>>0;}));return vm;}
 function buildGallery(){}
@@ -17352,7 +17384,7 @@ function constantDoc(name){
   return'PicoScript named constant';
 }
 function registerLang(id){monaco.languages.register({id:id});monaco.languages.setMonarchTokensProvider(id,MONARCH[id]);monaco.languages.registerCompletionItemProvider(id,{provideCompletionItems:function(model,pos){var kw=MONARCH[id].keywords||[];var sug=kw.map(function(k){return{label:k,kind:monaco.languages.CompletionItemKind.Keyword,insertText:k};});hookNames().forEach(function(name){sug.push({label:name,kind:monaco.languages.CompletionItemKind.Function,insertText:name+'('});});CONSTANT_NAMES.forEach(function(name){sug.push({label:name,kind:monaco.languages.CompletionItemKind.Constant,insertText:name,detail:constantDoc(name),documentation:'Use directly in expressions, e.g. Net.Status('+name+').' });});return{suggestions:sug};}});}
-function initMonaco(){if(typeof require==='undefined'||!require.config){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';return;}try{require.config({paths:{vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs'}});require(['vs/editor/editor.main'],function(){['picoc','picobasic','picopython','picoenglish'].forEach(registerLang);EDITOR=monaco.editor.create(document.getElementById('monaco'),{value:document.getElementById('src').value,language:monacoLangId(document.getElementById('lang').value),theme:'vs-dark',minimap:{enabled:false},fontSize:13,lineNumbers:'on',scrollBeyondLastLine:false,automaticLayout:true,tabSize:4,insertSpaces:true});EDITOR.onDidChangeModelContent(function(){document.getElementById('src').value=EDITOR.getValue();filesRender();});},function(){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';});}catch(e){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';}}
+function initMonaco(){if(typeof require==='undefined'||!require.config){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';return;}try{require.config({paths:{vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs'}});require(['vs/editor/editor.main'],function(){['picoc','picobasic','picopython','picoenglish'].forEach(registerLang);EDITOR=monaco.editor.create(document.getElementById('monaco'),{value:document.getElementById('src').value,language:monacoLangId(document.getElementById('lang').value),theme:'vs-dark',minimap:{enabled:false},fontSize:13,lineNumbers:'on',scrollBeyondLastLine:false,automaticLayout:true,tabSize:4,insertSpaces:true,glyphMargin:true});EDITOR.onDidChangeModelContent(function(){document.getElementById('src').value=EDITOR.getValue();filesRender();});EDITOR.onMouseDown(function(e){if(e.target&&e.target.position&&(e.target.type===monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN||e.target.type===monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS)){toggleSourceBreakpoint(e.target.position.lineNumber);}});updateSourceDecorations();},function(){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';});}catch(e){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';}}
 
 // localStorage-backed playground files
 var PS_FILES_KEY='picoscript.files.v1';
@@ -17435,22 +17467,23 @@ function psFilesDelete(name,skipConfirm){
 
 function compileSrc(run){
   var lang=document.getElementById('lang').value,src=getSrc(),err=document.getElementById('cerr');
-  try{var r=PicoCompile.compileDebug(src,lang);DBG.words=r.words.map(function(w){return w>>>0;});DBG.disasm=DBG.words.map(jsDisasm);DBG.vars=r.vars||{};err.textContent='compiled '+DBG.words.length+' words';err.style.color='#7ee787';dbgReset();if(run)dbgRun();}
+  try{var r=PicoCompile.compileDebug(src,lang);DBG.words=r.words.map(function(w){return w>>>0;});DBG.disasm=DBG.words.map(jsDisasm);DBG.vars=r.vars||{};DBG.debug=r.debug||{};DBG.src=src;rebuildDebugMaps();err.textContent='compiled '+DBG.words.length+' words';err.style.color='#7ee787';dbgReset();if(run)dbgRun();}
   catch(e){err.textContent=String(e.message||e);err.style.color='#ff7b72';}
 }
-function dbgReset(){DBG.vm=new PicoVM({cards:walBackend()});DBG.vm.load(DBG.words);render();renderWal();}
+function dbgReset(){DBG.vm=new PicoVM({cards:walBackend()});DBG.vm.load(DBG.words);render();renderWal();updateSourceDecorations();}
 function dbgStep(){if(DBG.vm){DBG.vm.step();render();renderWal();}}
-function dbgRun(){if(!DBG.vm)dbgReset();var g=0;while(DBG.vm.step()&&g++<200000){}render();renderWal();}
+function dbgRun(){if(!DBG.vm)dbgReset();var g=0;while(DBG.vm.step()&&g++<200000){if(pcHasBreakpoint(DBG.vm.pc))break;}render();renderWal();}
 function render(){
   var vm=DBG.vm;if(!vm)return;
-  document.getElementById('listing').innerHTML=DBG.disasm.map(function(t,idx){return '<div class="row'+(idx===vm.pc?' pc':'')+'">'+String(idx).padStart(3,' ')+'  '+esc(t)+'</div>';}).join('');
+  document.getElementById('listing').innerHTML=DBG.disasm.map(function(t,idx){var rec=DBG.debug&&DBG.debug[idx],lc=rec?PicoCompile.offsetToLineCol(DBG.src,rec[0]):[0,0],sym=lc[0]?('  ; L'+lc[0]+':'+lc[1]+' '+PicoCompile.sourceLineText(DBG.src,rec[0]).trim()):'';return '<div class="row'+(idx===vm.pc?' pc':'')+(pcHasBreakpoint(idx)?' bp':'')+'" onclick="toggleBp('+idx+')" title="click to toggle PC breakpoint">'+String(idx).padStart(3,' ')+'  '+esc(t+sym)+'</div>';}).join('');
   var pcrow=document.querySelector('#listing .row.pc');if(pcrow)pcrow.scrollIntoView({block:'nearest'});
-  document.getElementById('regs').innerHTML=Array.from(vm.regs).map(function(v,idx){return '<div class="r">R'+idx+' <b>'+v+'</b></div>';}).join('');
+  document.getElementById('regs').innerHTML='<div class="r">PC <b>'+vm.pc+'</b></div>'+Array.from(vm.regs).map(function(v,idx){return '<div class="r">R'+idx+' <b>'+v+'</b></div>';}).join('');
   var wb=document.getElementById('watches');
   if(wb){var vars=DBG.vars||{},ks=Object.keys(vars);wb.innerHTML=ks.length?ks.map(function(name){var rr=vars[name];return '<tr><td>'+esc(name)+'</td><td>R'+rr+'</td><td><b>'+vm.regs[rr]+'</b></td></tr>';}).join(''):'<tr><td colspan="3" style="color:var(--muted)">(none)</td></tr>';}
-  document.getElementById('state').textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;
+  document.querySelectorAll('#playDbgPanels .vm-state').forEach(function(el){el.textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;});
   var _txt=vm.outputText(),_pr=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_txt);
   document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']'+(_pr&&_txt?'\ntext: '+JSON.stringify(_txt):'');
+  updateSourceDecorations();
 }
 function jsDisasm(w){
   var names=["NOOP","LOAD","SAVE","PIPE","ADD","SUB","MUL","DIV","INC","JUMP","BRANCH","CALL","RETURN","WAIT","RAISE","DSP"];

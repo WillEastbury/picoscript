@@ -1152,8 +1152,13 @@ PAGE = r"""<!DOCTYPE html>
     overflow:auto; font-family:"SF Mono",Consolas,monospace; font-size:11.5px; }
   .listing .row { padding:2px 10px; white-space:pre; color:var(--muted); }
   .listing .row.pc { background:#2d3550; color:#fff; }
+  .listing .row.bp { color:#ffd866; cursor:pointer; }
+  .listing .row.bp:before { content:'● '; color:#ff7b72; }
+  .listing .row:not(.bp):before { content:'  '; }
   .regs { display:grid; grid-template-columns:repeat(4,1fr); gap:2px 8px; font-family:"SF Mono",monospace; font-size:11.5px; }
   .regs .r { color:var(--muted); } .regs .r b { color:var(--text); }
+  .debug-grid { display:grid; grid-template-columns:2fr 1fr 1.3fr; gap:10px; align-items:start; }
+  .debug-section h4 { margin:0 0 6px; font-size:11px; color:var(--accent); text-transform:uppercase; letter-spacing:.06em; }
   .state { font-family:"SF Mono",Consolas,monospace; font-size:11.5px; color:var(--muted); margin-top:6px; }
   select,textarea,input { background:#0c0e14; color:var(--text); border:1px solid #2c313f;
     border-radius:6px; padding:6px 8px; font-family:inherit; font-size:12px; }
@@ -1281,8 +1286,7 @@ PAGE = r"""<!DOCTYPE html>
 
     <!-- Debugger tab bar -->
     <div class="dbg-bar">
-      <button class="active" onclick="toggleDbg(this,'dbg-disasm')">Disassembly</button>
-      <button onclick="toggleDbg(this,'dbg-regs')">Registers</button>
+      <button class="active" onclick="toggleDbg(this,'dbg-debug')">Debug</button>
       <button onclick="toggleDbg(this,'dbg-output')">Output</button>
       <button onclick="toggleDbg(this,'dbg-src')">Source Editor</button>
       <button onclick="toggleDbg(this,'dbg-gpio')">GPIO</button>
@@ -1292,16 +1296,15 @@ PAGE = r"""<!DOCTYPE html>
       <button style="margin-left:auto" onclick="collapseDbg()">&#9660; Collapse</button>
     </div>
     <div class="dbg-panels" id="dbgPanels" style="max-height:220px">
-      <div class="dbg-panel active" id="dbg-disasm">
-        <div class="listing" id="listing"></div>
-        <div class="state" id="state"></div>
-      </div>
-      <div class="dbg-panel" id="dbg-regs">
-        <div class="regs" id="regs"></div>
-      </div>
+      <div class="dbg-panel active" id="dbg-debug"><div class="debug-grid">
+        <div class="debug-section"><h4>Disassembly</h4><div class="listing" id="listing"></div></div>
+        <div class="debug-section"><h4>Registers</h4><div class="regs" id="regs"></div></div>
+        <div class="debug-section"><h4>Watches</h4><table class="wal"><thead><tr><th>var</th><th>reg</th><th>value</th></tr></thead><tbody id="watches"></tbody></table></div>
+      </div><div class="state vm-state"></div></div>
       <div class="dbg-panel" id="dbg-output">
         <div class="out" id="out" style="font-size:13px"></div>
         <div class="out" id="psunit" style="font-size:13px;margin-top:6px"></div>
+        <div class="state vm-state"></div>
       </div>
       <div class="dbg-panel" id="dbg-src">
         <select id="lang" style="display:none">
@@ -1316,9 +1319,11 @@ PAGE = r"""<!DOCTYPE html>
           <button class="ghost" onclick="compileSrc(false)">Compile &amp; Step</button>
           <button class="ghost" onclick="dbgStep()">Step</button>
           <button class="ghost" onclick="dbgReset()">Reset</button>
+          <button class="ghost" onclick="toggleSourceBreakpointAtCursor()">Breakpoint at cursor</button>
           <button class="ghost" onclick="psUndo()" title="Undo to previous save">&#8617; Undo</button>
         </div>
         <div id="cerr" class="cerr"></div>
+        <div class="state vm-state"></div>
       </div>
       <div class="dbg-panel" id="dbg-gpio">
         <div class="gpio-tools">
@@ -1326,6 +1331,7 @@ PAGE = r"""<!DOCTYPE html>
           <span class="muted">Run a program that uses <b>Gpio.*</b> (or the <b>GPIO</b> DSL). Outputs show what it wrote (0&ndash;1024); click an <b>IN</b> pin to drive it, then re-run.</span>
         </div>
         <div class="gpio-header" id="gpioHeader"></div>
+        <div class="state vm-state"></div>
       </div>
       <div class="dbg-panel" id="dbg-cards">
         <div class="schema-tools">
@@ -1334,12 +1340,14 @@ PAGE = r"""<!DOCTYPE html>
           <span class="muted">Design a typed schema and author cards. The running program shares this store via <b>Storage.*</b> / the <b>STORE</b>/<b>LOAD</b> DSL.</span>
         </div>
         <div class="schema-wrap" id="cardsView"></div>
+        <div class="state vm-state"></div>
       </div>
       <div class="dbg-panel" id="dbg-stream">
         <div class="stream-tools">
           <span class="muted">Run a program that uses <b>Device.*</b> / <b>Stream.*</b>. The reference DMA ring renders each device, its stream, and the frames read (RX) or submitted (TX) &mdash; bytes shown live, <span style="color:var(--warn)">live</span> until <b>Stream.Release</b>.</span>
         </div>
         <div id="streamView"></div>
+        <div class="state vm-state"></div>
       </div>
       <div class="dbg-panel" id="dbg-ui">
         <div class="stream-tools">
@@ -1347,6 +1355,7 @@ PAGE = r"""<!DOCTYPE html>
         </div>
         <div id="uiView" style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start"></div>
         <div id="uiEvents" class="out" style="font-size:12px;margin-top:8px"></div>
+        <div class="state vm-state"></div>
       </div>
     </div>
   </div>
@@ -1498,7 +1507,23 @@ function debugCard(i){
 }
 
 // ---- debugger panels -------------------------------------------------------
-var DBG = { words:[], disasm:[], vm:null };
+var DBG = { words:[], disasm:[], vm:null, vars:{}, debug:{}, src:'', pcBps:{}, sourceBps:{}, pcLines:{}, lineToPcs:{} };
+
+function rebuildDebugMaps(){
+  DBG.pcLines={}; DBG.lineToPcs={};
+  Object.keys(DBG.debug||{}).forEach(function(k){
+    var pc=parseInt(k,10), rec=DBG.debug[k], off=rec&&rec[0], lc=PicoCompile.offsetToLineCol(DBG.src||'', off);
+    if(lc&&lc[0]){DBG.pcLines[pc]=lc[0];(DBG.lineToPcs[lc[0]]=DBG.lineToPcs[lc[0]]||[]).push(pc);}
+  });
+}
+function pcHasBreakpoint(pc){return !!(DBG.pcBps[pc] || DBG.sourceBps[DBG.pcLines[pc]]);}
+function toggleBp(pc){DBG.pcBps[pc]?delete DBG.pcBps[pc]:DBG.pcBps[pc]=1;render();}
+function toggleSourceBreakpoint(line){if(!line)return;DBG.sourceBps[line]?delete DBG.sourceBps[line]:DBG.sourceBps[line]=1;render();}
+function toggleSourceBreakpointAtCursor(){
+  var el=document.getElementById('src'), pos=el.selectionStart||0, line=(el.value.slice(0,pos).match(/\n/g)||[]).length+1;
+  toggleSourceBreakpoint(line);
+  filesStatus((DBG.sourceBps[line]?'Set':'Cleared')+' source breakpoint at line '+line);
+}
 
 // ---- device panel: GPIO header visual (wired to the provider seam) ----------
 var GP = { pins:{}, count:40 };
@@ -1813,26 +1838,29 @@ function compileSrc(run){
   var lang=document.getElementById('lang').value, src=getSrc();
   var err=document.getElementById('cerr');
   try {
-    var r=PicoCompile.compile(src,lang);
-    DBG.words=r.words.map(function(w){return w>>>0;}); DBG.disasm=DBG.words.map(jsDisasm);
+    var r=PicoCompile.compileDebug(src,lang);
+    DBG.words=r.words.map(function(w){return w>>>0;}); DBG.disasm=DBG.words.map(jsDisasm); DBG.vars=r.vars||{}; DBG.debug=r.debug||{}; DBG.src=src; rebuildDebugMaps();
     err.textContent='compiled '+DBG.words.length+' words'; err.style.color='#7ee787';
     dbgReset(); if(run) dbgRun();
   } catch(e){ err.textContent=String(e.message||e); err.style.color='#ff7b72'; }
 }
 function dbgReset(){ streamReset(); UI_LOG=[]; DBG.vm=new PicoVM({gpioProvider:GP, cardStore:CARDSTORE, streamProvider:SP}); DBG.vm.load(DBG.words); render(); }
 function dbgStep(){ if(DBG.vm){ DBG.vm.step(); render(); } }
-function dbgRun(){ if(!DBG.vm) dbgReset(); var g=0; while(DBG.vm.step()&&g++<200000){} render(); }
+function dbgRun(){ if(!DBG.vm) dbgReset(); var g=0; while(DBG.vm.step()&&g++<200000){ if(pcHasBreakpoint(DBG.vm.pc)) break; } render(); }
 
 function render(){
   var vm=DBG.vm; if(!vm) return;
   var L=document.getElementById('listing');
   L.innerHTML=DBG.disasm.map(function(t,idx){
-    return '<div class="row'+(idx===vm.pc?' pc':'')+'">'+String(idx).padStart(3,' ')+'  '+esc(t)+'</div>';
+    var rec=DBG.debug&&DBG.debug[idx],lc=rec?PicoCompile.offsetToLineCol(DBG.src,rec[0]):[0,0],sym=lc[0]?('  ; L'+lc[0]+':'+lc[1]+' '+PicoCompile.sourceLineText(DBG.src,rec[0]).trim()):'';
+    return '<div class="row'+(idx===vm.pc?' pc':'')+(pcHasBreakpoint(idx)?' bp':'')+'" onclick="toggleBp('+idx+')" title="click to toggle PC breakpoint">'+String(idx).padStart(3,' ')+'  '+esc(t+sym)+'</div>';
   }).join('');
   var pcrow=L.querySelector('.row.pc'); if(pcrow) pcrow.scrollIntoView({block:'nearest'});
-  document.getElementById('regs').innerHTML=Array.from(vm.regs).map(function(v,idx){
+  document.getElementById('regs').innerHTML='<div class="r">PC <b>'+vm.pc+'</b></div>'+Array.from(vm.regs).map(function(v,idx){
     return '<div class="r">R'+idx+' <b>'+v+'</b></div>';}).join('');
-  document.getElementById('state').textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus;
+  var wb=document.getElementById('watches'); if(wb){var vars=DBG.vars||{},ks=Object.keys(vars);wb.innerHTML=ks.length?ks.map(function(name){var rr=vars[name];return '<tr><td>'+esc(name)+'</td><td>R'+rr+'</td><td><b>'+vm.regs[rr]+'</b></td></tr>';}).join(''):'<tr><td colspan="3" style="color:var(--muted)">(none)</td></tr>';}
+  var line=DBG.pcLines[vm.pc]||0, bpLines=Object.keys(DBG.sourceBps||{}).sort(function(a,b){return a-b;}).join(',');
+  document.querySelectorAll('#dbgPanels .vm-state').forEach(function(el){el.textContent='pc='+vm.pc+'  steps='+vm.steps+'  halted='+vm.halted+'  http_status='+vm.httpStatus+(line?'  source=L'+line:'')+(bpLines?'  src_bp=['+bpLines+']':'');});
   var _txt=vm.outputText(),_pr=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_txt);
   document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']'+(_pr&&_txt?'\ntext: '+JSON.stringify(_txt):'');
   var ps=document.getElementById('psunit');

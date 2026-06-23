@@ -3355,8 +3355,9 @@
     },
     compileDebug: function (src, lang) {
       var vars = {};
-      var words = lowerToBytecode(compileIL(src, lang), true, vars);
-      return { words: words, vars: vars };
+      var dbg = {};
+      var words = lowerToBytecode(compileIL(src, lang), true, vars, true, dbg);
+      return { words: words, vars: vars, debug: dbg };
     },
     compileC: function (src) { return { words: lowerToBytecode(compileC(src), true), il: compileC(src) }; },
     compileBasic: function (src) { return { words: lowerToBytecode(compileBasic(src), true), il: compileBasic(src) }; },
