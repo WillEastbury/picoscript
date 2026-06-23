@@ -314,6 +314,7 @@ The editor can derive completions from the language namespace table:
 | `Error.` | `SetHandler`, `HasHandler`, `Code`, `Detail`, `Resume`, `Clear` |
 | `Capsule.` | `Call`, `Schedule`, `Jump`, `LoadModule`, `RunModule` |
 | `Base64.` | `Encode`, `Decode`, `UrlDecode` |
+| `Encoding.` | `AsciiEncode`, `AsciiDecode`, `Utf8Encode`, `Utf8Decode`, `Utf16LEEncode`, `Utf16LEDecode`, `Utf16BEEncode`, `Utf16BEDecode`, `Utf7Encode`, `Utf7Decode`, `HexEncode`, `HexDecode` |
 | `DateTime.` | `Now`, `UtcNow`, `Parse`, `Format`, `AddSeconds`, `AddMinutes`, `AddHours`, `AddDays`, `GetDayOfWeek`, `GetDayOfYear`, `UnixTimestamp`, `DiffDays`, `Year`, `Month`, `Day` |
 | `Thread.` | `Skip`, `Wait`, `Raise`, `YieldCounted` |
 | `Math.` | `Add`, `Sub`, `Mul`, `Div`, `Inc` |

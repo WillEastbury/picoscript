@@ -145,6 +145,10 @@ Only these are implemented end-to-end; do **not** invent others.
   `Search.Clear/UpsertText/Delete/IndexPack/QueryText/SetVector/QueryHybrid/
   Result/Score/Plan/SetSemanticWeight`.
 - `Utf8Writer.*`, `Utf8Reader.*`, `Json.*`, `Xml.*` — text/binary builders.
+- `Base64.Encode/Decode/UrlEncode/UrlDecode` and
+  `Encoding.AsciiEncode/Decode`, `Utf8Encode/Decode`,
+  `Utf16LEEncode/Decode`, `Utf16BEEncode/Decode`, `Utf7Encode/Decode`,
+  `HexEncode/Decode` — explicit byte/text interchange formats.
 - `Random.U32(seedReg)`, `Queue.Enqueue/Dequeue/Depth(...)`.
 
 ## Output format

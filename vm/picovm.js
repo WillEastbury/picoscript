@@ -530,6 +530,7 @@
     if (name.indexOf("Error.") === 0) { if (this._errorHook(name.slice(6), rd, rs1, rs2)) return; }
     if (name.indexOf("Capsule.") === 0) { if (this._capsuleExec(name.slice(8), rd, rs1, rs2)) return; }
     if (name.indexOf("Base64.") === 0) { if (this._base64(name.slice(7), rd, rs1, rs2)) return; }
+    if (name.indexOf("Encoding.") === 0) { if (this._encoding(name.slice(9), rd, rs1, rs2)) return; }
     if (name.indexOf("DateTime.") === 0) { if (this._datetime(name.slice(9), rd, rs1, rs2)) return; }
     if (name.indexOf("Locale.") === 0) { if (this._localeHook(name.slice(7), rd, rs1, rs2)) return; }
     if (name === "Req.Param" || name === "Req.ParamCount") { if (this._reqParam(name.slice(4), rd, rs1, rs2)) return; }
@@ -2350,6 +2351,19 @@
       this.regs[rd] = this._newSpanBytes(this._strToBytes(enc));
       return true;
     }
+    if (method === "UrlEncode") {
+      var udata = this._spanBytes(this.regs[rs1]);
+      var uenc;
+      if (typeof btoa !== "undefined") {
+        var s = ""; for (var ui = 0; ui < udata.length; ui++) s += String.fromCharCode(udata[ui]);
+        uenc = btoa(s);
+      } else {
+        uenc = Buffer.from(udata).toString("base64");
+      }
+      uenc = uenc.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+      this.regs[rd] = this._newSpanBytes(this._strToBytes(uenc));
+      return true;
+    }
     if (method === "Decode" || method === "UrlDecode") {
       var b64 = this._spanStr(this.regs[rs1]);
       if (method === "UrlDecode") {
@@ -2373,6 +2387,101 @@
       return true;
     }
     return false;
+  };
+
+  function bytesToUtf8(bytes) { return new TextDecoder("utf-8", { fatal: false }).decode(Uint8Array.from(bytes)); }
+  function utf8ToBytes(str) { return Array.from(new TextEncoder().encode(str)); }
+  function cleanAscii(bytes) { return bytes.map(function (b) { return b < 128 ? b : 63; }); }
+  function asciiEncodeText(str) { var out = []; for (var i = 0; i < str.length; i++) { var c = str.charCodeAt(i); out.push(c < 128 ? c : 63); } return out; }
+  function utf16Bytes(str, little) {
+    var out = [];
+    for (var i = 0; i < str.length; i++) {
+      var c = str.charCodeAt(i);
+      if (little) out.push(c & 255, (c >>> 8) & 255); else out.push((c >>> 8) & 255, c & 255);
+    }
+    return out;
+  }
+  function fromUtf16Bytes(bytes, little) {
+    var s = "";
+    for (var i = 0; i + 1 < bytes.length; i += 2) {
+      var c = little ? (bytes[i] | (bytes[i + 1] << 8)) : ((bytes[i] << 8) | bytes[i + 1]);
+      s += String.fromCharCode(c);
+    }
+    return utf8ToBytes(s);
+  }
+  function base64FromBytes(bytes) {
+    if (typeof btoa !== "undefined") {
+      var s = ""; for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+      return btoa(s);
+    }
+    return Buffer.from(bytes).toString("base64");
+  }
+  function bytesFromBase64(s) {
+    if (typeof atob !== "undefined") {
+      var raw = atob(s), out = [];
+      for (var i = 0; i < raw.length; i++) out.push(raw.charCodeAt(i) & 255);
+      return out;
+    }
+    return Array.from(Buffer.from(s, "base64"));
+  }
+  function utf7EncodeText(str) {
+    var out = "", buf = [];
+    function flush() {
+      if (!buf.length) return;
+      out += "+" + base64FromBytes(buf).replace(/=+$/g, "") + "-";
+      buf = [];
+    }
+    for (var i = 0; i < str.length; i++) {
+      var c = str.charCodeAt(i);
+      if (c >= 0x20 && c <= 0x7E && c !== 0x2B) { flush(); out += String.fromCharCode(c); }
+      else if (c === 0x2B) { flush(); out += "+-"; }
+      else { buf.push((c >>> 8) & 255, c & 255); }
+    }
+    flush();
+    return out;
+  }
+  function utf7DecodeText(s) {
+    var out = "";
+    for (var i = 0; i < s.length; i++) {
+      if (s[i] !== "+") { out += s[i]; continue; }
+      var j = s.indexOf("-", i + 1);
+      if (j < 0) { out += "+"; continue; }
+      var payload = s.slice(i + 1, j);
+      if (payload === "") out += "+";
+      else {
+        var pad = (4 - payload.length % 4) % 4, b64 = payload.replace(/,/g, "/") + "=".repeat(pad);
+        var bytes = bytesFromBase64(b64);
+        for (var k = 0; k + 1 < bytes.length; k += 2) out += String.fromCharCode((bytes[k] << 8) | bytes[k + 1]);
+      }
+      i = j;
+    }
+    return out;
+  }
+  PicoVM.prototype._encoding = function (method, rd, rs1, rs2) {
+    var data = this._spanBytes(this.regs[rs1]), out = null;
+    try {
+      if (method === "AsciiEncode") out = asciiEncodeText(bytesToUtf8(data));
+      else if (method === "AsciiDecode") out = cleanAscii(data);
+      else if (method === "Utf8Encode" || method === "Utf8Decode") out = utf8ToBytes(bytesToUtf8(data));
+      else if (method === "Utf16LEEncode") out = utf16Bytes(bytesToUtf8(data), true);
+      else if (method === "Utf16LEDecode") out = fromUtf16Bytes(data, true);
+      else if (method === "Utf16BEEncode") out = utf16Bytes(bytesToUtf8(data), false);
+      else if (method === "Utf16BEDecode") out = fromUtf16Bytes(data, false);
+      else if (method === "Utf7Encode") out = utf8ToBytes(utf7EncodeText(bytesToUtf8(data)));
+      else if (method === "Utf7Decode") out = utf8ToBytes(utf7DecodeText(bytesToUtf8(data)));
+      else if (method === "HexEncode") out = utf8ToBytes(data.map(function (b) { return (b & 255).toString(16).padStart(2, "0"); }).join(""));
+      else if (method === "HexDecode") {
+        var hx = bytesToUtf8(data).replace(/[^0-9a-fA-F]/g, "");
+        if (hx.length & 1) hx = "0" + hx;
+        out = [];
+        for (var hi = 0; hi < hx.length; hi += 2) out.push(parseInt(hx.slice(hi, hi + 2), 16) & 255);
+      } else return false;
+      this.hostStatus = 0;
+    } catch (e) {
+      out = []; this.hostStatus = 2;
+    }
+    this.regs[rd] = this._newSpanBytes(out);
+    return true;
   };
 
   // -- DateTime core (UTC epoch-seconds storage) ----------------------------

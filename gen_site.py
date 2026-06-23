@@ -651,10 +651,9 @@ function showRefInline(id){
 
 var GDBG={words:[],disasm:[],vm:null};
 function guideRun(i){
-  var d=DATA[i],styles=['c','basic','python','english','cobol','report','functional'],parts=[],ref=null,same=true;
-  styles.forEach(function(s){if(!d[s])return;var o=runWords(d[s].words).outputInts();if(ref===null)ref=JSON.stringify(o);else if(JSON.stringify(o)!==ref)same=false;parts.push(s+' \u2192 ['+o.join(', ')+']');});
-  var el=document.getElementById('gcardout'+i);if(el)el.innerHTML=parts.join(' &nbsp; ')+'  '+(same?'&#10003;':'&#9888;');
-  var lang=CUR_LANG;if(!d[lang])lang='basic';
+  var d=DATA[i],lang=CUR_LANG;if(!d[lang])lang='basic';
+  var o=runWords(d[lang].words).outputInts();
+  var el=document.getElementById('gcardout'+i);if(el)el.innerHTML=lang+' \u2192 ['+o.join(', ')+']';
   GDBG.words=d[lang].words.map(function(h){return parseInt(h,16)>>>0;});GDBG.disasm=d[lang].disasm.slice();
   GDBG.vm=new PicoVM();GDBG.vm.load(GDBG.words);var g=0;while(GDBG.vm.step()&&g++<200000){}gRender();
   document.getElementById('guideDbgPanels').classList.remove('collapsed');

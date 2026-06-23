@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0xCE0317EE
+#define PV_HOOK_TABLE_VERSION 0x1F813E24
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -486,6 +486,7 @@
 #define PV_HOOK_BASE64_ENCODE                    0x2D0
 #define PV_HOOK_BASE64_DECODE                    0x2D1
 #define PV_HOOK_BASE64_URLDECODE                 0x2D2
+#define PV_HOOK_BASE64_URLENCODE                 0x2D3
 #define PV_HOOK_NET_LISTEN                       0x2E0
 #define PV_HOOK_NET_ACCEPT                       0x2E1
 #define PV_HOOK_NET_READ                         0x2E2
@@ -496,5 +497,17 @@
 #define PV_HOOK_DATA_LOOKUP                      0x300
 #define PV_HOOK_DATA_FIELDNUM                    0x301
 #define PV_HOOK_DATA_FIELDSTR                    0x302
+#define PV_HOOK_ENCODING_ASCIIENCODE             0x310
+#define PV_HOOK_ENCODING_ASCIIDECODE             0x311
+#define PV_HOOK_ENCODING_UTF8ENCODE              0x312
+#define PV_HOOK_ENCODING_UTF8DECODE              0x313
+#define PV_HOOK_ENCODING_UTF16LEENCODE           0x314
+#define PV_HOOK_ENCODING_UTF16LEDECODE           0x315
+#define PV_HOOK_ENCODING_UTF16BEENCODE           0x316
+#define PV_HOOK_ENCODING_UTF16BEDECODE           0x317
+#define PV_HOOK_ENCODING_UTF7ENCODE              0x318
+#define PV_HOOK_ENCODING_UTF7DECODE              0x319
+#define PV_HOOK_ENCODING_HEXENCODE               0x31A
+#define PV_HOOK_ENCODING_HEXDECODE               0x31B
 
 #endif

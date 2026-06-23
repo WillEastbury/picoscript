@@ -1105,6 +1105,9 @@ class HostApi:
         if ns == "Base64":
             if self._base64(vm, method, rd, rs1, rs2):
                 return
+        if ns == "Encoding":
+            if self._encoding(vm, method, rd, rs1, rs2):
+                return
         if ns == "DateTime":
             if self._datetime(vm, method, rd, rs1, rs2):
                 return
@@ -3582,6 +3585,11 @@ class HostApi:
             enc = base64.b64encode(bytes(data))
             vm.regs[rd] = self._new_span_bytes(vm, enc)
             return True
+        if method == "UrlEncode":
+            data = self._span_raw(vm, vm.regs[rs1])
+            enc = base64.urlsafe_b64encode(bytes(data)).rstrip(b"=")
+            vm.regs[rd] = self._new_span_bytes(vm, enc)
+            return True
         if method == "Decode":
             data = self._span_raw(vm, vm.regs[rs1])
             try:
@@ -3605,6 +3613,47 @@ class HostApi:
             vm.regs[rd] = self._new_span_bytes(vm, dec)
             return True
         return False
+
+    def _encoding(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        data = self._span_raw(vm, vm.regs[rs1])
+        try:
+            if method == "AsciiEncode":
+                text = bytes(data).decode("utf-8", "replace")
+                out = text.encode("ascii", "replace")
+            elif method == "AsciiDecode":
+                out = bytes((b if b < 128 else ord("?")) for b in data)
+            elif method == "Utf8Encode":
+                text = bytes(data).decode("utf-8", "replace")
+                out = text.encode("utf-8")
+            elif method == "Utf8Decode":
+                out = bytes(data).decode("utf-8", "replace").encode("utf-8")
+            elif method == "Utf16LEEncode":
+                out = bytes(data).decode("utf-8", "replace").encode("utf-16le")
+            elif method == "Utf16LEDecode":
+                out = bytes(data).decode("utf-16le", "replace").encode("utf-8")
+            elif method == "Utf16BEEncode":
+                out = bytes(data).decode("utf-8", "replace").encode("utf-16be")
+            elif method == "Utf16BEDecode":
+                out = bytes(data).decode("utf-16be", "replace").encode("utf-8")
+            elif method == "Utf7Encode":
+                out = bytes(data).decode("utf-8", "replace").encode("utf-7")
+            elif method == "Utf7Decode":
+                out = bytes(data).decode("utf-7", "replace").encode("utf-8")
+            elif method == "HexEncode":
+                out = bytes(data).hex().encode("ascii")
+            elif method == "HexDecode":
+                raw = bytes(data).decode("ascii", "ignore").strip()
+                if len(raw) & 1:
+                    raw = "0" + raw
+                out = bytes.fromhex(raw)
+            else:
+                return False
+            self.host_status = 0
+        except (UnicodeError, ValueError):
+            out = b""
+            self.host_status = 2
+        vm.regs[rd] = self._new_span_bytes(vm, out)
+        return True
 
     # -- DateTime core (UTC epoch-seconds storage) -----------------------------
     def _datetime(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:

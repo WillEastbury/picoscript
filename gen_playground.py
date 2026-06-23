@@ -1470,16 +1470,11 @@ function loadCard(i){
 function runWords(hex){ var vm=new PicoVM(); vm.run(hex.map(function(h){return parseInt(h,16)>>>0;})); return vm; }
 
 function runCard(i){
-  var d=DATA[i], styles=['c','basic','python','english'], parts=[], ref=null, same=true;
-  styles.forEach(function(s){ if(!d[s]) return;
-    var o=runWords(d[s].words).outputInts();
-    if(ref===null) ref=JSON.stringify(o); else if(JSON.stringify(o)!==ref) same=false;
-    parts.push(s+' \u2192 ['+o.join(', ')+']');
-  });
+  var d=DATA[i], lang=CUR_LANG; if(!d[lang]) lang='basic';
+  var o=runWords(d[lang].words).outputInts();
   var el=document.getElementById('cardout'+i);
-  if(el) el.innerHTML=parts.join(' &nbsp; ')+'  '+(same?'&#10003;':'&#9888;');
+  if(el) el.innerHTML=lang+' \u2192 ['+o.join(', ')+']';
   // also load into debugger
-  var lang=CUR_LANG; if(!d[lang]) lang='basic';
   DBG.words=d[lang].words.map(function(h){return parseInt(h,16)>>>0;});
   DBG.disasm=d[lang].disasm.slice();
   dbgReset(); dbgRun();

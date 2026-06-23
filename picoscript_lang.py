@@ -494,7 +494,16 @@ NAMESPACE_MAP = {
     "Base64": {
         "Encode": OP_NOOP,
         "Decode": OP_NOOP,
+        "UrlEncode": OP_NOOP,
         "UrlDecode": OP_NOOP,
+    },
+    "Encoding": {
+        "AsciiEncode": OP_NOOP, "AsciiDecode": OP_NOOP,
+        "Utf8Encode": OP_NOOP, "Utf8Decode": OP_NOOP,
+        "Utf16LEEncode": OP_NOOP, "Utf16LEDecode": OP_NOOP,
+        "Utf16BEEncode": OP_NOOP, "Utf16BEDecode": OP_NOOP,
+        "Utf7Encode": OP_NOOP, "Utf7Decode": OP_NOOP,
+        "HexEncode": OP_NOOP, "HexDecode": OP_NOOP,
     },
     "Maths": {
         "Sin":            OP_NOOP,
@@ -931,10 +940,24 @@ HOST_HOOK_CODES = {
     ("Capsule", "Jump"):         0x02C2,   # rs1=pack rs2=card            (transfer execution)
     ("Capsule", "LoadModule"):   0x02C3,   # rs1=pack rs2=card            rd=moduleHandle
     ("Capsule", "RunModule"):    0x02C4,   # rs1=handle                   rd=result
-    # Base64 encode/decode (0x02D0-0x02D2): pure/deterministic string transform.
+    # Base64 encode/decode (0x02D0-0x02D3): pure/deterministic string transform.
     ("Base64", "Encode"):        0x02D0,   # rs1=span                     rd=base64 span
     ("Base64", "Decode"):        0x02D1,   # rs1=base64 span              rd=decoded span
     ("Base64", "UrlDecode"):     0x02D2,   # rs1=base64url span           rd=decoded span
+    ("Base64", "UrlEncode"):     0x02D3,   # rs1=span                     rd=base64url span
+    # Encoding transforms (0x0310-0x031B). Decoders normalize to UTF-8 spans.
+    ("Encoding", "AsciiEncode"): 0x0310,
+    ("Encoding", "AsciiDecode"): 0x0311,
+    ("Encoding", "Utf8Encode"):  0x0312,
+    ("Encoding", "Utf8Decode"):  0x0313,
+    ("Encoding", "Utf16LEEncode"): 0x0314,
+    ("Encoding", "Utf16LEDecode"): 0x0315,
+    ("Encoding", "Utf16BEEncode"): 0x0316,
+    ("Encoding", "Utf16BEDecode"): 0x0317,
+    ("Encoding", "Utf7Encode"): 0x0318,
+    ("Encoding", "Utf7Decode"): 0x0319,
+    ("Encoding", "HexEncode"):  0x031A,
+    ("Encoding", "HexDecode"):  0x031B,
     # DateTime extended (0xBB-0xBE): pure given input.
     ("DateTime", "DiffDays"):    0xBB,     # rs1=millis_a rs2=millis_b    rd=days
     ("DateTime", "Year"):        0xBC,     # rs1=millis                   rd=year

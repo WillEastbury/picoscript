@@ -140,6 +140,29 @@ ADA
 When you need exact bytes, use `Memory.Set` + `Span.Make`, but prefer string
 literals in examples unless byte-by-byte construction is the point.
 
+## 4b. Text and binary encodings
+
+Text is UTF-8 by default, but explicit conversion hooks are available when you
+need interchange formats:
+
+```c
+int text = "Hello+£";
+int ascii = Encoding.AsciiEncode(text);      // non-ASCII becomes '?'
+int utf16 = Encoding.Utf16LEEncode(text);
+int back = Encoding.Utf16LEDecode(utf16);
+int b64 = Base64.UrlEncode(text);
+int raw = Base64.UrlDecode(b64);
+int hex = Encoding.HexEncode(raw);
+Io.Write(back);
+```
+
+Available encoding hooks:
+
+| Namespace | Methods |
+|-----------|---------|
+| `Base64` | `Encode`, `Decode`, `UrlEncode`, `UrlDecode` |
+| `Encoding` | `AsciiEncode/Decode`, `Utf8Encode/Decode`, `Utf16LEEncode/Decode`, `Utf16BEEncode/Decode`, `Utf7Encode/Decode`, `HexEncode/Decode` |
+
 ## 5. Compression round-trip
 
 PicoScript includes two in-runtime codecs:

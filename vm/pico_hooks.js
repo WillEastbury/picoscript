@@ -492,6 +492,7 @@
       0x2D0: "Base64.Encode",
       0x2D1: "Base64.Decode",
       0x2D2: "Base64.UrlDecode",
+      0x2D3: "Base64.UrlEncode",
       0x2E0: "Net.Listen",
       0x2E1: "Net.Accept",
       0x2E2: "Net.Read",
@@ -502,6 +503,18 @@
       0x300: "Data.Lookup",
       0x301: "Data.FieldNum",
       0x302: "Data.FieldStr",
+      0x310: "Encoding.AsciiEncode",
+      0x311: "Encoding.AsciiDecode",
+      0x312: "Encoding.Utf8Encode",
+      0x313: "Encoding.Utf8Decode",
+      0x314: "Encoding.Utf16LEEncode",
+      0x315: "Encoding.Utf16LEDecode",
+      0x316: "Encoding.Utf16BEEncode",
+      0x317: "Encoding.Utf16BEDecode",
+      0x318: "Encoding.Utf7Encode",
+      0x319: "Encoding.Utf7Decode",
+      0x31A: "Encoding.HexEncode",
+      0x31B: "Encoding.HexDecode",
     }
   };
   function _canonConstant(name) {
