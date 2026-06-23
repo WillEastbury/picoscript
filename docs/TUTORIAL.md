@@ -426,6 +426,8 @@ M33 DSP, desktop SIMD, or a future tensor accelerator.
 | `Tokenizer.EncodeBytes/DecodeBytes` | byte-fallback tokenizer baseline |
 | `Tokenizer.SetVocab/EncodeTrie/DecodeTrie` | longest-prefix vocab trie baseline |
 | `Model.SetConfig/GetConfig/TensorView/ReadTensor/ReadTensorRow` | model metadata and storage-bound tensor views |
+| `Model.SetBlock/ReadTensorBlock/MatVecI8Block` | block windows over storage-backed tensor cards |
+| `BitLinear.MatVecTernaryBlock/MatVecBitmapBlock/MatVecBase3Block` | BitNet matvec directly over card-backed tensor blocks |
 | `Kv.WriteK/WriteV/ReadK/ReadV` | KV cache records by layer/position |
 | `Sampling.ArgMax/TopK/Temperature` | logits selection helpers |
 
@@ -462,6 +464,13 @@ Tokenizer.EncodeTrie("hello world");
 Model.SetConfig(1, 128);                 // e.g. hidden_dim
 Model.TensorView(3, "2|7|4096|2|4|15");  // pack|card|offset|rows|cols|format
 int row = Model.ReadTensorRow(3, 0);
+
+// Read/process only a row block from a model-card tensor.
+// rowSpec is (rowStart << 16) | rowCount when passed explicitly.
+Model.SetBlock(64, 16);
+int block = Model.ReadTensorBlock(3, 0);
+int logitsBlock = Model.MatVecI8Block(3, hidden);
+int bitnetBlock = BitLinear.MatVecBase3Block(3, hidden);
 
 Kv.WriteK((layer << 16) | pos, kSpan);
 Kv.WriteV((layer << 16) | pos, vSpan);

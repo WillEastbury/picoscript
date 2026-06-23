@@ -1603,11 +1603,60 @@
     return false;
   };
   function ternaryWeight(packed, idx) { if (((idx / 4) | 0) >= packed.length) return 0; var code = (packed[(idx / 4) | 0] >>> ((idx & 3) * 2)) & 3; return code === 1 ? 1 : (code === 2 ? -1 : 0); }
+  function decodeRowSpec(spec, defStart, defCount, maxRows) {
+    spec = spec >>> 0;
+    var start = spec ? ((spec >>> 16) & 0xFFFF) : (defStart | 0);
+    var count = spec ? (spec & 0xFFFF) : (defCount | 0);
+    if (count <= 0) count = Math.max(0, (maxRows | 0) - start);
+    if (start < 0) start = 0;
+    if (start > maxRows) start = maxRows | 0;
+    return [start | 0, Math.min(count | 0, Math.max(0, (maxRows | 0) - start)) | 0];
+  }
+  function bitmapWeight(packed, row, col, cols) {
+    var mb = Math.ceil(cols / 8), base = row * mb * 2, byte = (col / 8) | 0, bit = 1 << (col & 7);
+    var z = (packed[base + byte] || 0) & bit, mn = (packed[base + mb + byte] || 0) & bit;
+    return z ? 0 : (mn ? -1 : 1);
+  }
+  function base3Weight(packed, row, col, cols) {
+    var rb = Math.ceil(cols / 5), stride = (rb + 3) & ~3, idx = row * stride + ((col / 5) | 0);
+    var code = packed[idx] || 0, tr = [0, 0, 0, 0, 0];
+    for (var i = 4; i >= 0; i--) { var t = code % 3; code = Math.floor(code / 3); tr[i] = t === 0 ? 0 : (t === 1 ? 1 : -1); }
+    return tr[col % 5];
+  }
+  PicoVM.prototype._tensorBlobLayout = function (tid) {
+    var t = (this._modelState && this._modelState.tensors[tid | 0]) || {};
+    var st = this._st || { blobs: {} }, blob = st.blobs[String(t.pack || 0) + ":" + (t.card || 0)] || [];
+    var fmt = t.fmt || 0, elem = (fmt === 1 || fmt === 2 || fmt === 3 || fmt === 15) ? 1 : 4;
+    return { blob: blob, off: t.off || 0, rows: t.rows || 0, cols: t.cols || 0, fmt: fmt, elem: elem };
+  };
+  PicoVM.prototype._modelBlockMatVec = function (rd, tid, vecHandle, kind) {
+    var L = this._tensorBlobLayout(tid), vec = this._spanBytes(vecHandle), cols = L.cols || vec.length;
+    var block = this._modelState && this._modelState.block || { start: 0, count: 0 };
+    var rc = decodeRowSpec(0, block.start || 0, block.count || 0, L.rows || 0), start = rc[0], count = rc[1], vals = [];
+    var packed = L.blob.slice(L.off || 0);
+    for (var r = start; r < start + count; r++) {
+      var acc = 0;
+      if (kind === "i8") {
+        var base = (L.off || 0) + r * cols * L.elem;
+        for (var c = 0; c < cols && c < vec.length; c++) if (base + c < L.blob.length) acc = (acc + i8(L.blob[base + c]) * i8(vec[c])) | 0;
+      } else {
+        for (var c2 = 0; c2 < cols && c2 < vec.length; c2++) {
+          var w = kind === "ternary" ? ternaryWeight(packed, r * cols + c2) : (kind === "bitmap" ? bitmapWeight(packed, r, c2, cols) : base3Weight(packed, r, c2, cols));
+          acc = (acc + w * i8(vec[c2])) | 0;
+        }
+      }
+      vals.push(acc);
+    }
+    this.regs[rd] = this._newSpanBytes(packI32(vals)); return true;
+  };
   PicoVM.prototype._bitlinear = function (method, rd, rs1, rs2) {
     if (method === "SetShape") { this.bitlinearRows = Math.max(0, this.regs[rs1] | 0); this.bitlinearCols = Math.max(0, this.regs[rs2] | 0); this.regs[rd] = 1; return true; }
     if (method === "MatVecTernary") { var w = this._spanBytes(this.regs[rs1]), v = this._spanBytes(this.regs[rs2]), rows = this.bitlinearRows, cols = this.bitlinearCols || v.length, vals = []; for (var r = 0; r < rows; r++) { var acc = 0, base = r * cols; for (var c = 0; c < cols; c++) if (c < v.length) acc = (acc + ternaryWeight(w, base + c) * i8(v[c])) | 0; vals.push(acc); } this.regs[rd] = this._newSpanBytes(packI32(vals)); return true; }
     if (method === "MatVecBitmap") { var bw = this._spanBytes(this.regs[rs1]), bv = this._spanBytes(this.regs[rs2]), brows = this.bitlinearRows, bcols = this.bitlinearCols || bv.length, mb = Math.ceil(bcols / 8), bvals = []; for (var br = 0; br < brows; br++) { var bacc = 0, row = br * mb * 2; for (var bc = 0; bc < bcols && bc < bv.length; bc++) { var bit = 1 << (bc & 7), z = (bw[row + ((bc / 8) | 0)] || 0) & bit, mn = (bw[row + mb + ((bc / 8) | 0)] || 0) & bit; bacc = (bacc + (z ? 0 : (mn ? -1 : 1)) * i8(bv[bc])) | 0; } bvals.push(bacc); } this.regs[rd] = this._newSpanBytes(packI32(bvals)); return true; }
     if (method === "MatVecBase3") { var pw = this._spanBytes(this.regs[rs1]), pv = this._spanBytes(this.regs[rs2]), prows = this.bitlinearRows, pcols = this.bitlinearCols || pv.length, rb = Math.ceil(pcols / 5), stride = (rb + 3) & ~3, pvals = []; for (var pr = 0; pr < prows; pr++) { var pacc = 0, col = 0; for (var pb = 0; pb < rb; pb++) { var code = pw[pr * stride + pb] || 0, tr = [0,0,0,0,0]; for (var ti = 4; ti >= 0; ti--) { var tt = code % 3; code = Math.floor(code / 3); tr[ti] = tt === 0 ? 0 : (tt === 1 ? 1 : -1); } for (var tj = 0; tj < 5 && col < pcols && col < pv.length; tj++, col++) pacc = (pacc + tr[tj] * i8(pv[col])) | 0; } pvals.push(pacc); } this.regs[rd] = this._newSpanBytes(packI32(pvals)); return true; }
+    if (method === "MatVecTernaryBlock") return this._modelBlockMatVec(rd, this.regs[rs1] | 0, this.regs[rs2], "ternary");
+    if (method === "MatVecBitmapBlock") return this._modelBlockMatVec(rd, this.regs[rs1] | 0, this.regs[rs2], "bitmap");
+    if (method === "MatVecBase3Block") return this._modelBlockMatVec(rd, this.regs[rs1] | 0, this.regs[rs2], "base3");
     return false;
   };
 
@@ -1648,7 +1697,7 @@
     return false;
   };
   PicoVM.prototype._model = function (method, rd, rs1, rs2) {
-    if (!this._modelState) this._modelState = { cfg: {}, tensors: {} };
+    if (!this._modelState) this._modelState = { cfg: {}, tensors: {}, block: { start: 0, count: 0 } };
     var m = this._modelState;
     if (method === "SetConfig") { m.cfg[this.regs[rs1] | 0] = this.regs[rs2] | 0; this.regs[rd] = 1; return true; }
     if (method === "GetConfig") { this.regs[rd] = m.cfg[this.regs[rs1] | 0] || 0; return true; }
@@ -1658,7 +1707,9 @@
     if (method === "TensorRows") { this.regs[rd] = t.rows || 0; return true; }
     if (method === "TensorCols") { this.regs[rd] = t.cols || 0; return true; }
     if (method === "TensorFormat") { this.regs[rd] = t.fmt || 0; return true; }
-    if (method === "ReadTensor" || method === "ReadTensorRow") { var st = this._st || { blobs: {} }, blob = (st.blobs[String(t.pack||0)+":"+(t.card||0)] || []), elem = (t.fmt === 1 || t.fmt === 2 || t.fmt === 3 || t.fmt === 15) ? 1 : 4, rb = (t.cols || 0) * elem, start = t.off || 0, n = (t.rows || 0) * rb; if (method === "ReadTensorRow") { var row = Math.max(0, this.regs[rs2] | 0); start += row * rb; n = rb; } this.regs[rd] = this._newSpanBytes(blob.slice(start, start + n)); return true; }
+    if (method === "SetBlock") { m.block = { start: Math.max(0, this.regs[rs1] | 0), count: Math.max(0, this.regs[rs2] | 0) }; this.regs[rd] = 1; return true; }
+    if (method === "ReadTensor" || method === "ReadTensorRow" || method === "ReadTensorBlock") { var L = this._tensorBlobLayout(this.regs[rs1] | 0), rb = (L.cols || 0) * L.elem, start = L.off || 0, n = (L.rows || 0) * rb; if (method === "ReadTensorRow") { var row = Math.max(0, this.regs[rs2] | 0); start += row * rb; n = rb; } else if (method === "ReadTensorBlock") { var rc = decodeRowSpec(this.regs[rs2] | 0, m.block.start || 0, m.block.count || 0, L.rows || 0); start += rc[0] * rb; n = rc[1] * rb; } this.regs[rd] = this._newSpanBytes(L.blob.slice(start, start + n)); return true; }
+    if (method === "MatVecI8Block") return this._modelBlockMatVec(rd, this.regs[rs1] | 0, this.regs[rs2], "i8");
     return false;
   };
   PicoVM.prototype._kv = function (method, rd, rs1, rs2) {

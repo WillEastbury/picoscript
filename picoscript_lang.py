@@ -188,6 +188,9 @@ NAMESPACE_MAP = {
         "MatVecTernary": OP_NOOP,
         "MatVecBitmap": OP_NOOP,
         "MatVecBase3": OP_NOOP,
+        "MatVecTernaryBlock": OP_NOOP,
+        "MatVecBitmapBlock": OP_NOOP,
+        "MatVecBase3Block": OP_NOOP,
     },
     "Quant": {
         "AbsMax": OP_NOOP,
@@ -221,6 +224,9 @@ NAMESPACE_MAP = {
         "TensorFormat": OP_NOOP,
         "ReadTensor": OP_NOOP,
         "ReadTensorRow": OP_NOOP,
+        "SetBlock": OP_NOOP,
+        "ReadTensorBlock": OP_NOOP,
+        "MatVecI8Block": OP_NOOP,
     },
     "Kv": {
         "SetShape": OP_NOOP,
@@ -832,6 +838,12 @@ HOST_HOOK_CODES = {
     ("Model", "TensorFormat"):   0x0226,
     ("Model", "ReadTensor"):     0x0227,
     ("Model", "ReadTensorRow"):  0x0270,
+    ("Model", "SetBlock"):       0x0271,  # rs1=rowStart rs2=rowCount       rd=ok
+    ("Model", "ReadTensorBlock"): 0x0272, # rs1=tensor rs2=(start<<16)|cnt rd=span rows
+    ("Model", "MatVecI8Block"):  0x0273,  # rs1=tensor rs2=i8 vec           rd=span<int32_be>
+    ("BitLinear", "MatVecTernaryBlock"): 0x0274, # rs1=tensor rs2=i8 vec    rd=span<int32_be>
+    ("BitLinear", "MatVecBitmapBlock"):  0x0275, # rs1=tensor rs2=i8 vec    rd=span<int32_be>
+    ("BitLinear", "MatVecBase3Block"):   0x0276, # rs1=tensor rs2=i8 vec    rd=span<int32_be>
     ("Quant", "AbsMax"):         0x0228,
     ("Quant", "QuantI8"):        0x0229,
     ("Quant", "DequantI8"):      0x022A,

@@ -130,6 +130,13 @@ Only these are implemented end-to-end; do **not** invent others.
 - Large card / payload windows: `Storage.SetSlice/CardLen/ReadSlice/WriteSlice`,
   `Req.SetSlice/BodySlice/BodyLen`, `Stream.SetSlice/Slice`,
   `Event.SetSlice/DataSlice/DataLen`.
+- Model weights should be card-backed and block-sliced. Use
+  `Model.TensorView(tid, "pack|card|offset|rows|cols|format")`,
+  `Model.SetBlock(rowStart,rowCount)`, `Model.ReadTensorBlock(tid,rowSpec)`,
+  `Model.MatVecI8Block(tid, activation)`, or
+  `BitLinear.MatVecBase3Block/MatVecBitmapBlock/MatVecTernaryBlock(tid, activation)`
+  instead of reading full model tensors. `rowSpec = (rowStart << 16) | rowCount`;
+  pass `0` to use the current `Model.SetBlock`.
 - Transformer/inference primitives: `Tensor.SetShape/DotI8/MatVecI8/AddI32/
   MulI32/ScaleI32/ReluI32/RmsNormI32/RoPEI32/SoftmaxI32/ArgMaxI32` and
   `BitLinear.SetShape/MatVecTernary`. Use spans for all buffers.

@@ -268,7 +268,7 @@ class Parser:
                 self.end_stmt()
                 return Let(name, value)
             if (self.peek(1).kind == "op" and self.peek(1).value == "."
-                    and self.peek(2).kind == "id"
+                    and self.peek(2).kind in ("id", "kw")
                     and self.peek(3).kind == "op" and self.peek(3).value == "("):
                 call = self.parse_call_from_id()
                 self.end_stmt()
@@ -459,9 +459,11 @@ class Parser:
     def parse_call_from_id(self) -> Call:
         ns = self.expect("id").value
         self.expect("op", ".")
-        method = self.expect("id").value
+        method = self.next()
+        if method.kind not in ("id", "kw"):
+            raise SyntaxError(f"line {method.line}: expected method name, got {method.value!r}")
         args = self.parse_args()
-        return Call(ns, method, args)
+        return Call(ns, method.value, args)
     def parse_args(self) -> list:
         self.expect("op", "(")
         args = []
@@ -512,10 +514,10 @@ class Parser:
             self.expect("op", ")")
             return e
         if t.kind == "id":
-            if (self.at("op", ".") and self.peek(1).kind == "id"
+            if (self.at("op", ".") and self.peek(1).kind in ("id", "kw")
                     and self.peek(2).kind == "op" and self.peek(2).value == "("):
                 self.next()
-                method = self.expect("id").value
+                method = self.next().value
                 args = self.parse_args()
                 return Call(t.value, method, args)
             if self.at("op", "("):
@@ -579,4 +581,3 @@ ENDSUB
     assert words_4gl == words_basic, "4GL bytecode diverged from equivalent BASIC program"
     assert got == expected, f"unexpected output: got={got!r} expected={expected!r}"
     print("PASS picoscript_4gl: compile + VM output + BASIC parity")
-

@@ -294,12 +294,12 @@ The editor can derive completions from the language namespace table:
 | `Stream.` | `Open`, `Next`, `Span`, `Submit`, `Release`, `Close`, `SetSlice`, `Slice` |
 | `Event.` | `Post`, `Next`, `Type`, `Target`, `Data`, `SetData`, `Count`, `SetSlice`, `DataSlice`, `DataLen` |
 | `Tensor.` | `SetShape`, `DotI8`, `MatVecI8`, `AddI32`, `MulI32`, `ScaleI32`, `ReluI32`, `RmsNormI32`, `RoPEI32`, `SoftmaxI32`, `ArgMaxI32` |
-| `BitLinear.` | `SetShape`, `MatVecTernary`, `MatVecBitmap`, `MatVecBase3` |
+| `BitLinear.` | `SetShape`, `MatVecTernary`, `MatVecBitmap`, `MatVecBase3`, `MatVecTernaryBlock`, `MatVecBitmapBlock`, `MatVecBase3Block` |
 | `TextRender.` | `Raw`, `Text`, `Open`, `Attr`, `OpenEnd`, `Close`, `Empty`, `Hole`, `Br` |
 | `Quant.` | `AbsMax`, `QuantI8`, `DequantI8`, `ApplyScale`, `GroupScale` |
 | `Attention.` | `SetShape`, `Scores`, `Mix`, `Attend` |
 | `Tokenizer.` | `SetVocab`, `EncodeBytes`, `EncodeTrie`, `DecodeBytes`, `DecodeTrie`, `Count`, `Token` |
-| `Model.` | `SetConfig`, `GetConfig`, `TensorView`, `TensorOffset`, `TensorRows`, `TensorCols`, `TensorFormat`, `ReadTensor`, `ReadTensorRow` |
+| `Model.` | `SetConfig`, `GetConfig`, `TensorView`, `TensorOffset`, `TensorRows`, `TensorCols`, `TensorFormat`, `SetBlock`, `ReadTensor`, `ReadTensorRow`, `ReadTensorBlock`, `MatVecI8Block` |
 | `Kv.` | `SetShape`, `WriteK`, `WriteV`, `ReadK`, `ReadV`, `Len`, `Clear` |
 | `Sampling.` | `ArgMax`, `TopK`, `Temperature` |
 | `Query.` | `BuildLookupFilter`, `BuildManyToManyMap` |

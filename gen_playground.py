@@ -21,6 +21,9 @@ from picoscript_cfront import compile_c
 from picoscript_basic import compile_basic
 from picoscript_python import compile_python
 from picoscript_english import compile_english
+from picoscript_cobol import compile_cobol
+from picoscript_report import compile_report
+from picoscript_functional import compile_functional
 from picoscript_il import lower_to_bytecode_safe, il_to_text
 from picoscript_vm import PicoVM
 
@@ -395,40 +398,21 @@ CONSTRUCTS = [
      "PRINT LOAD QTY"),
 
     ("HTTP request: parse query + body",
-     "The portal's HTTP simulator writes request metadata into PicoWAL cards: method "
-     "at card 1, body length at 2, query length at 5, query bytes mirrored at 10+, "
-     "and body bytes mirrored at 20+. This runnable example seeds those same cards, "
-     "parses query and form-body parameters, and returns 201 for POST.",
-     "Storage.Save(0, 0, 1, 2);\n"
-     "Storage.Save(0, 0, 5, 8);\n"
-     "Storage.Save(0, 0, 2, 6);\n" +
-     c_save_bytes(10, b"name=Ada") +
-     c_save_bytes(20, b"qty=42") +
-     "int method = 0; int qlen = 0; int blen = 0;\n"
-     "Storage.Load(0, 0, 1, method);\n"
-     "Storage.Load(0, 0, 5, qlen);\n"
-     "Storage.Load(0, 0, 2, blen);\n"
-     + c_load_bytes_to_mem(10, 2000, len(b"name=Ada")) +
-     "int query = Span.Make(2000, qlen);\n" +
-     c_load_bytes_to_mem(20, 3000, len(b"qty=42")) +
-     "int body = Span.Make(3000, blen);\n"
+     "Use string literals as compact span values instead of byte-by-byte card "
+     "seeding. This parses query and form-body parameters and returns "
+     "<code>STATUS_CREATED</code> for <code>METHOD_POST</code>.",
+     "// No byte-by-byte Storage.Save seed here: string literals are span values.\n"
+     "int method = METHOD_POST;\n"
+     "int query = \"name=Ada\";\n"
+     "int body = \"qty=42\";\n"
      "int qmodel = Http.ParseQuery(query);\n"
      "int bmodel = Http.ParseForm(body);\n"
-     "if (method == 2) { Net.Status(201); } else { Net.Status(200); }\n"
+     "if (method == METHOD_POST) { Net.Status(STATUS_CREATED); } else { Net.Status(STATUS_OK); }\n"
      "Io.Write(qmodel); Io.Write(bmodel);",
-     "Storage.Save(0, 0, 1, 2)\n"
-     "Storage.Save(0, 0, 5, 8)\n"
-     "Storage.Save(0, 0, 2, 6)\n" +
-     basic_save_bytes(10, b"name=Ada") +
-     basic_save_bytes(20, b"qty=42") +
-     "DIM METHOD = 0\nDIM QLEN = 0\nDIM BLEN = 0\n"
-     "Storage.Load(0, 0, 1, METHOD)\n"
-     "Storage.Load(0, 0, 5, QLEN)\n"
-     "Storage.Load(0, 0, 2, BLEN)\n"
-     + basic_load_bytes_to_mem(10, 2000, len(b"name=Ada")) +
-     "DIM QUERY = Span.Make(2000, QLEN)\n" +
-     basic_load_bytes_to_mem(20, 3000, len(b"qty=42")) +
-     "DIM BODY = Span.Make(3000, BLEN)\n"
+     "' No byte-by-byte Storage.Save seed here: string literals are span values.\n"
+     "DIM METHOD = METHOD_POST\n"
+     "DIM QUERY = \"name=Ada\"\n"
+     "DIM BODY = \"qty=42\"\n"
      "DIM QMODEL = Http.ParseQuery(QUERY)\n"
      "DIM BMODEL = Http.ParseForm(BODY)\n"
      "IF METHOD = METHOD_POST THEN\n"
@@ -436,37 +420,121 @@ CONSTRUCTS = [
      "ELSE\n"
      "    NET.STATUS(STATUS_OK)\n"
      "ENDIF\n"
-     "Io.Write(QMODEL)\nIo.Write(BMODEL)"),
+     "Io.Write(QMODEL)\nIo.Write(BMODEL)",
+     "# No byte-by-byte Storage.Save seed here: string literals are span values.\n"
+     "method = METHOD_POST\n"
+     "query = \"name=Ada\"\n"
+     "body = \"qty=42\"\n"
+     "qmodel = Http.ParseQuery(query)\n"
+     "bmodel = Http.ParseForm(body)\n"
+     "if method == METHOD_POST:\n"
+     "    Net.Status(STATUS_CREATED)\n"
+     "else:\n"
+     "    Net.Status(STATUS_OK)\n"
+     "Io.Write(qmodel)\nIo.Write(bmodel)",
+     "# No byte-by-byte Storage.Save seed here: string literals are span values.\n"
+     "Set method to METHOD_POST.\n"
+     "Set query to \"name=Ada\".\n"
+     "Set body to \"qty=42\".\n"
+     "Set qmodel to Http.ParseQuery(query).\n"
+     "Set bmodel to Http.ParseForm(body).\n"
+     "If method is METHOD_POST:\n"
+     "    Net.Status(STATUS_CREATED).\n"
+     "Otherwise:\n"
+     "    Net.Status(STATUS_OK).\n"
+     "Io.Write(qmodel).\nIo.Write(bmodel).",
+     "IDENTIFICATION DIVISION.\n"
+     "PROGRAM-ID. HTTP-SAMPLE.\n"
+     "DATA DIVISION.\n"
+     "WORKING-STORAGE SECTION.\n"
+     "01 METHOD PIC 9 VALUE METHOD_POST.\n"
+     "PROCEDURE DIVISION.\n"
+     "*> No byte-by-byte Storage.Save seed here: string literals are span values.\n"
+     "MOVE \"name=Ada\" TO QUERY.\n"
+     "MOVE \"qty=42\" TO BODY.\n"
+     "COMPUTE QMODEL = Http.ParseQuery(QUERY).\n"
+     "COMPUTE BMODEL = Http.ParseForm(BODY).\n"
+     "IF METHOD = METHOD_POST\n"
+     "    Net.Status(STATUS_CREATED)\n"
+     "ELSE\n"
+     "    Net.Status(STATUS_OK)\n"
+     "END-IF.\n"
+     "Io.Write(QMODEL).\nIo.Write(BMODEL).\n"
+     "STOP RUN.\n",
+     "* No byte-by-byte Storage.Save seed here: string literals are span values.\n"
+     "DATA METHOD VALUE METHOD_POST.\n"
+     "DATA QUERY VALUE 'name=Ada'.\n"
+     "DATA BODY VALUE 'qty=42'.\n"
+     "COMPUTE QMODEL = Http.ParseQuery(QUERY).\n"
+     "COMPUTE BMODEL = Http.ParseForm(BODY).\n"
+     "IF METHOD = METHOD_POST.\n"
+     "  Net.Status(STATUS_CREATED).\n"
+     "ELSE.\n"
+     "  Net.Status(STATUS_OK).\n"
+     "ENDIF.\n"
+     "Io.Write(QMODEL).\nIo.Write(BMODEL).",
+     "// No byte-by-byte Storage.Save seed here: string literals are span values.\n"
+     "let method = METHOD_POST\n"
+     "let query = \"name=Ada\"\n"
+     "let body = \"qty=42\"\n"
+     "let qmodel = Http.ParseQuery(query)\n"
+     "let bmodel = Http.ParseForm(body)\n"
+     "if method = METHOD_POST then\n"
+     "    Net.Status(STATUS_CREATED)\n"
+     "else\n"
+     "    Net.Status(STATUS_OK)\n"
+     "Io.Write(qmodel)\nIo.Write(bmodel)"),
 
     ("TCP stream: parse parameter frame",
-     "The TCP/raw-bytes panel writes inbound bytes to PicoWAL too. For raw TCP, the "
-     "body length is card 2 and a small frame mirror is at cards 20+. Here the frame is "
-     "<code>cmd=PING&amp;n=3</code>; the program parses it with the same query parser and "
-     "responds with the normalized key/value model.",
-     "Storage.Save(0, 0, 2, 12);\n" +
-     c_save_bytes(20, b"cmd=PING&n=3") +
-     "int len = 0;\n"
-     "Storage.Load(0, 0, 2, len);\n"
-     + c_load_bytes_to_mem(20, 2000, len(b"cmd=PING&n=3")) +
-     "int frame = Span.Make(2000, len);\n"
+     "Raw frames can be modeled as span literals. Here the frame is "
+     "<code>cmd=PING&amp;n=3</code>; the program parses it with the query parser and "
+     "responds with a normalized key/value model.",
+     "// Compact frame seed: literal -> span, no byte cards required.\n"
+     "int frame = \"cmd=PING&n=3\";\n"
      "int model = Http.ParseQuery(frame);\n"
      "Net.Status(STATUS_OK);\n"
      "Io.Write(model);",
-     "Storage.Save(0, 0, 2, 12)\n" +
-     basic_save_bytes(20, b"cmd=PING&n=3") +
-     "DIM LEN = 0\n"
-     "Storage.Load(0, 0, 2, LEN)\n"
-     + basic_load_bytes_to_mem(20, 2000, len(b"cmd=PING&n=3")) +
-     "DIM FRAME = Span.Make(2000, LEN)\n"
+     "' Compact frame seed: literal -> span, no byte cards required.\n"
+     "DIM FRAME = \"cmd=PING&n=3\"\n"
      "DIM MODEL = Http.ParseQuery(FRAME)\n"
      "NET.STATUS(STATUS_OK)\n"
-     "Io.Write(MODEL)"),
+     "Io.Write(MODEL)",
+     "# Compact frame seed: literal -> span, no byte cards required.\n"
+     "frame = \"cmd=PING&n=3\"\n"
+     "model = Http.ParseQuery(frame)\n"
+     "Net.Status(STATUS_OK)\n"
+     "Io.Write(model)",
+     "# Compact frame seed: literal -> span, no byte cards required.\n"
+     "Set frame to \"cmd=PING&n=3\".\n"
+     "Set model to Http.ParseQuery(frame).\n"
+     "Net.Status(STATUS_OK).\n"
+     "Io.Write(model).",
+     "IDENTIFICATION DIVISION.\n"
+     "PROGRAM-ID. TCP-SAMPLE.\n"
+     "PROCEDURE DIVISION.\n"
+     "*> Compact frame seed: literal -> span, no byte cards required.\n"
+     "MOVE \"cmd=PING&n=3\" TO FRAME.\n"
+     "COMPUTE MODEL = Http.ParseQuery(FRAME).\n"
+     "Net.Status(STATUS_OK).\n"
+     "Io.Write(MODEL).\n"
+     "STOP RUN.\n",
+     "* Compact frame seed: literal -> span, no byte cards required.\n"
+     "DATA FRAME VALUE 'cmd=PING&n=3'.\n"
+     "COMPUTE MODEL = Http.ParseQuery(FRAME).\n"
+     "Net.Status(STATUS_OK).\n"
+     "Io.Write(MODEL).",
+     "// Compact frame seed: literal -> span, no byte cards required.\n"
+     "let frame = \"cmd=PING&n=3\"\n"
+     "let model = Http.ParseQuery(frame)\n"
+     "Net.Status(STATUS_OK)\n"
+     "Io.Write(model)"),
 
     ("Large cards: partial slice reads",
      "Large cards should be processed as byte ranges, not materialized whole. "
      "<code>Storage.SetSlice(offset,len)</code> selects a window; "
      "<code>ReadSlice(card)</code> returns that window as a span; "
      "<code>WriteSlice(card, span)</code> patches bytes at the current offset.",
+     "// Write one span to the large card, then read only a window back.\n"
      "int data = \"abcdefghijklmnopqrstuvwxyz\";\n"
      "Storage.UsePack(1);\n"
      "Storage.SetSlice(0, Span.Len(data));\n"
@@ -474,6 +542,7 @@ CONSTRUCTS = [
      "print(Storage.CardLen(7));\n"
      "Storage.SetSlice(10, 5);\n"
      "Io.Write(Storage.ReadSlice(7));",
+     "' Write one span to the large card, then read only a window back.\n"
      "DIM DATA = \"abcdefghijklmnopqrstuvwxyz\"\n"
      "Storage.UsePack(1)\n"
      "Storage.SetSlice(0, Span.Len(DATA))\n"
@@ -481,6 +550,7 @@ CONSTRUCTS = [
      "PRINT Storage.CardLen(7)\n"
      "Storage.SetSlice(10, 5)\n"
      "Io.Write(Storage.ReadSlice(7))",
+     "# Write one span to the large card, then read only a window back.\n"
      "data = \"abcdefghijklmnopqrstuvwxyz\"\n"
      "Storage.UsePack(1)\n"
      "Storage.SetSlice(0, Span.Len(data))\n"
@@ -488,13 +558,42 @@ CONSTRUCTS = [
      "print(Storage.CardLen(7))\n"
      "Storage.SetSlice(10, 5)\n"
      "Io.Write(Storage.ReadSlice(7))",
+     "# Write one span to the large card, then read only a window back.\n"
      "Set data to \"abcdefghijklmnopqrstuvwxyz\".\n"
      "Storage.UsePack(1).\n"
      "Storage.SetSlice(0, Span.Len(data)).\n"
      "Storage.WriteSlice(7, data).\n"
      "Print Storage.CardLen(7).\n"
      "Storage.SetSlice(10, 5).\n"
-     "Io.Write(Storage.ReadSlice(7))."),
+     "Io.Write(Storage.ReadSlice(7)).",
+     "IDENTIFICATION DIVISION.\n"
+     "PROGRAM-ID. SLICE-SAMPLE.\n"
+     "PROCEDURE DIVISION.\n"
+     "*> Write one span to the large card, then read only a window back.\n"
+     "MOVE \"abcdefghijklmnopqrstuvwxyz\" TO PAYLOAD.\n"
+     "Storage.UsePack(1).\n"
+     "Storage.SetSlice(0, Span.Len(PAYLOAD)).\n"
+     "Storage.WriteSlice(7, PAYLOAD).\n"
+     "DISPLAY Storage.CardLen(7).\n"
+     "Storage.SetSlice(10, 5).\n"
+     "Io.Write(Storage.ReadSlice(7)).\n"
+     "STOP RUN.\n",
+     "* Write one span to the large card, then read only a window back.\n"
+     "DATA PAYLOAD VALUE 'abcdefghijklmnopqrstuvwxyz'.\n"
+     "Storage.UsePack(1).\n"
+     "Storage.SetSlice(0, Span.Len(PAYLOAD)).\n"
+     "Storage.WriteSlice(7, PAYLOAD).\n"
+     "WRITE Storage.CardLen(7).\n"
+     "Storage.SetSlice(10, 5).\n"
+     "Io.Write(Storage.ReadSlice(7)).",
+     "// Write one span to the large card, then read only a window back.\n"
+     "let payload = \"abcdefghijklmnopqrstuvwxyz\"\n"
+     "Storage.UsePack(1)\n"
+     "Storage.SetSlice(0, Span.Len(payload))\n"
+     "Storage.WriteSlice(7, payload)\n"
+     "printfn Storage.CardLen(7)\n"
+     "Storage.SetSlice(10, 5)\n"
+     "Io.Write(Storage.ReadSlice(7))"),
 
     ("Stream data: slice a frame",
      "Stream leases can be read whole with <code>Stream.Span(lease)</code> or as a "
@@ -831,7 +930,15 @@ def disasm_lines(words):
 
 def build_example(srcs):
     """srcs: dict of style -> source. Compiles each, returns per-style example data."""
-    comps = {"c": compile_c, "basic": compile_basic, "python": compile_python, "english": compile_english}
+    comps = {
+        "c": compile_c,
+        "basic": compile_basic,
+        "python": compile_python,
+        "english": compile_english,
+        "cobol": compile_cobol,
+        "report": compile_report,
+        "functional": compile_functional,
+    }
     examples = {}
     for style, src in srcs.items():
         words = lower_to_bytecode_safe(comps[style](src))
@@ -847,13 +954,19 @@ def build_example(srcs):
 
 
 def _styles(c):
-    """Unpack a CONSTRUCTS tuple into a {style: source} dict (py/en optional)."""
+    """Unpack a CONSTRUCTS tuple into a {style: source} dict."""
     title, desc = c[0], c[1]
     srcs = {"c": c[2], "basic": c[3]}
     if len(c) >= 5 and c[4] is not None:
         srcs["python"] = c[4]
     if len(c) >= 6 and c[5] is not None:
         srcs["english"] = c[5]
+    if len(c) >= 7 and c[6] is not None:
+        srcs["cobol"] = c[6]
+    if len(c) >= 8 and c[7] is not None:
+        srcs["report"] = c[7]
+    if len(c) >= 9 and c[8] is not None:
+        srcs["functional"] = c[8]
     return title, desc, srcs
 
 

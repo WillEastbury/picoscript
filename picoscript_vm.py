@@ -743,6 +743,7 @@ class HostApi:
         self.tokenizer_rev: Dict[int, bytes] = {}
         self.model_config: Dict[int, int] = {}
         self.model_tensors: Dict[int, dict] = {}
+        self.model_block = {"start": 0, "count": 0}
         self.kv_shape = {"layers": 0, "positions": 0, "dim": 0}
         self.kv_head = 0
         self.kv_k: Dict[tuple, bytes] = {}
@@ -2215,6 +2216,91 @@ class HostApi:
         code = (packed[idx // 4] >> ((idx & 3) * 2)) & 3
         return 1 if code == 1 else (-1 if code == 2 else 0)
 
+    def _tensor_blob_and_layout(self, tid: int):
+        t = self.model_tensors.get(tid, {})
+        pack = str(t.get("pack", 0))
+        card = t.get("card", 0)
+        offset = t.get("offset", 0)
+        rows = t.get("rows", 0)
+        cols = t.get("cols", 0)
+        fmt = t.get("format", 0)
+        elem = 1 if fmt in (1, 2, 3, 15) else 4
+        return self.blob_cards.get((pack, card), bytearray()), int(offset), int(rows), int(cols), int(fmt), int(elem)
+
+    @staticmethod
+    def _decode_row_spec(spec: int, default_start: int, default_count: int, max_rows: int):
+        spec &= MASK32
+        if spec:
+            start = (spec >> 16) & 0xFFFF
+            count = spec & 0xFFFF
+        else:
+            start = default_start
+            count = default_count
+        if count <= 0:
+            count = max(0, max_rows - start)
+        if start < 0:
+            start = 0
+        if start > max_rows:
+            start = max_rows
+        return start, min(count, max(0, max_rows - start))
+
+    @staticmethod
+    def _base3_weight(packed: bytes, row: int, col: int, cols: int) -> int:
+        row_bytes = (cols + 4) // 5
+        stride = (row_bytes + 3) & ~3
+        idx = row * stride + (col // 5)
+        if idx >= len(packed):
+            return 0
+        code = packed[idx]
+        trits = [0] * 5
+        for i in range(4, -1, -1):
+            t = code % 3
+            code //= 3
+            trits[i] = 0 if t == 0 else (1 if t == 1 else -1)
+        return trits[col % 5]
+
+    @staticmethod
+    def _bitmap_weight(packed: bytes, row: int, col: int, cols: int) -> int:
+        mask_bytes = (cols + 7) // 8
+        base = row * mask_bytes * 2
+        byte = col // 8
+        bit = 1 << (col & 7)
+        zero = base + byte < len(packed) and (packed[base + byte] & bit)
+        minus = base + mask_bytes + byte < len(packed) and (packed[base + mask_bytes + byte] & bit)
+        return 0 if zero else (-1 if minus else 1)
+
+    def _model_block_matvec(self, vm: "PicoVM", rd, tid: int, vec_handle: int, fmt_kind: str) -> bool:
+        blob, offset, rows, cols, _fmt, elem = self._tensor_blob_and_layout(tid)
+        if cols <= 0:
+            vec = self._span_raw(vm, vec_handle)
+            cols = len(vec)
+        else:
+            vec = self._span_raw(vm, vec_handle)
+        start, count = self._decode_row_spec(0, self.model_block["start"], self.model_block["count"], rows)
+        vals = []
+        for r in range(start, start + count):
+            acc = 0
+            if fmt_kind == "i8":
+                base = offset + r * cols * elem
+                for c in range(cols):
+                    if c < len(vec) and base + c < len(blob):
+                        acc += self._i8(blob[base + c]) * self._i8(vec[c])
+            else:
+                packed = bytes(blob[offset:])
+                for c in range(cols):
+                    if c >= len(vec):
+                        break
+                    if fmt_kind == "ternary":
+                        w = self._ternary_weight(packed, r * cols + c)
+                    elif fmt_kind == "bitmap":
+                        w = self._bitmap_weight(packed, r, c, cols)
+                    else:
+                        w = self._base3_weight(packed, r, c, cols)
+                    acc += w * self._i8(vec[c])
+            vals.append(acc)
+        vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack(vals))
+        return True
+
     def _bitlinear(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
         if method == "HasFormat":
             fmt = vm.regs[rs1] & MASK32
@@ -2285,6 +2371,12 @@ class HostApi:
                 vals.append(acc)
             vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack(vals))
             return True
+        if method == "MatVecTernaryBlock":
+            return self._model_block_matvec(vm, rd, _sx32(vm.regs[rs1]), vm.regs[rs2], "ternary")
+        if method == "MatVecBitmapBlock":
+            return self._model_block_matvec(vm, rd, _sx32(vm.regs[rs1]), vm.regs[rs2], "bitmap")
+        if method == "MatVecBase3Block":
+            return self._model_block_matvec(vm, rd, _sx32(vm.regs[rs1]), vm.regs[rs2], "base3")
         return False
 
     def _quant(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
@@ -2421,27 +2513,29 @@ class HostApi:
             vm.regs[rd] = t.get("cols", 0); return True
         if method == "TensorFormat":
             vm.regs[rd] = t.get("format", 0); return True
-        if method == "ReadTensor" or method == "ReadTensorRow":
+        if method == "SetBlock":
+            self.model_block = {"start": max(0, _sx32(vm.regs[rs1])), "count": max(0, _sx32(vm.regs[rs2]))}
+            vm.regs[rd] = 1
+            return True
+        if method == "ReadTensor" or method == "ReadTensorRow" or method == "ReadTensorBlock":
             tid = _sx32(vm.regs[rs1])
-            t = self.model_tensors.get(tid, {})
-            pack = str(t.get("pack", 0))
-            card = t.get("card", 0)
-            offset = t.get("offset", 0)
-            rows = t.get("rows", 0)
-            cols = t.get("cols", 0)
-            fmt = t.get("format", 0)
-            elem = 1 if fmt in (1, 2, 3, 15) else 4
+            blob, offset, rows, cols, _fmt, elem = self._tensor_blob_and_layout(tid)
             row_bytes = cols * elem
-            blob = self.blob_cards.get((pack, card), bytearray())
             if method == "ReadTensorRow":
                 row = max(0, _sx32(vm.regs[rs2]))
                 start = offset + row * row_bytes
                 n = row_bytes
+            elif method == "ReadTensorBlock":
+                row, count = self._decode_row_spec(_sx32(vm.regs[rs2]), self.model_block["start"], self.model_block["count"], rows)
+                start = offset + row * row_bytes
+                n = count * row_bytes
             else:
                 start = offset
                 n = rows * row_bytes
             vm.regs[rd] = self._new_span_bytes(vm, bytes(blob[start:start + n]))
             return True
+        if method == "MatVecI8Block":
+            return self._model_block_matvec(vm, rd, _sx32(vm.regs[rs1]), vm.regs[rs2], "i8")
         return False
 
     def _kv(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
