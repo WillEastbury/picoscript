@@ -107,6 +107,10 @@
   .dbg-panels.collapsed { max-height:0 !important; }
   .dbg-panel { display:none; padding:8px 14px; overflow:auto; max-height:200px; }
   .dbg-panel.active { display:block; }
+  .dbg-panels.pinned-mode .dbg-panel.pinned { display:block; border-top:1px solid #2c313f; }
+  .dbg-pin { opacity:.65; padding:6px 5px !important; }
+  .dbg-pin.active { color:var(--warn) !important; border-bottom-color:var(--warn) !important; opacity:1; }
+  .dbg-size { margin-left:8px; width:auto; padding:3px 6px; font-size:11px; }
   .listing { background:#0c0e14; border:1px solid #2c313f; border-radius:6px; max-height:170px;
     overflow:auto; font-family:"SF Mono",Consolas,monospace; font-size:11.5px; }
   .listing .row { padding:2px 10px; white-space:pre; color:var(--muted); }
@@ -8509,7 +8513,10 @@ lowering convention or host contract.</p>
     </div>
     <div class="dbg-bar" id="guideDbgBar">
       <button class="active" onclick="gToggleDbg(this,'gdbg-debug')">Debug</button>
+      <button class="dbg-pin" data-pin="gdbg-debug" onclick="togglePinnedPanel('guide','gdbg-debug')" title="Pin Debug">📌</button>
       <button onclick="gToggleDbg(this,'gdbg-output')">Output</button>
+      <button class="dbg-pin" data-pin="gdbg-output" onclick="togglePinnedPanel('guide','gdbg-output')" title="Pin Output">📌</button>
+      <select class="dbg-size" id="guideDbgSize" onchange="setDbgSize('guide',this.value)"><option value="shallow">Shallow</option><option value="normal" selected>Normal</option><option value="deep">Deep</option><option value="dynamic">Dynamic</option></select>
       <button style="margin-left:auto" onclick="gCollapseDbg()">&#9660;</button>
     </div>
     <div class="dbg-panels" id="guideDbgPanels" style="max-height:180px">
@@ -8557,8 +8564,12 @@ lowering convention or host contract.</p>
     </div>
     <div class="dbg-bar" id="playDbgBar">
       <button class="active" onclick="pToggleDbg(this,'pdbg-debug')">Debug</button>
+      <button class="dbg-pin" data-pin="pdbg-debug" onclick="togglePinnedPanel('play','pdbg-debug')" title="Pin Debug">📌</button>
       <button onclick="pToggleDbg(this,'pdbg-cards')">Cards</button>
+      <button class="dbg-pin" data-pin="pdbg-cards" onclick="togglePinnedPanel('play','pdbg-cards')" title="Pin Cards">📌</button>
       <button onclick="pToggleDbg(this,'pdbg-output')">Output</button>
+      <button class="dbg-pin" data-pin="pdbg-output" onclick="togglePinnedPanel('play','pdbg-output')" title="Pin Output">📌</button>
+      <select class="dbg-size" id="playDbgSize" onchange="setDbgSize('play',this.value)"><option value="shallow">Shallow</option><option value="normal" selected>Normal</option><option value="deep">Deep</option><option value="dynamic">Dynamic</option></select>
       <button style="margin-left:auto" onclick="pCollapseDbg()">&#9660;</button>
     </div>
     <div class="dbg-panels" id="playDbgPanels" style="max-height:200px">
@@ -17303,6 +17314,21 @@ function showRefInline(id){
 }
 
 var GDBG={words:[],disasm:[],vm:null,debug:{},src:'',bps:{}};
+var DBG_LAYOUT={
+  guide:{panels:'guideDbgPanels',bar:'guideDbgBar',size:'normal',pinned:{}},
+  play:{panels:'playDbgPanels',bar:'playDbgBar',size:'normal',pinned:{}}
+};
+var DBG_HEIGHTS={shallow:120,normal:200,deep:340,dynamic:null};
+function applyDbgLayout(scope){
+  var cfg=DBG_LAYOUT[scope], host=document.getElementById(cfg.panels); if(!host)return;
+  var any=Object.keys(cfg.pinned).some(function(k){return cfg.pinned[k];});
+  host.classList.toggle('pinned-mode',any);
+  host.querySelectorAll('.dbg-panel').forEach(function(p){p.classList.toggle('pinned',!!cfg.pinned[p.id]);});
+  var h=DBG_HEIGHTS[cfg.size]; host.style.maxHeight=(h==null?'60vh':(h+'px'));
+  var bar=document.getElementById(cfg.bar); if(bar)bar.querySelectorAll('.dbg-pin').forEach(function(b){b.classList.toggle('active',!!cfg.pinned[b.getAttribute('data-pin')]);});
+}
+function setDbgSize(scope,size){DBG_LAYOUT[scope].size=size||'normal';applyDbgLayout(scope);}
+function togglePinnedPanel(scope,id){var p=DBG_LAYOUT[scope].pinned;p[id]=!p[id];applyDbgLayout(scope);}
 function guideRun(i){
   var d=DATA[i],lang=CUR_LANG;if(!d[lang])lang='basic';
   var o=runWords(d[lang].words).outputInts();
@@ -17332,12 +17358,12 @@ function gRender(){
   document.getElementById('gout').textContent='output: ['+vm.outputInts().join(', ')+']';
 }
 function gToggleBp(pc){GDBG.bps[pc]?delete GDBG.bps[pc]:GDBG.bps[pc]=1;gRender();}
-function gToggleDbg(btn,pid){document.querySelectorAll('#guideDbgBar button').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');document.querySelectorAll('#guideDbgPanels .dbg-panel').forEach(function(p){p.classList.remove('active');});var el=document.getElementById(pid);if(el)el.classList.add('active');document.getElementById('guideDbgPanels').classList.remove('collapsed');}
+function gToggleDbg(btn,pid){document.querySelectorAll('#guideDbgBar button:not(.dbg-pin)').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');document.querySelectorAll('#guideDbgPanels .dbg-panel').forEach(function(p){p.classList.remove('active');});var el=document.getElementById(pid);if(el)el.classList.add('active');applyDbgLayout('guide');document.getElementById('guideDbgPanels').classList.remove('collapsed');}
 function gCollapseDbg(){document.getElementById('guideDbgPanels').classList.toggle('collapsed');}
 
 // playground debugger
 var DBG={words:[],disasm:[],vm:null,vars:{},debug:{},src:'',pcBps:{},sourceBps:{},pcLines:{},lineToPcs:{},srcDecorations:[]};
-function pToggleDbg(btn,pid){document.querySelectorAll('#playDbgBar button').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');document.querySelectorAll('#playDbgPanels .dbg-panel').forEach(function(p){p.classList.remove('active');});var el=document.getElementById(pid);if(el)el.classList.add('active');document.getElementById('playDbgPanels').classList.remove('collapsed');}
+function pToggleDbg(btn,pid){document.querySelectorAll('#playDbgBar button:not(.dbg-pin)').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');document.querySelectorAll('#playDbgPanels .dbg-panel').forEach(function(p){p.classList.remove('active');});var el=document.getElementById(pid);if(el)el.classList.add('active');applyDbgLayout('play');document.getElementById('playDbgPanels').classList.remove('collapsed');}
 function pCollapseDbg(){document.getElementById('playDbgPanels').classList.toggle('collapsed');}
 
 function rebuildDebugMaps(){
@@ -17648,7 +17674,7 @@ function renderSamples(){
 }
 
 // Init
-buildGuideTree();showGuideCard(0);buildRefTree();buildNsRef();renderSyntaxRef();renderSamples();
+buildGuideTree();showGuideCard(0);buildRefTree();buildNsRef();renderSyntaxRef();renderSamples();applyDbgLayout('guide');applyDbgLayout('play');
 (function(){var src=document.getElementById('doc-internals');var dst=document.getElementById('doc-internals-inline');if(src&&dst)dst.innerHTML=src.innerHTML;})();
 (function(){var sel=document.getElementById('example');DATA.forEach(function(d,i){var o=document.createElement('option');o.value=i;o.textContent=(i+1)+'. '+d.title;sel.appendChild(o);});})();
 function loadExample(){var i=parseInt(document.getElementById('example').value,10)||0;var lang=document.getElementById('lang').value;var d=DATA[i];if(!d[lang])lang='basic';setSrc(d[lang].src);compileSrc(false);}

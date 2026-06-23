@@ -76,6 +76,10 @@
   .dbg-panels.collapsed { max-height:0 !important; }
   .dbg-panel { display:none; padding:10px 16px; overflow:auto; }
   .dbg-panel.active { display:block; }
+  .dbg-panels.pinned-mode .dbg-panel.pinned { display:block; border-top:1px solid #2c313f; }
+  .dbg-pin { opacity:.65; padding:7px 5px !important; }
+  .dbg-pin.active { color:var(--warn) !important; border-bottom-color:var(--warn) !important; opacity:1; }
+  .dbg-size { margin-left:8px; width:auto; padding:3px 6px; font-size:11px; }
   .ui-window { background:#1b1f2a; border:1px solid #3a4150; border-radius:7px; box-shadow:0 6px 18px rgba(0,0,0,.4); overflow:hidden; }
   .ui-titlebar { background:linear-gradient(#2b3242,#222836); color:#e6edf3; font-size:12px; font-weight:600;
     padding:5px 9px; border-bottom:1px solid #3a4150; display:flex; align-items:center; }
@@ -229,12 +233,20 @@
     <!-- Debugger tab bar -->
     <div class="dbg-bar">
       <button class="active" onclick="toggleDbg(this,'dbg-debug')">Debug</button>
+      <button class="dbg-pin" data-pin="dbg-debug" onclick="togglePinnedPanel('dbg-debug')" title="Pin Debug">📌</button>
       <button onclick="toggleDbg(this,'dbg-output')">Output</button>
+      <button class="dbg-pin" data-pin="dbg-output" onclick="togglePinnedPanel('dbg-output')" title="Pin Output">📌</button>
       <button onclick="toggleDbg(this,'dbg-src')">Source Editor</button>
+      <button class="dbg-pin" data-pin="dbg-src" onclick="togglePinnedPanel('dbg-src')" title="Pin Source">📌</button>
       <button onclick="toggleDbg(this,'dbg-gpio')">GPIO</button>
+      <button class="dbg-pin" data-pin="dbg-gpio" onclick="togglePinnedPanel('dbg-gpio')" title="Pin GPIO">📌</button>
       <button onclick="toggleDbg(this,'dbg-cards')">Cards</button>
+      <button class="dbg-pin" data-pin="dbg-cards" onclick="togglePinnedPanel('dbg-cards')" title="Pin Cards">📌</button>
       <button onclick="toggleDbg(this,'dbg-stream')">Stream</button>
+      <button class="dbg-pin" data-pin="dbg-stream" onclick="togglePinnedPanel('dbg-stream')" title="Pin Stream">📌</button>
       <button onclick="toggleDbg(this,'dbg-ui')">Remote UI</button>
+      <button class="dbg-pin" data-pin="dbg-ui" onclick="togglePinnedPanel('dbg-ui')" title="Pin UI">📌</button>
+      <select class="dbg-size" id="dbgSize" onchange="setDbgSize(this.value)"><option value="shallow">Shallow</option><option value="normal" selected>Normal</option><option value="deep">Deep</option><option value="dynamic">Dynamic</option></select>
       <button style="margin-left:auto" onclick="collapseDbg()">&#9660; Collapse</button>
     </div>
     <div class="dbg-panels" id="dbgPanels" style="max-height:220px">
@@ -9192,9 +9204,10 @@ function renderCards(){
 }
 
 function toggleDbg(btn, panelId){
-  document.querySelectorAll('.dbg-bar button').forEach(function(b){ b.classList.remove('active'); });
+  document.querySelectorAll('.dbg-bar button:not(.dbg-pin)').forEach(function(b){ b.classList.remove('active'); });
   btn.classList.add('active');
   showDbgPanel(panelId);
+  applyDbgLayout();
   expandDbg();
 }
 function showDbgPanel(id){
@@ -9207,6 +9220,18 @@ function collapseDbg(){
 function expandDbg(){
   document.getElementById('dbgPanels').classList.remove('collapsed');
 }
+var DBG_LAYOUT={size:'normal',pinned:{}};
+var DBG_HEIGHTS={shallow:120,normal:220,deep:360,dynamic:null};
+function applyDbgLayout(){
+  var host=document.getElementById('dbgPanels'); if(!host)return;
+  var any=Object.keys(DBG_LAYOUT.pinned).some(function(k){return DBG_LAYOUT.pinned[k];});
+  host.classList.toggle('pinned-mode',any);
+  host.querySelectorAll('.dbg-panel').forEach(function(p){p.classList.toggle('pinned',!!DBG_LAYOUT.pinned[p.id]);});
+  var h=DBG_HEIGHTS[DBG_LAYOUT.size]; host.style.maxHeight=(h==null?'60vh':(h+'px'));
+  document.querySelectorAll('.dbg-pin').forEach(function(b){b.classList.toggle('active',!!DBG_LAYOUT.pinned[b.getAttribute('data-pin')]);});
+}
+function setDbgSize(size){DBG_LAYOUT.size=size||'normal';applyDbgLayout();}
+function togglePinnedPanel(id){DBG_LAYOUT.pinned[id]=!DBG_LAYOUT.pinned[id];applyDbgLayout();}
 
 function getSrc(){return document.getElementById('src').value;}
 function setSrc(v){document.getElementById('src').value=v;if(typeof filesRender==='function')filesRender();}
@@ -9403,6 +9428,7 @@ renderGpio();
 renderCards();
 renderStream();
 renderUi();
+applyDbgLayout();
 </script>
 </body>
 </html>
