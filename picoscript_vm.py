@@ -32,11 +32,39 @@ from picoscript_lang import (
     NET_BODY_MARKER,
     NET_CLOSE_MARKER,
     CONTENT_TYPES,
+    NAMED_CONSTANTS,
+    to_locale,
 )
 
 # Reverse host-hook table: hook code -> (namespace, method)
 _HOOK_BY_CODE: Dict[int, tuple] = {code: key for key, code in HOST_HOOK_CODES.items()}
 _CT_BY_VALUE: Dict[int, str] = {v: k for k, v in CONTENT_TYPES.items()}
+
+_TZ_BY_ID: Dict[int, str] = {
+    0: "UTC",
+    1: "Europe/London",
+    2: "Europe/Paris",
+    3: "America/New_York",
+    4: "America/Chicago",
+    5: "America/Denver",
+    6: "America/Los_Angeles",
+    7: "Asia/Tokyo",
+    8: "Asia/Singapore",
+    9: "Asia/Hong_Kong",
+    10: "Australia/Sydney",
+    11: "Asia/Dubai",
+}
+_CURRENCY_CODE_BY_NUM: Dict[int, str] = {}
+_CURRENCY_MINOR_BY_CODE: Dict[str, int] = {}
+for _k, _v in NAMED_CONSTANTS.items():
+    if _k.startswith("CURRENCY_") and not _k.startswith("CURRENCY_MINOR_"):
+        _code = _k.split("CURRENCY_", 1)[1]
+        if len(_code) == 3:
+            _CURRENCY_CODE_BY_NUM.setdefault(int(_v), _code)
+    if _k.startswith("CURRENCY_MINOR_"):
+        _code = _k.split("CURRENCY_MINOR_", 1)[1]
+        if len(_code) == 3:
+            _CURRENCY_MINOR_BY_CODE[_code] = int(_v)
 
 MASK32 = 0xFFFFFFFF
 ARENA_BYTES = 520 * 1024                  # PicoVM data arena = RP2350 (Pico 2) 520 KB SRAM
@@ -72,6 +100,44 @@ def _sx16(v: int) -> int:
 def _sx32(v: int) -> int:
     v &= MASK32
     return v - 0x100000000 if v & 0x80000000 else v
+
+
+def _default_locale_tag() -> str:
+    import locale as _locale
+    tag = _locale.getlocale()[0] or _locale.getdefaultlocale()[0]  # type: ignore[attr-defined]
+    return tag or "en-US"
+
+
+def _default_timezone_name() -> str:
+    import datetime
+    tzinfo = datetime.datetime.now().astimezone().tzinfo
+    key = getattr(tzinfo, "key", None)
+    if key:
+        return str(key)
+    if tzinfo is not None:
+        name = tzinfo.tzname(datetime.datetime.now())
+        if name:
+            return str(name)
+    return "UTC"
+
+
+def _format_utc_offset(delta) -> str:
+    total = int(delta.total_seconds() // 60)
+    sign = "+" if total >= 0 else "-"
+    total = abs(total)
+    hh, mm = divmod(total, 60)
+    return f"{sign}{hh:02d}:{mm:02d}"
+
+
+def _format_scaled_int(value: int, scale: int) -> str:
+    scale = max(0, min(int(scale), 9))
+    if scale == 0:
+        return str(int(value))
+    sign = "-" if value < 0 else ""
+    n = abs(int(value))
+    den = 10 ** scale
+    whole, frac = divmod(n, den)
+    return f"{sign}{whole}.{frac:0{scale}d}"
 
 
 # ── Q16.16 fixed-point CORDIC (Maths.Sin/Cos/Tan, ...) ───────────────────────
@@ -645,9 +711,11 @@ class HostApi:
         self.queues: Dict[int, List[int]] = {}
         self.rng_state = 0x2545F4914F6CDD1D
         self.caps = CAP_ALL          # granted binding capabilities (INV-17); host restricts to gate
+        self.cap_ceiling = CAP_ALL   # immutable maximum this host may grant via Capability.Request
         self.no_alloc = False        # INV-5: when True, arena allocation in a hook raises PicoFault
         self.host_status = 0         # INV-18: typed status of the last fallible hook (0=OK)
         self.const_floor = 0x8000    # INV-9: lowest literal const-pool address; [floor,0x8000) is RO
+        self.const_used = set()      # addresses initialized by compiler-only Memory.SetConst
         self.log: List[str] = []
         self.handlers: Dict[tuple, Callable] = {}
         # Card store (PicoStore) + program-level Storage.* context.
@@ -723,6 +791,11 @@ class HostApi:
         self.response_mode: Optional[str] = None   # 'unary' | 'stream' (set at Seal / terminal verb)
         self.response_body_started = False          # first Resp.Write opens the body phase
         self.response_stream_closed = False         # Resp.EndStream closes the stream/body phase
+        # Locale.* formatting context (language + timezone). Date/time values are
+        # interpreted as UTC epoch seconds at rest and rendered with an explicit
+        # timezone offset at display time.
+        self.locale_tag = _default_locale_tag()
+        self.locale_tz = _default_timezone_name()
         # Automatic per-request arena scope: snapshot of (arena_top, span_count)
         # taken at the first handler invocation; each subsequent request rewinds
         # to it so a reused server VM never leaks (set_arena_base() can move it
@@ -873,7 +946,12 @@ class HostApi:
             return
         if ns == "Memory" and method == "SetConst":   # INV-9: compiler-only literal write
             a = vm.regs[rs1] % vm.arena_bytes
-            vm.mem[a] = vm.regs[rs2] & 0xFF
+            b = vm.regs[rs2] & 0xFF
+            if a in self.const_used and vm.mem[a] != b:
+                raise PicoFault(PV_FAULT_CONST_WRITE, getattr(vm, "cur_pc", 0), a,
+                                "conflicting write to read-only literal const region")
+            vm.mem[a] = b
+            self.const_used.add(a)
             if a < self.const_floor:
                 self.const_floor = a
             return
@@ -1026,8 +1104,11 @@ class HostApi:
         if ns == "Base64":
             if self._base64(vm, method, rd, rs1, rs2):
                 return
-        if ns == "DateTime" and method in ("DiffDays", "Year", "Month", "Day"):
-            if self._datetime_ext(vm, method, rd, rs1, rs2):
+        if ns == "DateTime":
+            if self._datetime(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Locale":
+            if self._locale(vm, method, rd, rs1, rs2):
                 return
         if ns == "Req" and method in ("Param", "ParamCount"):
             if self._req_param(vm, method, rd, rs1, rs2):
@@ -3309,7 +3390,7 @@ class HostApi:
                 return True
             if method == "Request":
                 cap_bit = vm.regs[rs1] & MASK32
-                if self._sandbox_denied & cap_bit:
+                if self._sandbox_denied & cap_bit or (cap_bit & ~self.cap_ceiling):
                     vm.regs[rd] = 0  # denied by sandbox
                 else:
                     self.caps |= cap_bit
@@ -3431,18 +3512,209 @@ class HostApi:
             return True
         return False
 
+    # -- DateTime core (UTC epoch-seconds storage) -----------------------------
+    def _datetime(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        import datetime
+        if method == "UtcNow" or method == "Now":
+            vm.regs[rd] = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) & MASK32
+            return True
+        if method == "UnixTimestamp":
+            vm.regs[rd] = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) & MASK32
+            return True
+        if method == "Parse":
+            raw = self._span_str(vm, vm.regs[rs1]).strip()
+            if not raw:
+                self.host_status = 2
+                vm.regs[rd] = 0
+                return True
+            parsed = None
+            if raw.lstrip("+-").isdigit():
+                parsed = int(raw)
+            else:
+                txt = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+                try:
+                    dt = datetime.datetime.fromisoformat(txt)
+                except ValueError:
+                    dt = None
+                if dt is not None:
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=datetime.timezone.utc)
+                    parsed = int(dt.timestamp())
+            if parsed is None:
+                self.host_status = 2
+                vm.regs[rd] = 0
+            else:
+                self.host_status = 0
+                vm.regs[rd] = int(parsed) & MASK32
+            return True
+        if method == "Format":
+            sec = _sx32(vm.regs[rs1])
+            try:
+                dt = datetime.datetime.fromtimestamp(sec, tz=datetime.timezone.utc)
+            except (OSError, OverflowError, ValueError):
+                vm.regs[rd] = self._new_span_bytes(vm, b"")
+                self.host_status = 2
+                return True
+            text = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            vm.regs[rd] = self._new_span_bytes(vm, text.encode("utf-8"))
+            self.host_status = 0
+            return True
+        if method == "AddSeconds":
+            vm.regs[rd] = (_sx32(vm.regs[rs1]) + _sx32(vm.regs[rs2])) & MASK32
+            return True
+        if method == "AddMinutes":
+            vm.regs[rd] = (_sx32(vm.regs[rs1]) + (_sx32(vm.regs[rs2]) * 60)) & MASK32
+            return True
+        if method == "AddHours":
+            vm.regs[rd] = (_sx32(vm.regs[rs1]) + (_sx32(vm.regs[rs2]) * 3600)) & MASK32
+            return True
+        if method == "AddDays":
+            vm.regs[rd] = (_sx32(vm.regs[rs1]) + (_sx32(vm.regs[rs2]) * 86400)) & MASK32
+            return True
+        if method == "GetDayOfWeek":
+            sec = _sx32(vm.regs[rs1])
+            try:
+                dt = datetime.datetime.fromtimestamp(sec, tz=datetime.timezone.utc)
+            except (OSError, OverflowError, ValueError):
+                vm.regs[rd] = 0
+                self.host_status = 2
+                return True
+            vm.regs[rd] = dt.isoweekday() & MASK32
+            self.host_status = 0
+            return True
+        if method == "GetDayOfYear":
+            sec = _sx32(vm.regs[rs1])
+            try:
+                dt = datetime.datetime.fromtimestamp(sec, tz=datetime.timezone.utc)
+            except (OSError, OverflowError, ValueError):
+                vm.regs[rd] = 0
+                self.host_status = 2
+                return True
+            vm.regs[rd] = dt.timetuple().tm_yday & MASK32
+            self.host_status = 0
+            return True
+        if method in ("DiffDays", "Year", "Month", "Day"):
+            return self._datetime_ext(vm, method, rd, rs1, rs2)
+        return False
+
+    # -- Locale formatting (language + timezone conversion) --------------------
+    def _locale(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        import datetime
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        def _arg_to_text(reg_value: int) -> str:
+            if 0 < reg_value < len(vm.spans) and vm.spans[reg_value]:
+                return self._span_str(vm, reg_value).strip()
+            return ""
+
+        def _arg_to_timezone(reg_value: int) -> Optional[str]:
+            if _sx32(reg_value) == 0:
+                return None
+            text = _arg_to_text(reg_value)
+            if text and ("/" in text or text.upper() == "UTC" or text.upper().startswith("GMT") or text[0].isalpha()):
+                return text
+            return _TZ_BY_ID.get(_sx32(reg_value))
+
+        def _currency_code(reg_value: int) -> str:
+            text = _arg_to_text(reg_value).upper()
+            if len(text) == 3 and text.isalpha():
+                return text
+            return _CURRENCY_CODE_BY_NUM.get(_sx32(reg_value), "USD")
+
+        if method == "SetLocale":
+            locale_spec = _arg_to_text(vm.regs[rs1])
+            locale_tag = self.locale_tag
+            tz_name = self.locale_tz
+            if locale_spec:
+                if "@" in locale_spec:
+                    locale_part, tz_part = locale_spec.split("@", 1)
+                    locale_tag = locale_part.strip() or locale_tag
+                    if tz_part.strip():
+                        tz_name = tz_part.strip()
+                else:
+                    locale_tag = locale_spec
+            tz_arg = _arg_to_timezone(vm.regs[rs2])
+            if tz_arg:
+                tz_name = tz_arg
+            try:
+                ZoneInfo(tz_name)
+            except ZoneInfoNotFoundError:
+                self.host_status = 2
+                vm.regs[rd] = 0
+                return True
+            self.locale_tag = locale_tag or self.locale_tag
+            self.locale_tz = tz_name
+            self.host_status = 0
+            vm.regs[rd] = 1
+            return True
+
+        if method == "GetCurrentLocale":
+            current = f"{self.locale_tag}@{self.locale_tz}"
+            vm.regs[rd] = self._new_span_bytes(vm, current.encode("utf-8"))
+            return True
+
+        if method == "FormatNumber":
+            value = _sx32(vm.regs[rs1])
+            scale = _sx32(vm.regs[rs2])
+            text = _format_scaled_int(value, scale)
+            vm.regs[rd] = self._new_span_bytes(vm, text.encode("utf-8"))
+            self.host_status = 0
+            return True
+
+        if method == "FormatCurrency":
+            amount_minor = _sx32(vm.regs[rs1])
+            code = _currency_code(vm.regs[rs2])
+            scale = _CURRENCY_MINOR_BY_CODE.get(code, 2)
+            text = f"{code} {_format_scaled_int(amount_minor, scale)}"
+            vm.regs[rd] = self._new_span_bytes(vm, text.encode("utf-8"))
+            self.host_status = 0
+            return True
+
+        if method == "FormatDate" or method == "FormatTime":
+            sec = _sx32(vm.regs[rs1])
+            tz_name = _arg_to_timezone(vm.regs[rs2]) or self.locale_tz
+            try:
+                tz = ZoneInfo(tz_name)
+            except ZoneInfoNotFoundError:
+                self.host_status = 2
+                vm.regs[rd] = self._new_span_bytes(vm, b"")
+                return True
+            dt_utc = datetime.datetime.fromtimestamp(sec, tz=datetime.timezone.utc)
+            local = dt_utc.astimezone(tz)
+            offset = _format_utc_offset(local.utcoffset() or datetime.timedelta(0))
+            if method == "FormatDate":
+                text = f"{local.strftime('%Y-%m-%d')} {offset}"
+            else:
+                text = f"{local.strftime('%H:%M:%S')} {offset}"
+            vm.regs[rd] = self._new_span_bytes(vm, text.encode("utf-8"))
+            self.host_status = 0
+            return True
+
+        if method == "Translate":
+            key = _arg_to_text(vm.regs[rs1])
+            locale_override = _arg_to_text(vm.regs[rs2]) or self.locale_tag
+            translated = to_locale(key, locale=locale_override, include_description=False) if key else None
+            if translated is None:
+                translated = key
+            vm.regs[rd] = self._new_span_bytes(vm, translated.encode("utf-8"))
+            self.host_status = 0 if translated else 2
+            return True
+
+        return False
+
     # -- DateTime extended (DiffDays, Year, Month, Day) ----------------------
     def _datetime_ext(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
         import datetime
         if method == "DiffDays":
-            a = _sx32(vm.regs[rs1])  # millis
-            b = _sx32(vm.regs[rs2])  # millis
-            diff_ms = a - b
-            vm.regs[rd] = (diff_ms // 86400000) & MASK32
+            a = _sx32(vm.regs[rs1])  # epoch seconds
+            b = _sx32(vm.regs[rs2])  # epoch seconds
+            diff = a - b
+            q = abs(diff) // 86400
+            vm.regs[rd] = (-q if diff < 0 else q) & MASK32
             return True
-        ms = _sx32(vm.regs[rs1])
+        sec = _sx32(vm.regs[rs1])
         try:
-            dt = datetime.datetime.utcfromtimestamp(ms / 1000.0)
+            dt = datetime.datetime.fromtimestamp(sec, tz=datetime.timezone.utc)
         except (ValueError, OSError, OverflowError):
             vm.regs[rd] = 0
             return True
@@ -3505,6 +3777,7 @@ class PicoVM:
         self.host = host or HostApi()
         if caps is not None:                 # restrict granted bindings (INV-17)
             self.host.caps = caps
+            self.host.cap_ceiling = caps
         if seed is not None:                 # host-injected Random.U32 seed (INV-15)
             self.host.rng_state = seed
         if no_alloc is not None:             # hot-path no-allocation mode (INV-5)

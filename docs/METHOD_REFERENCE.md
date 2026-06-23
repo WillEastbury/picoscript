@@ -13,6 +13,7 @@ This document provides a comprehensive reference for all PicoScript methods, org
 
 ## Table of Contents
 
+- [Named constants & locale style](#named-constants--locale-style)
 - [Auth](#auth)
 - [Bits](#bits)
 - [Compress](#compress)
@@ -49,6 +50,26 @@ This document provides a comprehensive reference for all PicoScript methods, org
 - [Xml](#xml)
 
 ---
+
+## Named constants & locale style
+
+PicoScript includes a standard cross-language constant catalog (HTTP methods and
+statuses, day/month, timezone/DST, currencies, countries, units, colors, and
+integer sizing/conversion constants).
+
+Use these constants directly in source:
+
+```c
+Resp.Status(HTTP_STATUS_NOT_FOUND);
+print(TZ_EUROPE_LONDON);
+```
+
+For localized human-readable labels/descriptions, use:
+- Python: `picoscript_lang.toLocale(name, locale, user_dictionary)`
+- Browser hooks: `PV_HOOKS.toLocale(name, locale, userDictionary)`
+
+Full catalog and dictionary format:
+- `docs/NAMED_CONSTANTS.md`
 
 ## Auth
 

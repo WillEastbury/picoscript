@@ -1270,6 +1270,713 @@ DSP_BASIC_NAMES = {
 DSP_BASIC_TO_SUBOP = {name: subop for subop, name in DSP_BASIC_NAMES.items()}
 BASIC_CONTENT_TYPES = {name.upper(): imm for name, imm in CONTENT_TYPES.items()}
 
+# Named constants for readable request/response code in all frontends.
+# Keys are canonical uppercase spellings; lookup is case-insensitive.
+HTTP_NAMED_CONSTANTS = {
+    # HTTP methods (Req.Method)
+    "HTTP_METHOD_GET": 1,
+    "HTTP_METHOD_POST": 2,
+    "HTTP_METHOD_PUT": 3,
+    "HTTP_METHOD_DELETE": 4,
+    "HTTP_METHOD_HEAD": 5,
+    "HTTP_METHOD_PATCH": 6,
+    "HTTP_METHOD_OPTIONS": 7,
+    "HTTP_METHOD_CONNECT": 8,
+    "HTTP_METHOD_TRACE": 9,
+    # Short aliases
+    "METHOD_GET": 1,
+    "METHOD_POST": 2,
+    "METHOD_PUT": 3,
+    "METHOD_DELETE": 4,
+    "METHOD_HEAD": 5,
+    "METHOD_PATCH": 6,
+    "METHOD_OPTIONS": 7,
+    "METHOD_CONNECT": 8,
+    "METHOD_TRACE": 9,
+    # Enum-style aliases (C frontends can use HttpMethod.POST style)
+    "HTTPMETHOD.GET": 1,
+    "HTTPMETHOD.POST": 2,
+    "HTTPMETHOD.PUT": 3,
+    "HTTPMETHOD.DELETE": 4,
+    "HTTPMETHOD.HEAD": 5,
+    "HTTPMETHOD.PATCH": 6,
+    "HTTPMETHOD.OPTIONS": 7,
+    "HTTPMETHOD.CONNECT": 8,
+    "HTTPMETHOD.TRACE": 9,
+    # HTTP statuses (Resp.Status)
+    "HTTP_STATUS_OK": 200,
+    "HTTP_STATUS_CREATED": 201,
+    "HTTP_STATUS_ACCEPTED": 202,
+    "HTTP_STATUS_NO_CONTENT": 204,
+    "HTTP_STATUS_BAD_REQUEST": 400,
+    "HTTP_STATUS_UNAUTHORIZED": 401,
+    "HTTP_STATUS_FORBIDDEN": 403,
+    "HTTP_STATUS_NOT_FOUND": 404,
+    "HTTP_STATUS_CONFLICT": 409,
+    "HTTP_STATUS_UNPROCESSABLE_ENTITY": 422,
+    "HTTP_STATUS_TOO_MANY_REQUESTS": 429,
+    "HTTP_STATUS_INTERNAL_SERVER_ERROR": 500,
+    "HTTP_STATUS_NOT_IMPLEMENTED": 501,
+    "HTTP_STATUS_BAD_GATEWAY": 502,
+    "HTTP_STATUS_SERVICE_UNAVAILABLE": 503,
+    # Short aliases
+    "STATUS_OK": 200,
+    "STATUS_CREATED": 201,
+    "STATUS_ACCEPTED": 202,
+    "STATUS_NO_CONTENT": 204,
+    "STATUS_BAD_REQUEST": 400,
+    "STATUS_UNAUTHORIZED": 401,
+    "STATUS_FORBIDDEN": 403,
+    "STATUS_NOT_FOUND": 404,
+    "STATUS_CONFLICT": 409,
+    "STATUS_UNPROCESSABLE_ENTITY": 422,
+    "STATUS_TOO_MANY_REQUESTS": 429,
+    "STATUS_INTERNAL_SERVER_ERROR": 500,
+    "STATUS_NOT_IMPLEMENTED": 501,
+    "STATUS_BAD_GATEWAY": 502,
+    "STATUS_SERVICE_UNAVAILABLE": 503,
+    # Enum-style aliases (C frontends can use HttpStatus.OK style)
+    "HTTPSTATUS.OK": 200,
+    "HTTPSTATUS.CREATED": 201,
+    "HTTPSTATUS.ACCEPTED": 202,
+    "HTTPSTATUS.NO_CONTENT": 204,
+    "HTTPSTATUS.BAD_REQUEST": 400,
+    "HTTPSTATUS.UNAUTHORIZED": 401,
+    "HTTPSTATUS.FORBIDDEN": 403,
+    "HTTPSTATUS.NOT_FOUND": 404,
+    "HTTPSTATUS.CONFLICT": 409,
+    "HTTPSTATUS.UNPROCESSABLE_ENTITY": 422,
+    "HTTPSTATUS.TOO_MANY_REQUESTS": 429,
+    "HTTPSTATUS.INTERNAL_SERVER_ERROR": 500,
+    "HTTPSTATUS.NOT_IMPLEMENTED": 501,
+    "HTTPSTATUS.BAD_GATEWAY": 502,
+    "HTTPSTATUS.SERVICE_UNAVAILABLE": 503,
+}
+
+
+SYSTEM_NAMED_CONSTANTS = {
+    # Day-of-week (ISO-style, Monday=1..Sunday=7)
+    "DAY_MONDAY": 1,
+    "DAY_TUESDAY": 2,
+    "DAY_WEDNESDAY": 3,
+    "DAY_THURSDAY": 4,
+    "DAY_FRIDAY": 5,
+    "DAY_SATURDAY": 6,
+    "DAY_SUNDAY": 7,
+    "DAY.MONDAY": 1,
+    "DAY.TUESDAY": 2,
+    "DAY.WEDNESDAY": 3,
+    "DAY.THURSDAY": 4,
+    "DAY.FRIDAY": 5,
+    "DAY.SATURDAY": 6,
+    "DAY.SUNDAY": 7,
+    # Months
+    "MONTH_JANUARY": 1,
+    "MONTH_FEBRUARY": 2,
+    "MONTH_MARCH": 3,
+    "MONTH_APRIL": 4,
+    "MONTH_MAY": 5,
+    "MONTH_JUNE": 6,
+    "MONTH_JULY": 7,
+    "MONTH_AUGUST": 8,
+    "MONTH_SEPTEMBER": 9,
+    "MONTH_OCTOBER": 10,
+    "MONTH_NOVEMBER": 11,
+    "MONTH_DECEMBER": 12,
+    "MONTH.JANUARY": 1,
+    "MONTH.FEBRUARY": 2,
+    "MONTH.MARCH": 3,
+    "MONTH.APRIL": 4,
+    "MONTH.MAY": 5,
+    "MONTH.JUNE": 6,
+    "MONTH.JULY": 7,
+    "MONTH.AUGUST": 8,
+    "MONTH.SEPTEMBER": 9,
+    "MONTH.OCTOBER": 10,
+    "MONTH.NOVEMBER": 11,
+    "MONTH.DECEMBER": 12,
+    # 32-bit integer sizing constants
+    "BITS_PER_BYTE": 8,
+    "UINT8_MAX": 255,
+    "UINT16_MAX": 65535,
+    "UINT24_MAX": 16777215,
+    "UINT32_MAX": 4294967295,
+    "INT8_MIN": -128,
+    "INT8_MAX": 127,
+    "INT16_MIN": -32768,
+    "INT16_MAX": 32767,
+    "INT24_MIN": -8388608,
+    "INT24_MAX": 8388607,
+    "INT32_MIN": -2147483648,
+    "INT32_MAX": 2147483647,
+    "MASK8": 0xFF,
+    "MASK16": 0xFFFF,
+    "MASK24": 0xFFFFFF,
+    "MASK32": 0xFFFFFFFF,
+    "SIGN8": 0x80,
+    "SIGN16": 0x8000,
+    "SIGN24": 0x800000,
+    "SIGN32": 0x80000000,
+    # Time zones (stable enum IDs; host maps these to tzdb rules)
+    "TZ_UTC": 0,
+    "TZ_EUROPE_LONDON": 1,
+    "TZ_EUROPE_PARIS": 2,
+    "TZ_AMERICA_NEW_YORK": 3,
+    "TZ_AMERICA_CHICAGO": 4,
+    "TZ_AMERICA_DENVER": 5,
+    "TZ_AMERICA_LOS_ANGELES": 6,
+    "TZ_ASIA_TOKYO": 7,
+    "TZ_ASIA_SINGAPORE": 8,
+    "TZ_ASIA_HONG_KONG": 9,
+    "TZ_AUSTRALIA_SYDNEY": 10,
+    "TZ_ASIA_DUBAI": 11,
+    "TZ.UTC": 0,
+    "TZ.EUROPE_LONDON": 1,
+    "TZ.EUROPE_PARIS": 2,
+    "TZ.AMERICA_NEW_YORK": 3,
+    "TZ.AMERICA_CHICAGO": 4,
+    "TZ.AMERICA_DENVER": 5,
+    "TZ.AMERICA_LOS_ANGELES": 6,
+    "TZ.ASIA_TOKYO": 7,
+    "TZ.ASIA_SINGAPORE": 8,
+    "TZ.ASIA_HONG_KONG": 9,
+    "TZ.AUSTRALIA_SYDNEY": 10,
+    "TZ.ASIA_DUBAI": 11,
+    "TIMEZONE.UTC": 0,
+    "TIMEZONE.EUROPE_LONDON": 1,
+    "TIMEZONE.EUROPE_PARIS": 2,
+    "TIMEZONE.AMERICA_NEW_YORK": 3,
+    "TIMEZONE.AMERICA_CHICAGO": 4,
+    "TIMEZONE.AMERICA_DENVER": 5,
+    "TIMEZONE.AMERICA_LOS_ANGELES": 6,
+    "TIMEZONE.ASIA_TOKYO": 7,
+    "TIMEZONE.ASIA_SINGAPORE": 8,
+    "TIMEZONE.ASIA_HONG_KONG": 9,
+    "TIMEZONE.AUSTRALIA_SYDNEY": 10,
+    "TIMEZONE.ASIA_DUBAI": 11,
+    # DST status
+    "DST_NONE": 0,
+    "DST_OBSERVED": 1,
+    "DST_ACTIVE": 2,
+    "DST.NONE": 0,
+    "DST.OBSERVED": 1,
+    "DST.ACTIVE": 2,
+    # Currencies (ISO-4217 numeric)
+    "CURRENCY_USD": 840,
+    "CURRENCY_EUR": 978,
+    "CURRENCY_GBP": 826,
+    "CURRENCY_JPY": 392,
+    "CURRENCY_CNY": 156,
+    "CURRENCY_AUD": 36,
+    "CURRENCY_CAD": 124,
+    "CURRENCY_CHF": 756,
+    "CURRENCY_SEK": 752,
+    "CURRENCY_NOK": 578,
+    "CURRENCY_NZD": 554,
+    "CURRENCY_INR": 356,
+    "CURRENCY_SGD": 702,
+    "CURRENCY_HKD": 344,
+    "CURRENCY_AED": 784,
+    "CURRENCY_BRL": 986,
+    "CURRENCY_ZAR": 710,
+    "CURRENCY_KRW": 410,
+    "CURRENCY_MXN": 484,
+    "CURRENCY.USD": 840,
+    "CURRENCY.EUR": 978,
+    "CURRENCY.GBP": 826,
+    "CURRENCY.JPY": 392,
+    "CURRENCY.CNY": 156,
+    "CURRENCY.AUD": 36,
+    "CURRENCY.CAD": 124,
+    "CURRENCY.CHF": 756,
+    "CURRENCY.SEK": 752,
+    "CURRENCY.NOK": 578,
+    "CURRENCY.NZD": 554,
+    "CURRENCY.INR": 356,
+    "CURRENCY.SGD": 702,
+    "CURRENCY.HKD": 344,
+    "CURRENCY.AED": 784,
+    "CURRENCY.BRL": 986,
+    "CURRENCY.ZAR": 710,
+    "CURRENCY.KRW": 410,
+    "CURRENCY.MXN": 484,
+    # Currency minor units (decimal places)
+    "CURRENCY_MINOR_USD": 2,
+    "CURRENCY_MINOR_EUR": 2,
+    "CURRENCY_MINOR_GBP": 2,
+    "CURRENCY_MINOR_JPY": 0,
+    "CURRENCY_MINOR_CNY": 2,
+    "CURRENCY_MINOR_AUD": 2,
+    "CURRENCY_MINOR_CAD": 2,
+    "CURRENCY_MINOR_CHF": 2,
+    "CURRENCY_MINOR_SEK": 2,
+    "CURRENCY_MINOR_NOK": 2,
+    "CURRENCY_MINOR_NZD": 2,
+    "CURRENCY_MINOR_INR": 2,
+    "CURRENCY_MINOR_SGD": 2,
+    "CURRENCY_MINOR_HKD": 2,
+    "CURRENCY_MINOR_AED": 2,
+    "CURRENCY_MINOR_BRL": 2,
+    "CURRENCY_MINOR_ZAR": 2,
+    "CURRENCY_MINOR_KRW": 0,
+    "CURRENCY_MINOR_MXN": 2,
+    "CURRENCYMINOR.USD": 2,
+    "CURRENCYMINOR.EUR": 2,
+    "CURRENCYMINOR.GBP": 2,
+    "CURRENCYMINOR.JPY": 0,
+    "CURRENCYMINOR.CNY": 2,
+    "CURRENCYMINOR.AUD": 2,
+    "CURRENCYMINOR.CAD": 2,
+    "CURRENCYMINOR.CHF": 2,
+    "CURRENCYMINOR.SEK": 2,
+    "CURRENCYMINOR.NOK": 2,
+    "CURRENCYMINOR.NZD": 2,
+    "CURRENCYMINOR.INR": 2,
+    "CURRENCYMINOR.SGD": 2,
+    "CURRENCYMINOR.HKD": 2,
+    "CURRENCYMINOR.AED": 2,
+    "CURRENCYMINOR.BRL": 2,
+    "CURRENCYMINOR.ZAR": 2,
+    "CURRENCYMINOR.KRW": 0,
+    "CURRENCYMINOR.MXN": 2,
+    # Countries (ISO-3166-1 numeric)
+    "COUNTRY_US": 840,
+    "COUNTRY_GB": 826,
+    "COUNTRY_FR": 250,
+    "COUNTRY_DE": 276,
+    "COUNTRY_ES": 724,
+    "COUNTRY_IT": 380,
+    "COUNTRY_NL": 528,
+    "COUNTRY_SE": 752,
+    "COUNTRY_NO": 578,
+    "COUNTRY_DK": 208,
+    "COUNTRY_FI": 246,
+    "COUNTRY_CH": 756,
+    "COUNTRY_IE": 372,
+    "COUNTRY_PL": 616,
+    "COUNTRY_PT": 620,
+    "COUNTRY_AU": 36,
+    "COUNTRY_NZ": 554,
+    "COUNTRY_JP": 392,
+    "COUNTRY_CN": 156,
+    "COUNTRY_HK": 344,
+    "COUNTRY_SG": 702,
+    "COUNTRY_IN": 356,
+    "COUNTRY_AE": 784,
+    "COUNTRY_BR": 76,
+    "COUNTRY_ZA": 710,
+    "COUNTRY_KR": 410,
+    "COUNTRY_MX": 484,
+    "COUNTRY_CA": 124,
+    "COUNTRY.US": 840,
+    "COUNTRY.GB": 826,
+    "COUNTRY.FR": 250,
+    "COUNTRY.DE": 276,
+    "COUNTRY.ES": 724,
+    "COUNTRY.IT": 380,
+    "COUNTRY.NL": 528,
+    "COUNTRY.SE": 752,
+    "COUNTRY.NO": 578,
+    "COUNTRY.DK": 208,
+    "COUNTRY.FI": 246,
+    "COUNTRY.CH": 756,
+    "COUNTRY.IE": 372,
+    "COUNTRY.PL": 616,
+    "COUNTRY.PT": 620,
+    "COUNTRY.AU": 36,
+    "COUNTRY.NZ": 554,
+    "COUNTRY.JP": 392,
+    "COUNTRY.CN": 156,
+    "COUNTRY.HK": 344,
+    "COUNTRY.SG": 702,
+    "COUNTRY.IN": 356,
+    "COUNTRY.AE": 784,
+    "COUNTRY.BR": 76,
+    "COUNTRY.ZA": 710,
+    "COUNTRY.KR": 410,
+    "COUNTRY.MX": 484,
+    "COUNTRY.CA": 124,
+    # Base units
+    "UOM_METER": 1,
+    "UOM_KILOGRAM": 2,
+    "UOM_SECOND": 3,
+    "UOM_AMPERE": 4,
+    "UOM_KELVIN": 5,
+    "UOM_MOLE": 6,
+    "UOM_CANDELA": 7,
+    "UOM_LITER": 100,
+    "UOM_GRAM": 101,
+    "UOM_CELSIUS": 102,
+    "UOM.METER": 1,
+    "UOM.KILOGRAM": 2,
+    "UOM.SECOND": 3,
+    "UOM.AMPERE": 4,
+    "UOM.KELVIN": 5,
+    "UOM.MOLE": 6,
+    "UOM.CANDELA": 7,
+    "UOM.LITER": 100,
+    "UOM.GRAM": 101,
+    "UOM.CELSIUS": 102,
+    # Colours (24-bit RGB)
+    "COLOR_BLACK": 0x000000,
+    "COLOR_WHITE": 0xFFFFFF,
+    "COLOR_RED": 0xFF0000,
+    "COLOR_GREEN": 0x00FF00,
+    "COLOR_BLUE": 0x0000FF,
+    "COLOR_YELLOW": 0xFFFF00,
+    "COLOR_CYAN": 0x00FFFF,
+    "COLOR_MAGENTA": 0xFF00FF,
+    "COLOR_ORANGE": 0xFFA500,
+    "COLOR_GRAY": 0x808080,
+    "COLOR_GREY": 0x808080,
+    "COLOR.BLACK": 0x000000,
+    "COLOR.WHITE": 0xFFFFFF,
+    "COLOR.RED": 0xFF0000,
+    "COLOR.GREEN": 0x00FF00,
+    "COLOR.BLUE": 0x0000FF,
+    "COLOR.YELLOW": 0xFFFF00,
+    "COLOR.CYAN": 0x00FFFF,
+    "COLOR.MAGENTA": 0xFF00FF,
+    "COLOR.ORANGE": 0xFFA500,
+    "COLOR.GRAY": 0x808080,
+    "COLOR.GREY": 0x808080,
+    # Conversion constants
+    "MS_PER_SECOND": 1000,
+    "SECONDS_PER_MINUTE": 60,
+    "MINUTES_PER_HOUR": 60,
+    "HOURS_PER_DAY": 24,
+    "DAYS_PER_WEEK": 7,
+    "BYTES_PER_KIB": 1024,
+    "BYTES_PER_MIB": 1048576,
+    "MM_PER_METER": 1000,
+    "CM_PER_METER": 100,
+    "GRAMS_PER_KILOGRAM": 1000,
+    "PI_Q16": 205887,
+    "RAD_PER_DEG_Q16": 1144,
+    "DEG_PER_RAD_Q16": 3754936,
+}
+
+NAMED_CONSTANTS = {}
+NAMED_CONSTANTS.update(HTTP_NAMED_CONSTANTS)
+NAMED_CONSTANTS.update(SYSTEM_NAMED_CONSTANTS)
+
+# Pretty-print metadata is localizable by locale key.
+NAMED_CONSTANT_I18N = {
+    "en": {
+        # Day/month names
+        "DAY_MONDAY": {"label": "Monday", "description": "ISO weekday index 1 (Monday)."},
+        "DAY_TUESDAY": {"label": "Tuesday", "description": "ISO weekday index 2 (Tuesday)."},
+        "DAY_WEDNESDAY": {"label": "Wednesday", "description": "ISO weekday index 3 (Wednesday)."},
+        "DAY_THURSDAY": {"label": "Thursday", "description": "ISO weekday index 4 (Thursday)."},
+        "DAY_FRIDAY": {"label": "Friday", "description": "ISO weekday index 5 (Friday)."},
+        "DAY_SATURDAY": {"label": "Saturday", "description": "ISO weekday index 6 (Saturday)."},
+        "DAY_SUNDAY": {"label": "Sunday", "description": "ISO weekday index 7 (Sunday)."},
+        "MONTH_JANUARY": {"label": "January", "description": "Month index 1 (January)."},
+        "MONTH_FEBRUARY": {"label": "February", "description": "Month index 2 (February)."},
+        "MONTH_MARCH": {"label": "March", "description": "Month index 3 (March)."},
+        "MONTH_APRIL": {"label": "April", "description": "Month index 4 (April)."},
+        "MONTH_MAY": {"label": "May", "description": "Month index 5 (May)."},
+        "MONTH_JUNE": {"label": "June", "description": "Month index 6 (June)."},
+        "MONTH_JULY": {"label": "July", "description": "Month index 7 (July)."},
+        "MONTH_AUGUST": {"label": "August", "description": "Month index 8 (August)."},
+        "MONTH_SEPTEMBER": {"label": "September", "description": "Month index 9 (September)."},
+        "MONTH_OCTOBER": {"label": "October", "description": "Month index 10 (October)."},
+        "MONTH_NOVEMBER": {"label": "November", "description": "Month index 11 (November)."},
+        "MONTH_DECEMBER": {"label": "December", "description": "Month index 12 (December)."},
+        # Time zones / DST
+        "TZ_UTC": {"label": "UTC", "description": "Coordinated Universal Time (no daylight saving transition)."},
+        "TZ_EUROPE_LONDON": {"label": "Europe/London", "description": "IANA zone Europe/London (GMT/BST)."},
+        "TZ_EUROPE_PARIS": {"label": "Europe/Paris", "description": "IANA zone Europe/Paris (CET/CEST)."},
+        "TZ_AMERICA_NEW_YORK": {"label": "America/New_York", "description": "IANA zone America/New_York (EST/EDT)."},
+        "TZ_AMERICA_CHICAGO": {"label": "America/Chicago", "description": "IANA zone America/Chicago (CST/CDT)."},
+        "TZ_AMERICA_DENVER": {"label": "America/Denver", "description": "IANA zone America/Denver (MST/MDT)."},
+        "TZ_AMERICA_LOS_ANGELES": {"label": "America/Los_Angeles", "description": "IANA zone America/Los_Angeles (PST/PDT)."},
+        "TZ_ASIA_TOKYO": {"label": "Asia/Tokyo", "description": "IANA zone Asia/Tokyo (JST)."},
+        "TZ_ASIA_SINGAPORE": {"label": "Asia/Singapore", "description": "IANA zone Asia/Singapore (SGT)."},
+        "TZ_ASIA_HONG_KONG": {"label": "Asia/Hong_Kong", "description": "IANA zone Asia/Hong_Kong (HKT)."},
+        "TZ_AUSTRALIA_SYDNEY": {"label": "Australia/Sydney", "description": "IANA zone Australia/Sydney (AEST/AEDT)."},
+        "TZ_ASIA_DUBAI": {"label": "Asia/Dubai", "description": "IANA zone Asia/Dubai (GST)."},
+        "DST_NONE": {"label": "No DST", "description": "Zone does not observe daylight saving time."},
+        "DST_OBSERVED": {"label": "DST observed", "description": "Zone has daylight saving rules in its calendar."},
+        "DST_ACTIVE": {"label": "DST active now", "description": "Current instant is inside the daylight saving period."},
+        # Currencies (ISO-4217)
+        "CURRENCY_USD": {"label": "US Dollar (USD)", "description": "ISO-4217 numeric code 840."},
+        "CURRENCY_EUR": {"label": "Euro (EUR)", "description": "ISO-4217 numeric code 978."},
+        "CURRENCY_GBP": {"label": "Pound Sterling (GBP)", "description": "ISO-4217 numeric code 826."},
+        "CURRENCY_JPY": {"label": "Japanese Yen (JPY)", "description": "ISO-4217 numeric code 392."},
+        "CURRENCY_CNY": {"label": "Chinese Yuan (CNY)", "description": "ISO-4217 numeric code 156."},
+        "CURRENCY_AUD": {"label": "Australian Dollar (AUD)", "description": "ISO-4217 numeric code 36."},
+        "CURRENCY_CAD": {"label": "Canadian Dollar (CAD)", "description": "ISO-4217 numeric code 124."},
+        "CURRENCY_CHF": {"label": "Swiss Franc (CHF)", "description": "ISO-4217 numeric code 756."},
+        "CURRENCY_SEK": {"label": "Swedish Krona (SEK)", "description": "ISO-4217 numeric code 752."},
+        "CURRENCY_NOK": {"label": "Norwegian Krone (NOK)", "description": "ISO-4217 numeric code 578."},
+        "CURRENCY_NZD": {"label": "New Zealand Dollar (NZD)", "description": "ISO-4217 numeric code 554."},
+        "CURRENCY_INR": {"label": "Indian Rupee (INR)", "description": "ISO-4217 numeric code 356."},
+        "CURRENCY_SGD": {"label": "Singapore Dollar (SGD)", "description": "ISO-4217 numeric code 702."},
+        "CURRENCY_HKD": {"label": "Hong Kong Dollar (HKD)", "description": "ISO-4217 numeric code 344."},
+        "CURRENCY_AED": {"label": "UAE Dirham (AED)", "description": "ISO-4217 numeric code 784."},
+        "CURRENCY_BRL": {"label": "Brazilian Real (BRL)", "description": "ISO-4217 numeric code 986."},
+        "CURRENCY_ZAR": {"label": "South African Rand (ZAR)", "description": "ISO-4217 numeric code 710."},
+        "CURRENCY_KRW": {"label": "South Korean Won (KRW)", "description": "ISO-4217 numeric code 410."},
+        "CURRENCY_MXN": {"label": "Mexican Peso (MXN)", "description": "ISO-4217 numeric code 484."},
+        # Countries (ISO-3166-1)
+        "COUNTRY_US": {"label": "United States", "description": "ISO-3166-1 numeric country code 840."},
+        "COUNTRY_GB": {"label": "United Kingdom", "description": "ISO-3166-1 numeric country code 826."},
+        "COUNTRY_FR": {"label": "France", "description": "ISO-3166-1 numeric country code 250."},
+        "COUNTRY_DE": {"label": "Germany", "description": "ISO-3166-1 numeric country code 276."},
+        "COUNTRY_ES": {"label": "Spain", "description": "ISO-3166-1 numeric country code 724."},
+        "COUNTRY_IT": {"label": "Italy", "description": "ISO-3166-1 numeric country code 380."},
+        "COUNTRY_NL": {"label": "Netherlands", "description": "ISO-3166-1 numeric country code 528."},
+        "COUNTRY_SE": {"label": "Sweden", "description": "ISO-3166-1 numeric country code 752."},
+        "COUNTRY_NO": {"label": "Norway", "description": "ISO-3166-1 numeric country code 578."},
+        "COUNTRY_DK": {"label": "Denmark", "description": "ISO-3166-1 numeric country code 208."},
+        "COUNTRY_FI": {"label": "Finland", "description": "ISO-3166-1 numeric country code 246."},
+        "COUNTRY_CH": {"label": "Switzerland", "description": "ISO-3166-1 numeric country code 756."},
+        "COUNTRY_IE": {"label": "Ireland", "description": "ISO-3166-1 numeric country code 372."},
+        "COUNTRY_PL": {"label": "Poland", "description": "ISO-3166-1 numeric country code 616."},
+        "COUNTRY_PT": {"label": "Portugal", "description": "ISO-3166-1 numeric country code 620."},
+        "COUNTRY_AU": {"label": "Australia", "description": "ISO-3166-1 numeric country code 36."},
+        "COUNTRY_NZ": {"label": "New Zealand", "description": "ISO-3166-1 numeric country code 554."},
+        "COUNTRY_JP": {"label": "Japan", "description": "ISO-3166-1 numeric country code 392."},
+        "COUNTRY_CN": {"label": "China", "description": "ISO-3166-1 numeric country code 156."},
+        "COUNTRY_HK": {"label": "Hong Kong", "description": "ISO-3166-1 numeric country code 344."},
+        "COUNTRY_SG": {"label": "Singapore", "description": "ISO-3166-1 numeric country code 702."},
+        "COUNTRY_IN": {"label": "India", "description": "ISO-3166-1 numeric country code 356."},
+        "COUNTRY_AE": {"label": "United Arab Emirates", "description": "ISO-3166-1 numeric country code 784."},
+        "COUNTRY_BR": {"label": "Brazil", "description": "ISO-3166-1 numeric country code 76."},
+        "COUNTRY_ZA": {"label": "South Africa", "description": "ISO-3166-1 numeric country code 710."},
+        "COUNTRY_KR": {"label": "South Korea", "description": "ISO-3166-1 numeric country code 410."},
+        "COUNTRY_MX": {"label": "Mexico", "description": "ISO-3166-1 numeric country code 484."},
+        "COUNTRY_CA": {"label": "Canada", "description": "ISO-3166-1 numeric country code 124."},
+        # Units / colours / conversion / integer sizing
+        "UOM_METER": {"label": "meter (m)", "description": "SI base unit for length."},
+        "UOM_KILOGRAM": {"label": "kilogram (kg)", "description": "SI base unit for mass."},
+        "UOM_SECOND": {"label": "second (s)", "description": "SI base unit for time."},
+        "UOM_AMPERE": {"label": "ampere (A)", "description": "SI base unit for electric current."},
+        "UOM_KELVIN": {"label": "kelvin (K)", "description": "SI base unit for temperature."},
+        "UOM_MOLE": {"label": "mole (mol)", "description": "SI base unit for amount of substance."},
+        "UOM_CANDELA": {"label": "candela (cd)", "description": "SI base unit for luminous intensity."},
+        "UOM_LITER": {"label": "liter (L)", "description": "Metric derived unit for volume."},
+        "UOM_GRAM": {"label": "gram (g)", "description": "Metric unit for mass (1/1000 kilogram)."},
+        "UOM_CELSIUS": {"label": "degree Celsius (°C)", "description": "Metric temperature scale in degrees Celsius."},
+        "COLOR_BLACK": {"label": "Black", "description": "24-bit RGB colour 0x000000."},
+        "COLOR_WHITE": {"label": "White", "description": "24-bit RGB colour 0xFFFFFF."},
+        "COLOR_RED": {"label": "Red", "description": "24-bit RGB colour 0xFF0000."},
+        "COLOR_GREEN": {"label": "Green", "description": "24-bit RGB colour 0x00FF00."},
+        "COLOR_BLUE": {"label": "Blue", "description": "24-bit RGB colour 0x0000FF."},
+        "COLOR_YELLOW": {"label": "Yellow", "description": "24-bit RGB colour 0xFFFF00."},
+        "COLOR_CYAN": {"label": "Cyan", "description": "24-bit RGB colour 0x00FFFF."},
+        "COLOR_MAGENTA": {"label": "Magenta", "description": "24-bit RGB colour 0xFF00FF."},
+        "COLOR_ORANGE": {"label": "Orange", "description": "24-bit RGB colour 0xFFA500."},
+        "COLOR_GRAY": {"label": "Gray", "description": "24-bit RGB colour 0x808080."},
+        "BITS_PER_BYTE": {"label": "Bits per byte", "description": "Number of bits in one byte (8)."},
+        "UINT8_MAX": {"label": "u8 max", "description": "Maximum unsigned 8-bit integer value."},
+        "UINT16_MAX": {"label": "u16 max", "description": "Maximum unsigned 16-bit integer value."},
+        "UINT24_MAX": {"label": "u24 max", "description": "Maximum unsigned 24-bit integer value."},
+        "UINT32_MAX": {"label": "u32 max", "description": "Maximum unsigned 32-bit integer value."},
+        "INT8_MIN": {"label": "i8 min", "description": "Minimum signed 8-bit integer value."},
+        "INT8_MAX": {"label": "i8 max", "description": "Maximum signed 8-bit integer value."},
+        "INT16_MIN": {"label": "i16 min", "description": "Minimum signed 16-bit integer value."},
+        "INT16_MAX": {"label": "i16 max", "description": "Maximum signed 16-bit integer value."},
+        "INT24_MIN": {"label": "i24 min", "description": "Minimum signed 24-bit integer value."},
+        "INT24_MAX": {"label": "i24 max", "description": "Maximum signed 24-bit integer value."},
+        "INT32_MIN": {"label": "i32 min", "description": "Minimum signed 32-bit integer value."},
+        "INT32_MAX": {"label": "i32 max", "description": "Maximum signed 32-bit integer value."},
+        "MASK8": {"label": "8-bit mask", "description": "Bit mask for the low 8 bits (0xFF)."},
+        "MASK16": {"label": "16-bit mask", "description": "Bit mask for the low 16 bits (0xFFFF)."},
+        "MASK24": {"label": "24-bit mask", "description": "Bit mask for the low 24 bits (0xFFFFFF)."},
+        "MASK32": {"label": "32-bit mask", "description": "Bit mask for the low 32 bits (0xFFFFFFFF)."},
+        "SIGN8": {"label": "8-bit sign bit", "description": "Sign bit flag for signed 8-bit values (0x80)."},
+        "SIGN16": {"label": "16-bit sign bit", "description": "Sign bit flag for signed 16-bit values (0x8000)."},
+        "SIGN24": {"label": "24-bit sign bit", "description": "Sign bit flag for signed 24-bit values (0x800000)."},
+        "SIGN32": {"label": "32-bit sign bit", "description": "Sign bit flag for signed 32-bit values (0x80000000)."},
+        "MS_PER_SECOND": {"label": "milliseconds per second", "description": "Unit conversion constant (1000)."},
+        "SECONDS_PER_MINUTE": {"label": "seconds per minute", "description": "Unit conversion constant (60)."},
+        "MINUTES_PER_HOUR": {"label": "minutes per hour", "description": "Unit conversion constant (60)."},
+        "HOURS_PER_DAY": {"label": "hours per day", "description": "Unit conversion constant (24)."},
+        "DAYS_PER_WEEK": {"label": "days per week", "description": "Unit conversion constant (7)."},
+        "BYTES_PER_KIB": {"label": "bytes per KiB", "description": "Binary-size conversion constant (1024)."},
+        "BYTES_PER_MIB": {"label": "bytes per MiB", "description": "Binary-size conversion constant (1,048,576)."},
+        "MM_PER_METER": {"label": "millimetres per metre", "description": "Metric conversion constant (1000)."},
+        "CM_PER_METER": {"label": "centimetres per metre", "description": "Metric conversion constant (100)."},
+        "GRAMS_PER_KILOGRAM": {"label": "grams per kilogram", "description": "Metric conversion constant (1000)."},
+        "PI_Q16": {"label": "pi (Q16.16)", "description": "Pi in fixed-point Q16.16 format."},
+        "RAD_PER_DEG_Q16": {"label": "radians per degree (Q16.16)", "description": "Radians-per-degree in Q16.16 format."},
+        "DEG_PER_RAD_Q16": {"label": "degrees per radian (Q16.16)", "description": "Degrees-per-radian in Q16.16 format."},
+    },
+}
+
+
+def _canonical_named_constant_key(name: str):
+    if not name:
+        return None
+    key = str(name).strip().upper()
+    if key.startswith("METHOD_"):
+        return "HTTP_" + key
+    if key.startswith("STATUS_"):
+        return "HTTP_" + key
+    if key.startswith("HTTPMETHOD."):
+        return "HTTP_METHOD_" + key.split(".", 1)[1]
+    if key.startswith("HTTPSTATUS."):
+        return "HTTP_STATUS_" + key.split(".", 1)[1]
+    if key.startswith("DAY."):
+        return "DAY_" + key.split(".", 1)[1]
+    if key.startswith("MONTH."):
+        return "MONTH_" + key.split(".", 1)[1]
+    if key.startswith("TZ."):
+        return "TZ_" + key.split(".", 1)[1]
+    if key.startswith("TIMEZONE."):
+        return "TZ_" + key.split(".", 1)[1]
+    if key.startswith("DST."):
+        return "DST_" + key.split(".", 1)[1]
+    if key.startswith("CURRENCY."):
+        return "CURRENCY_" + key.split(".", 1)[1]
+    if key.startswith("CURRENCYMINOR."):
+        return "CURRENCY_MINOR_" + key.split(".", 1)[1]
+    if key.startswith("COUNTRY."):
+        return "COUNTRY_" + key.split(".", 1)[1]
+    if key.startswith("UOM."):
+        return "UOM_" + key.split(".", 1)[1]
+    if key.startswith("COLOR."):
+        return "COLOR_" + key.split(".", 1)[1]
+    return key
+
+
+def resolve_named_constant(name: str):
+    """Resolve a language-level named constant to int, or None."""
+    if not name:
+        return None
+    return NAMED_CONSTANTS.get(str(name).strip().upper())
+
+
+def _split_constant_words(canonical: str):
+    return [w for w in str(canonical).strip().replace(".", "_").split("_") if w]
+
+
+def _title_constant(canonical: str):
+    words = _split_constant_words(canonical)
+    return " ".join(w.capitalize() for w in words) if words else str(canonical)
+
+
+def _default_en_constant_meta(canonical: str, value: int):
+    if canonical.startswith("CURRENCY_MINOR_"):
+        code = canonical.split("_", 2)[2]
+        return {
+            "label": f"{code} minor units",
+            "description": f"Decimal places used by {code} currency amounts.",
+        }
+    if canonical.startswith("CURRENCY_"):
+        code = canonical.split("_", 1)[1]
+        return {
+            "label": f"{code} currency",
+            "description": f"ISO-4217 numeric currency code for {code}.",
+        }
+    if canonical.startswith("COUNTRY_"):
+        code = canonical.split("_", 1)[1]
+        return {
+            "label": f"{code} country",
+            "description": f"ISO-3166-1 numeric country code for {code}.",
+        }
+    if canonical.startswith("TZ_"):
+        zone = canonical.split("_", 1)[1]
+        return {
+            "label": zone.replace("_", "/"),
+            "description": "Stable timezone enum ID (host maps this to tzdb rules).",
+        }
+    if canonical.startswith("DST_"):
+        return {
+            "label": _title_constant(canonical.replace("DST_", "DST ")),
+            "description": "Daylight-saving state enum value.",
+        }
+    return {
+        "label": _title_constant(canonical),
+        "description": f"Named constant value {int(value)}.",
+    }
+
+
+def _normalize_meta_entry(entry):
+    if isinstance(entry, dict):
+        out = {}
+        if "label" in entry and entry["label"] is not None:
+            out["label"] = str(entry["label"])
+        if "description" in entry and entry["description"] is not None:
+            out["description"] = str(entry["description"])
+        return out
+    if isinstance(entry, str):
+        return {"label": entry}
+    return {}
+
+
+def _resolve_user_locale_entries(user_dictionary, locale_key: str):
+    if not isinstance(user_dictionary, dict):
+        return {}
+    out = {}
+    for key, value in user_dictionary.items():
+        if isinstance(value, dict) and ("label" in value or "description" in value):
+            out[str(key).strip().upper()] = _normalize_meta_entry(value)
+        elif isinstance(value, str):
+            out[str(key).strip().upper()] = _normalize_meta_entry(value)
+    base = locale_key.split("-", 1)[0]
+    for lk in (locale_key, base):
+        scoped = user_dictionary.get(lk)
+        if not isinstance(scoped, dict):
+            continue
+        for key, value in scoped.items():
+            out[str(key).strip().upper()] = _normalize_meta_entry(value)
+    return out
+
+
+def describe_named_constant(name: str, locale: str = "en", user_dictionary=None):
+    """Return localizable pretty-print metadata for a named constant."""
+    if not name:
+        return None
+    raw = str(name).strip().upper()
+    value = NAMED_CONSTANTS.get(raw)
+    if value is None:
+        return None
+    canonical = _canonical_named_constant_key(raw)
+    locale_key = str(locale or "en")
+    locale_entries = (
+        NAMED_CONSTANT_I18N.get(locale_key)
+        or NAMED_CONSTANT_I18N.get(locale_key.split("-", 1)[0])
+        or NAMED_CONSTANT_I18N.get("en", {})
+    )
+    meta = dict(_default_en_constant_meta(canonical, value))
+    meta.update(NAMED_CONSTANT_I18N.get("en", {}).get(canonical, {}))
+    meta.update(locale_entries.get(canonical, {}))
+    user_entries = _resolve_user_locale_entries(user_dictionary, locale_key)
+    meta.update(user_entries.get(canonical, {}))
+    meta.update(user_entries.get(raw, {}))
+    label = meta.get("label") or canonical
+    description = meta.get("description") or f"Named constant value {int(value)}."
+    return {
+        "name": canonical,
+        "value": int(value),
+        "label": label,
+        "description": description,
+        "locale": locale_key,
+    }
+
+
+def to_locale(name: str, locale: str = "en", user_dictionary=None, include_description: bool = True):
+    """Format a named constant using built-in English metadata plus optional locale overrides."""
+    meta = describe_named_constant(name, locale=locale, user_dictionary=user_dictionary)
+    if meta is None:
+        return None
+    if include_description:
+        return f"{meta['label']} ({meta['value']}): {meta['description']}"
+    return f"{meta['label']} ({meta['value']})"
+
+
+def toLocale(name: str, locale: str = "en", user_dictionary=None, include_description: bool = True):
+    """camelCase alias for to_locale()."""
+    return to_locale(
+        name,
+        locale=locale,
+        user_dictionary=user_dictionary,
+        include_description=include_description,
+    )
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Card address encoding

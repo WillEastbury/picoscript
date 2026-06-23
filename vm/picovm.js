@@ -44,11 +44,68 @@
   // picoscript_vm.CAP_*; pure computation needs none (class 0, always allowed).
   var CAP = { KERNEL: 1, QUEUE: 2, RANDOM: 4, STORAGE: 8, TIME: 16, NET: 32, CONTEXT: 64, AUTH: 128, ENV: 256, CRYPTO: 512, GPIO: 1024, CAPSULE: 2048, DEVICE: 4096, DMA: 8192, EVENT: 16384, UI: 32768, PROCESS: 65536, TIMER: 131072, PRINCIPAL: 262144, CAPSULE_EXEC: 524288 };
   var CAP_ALL = 0xFFFFF;
+  var CONSTANTS = (PV_HOOKS && PV_HOOKS.CONSTANTS) || {};
+  var TZ_BY_ID = {
+    0: "UTC",
+    1: "Europe/London",
+    2: "Europe/Paris",
+    3: "America/New_York",
+    4: "America/Chicago",
+    5: "America/Denver",
+    6: "America/Los_Angeles",
+    7: "Asia/Tokyo",
+    8: "Asia/Singapore",
+    9: "Asia/Hong_Kong",
+    10: "Australia/Sydney",
+    11: "Asia/Dubai"
+  };
+  var CURRENCY_CODE_BY_NUM = {};
+  var CURRENCY_MINOR_BY_CODE = {};
+  Object.keys(CONSTANTS).forEach(function (k) {
+    var v = CONSTANTS[k] | 0;
+    if (k.indexOf("CURRENCY_MINOR_") === 0) {
+      var m = k.slice("CURRENCY_MINOR_".length);
+      if (m.length === 3) CURRENCY_MINOR_BY_CODE[m] = v | 0;
+    } else if (k.indexOf("CURRENCY_") === 0) {
+      var c = k.slice("CURRENCY_".length);
+      if (c.length === 3 && CURRENCY_CODE_BY_NUM[v] === undefined) CURRENCY_CODE_BY_NUM[v] = c;
+    }
+  });
+  function defaultLocaleTag() {
+    if (typeof navigator !== "undefined" && navigator.language) return String(navigator.language);
+    return "en-US";
+  }
+  function defaultTimeZone() {
+    if (typeof Intl !== "undefined" && Intl.DateTimeFormat) {
+      var z = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (z) return String(z);
+    }
+    return "UTC";
+  }
+  function fmtOffset(minutes) {
+    var sign = (minutes >= 0) ? "+" : "-";
+    var n = Math.abs(minutes | 0);
+    var hh = Math.floor(n / 60), mm = n % 60;
+    return sign + String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
+  }
+  function formatScaledInt(value, scale) {
+    var s = scale | 0;
+    if (s < 0) s = 0;
+    if (s > 9) s = 9;
+    var v = value | 0;
+    if (s === 0) return String(v);
+    var sign = v < 0 ? "-" : "";
+    var n = Math.abs(v);
+    var den = Math.pow(10, s);
+    var whole = Math.floor(n / den);
+    var frac = String(n % den).padStart(s, "0");
+    return sign + String(whole) + "." + frac;
+  }
   var CAP_BY_NS = { Kernel: CAP.KERNEL, Queue: CAP.QUEUE, Random: CAP.RANDOM,
     Req: CAP.NET, Resp: CAP.NET, Net: CAP.NET, Storage: CAP.STORAGE, DateTime: CAP.TIME,
     Context: CAP.CONTEXT, Auth: CAP.AUTH, X509: CAP.AUTH, Environment: CAP.ENV, Locale: CAP.ENV, Gpio: CAP.GPIO,
     Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Stream: CAP.DMA, Event: CAP.EVENT, Ui: CAP.UI,
-    Process: CAP.PROCESS, Env: CAP.PROCESS, Timer: CAP.TIMER, Scheduler: CAP.TIMER,
+    Search: CAP.STORAGE, Process: CAP.PROCESS, Env: CAP.PROCESS, Timer: CAP.TIMER, Scheduler: CAP.TIMER,
     Principal: CAP.PRINCIPAL, Capability: CAP.PRINCIPAL, Sandbox: CAP.PRINCIPAL, Capsule: CAP.CAPSULE_EXEC };
   function hookCap(name) {   // "Ns.Method" -> required capability class (0 = pure)
     var dot = name.indexOf("."), ns = name.slice(0, dot), m = name.slice(dot + 1);
@@ -67,6 +124,7 @@
       NET_HEADER_BASE: 0x9000, CONTENT_TYPES: {}, BY_CODE: {} };
     this.maxSteps = opts.maxSteps || 1000000;
     this.caps = (opts.caps !== undefined) ? (opts.caps >>> 0) : CAP_ALL;  // granted bindings (INV-17)
+    this.capCeiling = (opts.capCeiling !== undefined) ? (opts.capCeiling >>> 0) : this.caps;
     this._seed = (opts.seed !== undefined) ? (opts.seed >>> 0) : null;     // host-injected Random.U32 seed (INV-15)
     this.noAlloc = !!opts.noAlloc;          // hot-path no-allocation mode (INV-5)
     // Optional external card store (PicoWAL). Must expose get(addr)->int and
@@ -95,6 +153,7 @@
     this.rng = (this._seed !== null) ? this._seed : (0x4F6CDD1D >>> 0);
     this.hostStatus = 0;                      // INV-18: typed status of the last fallible hook
     this.constFloor = 0x8000;                 // INV-9: lowest literal const-pool address ([floor,0x8000) RO)
+    this.constWritten = {};
     this.mem = new Uint8Array(520 * 1024);   // process arena = RP2350 (Pico 2) 520 KB SRAM
     this.dotLen = 0;                          // active span length for Dot8.Of
     this.tensorRows = 0; this.tensorCols = 0;
@@ -117,6 +176,8 @@
     this.responseMode = null;            // 'unary' | 'stream' (set at Seal / terminal verb)
     this.responseBodyStarted = false;    // first Resp.Write opens the body phase
     this.responseStreamClosed = false;   // Resp.EndStream closes the stream/body phase
+    this._localeTag = defaultLocaleTag();
+    this._localeTimeZone = defaultTimeZone();
     this._handlerMark = null;   // per-request arena scope (auto rewind on each request)
   };
 
@@ -285,7 +346,10 @@
     }
     if (name === "Memory.SetConst") {   // INV-9: compiler-only literal write
       var mc = (this.regs[rs1] >>> 0) % (520 * 1024);
-      this.mem[mc] = this.regs[rs2] & 0xFF;
+      var mb = this.regs[rs2] & 0xFF;
+      if (this.constWritten[mc] && this.mem[mc] !== mb) throw picoFault(FAULT.CONST_WRITE, this.curPc, mc, "conflicting write to read-only literal const region");
+      this.mem[mc] = mb;
+      this.constWritten[mc] = 1;
       if (mc < this.constFloor) this.constFloor = mc;
       return;
     }
@@ -466,7 +530,8 @@
     if (name.indexOf("Error.") === 0) { if (this._errorHook(name.slice(6), rd, rs1, rs2)) return; }
     if (name.indexOf("Capsule.") === 0) { if (this._capsuleExec(name.slice(8), rd, rs1, rs2)) return; }
     if (name.indexOf("Base64.") === 0) { if (this._base64(name.slice(7), rd, rs1, rs2)) return; }
-    if (name === "DateTime.DiffDays" || name === "DateTime.Year" || name === "DateTime.Month" || name === "DateTime.Day") { if (this._datetimeExt(name.slice(9), rd, rs1, rs2)) return; }
+    if (name.indexOf("DateTime.") === 0) { if (this._datetime(name.slice(9), rd, rs1, rs2)) return; }
+    if (name.indexOf("Locale.") === 0) { if (this._localeHook(name.slice(7), rd, rs1, rs2)) return; }
     if (name === "Req.Param" || name === "Req.ParamCount") { if (this._reqParam(name.slice(4), rd, rs1, rs2)) return; }
     this.log.push("host " + name + " R" + rd + " R" + rs1);
   };
@@ -2156,7 +2221,7 @@
       }
       if (method === "Request") {
         var cb2 = this.regs[rs1] >>> 0;
-        if (a.denied & cb2) this.regs[rd] = 0;
+        if ((a.denied & cb2) || (cb2 & ~this.capCeiling)) this.regs[rd] = 0;
         else { this.caps |= cb2; this.regs[rd] = 1; }
         return true;
       }
@@ -2259,15 +2324,201 @@
     return false;
   };
 
+  // -- DateTime core (UTC epoch-seconds storage) ----------------------------
+  PicoVM.prototype._datetime = function (method, rd, rs1, rs2) {
+    if (method === "UtcNow" || method === "Now" || method === "UnixTimestamp") {
+      this.regs[rd] = (Date.now() / 1000) | 0;
+      return true;
+    }
+    if (method === "Parse") {
+      var raw = this._spanStr(this.regs[rs1]).trim();
+      if (!raw) { this.regs[rd] = 0; this.hostStatus = 2; return true; }
+      var sec = 0;
+      if (/^[+-]?\d+$/.test(raw)) sec = parseInt(raw, 10) | 0;
+      else {
+        var iso = raw.endsWith("Z") ? (raw.slice(0, -1) + "+00:00") : raw;
+        if (!/[zZ]|[+-]\d\d:\d\d$/.test(iso)) iso += "+00:00";
+        var ms = Date.parse(iso);
+        if (!isFinite(ms)) { this.regs[rd] = 0; this.hostStatus = 2; return true; }
+        sec = (ms / 1000) | 0;
+      }
+      this.regs[rd] = sec | 0;
+      this.hostStatus = 0;
+      return true;
+    }
+    if (method === "Format") {
+      var secFmt = this.regs[rs1] | 0;
+      var dFmt = new Date(secFmt * 1000);
+      this.regs[rd] = this._newSpanBytes(this._strToBytes(dFmt.toISOString().replace(/\.\d{3}Z$/, "Z")));
+      this.hostStatus = 0;
+      return true;
+    }
+    if (method === "AddSeconds") { this.regs[rd] = ((this.regs[rs1] | 0) + (this.regs[rs2] | 0)) | 0; return true; }
+    if (method === "AddMinutes") { this.regs[rd] = ((this.regs[rs1] | 0) + Math.imul(this.regs[rs2] | 0, 60)) | 0; return true; }
+    if (method === "AddHours") { this.regs[rd] = ((this.regs[rs1] | 0) + Math.imul(this.regs[rs2] | 0, 3600)) | 0; return true; }
+    if (method === "AddDays") { this.regs[rd] = ((this.regs[rs1] | 0) + Math.imul(this.regs[rs2] | 0, 86400)) | 0; return true; }
+    if (method === "GetDayOfWeek") {
+      var dtw = new Date((this.regs[rs1] | 0) * 1000);
+      var dow = dtw.getUTCDay(); if (dow === 0) dow = 7;
+      this.regs[rd] = dow | 0;
+      this.hostStatus = 0;
+      return true;
+    }
+    if (method === "GetDayOfYear") {
+      var dty = new Date((this.regs[rs1] | 0) * 1000);
+      var start = Date.UTC(dty.getUTCFullYear(), 0, 1);
+      this.regs[rd] = (((dty.getTime() - start) / 86400000) | 0) + 1;
+      this.hostStatus = 0;
+      return true;
+    }
+    if (method === "DiffDays" || method === "Year" || method === "Month" || method === "Day") {
+      return this._datetimeExt(method, rd, rs1, rs2);
+    }
+    return false;
+  };
+
+  // -- Locale formatting + timezone conversion -------------------------------
+  PicoVM.prototype._localeHook = function (method, rd, rs1, rs2) {
+    var vm = this;
+    function argText(regValue) {
+      var h = regValue | 0;
+      if (h > 0 && h < vm.spans.length && vm.spans[h]) return vm._spanStr(h).trim();
+      return "";
+    }
+    function argTz(regValue) {
+      if ((regValue | 0) === 0) return "";
+      var txt = argText(regValue);
+      if (txt && (txt.indexOf("/") >= 0 || txt.toUpperCase() === "UTC" || txt.toUpperCase().indexOf("GMT") === 0 || /^[A-Za-z]/.test(txt))) return txt;
+      var id = regValue | 0;
+      return TZ_BY_ID[id] || "";
+    }
+    function validTimeZone(tz) {
+      if (!tz) return false;
+      try {
+        new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date(0));
+        return true;
+      } catch (e) {
+        if (e instanceof RangeError) return false;
+        throw e;
+      }
+    }
+    function tzParts(sec, tz) {
+      var ms = (sec | 0) * 1000;
+      var f = new Intl.DateTimeFormat("en-CA", {
+        timeZone: tz, hour12: false,
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit"
+      });
+      var parts = f.formatToParts(new Date(ms));
+      var out = {};
+      for (var i = 0; i < parts.length; i++) {
+        var p = parts[i];
+        if (p.type === "year" || p.type === "month" || p.type === "day" ||
+            p.type === "hour" || p.type === "minute" || p.type === "second") {
+          out[p.type] = parseInt(p.value, 10) | 0;
+        }
+      }
+      return out;
+    }
+    function tzOffsetMinutes(sec, tz) {
+      var ms = (sec | 0) * 1000;
+      var p = tzParts(sec, tz);
+      var asUtc = Date.UTC(p.year, (p.month | 0) - 1, p.day | 0, p.hour | 0, p.minute | 0, p.second | 0);
+      return ((asUtc - ms) / 60000) | 0;
+    }
+    function currencyCode(regValue) {
+      var txt = argText(regValue).toUpperCase();
+      if (/^[A-Z]{3}$/.test(txt)) return txt;
+      return CURRENCY_CODE_BY_NUM[regValue | 0] || "USD";
+    }
+
+    if (method === "SetLocale") {
+      var localeSpec = argText(this.regs[rs1]);
+      var localeTag = this._localeTag;
+      var tzName = this._localeTimeZone;
+      if (localeSpec) {
+        var at = localeSpec.indexOf("@");
+        if (at >= 0) {
+          var l = localeSpec.slice(0, at).trim();
+          var t = localeSpec.slice(at + 1).trim();
+          if (l) localeTag = l;
+          if (t) tzName = t;
+        } else {
+          localeTag = localeSpec;
+        }
+      }
+      var tzArg = argTz(this.regs[rs2]);
+      if (tzArg) tzName = tzArg;
+      if (!validTimeZone(tzName)) {
+        this.hostStatus = 2;
+        this.regs[rd] = 0;
+        return true;
+      }
+      this._localeTag = localeTag || this._localeTag;
+      this._localeTimeZone = tzName;
+      this.hostStatus = 0;
+      this.regs[rd] = 1;
+      return true;
+    }
+    if (method === "GetCurrentLocale") {
+      this.regs[rd] = this._newSpanBytes(this._strToBytes(this._localeTag + "@" + this._localeTimeZone));
+      return true;
+    }
+    if (method === "FormatNumber") {
+      this.regs[rd] = this._newSpanBytes(this._strToBytes(formatScaledInt(this.regs[rs1] | 0, this.regs[rs2] | 0)));
+      this.hostStatus = 0;
+      return true;
+    }
+    if (method === "FormatCurrency") {
+      var code = currencyCode(this.regs[rs2]);
+      var scale = CURRENCY_MINOR_BY_CODE[code];
+      if (scale === undefined) scale = 2;
+      var cur = code + " " + formatScaledInt(this.regs[rs1] | 0, scale);
+      this.regs[rd] = this._newSpanBytes(this._strToBytes(cur));
+      this.hostStatus = 0;
+      return true;
+    }
+    if (method === "FormatDate" || method === "FormatTime") {
+      var sec = this.regs[rs1] | 0;
+      var tz = argTz(this.regs[rs2]) || this._localeTimeZone;
+      if (!validTimeZone(tz)) {
+        this.hostStatus = 2;
+        this.regs[rd] = this._newSpanBytes([]);
+        return true;
+      }
+      var p = tzParts(sec, tz);
+      var offset = fmtOffset(tzOffsetMinutes(sec, tz));
+      var text;
+      if (method === "FormatDate") text = String(p.year).padStart(4, "0") + "-" + String(p.month).padStart(2, "0") + "-" + String(p.day).padStart(2, "0") + " " + offset;
+      else text = String(p.hour).padStart(2, "0") + ":" + String(p.minute).padStart(2, "0") + ":" + String(p.second).padStart(2, "0") + " " + offset;
+      this.regs[rd] = this._newSpanBytes(this._strToBytes(text));
+      this.hostStatus = 0;
+      return true;
+    }
+    if (method === "Translate") {
+      var key = argText(this.regs[rs1]);
+      var localeOverride = argText(this.regs[rs2]) || this._localeTag;
+      var translated = key;
+      if (PV_HOOKS && typeof PV_HOOKS.toLocale === "function") {
+        var v = PV_HOOKS.toLocale(key, localeOverride, null, false);
+        if (v) translated = v;
+      }
+      this.regs[rd] = this._newSpanBytes(this._strToBytes(translated));
+      this.hostStatus = translated ? 0 : 2;
+      return true;
+    }
+    return false;
+  };
+
   // -- DateTime extended (DiffDays/Year/Month/Day) (mirrors HostApi._datetime_ext) ----
   PicoVM.prototype._datetimeExt = function (method, rd, rs1, rs2) {
     if (method === "DiffDays") {
       var a = this.regs[rs1] | 0, b = this.regs[rs2] | 0;
-      this.regs[rd] = ((a - b) / 86400000) | 0;
+      this.regs[rd] = ((a - b) / 86400) | 0;
       return true;
     }
-    var ms = this.regs[rs1] | 0;
-    var dt = new Date(ms);
+    var sec = this.regs[rs1] | 0;
+    var dt = new Date(sec * 1000);
     if (method === "Year") { this.regs[rd] = dt.getUTCFullYear(); return true; }
     if (method === "Month") { this.regs[rd] = dt.getUTCMonth() + 1; return true; }
     if (method === "Day") { this.regs[rd] = dt.getUTCDate(); return true; }
@@ -2443,9 +2694,10 @@
         job.res.end(response.body);
       })
       .catch(function (err) {
+        if (err) console.error(err && err.stack ? err.stack : err);
         job.res.statusCode = 500;
         job.res.setHeader("content-type", "text/plain; charset=utf-8");
-        job.res.end(String((err && err.stack) || err));
+        job.res.end("internal server error");
       })
       .finally(function () {
         self._resetWorker(worker);

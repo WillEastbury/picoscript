@@ -72,6 +72,54 @@ BASIC has idiomatic forms for several namespaces. Prefer `PRINT`, `STORE`,
 `LOAD`, `GPIO`, `UI`, and `EVENT` when writing BASIC examples; use dotted
 `Namespace.Method(...)` calls when you are writing C-style code.
 
+## 3b. Use named constants, enums, and localization
+
+Built-in constants are available in every frontend. For HTTP:
+
+```c
+Resp.Status(HTTP_STATUS_NOT_FOUND);
+```
+
+You can also declare your own compile-time constants and enums:
+
+```basic
+CONST RETRY = 3
+ENUM HTTPCODE
+OK = 200
+CREATED = 201
+ACCEPTED
+ENDENUM
+PRINT HTTPCODE_OK
+```
+
+For cross-language source, prefer `ENUMNAME_MEMBER` (for example
+`HTTPCODE_OK`). C-style also supports dotted enum member syntax.
+
+For pretty labels/descriptions, use `toLocale`:
+
+```python
+from picoscript_lang import toLocale
+
+print(toLocale("CURRENCY_USD"))
+print(toLocale("TZ_EUROPE_LONDON", "en-GB", {
+    "en-GB": {"TZ_EUROPE_LONDON": {"label": "UK time"}}
+}))
+```
+
+In browser runtime hooks, the same helper exists as `PV_HOOKS.toLocale(...)`.
+See `docs/NAMED_CONSTANTS.md` for the standard catalog.
+
+For runtime locale/timezone formatting in PicoScript itself:
+
+```c
+int lang = "en-GB";
+int tz = "UTC";
+Locale.SetLocale(lang, tz);
+Io.Write(Locale.GetCurrentLocale());
+Io.Write(Locale.FormatDate(0, 0));   // UTC epoch-seconds -> date + offset
+Io.Write(Locale.FormatTime(0, 0));   // UTC epoch-seconds -> time + offset
+```
+
 ## 4. Strings are spans
 
 Most library calls take and return **spans**: handles to bytes in the VM arena.

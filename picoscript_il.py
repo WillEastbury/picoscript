@@ -27,6 +27,7 @@ from dataclasses import dataclass, field, replace
 from typing import List, Optional, Tuple, Union, Dict
 
 import hashlib
+import json
 
 import picoscript as isa
 from picoscript_lang import (
@@ -1006,8 +1007,34 @@ def symbolize(code, pc, detail, debug=None, source: str = "") -> dict:
 # Backend 2: lower to portable C (toC -- native Thumb / AArch64 via host cc)
 # ═══════════════════════════════════════════════════════════════════════════
 
+_RESERVED_IDENTIFIERS = {
+    "auto", "break", "case", "char", "const", "continue", "default", "do",
+    "double", "else", "enum", "extern", "float", "for", "goto", "if",
+    "inline", "int", "long", "register", "restrict", "return", "short",
+    "signed", "sizeof", "static", "struct", "switch", "typedef", "union",
+    "unsigned", "void", "volatile", "while",
+    "await", "class", "debugger", "delete", "export", "extends", "finally",
+    "function", "import", "in", "instanceof", "let", "new", "super", "this",
+    "throw", "try", "typeof", "var", "with", "yield",
+}
+
+
 def _c_ident(label: str) -> str:
-    return "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in label)
+    ident = "".join(ch if (ch.isascii() and (ch.isalnum() or ch == "_")) else "_" for ch in str(label))
+    if not ident or ident[0].isdigit() or ident in _RESERVED_IDENTIFIERS:
+        ident = "_" + ident
+    return ident
+
+
+def _c_string(text: str) -> str:
+    return (
+        str(text)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
 
 
 def lower_to_c(insts: List[Inst], func_name: str = "pico_main", opt: bool = True,
@@ -1027,7 +1054,7 @@ def lower_to_c(insts: List[Inst], func_name: str = "pico_main", opt: bool = True
     if opt:
         insts = optimize(insts)
 
-    module = func_name
+    module = _c_ident(func_name)
     call_targets = {ins.label for ins in insts if ins.op == "call"}
 
     # Split the linear IL into functions at call-target labels.
@@ -1120,11 +1147,13 @@ def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool) -> str:
     if op in ARITH:
         sym = {"add": "+", "sub": "-", "mul": "*", "div": "/"}[op]
         if op == "div":
-            return (f"    {name_of(ins.dst)} = ({opnd(ins.b)} != 0) ? "
-                    f"({opnd(ins.a)} / {opnd(ins.b)}) : 0;")
-        return f"    {name_of(ins.dst)} = {opnd(ins.a)} {sym} {opnd(ins.b)};"
+            return (f"    {name_of(ins.dst)} = ((int32_t)({opnd(ins.b)}) != 0) ? "
+                    f"(((int32_t)({opnd(ins.a)}) == (int32_t)0x80000000u && (int32_t)({opnd(ins.b)}) == -1) ? "
+                    f"(int64_t)(int32_t)0x80000000u : "
+                    f"(int64_t)(int32_t)((int32_t)({opnd(ins.a)}) / (int32_t)({opnd(ins.b)}))) : 0;")
+        return f"    {name_of(ins.dst)} = (int64_t)(int32_t)((uint32_t)({opnd(ins.a)}) {sym} (uint32_t)({opnd(ins.b)}));"
     if op == "inc":
-        return f"    {name_of(ins.dst)} += 1;"
+        return f"    {name_of(ins.dst)} = (int64_t)(int32_t)((uint32_t)({name_of(ins.dst)}) + 1u);"
     if op == "cmpbr":
         csym = {"EQ": "==", "NE": "!=", "LT": "<", "GT": ">", "LE": "<=", "GE": ">="}
         tgt = _c_ident(ins.label)
@@ -1187,7 +1216,7 @@ def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool) -> str:
         code = HOST_HOOK_CODES.get((ins.ns, ins.method))
         if code is not None:
             return f"    {dst}pv_host2(ctx, 0x{code:X}, {a}, {b});"
-        return f"    {dst}pv_host(ctx, \"{ins.ns}\", \"{ins.method}\", {a}, {b});"
+        return f"    {dst}pv_host(ctx, \"{_c_string(ins.ns)}\", \"{_c_string(ins.method)}\", {a}, {b});"
     if op == "load":
         return f"    {name_of(ins.dst)} = pv_load(ctx, {ins.imm});"
     if op == "save":
@@ -1198,7 +1227,7 @@ def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool) -> str:
         if ins.method == "status":
             return f"    pv_net_status(ctx, {ins.imm});"
         if ins.method == "type":
-            return f"    pv_net_type(ctx, \"{ins.text}\");"
+            return f"    pv_net_type(ctx, \"{_c_string(ins.text)}\");"
         if ins.method == "body":
             return "    pv_net_body(ctx);"
         if ins.method == "close":
@@ -1234,6 +1263,7 @@ def lower_to_js(insts: List[Inst], module_name: str = "pico", opt: bool = True) 
     provenance = _provenance_header("//", "js", insts)
     if opt:
         insts = optimize(insts)
+    module_name = _c_ident(module_name)
 
     call_targets = {ins.label for ins in insts if ins.op == "call"}
     # split into functions at call-target labels (entry = main)
@@ -1459,7 +1489,7 @@ def _emit_js_inst(ins: Inst, jop, jname, label_block, label_to_func) -> Tuple[st
         code = HOST_HOOK_CODES.get((ins.ns, ins.method))
         if code is not None:
             return f'{dst}rt.host(0x{code:X}, {a}, {b});', False
-        return f'{dst}rt.host("{ins.ns}", "{ins.method}", {a}, {b});', False
+        return f'{dst}rt.host({json.dumps(ins.ns)}, {json.dumps(ins.method)}, {a}, {b});', False
     if op == "load":
         return f"{jname(ins.dst)} = rt.load({ins.imm});", False
     if op == "save":
@@ -1470,7 +1500,7 @@ def _emit_js_inst(ins: Inst, jop, jname, label_block, label_to_func) -> Tuple[st
         if ins.method == "status":
             return f"rt.netStatus({ins.imm});", False
         if ins.method == "type":
-            return f'rt.netType("{ins.text}");', False
+            return f'rt.netType({json.dumps(ins.text)});', False
         if ins.method == "body":
             return "rt.netBody();", False
         if ins.method == "close":

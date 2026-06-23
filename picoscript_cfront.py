@@ -32,13 +32,13 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Union, Dict
 
 from picoscript_il import ILBuilder, VReg, Imm, COND, COND_NEGATE, canon_host
-from picoscript_lang import encode_card_addr
+from picoscript_lang import encode_card_addr, resolve_named_constant
 
 # ── tokens ──────────────────────────────────────────────────────────────────
 
 KEYWORDS = {"int", "var", "void", "if", "else", "while", "for", "return",
             "break", "continue", "switch", "case", "default", "do", "goto",
-            "dispatch"}
+            "dispatch", "const", "enum"}
 
 # C-frontend aliases: libc-style spellings -> canonical (ns, method). Pure frontend
 # sugar -- resolves to the same host call, so bytecode/output is identical on all five
@@ -162,6 +162,12 @@ class Call:
 @dataclass
 class Decl:
     name: str; init: object
+@dataclass
+class ConstDecl:
+    name: str; value: object
+@dataclass
+class EnumDecl:
+    enum_name: str; members: list   # members=[(name, value_expr_or_None), ...]
 @dataclass
 class Assign:
     name: str; value: object
@@ -298,6 +304,10 @@ class Parser:
         if t.kind == "kw":
             if t.value in ("int", "var"):
                 return self.parse_decl()
+            if t.value == "const":
+                return self.parse_const_decl()
+            if t.value == "enum":
+                return self.parse_enum_decl()
             if t.value == "if":
                 return self.parse_if()
             if t.value == "while":
@@ -380,6 +390,33 @@ class Parser:
     def parse_decl(self) -> Decl:
         self.next()  # int / var
         return self.parse_decl_after_type()
+
+    def parse_const_decl(self) -> ConstDecl:
+        self.next()  # const
+        if self.peek().kind == "kw" and self.peek().value in ("int", "var"):
+            self.next()
+        name = self.next().value
+        self.expect("=")
+        value = self.parse_expr()
+        self.expect(";")
+        return ConstDecl(name, value)
+
+    def parse_enum_decl(self) -> EnumDecl:
+        self.next()  # enum
+        enum_name = self.next().value
+        self.expect("{")
+        members = []
+        while not self.accept("}"):
+            if self.peek().kind == "eof":
+                raise SyntaxError("unterminated enum declaration")
+            member_name = self.next().value
+            member_value = None
+            if self.accept("="):
+                member_value = self.parse_expr()
+            members.append((member_name, member_value))
+            self.accept(",")
+        self.expect(";")
+        return EnumDecl(enum_name, members)
 
     def parse_decl_after_type(self) -> Decl:
         name = self.next().value
@@ -590,6 +627,7 @@ class Lowerer:
         self.b = ILBuilder()
         self.vars: Dict[str, VReg] = {}
         self.funcs: List[Func] = []
+        self.user_constants: Dict[str, int] = {}
         self.loop_stack: List[Tuple[str, str]] = []   # (continue_label, break_label)
         # String-literal constant pool: each distinct literal is interned to its own
         # stable address (deduped), growing DOWN from the bump-arena base 0x8000 so
@@ -638,6 +676,10 @@ class Lowerer:
                 self.assign_to(v, s.init)
             else:
                 self.b.const(v, 0)
+        elif isinstance(s, ConstDecl):
+            self._define_constant(s.name, s.value)
+        elif isinstance(s, EnumDecl):
+            self._define_enum(s.enum_name, s.members)
         elif isinstance(s, Assign):
             self.assign_to(self.var(s.name), s.value)
         elif isinstance(s, FieldAssign):
@@ -680,6 +722,64 @@ class Lowerer:
                 self.stmt(st)
         else:
             raise SyntaxError(f"cannot lower statement {s}")
+
+    def _resolve_constant(self, name: str):
+        key = str(name).strip().upper()
+        if key in self.user_constants:
+            return self.user_constants[key]
+        return resolve_named_constant(name)
+
+    def _eval_const_expr(self, expr) -> int:
+        if isinstance(expr, Num):
+            return int(expr.value)
+        if isinstance(expr, Var):
+            cv = self._resolve_constant(expr.name)
+            if cv is None:
+                raise SyntaxError(f"unknown constant {expr.name!r} in constant expression")
+            return int(cv)
+        if isinstance(expr, FieldRef):
+            cv = self._resolve_constant(f"{expr.obj}.{expr.field}")
+            if cv is None:
+                raise SyntaxError(f"unknown constant {expr.obj}.{expr.field!r} in constant expression")
+            return int(cv)
+        if isinstance(expr, Unary):
+            if expr.op == "-":
+                return -self._eval_const_expr(expr.operand)
+            raise SyntaxError(f"unsupported unary op {expr.op!r} in constant expression")
+        if isinstance(expr, Bin):
+            a = self._eval_const_expr(expr.lhs)
+            b = self._eval_const_expr(expr.rhs)
+            if expr.op == "+":
+                return a + b
+            if expr.op == "-":
+                return a - b
+            if expr.op == "*":
+                return a * b
+            if expr.op == "/":
+                if b == 0:
+                    raise SyntaxError("division by zero in constant expression")
+                return int(a / b)
+            if expr.op == "%":
+                if b == 0:
+                    raise SyntaxError("modulo by zero in constant expression")
+                return a - int(a / b) * b
+        raise SyntaxError(f"unsupported constant expression {type(expr).__name__}")
+
+    def _define_constant(self, name: str, value_expr):
+        self.user_constants[str(name).strip().upper()] = int(self._eval_const_expr(value_expr))
+
+    def _define_enum(self, enum_name: str, members):
+        enum_key = str(enum_name).strip().upper()
+        cur = -1
+        for member_name, value_expr in members:
+            if value_expr is None:
+                cur += 1
+            else:
+                cur = int(self._eval_const_expr(value_expr))
+            member_key = str(member_name).strip().upper()
+            self.user_constants[member_key] = cur
+            self.user_constants[f"{enum_key}_{member_key}"] = cur
+            self.user_constants[f"{enum_key}.{member_key}"] = cur
 
     def assign_to(self, dst: VReg, expr):
         # Fast path: dst = a OP b  with immediate RHS -> single arith op.
@@ -840,6 +940,9 @@ class Lowerer:
         if isinstance(e, Num):
             v = self.b.vreg(); self.b.const(v, e.value); return v
         if isinstance(e, Var):
+            cv = self._resolve_constant(e.name)
+            if cv is not None:
+                v = self.b.vreg(); self.b.const(v, cv); return v
             return self.var(e.name)
         if isinstance(e, Bin):
             if e.op in _CMP_OPS:
@@ -874,6 +977,9 @@ class Lowerer:
         if isinstance(e, Str):
             return self.emit_str_span(e.value)
         if isinstance(e, FieldRef):
+            cv = self._resolve_constant(f"{e.obj}.{e.field}")
+            if cv is not None:
+                v = self.b.vreg(); self.b.const(v, cv); return v
             card = self.var(e.obj)
             self.b.host("Storage", "EditCard", (card,), None)
             name = self.emit_str_span(e.field)

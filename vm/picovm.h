@@ -136,6 +136,7 @@ struct pv_ctx {
     int       no_alloc;        /* when set, arena allocation in a hook faults (INV-5 hot path) */
     int       host_status;     /* INV-18: typed status of the last fallible hook (0 = OK) */
     uint32_t  const_floor;     /* INV-9: lowest literal const-pool address; [floor,0x8000) is RO */
+    uint8_t   const_used[4096];/* bitset for initialized literal const bytes below 0x8000 */
 
     /* simple in-VM queues for the default host (Queue.*) */
     int32_t   queues[8][64];
@@ -185,9 +186,26 @@ static inline int32_t pv_mem_get(pv_ctx *ctx, uint32_t addr)
 {
     return ctx->mem_size ? (int32_t)ctx->mem[addr % (uint32_t)ctx->mem_size] : 0;
 }
+static inline int pv_const_used(pv_ctx *ctx, uint32_t addr)
+{
+    return addr < 0x8000u ? (ctx->const_used[addr >> 3] & (uint8_t)(1u << (addr & 7))) != 0 : 0;
+}
+static inline void pv_const_mark(pv_ctx *ctx, uint32_t addr)
+{
+    if (addr < 0x8000u) ctx->const_used[addr >> 3] |= (uint8_t)(1u << (addr & 7));
+}
 static inline void pv_mem_set(pv_ctx *ctx, uint32_t addr, int32_t val)
 {
-    if (ctx->mem_size) ctx->mem[addr % (uint32_t)ctx->mem_size] = (uint8_t)(val & 0xFF);
+    if (!ctx->mem_size) return;
+    addr %= (uint32_t)ctx->mem_size;
+    if (addr >= ctx->const_floor && addr < 0x8000u) {
+        ctx->fault = PV_FAULT_CONST_WRITE;
+        ctx->fault_pc = ctx->cur_pc;
+        ctx->fault_detail = (int)addr;
+        ctx->halted = 1;
+        return;
+    }
+    ctx->mem[addr] = (uint8_t)(val & 0xFF);
 }
 static inline void pv_io_write(pv_ctx *ctx, int32_t b)
 {

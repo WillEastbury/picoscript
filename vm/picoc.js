@@ -40,6 +40,45 @@
   Object.keys(H.CONTENT_TYPES).forEach(function (v) {
     CT_BY_NAME[H.CONTENT_TYPES[v]] = parseInt(v, 10);
   });
+  var NAMED_CONSTANTS = {
+    // HTTP methods (Req.Method)
+    "HTTP_METHOD_GET": 1, "HTTP_METHOD_POST": 2, "HTTP_METHOD_PUT": 3,
+    "HTTP_METHOD_DELETE": 4, "HTTP_METHOD_HEAD": 5, "HTTP_METHOD_PATCH": 6,
+    "HTTP_METHOD_OPTIONS": 7, "HTTP_METHOD_CONNECT": 8, "HTTP_METHOD_TRACE": 9,
+    "METHOD_GET": 1, "METHOD_POST": 2, "METHOD_PUT": 3,
+    "METHOD_DELETE": 4, "METHOD_HEAD": 5, "METHOD_PATCH": 6,
+    "METHOD_OPTIONS": 7, "METHOD_CONNECT": 8, "METHOD_TRACE": 9,
+    "HTTPMETHOD.GET": 1, "HTTPMETHOD.POST": 2, "HTTPMETHOD.PUT": 3,
+    "HTTPMETHOD.DELETE": 4, "HTTPMETHOD.HEAD": 5, "HTTPMETHOD.PATCH": 6,
+    "HTTPMETHOD.OPTIONS": 7, "HTTPMETHOD.CONNECT": 8, "HTTPMETHOD.TRACE": 9,
+    // HTTP statuses (Resp.Status)
+    "HTTP_STATUS_OK": 200, "HTTP_STATUS_CREATED": 201, "HTTP_STATUS_ACCEPTED": 202,
+    "HTTP_STATUS_NO_CONTENT": 204, "HTTP_STATUS_BAD_REQUEST": 400,
+    "HTTP_STATUS_UNAUTHORIZED": 401, "HTTP_STATUS_FORBIDDEN": 403,
+    "HTTP_STATUS_NOT_FOUND": 404, "HTTP_STATUS_CONFLICT": 409,
+    "HTTP_STATUS_UNPROCESSABLE_ENTITY": 422, "HTTP_STATUS_TOO_MANY_REQUESTS": 429,
+    "HTTP_STATUS_INTERNAL_SERVER_ERROR": 500, "HTTP_STATUS_NOT_IMPLEMENTED": 501,
+    "HTTP_STATUS_BAD_GATEWAY": 502, "HTTP_STATUS_SERVICE_UNAVAILABLE": 503,
+    "STATUS_OK": 200, "STATUS_CREATED": 201, "STATUS_ACCEPTED": 202,
+    "STATUS_NO_CONTENT": 204, "STATUS_BAD_REQUEST": 400, "STATUS_UNAUTHORIZED": 401,
+    "STATUS_FORBIDDEN": 403, "STATUS_NOT_FOUND": 404, "STATUS_CONFLICT": 409,
+    "STATUS_UNPROCESSABLE_ENTITY": 422, "STATUS_TOO_MANY_REQUESTS": 429,
+    "STATUS_INTERNAL_SERVER_ERROR": 500, "STATUS_NOT_IMPLEMENTED": 501,
+    "STATUS_BAD_GATEWAY": 502, "STATUS_SERVICE_UNAVAILABLE": 503,
+    "HTTPSTATUS.OK": 200, "HTTPSTATUS.CREATED": 201, "HTTPSTATUS.ACCEPTED": 202,
+    "HTTPSTATUS.NO_CONTENT": 204, "HTTPSTATUS.BAD_REQUEST": 400,
+    "HTTPSTATUS.UNAUTHORIZED": 401, "HTTPSTATUS.FORBIDDEN": 403,
+    "HTTPSTATUS.NOT_FOUND": 404, "HTTPSTATUS.CONFLICT": 409,
+    "HTTPSTATUS.UNPROCESSABLE_ENTITY": 422, "HTTPSTATUS.TOO_MANY_REQUESTS": 429,
+    "HTTPSTATUS.INTERNAL_SERVER_ERROR": 500, "HTTPSTATUS.NOT_IMPLEMENTED": 501,
+    "HTTPSTATUS.BAD_GATEWAY": 502, "HTTPSTATUS.SERVICE_UNAVAILABLE": 503
+  };
+  Object.keys(H.CONSTANTS || {}).forEach(function (k) { NAMED_CONSTANTS[k.toUpperCase()] = H.CONSTANTS[k] | 0; });
+  function namedConstant(name) {
+    if (name == null) return null;
+    var key = String(name).toUpperCase();
+    return Object.prototype.hasOwnProperty.call(NAMED_CONSTANTS, key) ? (NAMED_CONSTANTS[key] | 0) : null;
+  }
   function canonHost(ns, m) {
     return HOOK_CANON[(ns + "." + m).toLowerCase()] || [ns, m];
   }
@@ -460,7 +499,7 @@
   // ========================================================================
   // C-SYNTAX FRONTEND (port of picoscript_cfront.py)
   // ========================================================================
-  var C_KW = { int:1, var:1, void:1, if:1, else:1, while:1, for:1, return:1, break:1, continue:1, switch:1, case:1, default:1, do:1, goto:1, dispatch:1 };
+  var C_KW = { int:1, var:1, void:1, if:1, else:1, while:1, for:1, return:1, break:1, continue:1, switch:1, case:1, default:1, do:1, goto:1, dispatch:1, const:1, enum:1 };
   var C_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "&&":1, "||":1, "++":1, "--":1, "+=":1, "-=":1, "*=":1, "/=":1, "%=":1 };
   var C_ONE = "+-*/%()<>=;,{}.!?:";
   var C_PREC = { "||":1, "&&":2, "==":3, "!=":3, "<":4, ">":4, "<=":4, ">=":4, "+":5, "-":5, "*":6, "/":6, "%":6 };
@@ -530,6 +569,8 @@
       var t = this.peek();
       if (t.kind === "kw") {
         if (t.value === "int" || t.value === "var") return this.parseDecl();
+        if (t.value === "const") return this.parseConstDecl();
+        if (t.value === "enum") return this.parseEnumDecl();
         if (t.value === "if") return this.parseIf();
         if (t.value === "while") return this.parseWhile();
         if (t.value === "for") return this.parseFor();
@@ -564,6 +605,31 @@
       var e = this.parseExpr(); this.expect(";"); return { t: "ExprStmt", expr: e };
     },
     parseDecl: function () { this.next(); return this.parseDeclAfterType(); },
+    parseConstDecl: function () {
+      this.next(); // const
+      if (this.peek().kind === "kw" && (this.peek().value === "int" || this.peek().value === "var")) this.next();
+      var name = this.next().value;
+      this.expect("=");
+      var value = this.parseExpr();
+      this.expect(";");
+      return { t: "ConstDecl", name: name, value: value };
+    },
+    parseEnumDecl: function () {
+      this.next(); // enum
+      var enumName = this.next().value;
+      this.expect("{");
+      var members = [];
+      while (!this.accept("}")) {
+        if (this.peek().kind === "eof") throw new Error("C: unterminated enum declaration");
+        var memberName = this.next().value;
+        var memberValue = null;
+        if (this.accept("=")) memberValue = this.parseExpr();
+        members.push([memberName, memberValue]);
+        this.accept(",");
+      }
+      this.expect(";");
+      return { t: "EnumDecl", enum_name: enumName, members: members };
+    },
     parseDeclAfterType: function () { var name = this.next().value; var init = null; if (this.accept("=")) init = this.parseExpr(); this.expect(";"); return { t: "Decl", name: name, init: init }; },
     parseDeclNoSemi: function () { this.next(); var name = this.next().value; var init = null; if (this.accept("=")) init = this.parseExpr(); this.expect(";"); return { t: "Decl", name: name, init: init }; },
     parseIf: function () {
@@ -699,9 +765,62 @@
     return span;
   }
 
-  function CLowerer() { this.b = new ILBuilder(); this.vars = {}; this.funcs = []; this.loop = []; this._strlitN = 0; }
+  function CLowerer() { this.b = new ILBuilder(); this.vars = {}; this.funcs = []; this.loop = []; this._strlitN = 0; this.userConstants = {}; }
   CLowerer.prototype = {
     varOf: function (name) { var k = name.toLowerCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
+    resolveConstant: function (name) {
+      var key = String(name).trim().toUpperCase();
+      if (Object.prototype.hasOwnProperty.call(this.userConstants, key)) return this.userConstants[key] | 0;
+      return namedConstant(name);
+    },
+    evalConstExpr: function (e) {
+      if (e.t === "Num") return e.value | 0;
+      if (e.t === "Var") {
+        var cv = this.resolveConstant(e.name);
+        if (cv === null) throw new Error("unknown constant " + e.name + " in constant expression");
+        return cv | 0;
+      }
+      if (e.t === "FieldRef") {
+        var fv = this.resolveConstant(e.obj + "." + e.field);
+        if (fv === null) throw new Error("unknown constant " + e.obj + "." + e.field + " in constant expression");
+        return fv | 0;
+      }
+      if (e.t === "Unary") {
+        if (e.op === "-") return -this.evalConstExpr(e.operand);
+        throw new Error("unsupported unary op " + e.op + " in constant expression");
+      }
+      if (e.t === "Bin") {
+        var a = this.evalConstExpr(e.lhs), b = this.evalConstExpr(e.rhs);
+        if (e.op === "+") return (a + b) | 0;
+        if (e.op === "-") return (a - b) | 0;
+        if (e.op === "*") return (a * b) | 0;
+        if (e.op === "/") {
+          if (b === 0) throw new Error("division by zero in constant expression");
+          return (a / b) | 0;
+        }
+        if (e.op === "%") {
+          if (b === 0) throw new Error("modulo by zero in constant expression");
+          return (a - ((a / b) | 0) * b) | 0;
+        }
+      }
+      throw new Error("unsupported constant expression " + e.t);
+    },
+    defineConstant: function (name, expr) {
+      this.userConstants[String(name).trim().toUpperCase()] = this.evalConstExpr(expr) | 0;
+    },
+    defineEnum: function (enumName, members) {
+      var ek = String(enumName).trim().toUpperCase();
+      var cur = -1;
+      for (var i = 0; i < members.length; i++) {
+        var mname = members[i][0];
+        var mexpr = members[i][1];
+        cur = (mexpr == null) ? (cur + 1) : (this.evalConstExpr(mexpr) | 0);
+        var mk = String(mname).trim().toUpperCase();
+        this.userConstants[mk] = cur;
+        this.userConstants[ek + "_" + mk] = cur;
+        this.userConstants[ek + "." + mk] = cur;
+      }
+    },
     lowerProgram: function (prog) {
       var self = this, body = [];
       this._funcParams = {};
@@ -720,6 +839,8 @@
       var self = this;
       if (typeof s.pos === "number" && s.pos >= 0) this.b.curPos = s.pos;   // INV-25
       if (s.t === "Decl") { var v = this.varOf(s.name); if (s.init != null) this.assignTo(v, s.init); else this.b.const_(v, 0); }
+      else if (s.t === "ConstDecl") this.defineConstant(s.name, s.value);
+      else if (s.t === "EnumDecl") this.defineEnum(s.enum_name, s.members || []);
       else if (s.t === "Assign") this.assignTo(this.varOf(s.name), s.value);
       else if (s.t === "FieldAssign") this.assignField(s.obj, s.field, s.value);
       else if (s.t === "If") this.lowerIf(s);
@@ -827,7 +948,11 @@
     eval: function (e, want) {
       if (want === undefined) want = true;
       if (e.t === "Num") { var v = this.b.vreg(); this.b.const_(v, e.value); return v; }
-      if (e.t === "Var") return this.varOf(e.name);
+      if (e.t === "Var") {
+        var cv = this.resolveConstant(e.name);
+        if (cv !== null) { var vv = this.b.vreg(); this.b.const_(vv, cv); return vv; }
+        return this.varOf(e.name);
+      }
       if (e.t === "Raw") return e.v;
       if (e.t === "Bin") {
         if (CMP[e.op]) return this.evalBool(e);
@@ -846,7 +971,11 @@
       }
       if (e.t === "Call") return this.lowerCall(e, want);
       if (e.t === "Str") return emitStrSpan(this, e.value);
-      if (e.t === "FieldRef") { var card = this.varOf(e.obj); this.b.host("Storage", "EditCard", [card], null); var name = emitStrSpan(this, e.field); var fd = this.b.vreg(); this.b.host("Storage", "GetField", [name], fd); return fd; }
+      if (e.t === "FieldRef") {
+        var fv = this.resolveConstant(e.obj + "." + e.field);
+        if (fv !== null) { var fe = this.b.vreg(); this.b.const_(fe, fv); return fe; }
+        var card = this.varOf(e.obj); this.b.host("Storage", "EditCard", [card], null); var name = emitStrSpan(this, e.field); var fd = this.b.vreg(); this.b.host("Storage", "GetField", [name], fd); return fd;
+      }
       throw new Error("C: cannot evaluate " + e.t);
     },
     evalBool: function (e) {
@@ -941,7 +1070,7 @@
   // ========================================================================
   // BASIC-LIKE FRONTEND (port of picoscript_basic.py)
   // ========================================================================
-  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","DISPATCH","ENDDISPATCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD","STORE","GPIO","LOAD","SERVER","ENDSERVER","ASSERT","PACK","CARD","FIFO","DEVICE","STREAM","UI","EVENT"].forEach(function (k) { B_KW[k] = 1; });
+  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","DISPATCH","ENDDISPATCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD","STORE","GPIO","LOAD","SERVER","ENDSERVER","ASSERT","PACK","CARD","FIFO","DEVICE","STREAM","UI","EVENT","CONST","ENUM","ENDENUM"].forEach(function (k) { B_KW[k] = 1; });
   var B_CMPW = { EQ:"EQ", NE:"NE", LT:"LT", GT:"GT", LE:"LE", GE:"GE" };
   var B_CMPS = { "==":"EQ", "!=":"NE", "<>":"NE", "=":"EQ", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
   var B_COMPARATORS = {}; for (var _k in B_CMPW) B_COMPARATORS[_k] = B_CMPW[_k]; for (var _k2 in B_CMPS) B_COMPARATORS[_k2] = B_CMPS[_k2];
@@ -1003,6 +1132,8 @@
         var kw = t.value;
         if (kw === "LET") return this.parseLet(true);
         if (kw === "DIM") return this.parseDim();
+        if (kw === "CONST") return this.parseConst();
+        if (kw === "ENUM") return this.parseEnum();
         if (kw === "INC") { this.next(); var ni = this.next().value; this.endLine(); return { t: "IncDec", name: ni, delta: 1 }; }
         if (kw === "DEC") { this.next(); var nd = this.next().value; this.endLine(); return { t: "IncDec", name: nd, delta: -1 }; }
         if (kw === "IF") return this.parseIf();
@@ -1061,6 +1192,34 @@
       if (this.peek().kind === "op" && this.peek().value === "=") { this.next(); init = this.parseExpr(); }
       else if (this.peekWord() === "NEW") { this.eatWord(); this.expectWord("CARD"); init = { t: "Call", ns: "Storage", method: "AddCard", args: [] }; }
       this.endLine(); return { t: "Dim", name: name, init: init };
+    },
+    parseConst: function () {
+      this.eatKw("CONST");
+      var name = this.next().value;
+      this.eatOp("=");
+      var value = this.parseExpr();
+      this.endLine();
+      return { t: "ConstDecl", name: name, value: value };
+    },
+    parseEnum: function () {
+      this.eatKw("ENUM");
+      var enumName = this.next().value;
+      this.endLine();
+      var members = [];
+      this.skipNl();
+      while (!this.atKw("ENDENUM")) {
+        if (this.peek().kind === "eof") throw new Error("BASIC: unexpected EOF expecting ENDENUM");
+        var tok = this.next();
+        if (tok.kind !== "id" && tok.kind !== "kw") throw new Error("BASIC: expected enum member name got " + tok.value);
+        var memberName = tok.value, memberValue = null;
+        if (this.peek().kind === "op" && this.peek().value === "=") { this.next(); memberValue = this.parseExpr(); }
+        this.endLine();
+        members.push([memberName, memberValue]);
+        this.skipNl();
+      }
+      this.eatKw("ENDENUM");
+      this.endLine();
+      return { t: "EnumDecl", enum_name: enumName, members: members };
     },
     parseLet: function (eat) { if (eat) this.eatKw("LET"); var name = this.next().value; if (this.peekWord() === "NEW") { this.eatWord(); this.expectWord("CARD"); this.endLine(); return { t: "Let", name: name, value: { t: "Call", ns: "Storage", method: "AddCard", args: [] } }; } this.eatOp("="); var v = this.parseExpr(); this.endLine(); return { t: "Let", name: name, value: v }; },
     peekWord: function () { var t = this.peek(); if (t.kind === "id") return t.value.toUpperCase(); if (t.kind === "kw") return t.value; return null; },
@@ -1330,9 +1489,53 @@
     bin: ["ToBinary", "0b", false], "hex$": ["ToHex", null, true]
   };
 
-  function BLowerer() { this.b = new ILBuilder(); this.vars = {}; this.subs = []; this.scopes = []; this._strlitN = 0; }
+  function BLowerer() { this.b = new ILBuilder(); this.vars = {}; this.subs = []; this.scopes = []; this._strlitN = 0; this.userConstants = {}; }
   BLowerer.prototype = {
     varOf: function (name) { var k = name.toUpperCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
+    resolveConstant: function (name) {
+      var key = String(name).trim().toUpperCase();
+      if (Object.prototype.hasOwnProperty.call(this.userConstants, key)) return this.userConstants[key] | 0;
+      return namedConstant(name);
+    },
+    evalConstExpr: function (e) {
+      if (e.t === "Num") return e.value | 0;
+      if (e.t === "Var") {
+        var cv = this.resolveConstant(e.name);
+        if (cv === null) throw new Error("unknown constant " + e.name + " in constant expression");
+        return cv | 0;
+      }
+      if (e.t === "Bin") {
+        var a = this.evalConstExpr(e.lhs), b = this.evalConstExpr(e.rhs);
+        if (e.op === "+") return (a + b) | 0;
+        if (e.op === "-") return (a - b) | 0;
+        if (e.op === "*") return (a * b) | 0;
+        if (e.op === "/") {
+          if (b === 0) throw new Error("division by zero in constant expression");
+          return (a / b) | 0;
+        }
+        if (e.op === "MOD") {
+          if (b === 0) throw new Error("modulo by zero in constant expression");
+          return (a - ((a / b) | 0) * b) | 0;
+        }
+      }
+      throw new Error("unsupported constant expression " + e.t);
+    },
+    defineConstant: function (name, expr) {
+      this.userConstants[String(name).trim().toUpperCase()] = this.evalConstExpr(expr) | 0;
+    },
+    defineEnum: function (enumName, members) {
+      var ek = String(enumName).trim().toUpperCase();
+      var cur = -1;
+      for (var i = 0; i < members.length; i++) {
+        var mname = members[i][0];
+        var mexpr = members[i][1];
+        cur = (mexpr == null) ? (cur + 1) : (this.evalConstExpr(mexpr) | 0);
+        var mk = String(mname).trim().toUpperCase();
+        this.userConstants[mk] = cur;
+        this.userConstants[ek + "_" + mk] = cur;
+        this.userConstants[ek + "." + mk] = cur;
+      }
+    },
     lowerProgram: function (prog) {
       var self = this, body = [];
       this._subParams = {};
@@ -1352,6 +1555,8 @@
       if (typeof s.pos === "number" && s.pos >= 0) this.b.curPos = s.pos;   // INV-25
       if (s.t === "Let" || s.t === "Assign") this.assignTo(this.varOf(s.name), s.value);
       else if (s.t === "Dim") { var dv = this.varOf(s.name); if (s.init === null) this.b.const_(dv, 0); else this.assignTo(dv, s.init); }
+      else if (s.t === "ConstDecl") this.defineConstant(s.name, s.value);
+      else if (s.t === "EnumDecl") this.defineEnum(s.enum_name, s.members || []);
       else if (s.t === "IncDec") { var iv = this.varOf(s.name); if (s.delta === 1) this.b.inc(iv); else this.b.arith("sub", iv, iv, new Imm(1)); }
       else if (s.t === "Label") this.b.label("lbl_" + s.name.toUpperCase());
       else if (s.t === "Goto") this.b.jmp("lbl_" + s.label.toUpperCase());
@@ -1482,7 +1687,11 @@
     },
     eval: function (e) {
       if (e.t === "Num") { var v = this.b.vreg(); this.b.const_(v, e.value); return v; }
-      if (e.t === "Var") return this.varOf(e.name);
+      if (e.t === "Var") {
+        var bv = this.resolveConstant(e.name);
+        if (bv !== null) { var bc = this.b.vreg(); this.b.const_(bc, bv); return bc; }
+        return this.varOf(e.name);
+      }
       if (e.t === "Bin") {
         if (e.op === "AND" || e.op === "OR") return this.evalLogical(e);
         if (e.op === "MOD") return this.evalMod(e.lhs, e.rhs);
@@ -1609,7 +1818,7 @@
   // ========================================================================
 
   // ---- Python-style frontend (port of picoscript_python.py) ---------------
-  var PY_KW = {}; ["if","elif","else","while","for","in","range","def","return","break","continue","pass","and","or","not","print","true","false","match","case","do","until","goto","label","dispatch"].forEach(function (k) { PY_KW[k] = 1; });
+  var PY_KW = {}; ["if","elif","else","while","for","in","range","def","return","break","continue","pass","and","or","not","print","true","false","match","case","do","until","goto","label","dispatch","const","enum"].forEach(function (k) { PY_KW[k] = 1; });
   var PY_CMP = { "==":"EQ","!=":"NE","<":"LT",">":"GT","<=":"LE",">=":"GE" };
   var PY_AUG = { "+=":"+","-=":"-","*=":"*","/=":"/","%=":"MOD" };
   var PY_PREC = { or:1, and:2, "==":3, "!=":3, "<":3, ">":3, "<=":3, ">=":3, "+":5, "-":5, "*":6, "/":6, "%":6 };
@@ -1685,6 +1894,8 @@
         if (kw === "match") return this.parseMatch();
       if (kw === "dispatch") return this.parseDispatch();
         if (kw === "do") return this.parseDo();
+        if (kw === "const") return this.parseConstDecl();
+        if (kw === "enum") return this.parseEnumDecl();
         if (kw === "goto") { this.next(); var gl = this.expect("id").value; this.expect("newline"); return { t: "Goto", label: gl }; }
         if (kw === "label") { this.next(); var ll = this.expect("id").value; this.expect("newline"); return { t: "Label", name: ll }; }
         if (kw === "def") return this.parseDef();
@@ -1762,6 +1973,31 @@
       if (!this.at("op", ")")) { params.push(this.expect("id").value); while (this.at("op", ",")) { this.next(); params.push(this.expect("id").value); } }
       this.expect("op", ")");
       return { t: "Sub", name: name, body: this.parseSuite(), params: params.length ? params : null };
+    },
+    parseConstDecl: function () {
+      this.expectKw("const");
+      var name = this.expect("id").value;
+      this.expect("op", "=");
+      var value = this.parseExpr();
+      this.expect("newline");
+      return { t: "ConstDecl", name: name, value: value };
+    },
+    parseEnumDecl: function () {
+      this.expectKw("enum");
+      var enumName = this.expect("id").value;
+      this.expect("op", ":");
+      this.expect("newline");
+      this.expect("indent");
+      var members = [];
+      while (!this.at("dedent")) {
+        var memberName = this.expect("id").value;
+        var memberValue = null;
+        if (this.at("op", "=")) { this.next(); memberValue = this.parseExpr(); }
+        this.expect("newline");
+        members.push([memberName, memberValue]);
+      }
+      this.expect("dedent");
+      return { t: "EnumDecl", enum_name: enumName, members: members };
     },
     parseCallFromId: function () { var ns = this.next().value; this.expect("op", "."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
     parseArgs: function () { this.expect("op", "("); var a = []; if (!this.at("op", ")")) { a.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); a.push(this.parseExpr()); } } this.expect("op", ")"); return a; },
@@ -1849,6 +2085,30 @@
         if (w === "define" || w === "to") {
           this.next();
           if (this.atWord("a", "an", "the")) this.next();
+          if (this.atWord("constant", "const")) {
+            this.next();
+            var cname = this.expect("word").value;
+            if (this.atWord("as", "to", "is", "equals", "be")) this.next();
+            var cval = this.parseExpr();
+            this.endStmt();
+            return { t: "ConstDecl", name: cname, value: cval };
+          }
+          if (this.atWord("enum", "enumeration")) {
+            this.next();
+            var ename = this.expect("word").value;
+            this.expect("op", ":"); this.expect("newline"); this.expect("indent");
+            var emembers = [];
+            while (!this.at("dedent")) {
+              if (this.atWord("member")) this.next();
+              var mn = this.expect("word").value;
+              var mv = null;
+              if (this.atWord("is", "equals", "as", "to", "be")) { this.next(); mv = this.parseExpr(); }
+              this.endStmt();
+              emembers.push([mn, mv]);
+            }
+            this.expect("dedent");
+            return { t: "EnumDecl", enum_name: ename, members: emembers };
+          }
           if (this.atWord("routine", "subroutine", "procedure", "function")) { this.next(); if (this.atWord("called", "named")) this.next(); }
           var dn = this.expect("word").value;
           var dparams = null;

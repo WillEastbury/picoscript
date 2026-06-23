@@ -58,6 +58,8 @@ RETURN
 DOC_FILES = [
     ("readme", "README", os.path.join(ROOT, "README.md")),
     ("tutorial", "Tutorial", os.path.join(ROOT, "docs", "TUTORIAL.md")),
+    ("methods", "Method Reference", os.path.join(ROOT, "docs", "METHOD_REFERENCE.md")),
+    ("constants", "Named Constants", os.path.join(ROOT, "docs", "NAMED_CONSTANTS.md")),
     ("spec", "Language Spec", os.path.join(ROOT, "LANGUAGE_SPEC.md")),
     ("arch", "Compiler Architecture", os.path.join(ROOT, "docs", "COMPILER_ARCHITECTURE.md")),
     ("editor", "Editor Contract", os.path.join(ROOT, "docs", "picoscript-language-editor.md")),

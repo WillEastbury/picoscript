@@ -61,7 +61,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Dict, Tuple
 
 from picoscript_il import ILBuilder, VReg, Imm, COND, COND_NEGATE, canon_host
-from picoscript_lang import encode_card_addr
+from picoscript_lang import encode_card_addr, resolve_named_constant
 
 PRINT_CARD = 0xFFFE   # scratch card used to pipe PRINT output
 
@@ -76,6 +76,7 @@ KEYWORDS = {
     "EQ", "NE", "LT", "GT", "LE", "GE", "MOD",
     "STORE", "GPIO", "LOAD", "SERVER", "ENDSERVER", "ASSERT",
     "PACK", "CARD", "FIFO", "DEVICE", "STREAM", "UI", "EVENT",
+    "CONST", "ENUM", "ENDENUM",
     "ON", "END",
 }
 CMP_WORDS = {"EQ": "EQ", "NE": "NE", "LT": "LT", "GT": "GT", "LE": "LE", "GE": "GE"}
@@ -267,6 +268,12 @@ class Raise:
 @dataclass
 class OnBlock:
     event_ns: str; event_method: str; body: list   # ON Ns.Method: body END ON
+@dataclass
+class ConstDecl:
+    name: str; value: object
+@dataclass
+class EnumDecl:
+    enum_name: str; members: list   # members=[(name, value_expr_or_None), ...]
 
 
 # ── parser ──────────────────────────────────────────────────────────────────
@@ -356,6 +363,10 @@ class Parser:
                 return self.parse_let(eat_let=True)
             if kw == "DIM":
                 return self.parse_dim()
+            if kw == "CONST":
+                return self.parse_const()
+            if kw == "ENUM":
+                return self.parse_enum()
             if kw == "INC":
                 self.next(); name = self.next().value; self.end_line(); return IncDec(name, 1)
             if kw == "DEC":
@@ -457,6 +468,38 @@ class Parser:
         v = self.parse_expr()
         self.end_line()
         return Let(name, v)
+
+    def parse_const(self) -> ConstDecl:
+        self.eat_kw("CONST")
+        name = self.next().value
+        self.eat_op("=")
+        value = self.parse_expr()
+        self.end_line()
+        return ConstDecl(name, value)
+
+    def parse_enum(self) -> EnumDecl:
+        self.eat_kw("ENUM")
+        enum_name = self.next().value
+        self.end_line()
+        members = []
+        self.skip_nl()
+        while not self.at_kw("ENDENUM"):
+            t = self.peek()
+            if t.kind == "eof":
+                raise SyntaxError("unexpected EOF; expected ENDENUM")
+            if t.kind not in ("id", "kw"):
+                raise SyntaxError(f"line {t.line}: expected enum member name, got {t.value!r}")
+            member_name = self.next().value
+            member_value = None
+            if self.peek().kind == "op" and self.peek().value == "=":
+                self.next()
+                member_value = self.parse_expr()
+            self.end_line()
+            members.append((member_name, member_value))
+            self.skip_nl()
+        self.eat_kw("ENDENUM")
+        self.end_line()
+        return EnumDecl(enum_name, members)
 
     def parse_dim(self) -> Dim:
         self.eat_kw("DIM")
@@ -982,6 +1025,7 @@ class Lowerer:
         self.b = ILBuilder()
         self.vars: Dict[str, VReg] = {}
         self.subs: List[Sub] = []
+        self.user_constants: Dict[str, int] = {}
         # Stack of (continue_label_or_None, break_label) for BREAK/SKIP.
         # Loops push a continue label; SWITCH pushes None (breakable, not skippable).
         self.scopes: List[tuple] = []
@@ -1036,6 +1080,10 @@ class Lowerer:
                 self.b.inc(v)
             else:
                 self.b.arith("sub", v, v, Imm(1))
+        elif isinstance(s, ConstDecl):
+            self._define_constant(s.name, s.value)
+        elif isinstance(s, EnumDecl):
+            self._define_enum(s.enum_name, s.members)
         elif isinstance(s, Label):
             self.b.label(f"lbl_{s.name.upper()}")
         elif isinstance(s, Goto):
@@ -1094,6 +1142,55 @@ class Lowerer:
             self.lower_on_block(s)
         else:
             raise SyntaxError(f"cannot lower {s}")
+
+    def _resolve_constant(self, name: str):
+        key = str(name).strip().upper()
+        if key in self.user_constants:
+            return self.user_constants[key]
+        return resolve_named_constant(name)
+
+    def _eval_const_expr(self, expr) -> int:
+        if isinstance(expr, Num):
+            return int(expr.value)
+        if isinstance(expr, Var):
+            cv = self._resolve_constant(expr.name)
+            if cv is None:
+                raise SyntaxError(f"unknown constant {expr.name!r} in constant expression")
+            return int(cv)
+        if isinstance(expr, Bin):
+            a = self._eval_const_expr(expr.lhs)
+            b = self._eval_const_expr(expr.rhs)
+            if expr.op == "+":
+                return a + b
+            if expr.op == "-":
+                return a - b
+            if expr.op == "*":
+                return a * b
+            if expr.op == "/":
+                if b == 0:
+                    raise SyntaxError("division by zero in constant expression")
+                return int(a / b)
+            if expr.op == "MOD":
+                if b == 0:
+                    raise SyntaxError("modulo by zero in constant expression")
+                return a - int(a / b) * b
+        raise SyntaxError(f"unsupported constant expression {type(expr).__name__}")
+
+    def _define_constant(self, name: str, value_expr):
+        self.user_constants[str(name).strip().upper()] = int(self._eval_const_expr(value_expr))
+
+    def _define_enum(self, enum_name: str, members):
+        enum_key = str(enum_name).strip().upper()
+        cur = -1
+        for member_name, value_expr in members:
+            if value_expr is None:
+                cur += 1
+            else:
+                cur = int(self._eval_const_expr(value_expr))
+            member_key = str(member_name).strip().upper()
+            self.user_constants[member_key] = cur
+            self.user_constants[f"{enum_key}_{member_key}"] = cur
+            self.user_constants[f"{enum_key}.{member_key}"] = cur
 
     def lower_try(self, s: TryExcept):
         """try/except/finally -> Error.SetHandler + conditional check pattern.
@@ -1364,6 +1461,9 @@ class Lowerer:
         if isinstance(e, Num):
             v = self.b.vreg(); self.b.const(v, e.value); return v
         if isinstance(e, Var):
+            cv = self._resolve_constant(e.name)
+            if cv is not None:
+                v = self.b.vreg(); self.b.const(v, cv); return v
             return self.var(e.name)
         if isinstance(e, Bin):
             if e.op in ("AND", "OR"):

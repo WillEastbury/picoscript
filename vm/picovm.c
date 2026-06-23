@@ -115,10 +115,25 @@ int32_t pv_dot8(pv_ctx *ctx, uint32_t wptr, uint32_t aptr)
     int n = ctx->dot_len;
     int32_t s = 0;
     int i = 0;
-    if (!ctx->mem || ctx->mem_size <= 0) return 0;
+    if (!ctx->mem || ctx->mem_size <= 0 || n <= 0) return 0;
     {
-        const int8_t *w = (const int8_t *)(ctx->mem + (wptr % (uint32_t)ctx->mem_size));
-        const int8_t *a = (const int8_t *)(ctx->mem + (aptr % (uint32_t)ctx->mem_size));
+        uint32_t sz = (uint32_t)ctx->mem_size;
+        uint32_t wi = wptr % sz;
+        uint32_t ai = aptr % sz;
+        const int contiguous = ((uint64_t)wi + (uint32_t)n <= (uint64_t)sz) &&
+                               ((uint64_t)ai + (uint32_t)n <= (uint64_t)sz);
+        const int8_t *w = (const int8_t *)(ctx->mem + wi);
+        const int8_t *a = (const int8_t *)(ctx->mem + ai);
+        if (!contiguous) {
+            for (; i < n; i++) {
+                int8_t x = (int8_t)ctx->mem[wi];
+                int8_t y = (int8_t)ctx->mem[ai];
+                s += (int32_t)x * (int32_t)y;
+                if (++wi == sz) wi = 0;
+                if (++ai == sz) ai = 0;
+            }
+            return s;
+        }
 #if defined(__ARM_FEATURE_DOTPROD) && defined(__aarch64__)
         int32x4_t acc = vdupq_n_s32(0);
         for (; i + 16 <= n; i += 16)
@@ -1480,8 +1495,14 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
     }
     if (hook == PV_HOOK_MEMORY_SETCONST) {                  /* INV-9: compiler-only literal write */
         uint32_t a = (uint32_t)ctx->regs[rs1];
+        uint8_t b = (uint8_t)(ctx->regs[rs2] & 0xFF);
         if (ctx->mem_size) a %= (uint32_t)ctx->mem_size;   /* match Python/JS wrap before lowering the floor */
-        pv_mem_set(ctx, a, ctx->regs[rs2]);
+        if (ctx->mem_size && pv_const_used(ctx, a) && ctx->mem[a] != b) {
+            pv_set_fault(ctx, PV_FAULT_CONST_WRITE, ctx->cur_pc, (int)a);
+            return;
+        }
+        if (ctx->mem_size) ctx->mem[a] = b;
+        pv_const_mark(ctx, a);
         if (a < ctx->const_floor) ctx->const_floor = a;
         return;
     }
@@ -2164,7 +2185,7 @@ int64_t pv_host2(pv_ctx *ctx, int hook, int64_t a, int64_t b)
     ctx->regs[1] = (int32_t)a;
     ctx->regs[2] = (int32_t)b;
     ctx->regs[0] = 0;
-    pv_default_host(ctx, hook, 0, 1, 2, imm16);
+    (ctx->host ? ctx->host : pv_default_host)(ctx, hook, 0, 1, 2, imm16);
     return (int64_t)ctx->regs[0];
 }
 

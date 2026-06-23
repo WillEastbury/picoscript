@@ -91,6 +91,7 @@ PicoScript runs inside picoweb/PIOS as deterministic, bounded userland logic for
 | `picoscript_opcodes.py` | Opcode reference |
 | `LANGUAGE_SPEC.md` | Formal runtime and access model spec |
 | `docs/TUTORIAL.md` | Followable getting-started path: portal, playground, CLI, spans, compression, UI, and parity checks |
+| `docs/NAMED_CONSTANTS.md` | Standard enum/constant catalog, localization (`toLocale`), and user-defined `const`/`enum` syntax across all frontends |
 | `docs/COMPILER_ARCHITECTURE.md` | Frontend/IL/backend lowering pipeline |
 | `docs/picoscript-language-editor.md` | Language syntax, editor contract, completions |
 | `docs/AGENT_PROMPT.md` | **Ready-to-use prompt** for an LLM/agent to generate valid PicoScript (grammar, rules, host calls, worked 4-style examples) |

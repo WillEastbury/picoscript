@@ -132,6 +132,102 @@ CONSTRUCTS = [
      "code = 2\nmatch code:\n    case 1:\n        print(10)\n    case 2:\n        print(20)\n    case _:\n        print(0)",
      "Set code to 2.\nChoose code:\n    When 1:\n        Print 10.\n    When 2:\n        Print 20.\n    Otherwise:\n        Print 0."),
 
+    ("User constants &amp; enums",
+     "Define compile-time <code>const</code>/<code>enum</code> values in every "
+     "frontend. Prefer <code>ENUM_MEMBER</code> form for cross-language source.",
+     "const RETRY = 3;\n"
+     "enum HttpCode { OK = 200, CREATED = 201, ACCEPTED };\n"
+     "Io.WriteByte(RETRY);\n"
+     "Io.WriteByte(HttpCode.OK);\n"
+     "Io.WriteByte(HTTPCODE_CREATED);\n"
+     "Io.WriteByte(HttpCode.ACCEPTED);",
+     "CONST RETRY = 3\n"
+     "ENUM HTTPCODE\n"
+     "OK = 200\n"
+     "CREATED = 201\n"
+     "ACCEPTED\n"
+     "ENDENUM\n"
+     "Io.WriteByte(RETRY)\n"
+     "Io.WriteByte(HTTPCODE_OK)\n"
+     "Io.WriteByte(HTTPCODE_CREATED)\n"
+     "Io.WriteByte(HTTPCODE_ACCEPTED)",
+     "const RETRY = 3\n"
+     "enum HttpCode:\n"
+     "    OK = 200\n"
+     "    CREATED = 201\n"
+     "    ACCEPTED\n"
+     "Io.WriteByte(RETRY)\n"
+     "Io.WriteByte(HTTPCODE_OK)\n"
+     "Io.WriteByte(HTTPCODE_CREATED)\n"
+     "Io.WriteByte(HTTPCODE_ACCEPTED)",
+     "Define constant RETRY as 3.\n"
+     "Define enum HttpCode:\n"
+     "    OK is 200.\n"
+     "    CREATED is 201.\n"
+     "    ACCEPTED.\n"
+     "Io.WriteByte(RETRY).\n"
+     "Io.WriteByte(HTTPCODE_OK).\n"
+     "Io.WriteByte(HTTPCODE_CREATED).\n"
+     "Io.WriteByte(HTTPCODE_ACCEPTED)."),
+
+    ("Built-in constants &amp; locale metadata",
+     "Use the standard constant catalog directly in source. For human-readable "
+     "labels/descriptions, use <code>toLocale(...)</code> in "
+     "<code>docs/NAMED_CONSTANTS.md</code> and the Reference docs.",
+     "print(METHOD_POST);\n"
+     "print(STATUS_CREATED);\n"
+     "print(DAY_MONDAY);\n"
+     "print(TZ_EUROPE_LONDON);",
+     "PRINT METHOD_POST\n"
+     "PRINT STATUS_CREATED\n"
+     "PRINT DAY_MONDAY\n"
+     "PRINT TZ_EUROPE_LONDON",
+     "print(METHOD_POST)\n"
+     "print(STATUS_CREATED)\n"
+     "print(DAY_MONDAY)\n"
+     "print(TZ_EUROPE_LONDON)",
+     "Print METHOD_POST.\n"
+     "Print STATUS_CREATED.\n"
+     "Print DAY_MONDAY.\n"
+     "Print TZ_EUROPE_LONDON."),
+
+    ("Locale.SetLocale + UTC display offsets",
+     "Locale formatting stores timestamps as UTC epoch-seconds and renders date/time "
+     "with an explicit timezone offset. In browser mode, the default locale/timezone "
+     "comes from the browser and can be overridden with <code>Locale.SetLocale</code>.",
+     "int lang = \"en-GB\";\n"
+     "int tz = \"UTC\";\n"
+     "Locale.SetLocale(lang, tz);\n"
+     "int current = Locale.GetCurrentLocale();\n"
+     "int n = Locale.FormatNumber(12345, 0);\n"
+     "int d = Locale.FormatDate(0, 0);\n"
+     "int t = Locale.FormatTime(0, 0);\n"
+     "Io.Write(current); Io.Write(\"|\"); Io.Write(n); Io.Write(\"|\"); Io.Write(d); Io.Write(\"|\"); Io.Write(t);",
+     "DIM LANG = \"en-GB\"\n"
+     "DIM TZ = \"UTC\"\n"
+     "Locale.SetLocale(LANG, TZ)\n"
+     "DIM CURRENT = Locale.GetCurrentLocale()\n"
+     "DIM N = Locale.FormatNumber(12345, 0)\n"
+     "DIM D = Locale.FormatDate(0, 0)\n"
+     "DIM T = Locale.FormatTime(0, 0)\n"
+     "Io.Write(CURRENT)\nIo.Write(\"|\")\nIo.Write(N)\nIo.Write(\"|\")\nIo.Write(D)\nIo.Write(\"|\")\nIo.Write(T)",
+     "lang = \"en-GB\"\n"
+     "tz = \"UTC\"\n"
+     "Locale.SetLocale(lang, tz)\n"
+     "current = Locale.GetCurrentLocale()\n"
+     "n = Locale.FormatNumber(12345, 0)\n"
+     "d = Locale.FormatDate(0, 0)\n"
+     "t = Locale.FormatTime(0, 0)\n"
+     "Io.Write(current)\nIo.Write(\"|\")\nIo.Write(n)\nIo.Write(\"|\")\nIo.Write(d)\nIo.Write(\"|\")\nIo.Write(t)",
+     "Set lang to \"en-GB\".\n"
+     "Set tz to \"UTC\".\n"
+     "Locale.SetLocale(lang, tz).\n"
+     "Set current to Locale.GetCurrentLocale().\n"
+     "Set n to Locale.FormatNumber(12345, 0).\n"
+     "Set d to Locale.FormatDate(0, 0).\n"
+     "Set t to Locale.FormatTime(0, 0).\n"
+     "Io.Write(current).\nIo.Write(\"|\").\nIo.Write(n).\nIo.Write(\"|\").\nIo.Write(d).\nIo.Write(\"|\").\nIo.Write(t)."),
+
     ("Jump-table dispatch (state machine)",
      "<code>dispatch</code> is a switch that compiles to a real <b>jump table</b> (an "
      "indexed jump) instead of a compare chain &mdash; O(1) dispatch on a dense integer "

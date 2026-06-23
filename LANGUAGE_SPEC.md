@@ -127,8 +127,8 @@ print(total);
 Supports: `int`/`var` declarations, assignment and compound assignment
 (`+= -= *= /= %=`), arithmetic `+ - * / %`, comparisons, logical `&& || !`, the
 ternary `?:`, pre/post `++`/`--`, `if/else`, `while`, `for`, `break`/`continue`,
-`return`, `void` subroutines and calls, `print(...)`, and `Namespace.Method(...)`
-host/Net/Storage calls.
+`return`, `void` subroutines and calls, compile-time `const` declarations and
+`enum` blocks, `print(...)`, and `Namespace.Method(...)` host/Net/Storage calls.
 
 **BASIC-like frontend** (`picoscript_basic.py`, `.pbas`) — block-structured:
 
@@ -156,7 +156,7 @@ Supports: `DIM`/`LET` declaration and `x = expr` assignment (and `+= -= *= /=`),
 the `IIF(cond,a,b)` ternary, `IF/THEN/ELSEIF/ELSE/ENDIF`, `WHILE/ENDWHILE`,
 `DO/LOOP` (`WHILE`/`UNTIL` guard at `DO` for pre-test or at `LOOP` for post-test),
 `FOR/TO/STEP/NEXT`, `FOREACH/IN/ENDFOREACH`, `SWITCH/CASE/DEFAULT/ENDSWITCH`,
-`GOTO`/labels, `GOSUB/SUB/ENDSUB`, `RETURN`, `BREAK`, `SKIP`, `PRINT`, and
+`GOTO`/labels, `GOSUB/SUB/ENDSUB`, `CONST`, `ENUM ... ENDENUM`, `RETURN`, `BREAK`, `SKIP`, `PRINT`, and
 `Namespace.Method(...)` calls.
 
 **Python-style frontend** (`picoscript_python.py`, `.ppy`) — significant
@@ -176,7 +176,8 @@ Supports: `x = expr` (first use declares) and augmented `+= -= *= /= %=`, arithm
 `+ - * / %`, comparisons `== != < > <= >=`, logical `and`/`or`/`not`, `a if c else b`,
 `if:`/`elif:`/`else:`, `while:`, the post-test `do:` … `until c` / `while c`,
 `for i in range(n)` / `range(a, b[, step])`, `match x:` / `case N:` / `case _:`,
-`goto L` + `label L`, `def name():` and `name()` calls,
+`goto L` + `label L`, `def name():` and `name()` calls, `const NAME = expr`,
+`enum Name: ...`,
 `return`/`break`/`continue`/`pass`, `print(...)`, and `Namespace.Method(...)` host
 calls. Line comments `#`.
 
@@ -201,8 +202,9 @@ Statements: `Set X to …` / `Let X be …`, `Add … to X` / `Subtract … from
 the post-test `Repeat:` … `Until c.` / `While c.`, `Repeat n times with X:` (0..n-1),
 `For each X from a to b:` (a..b inclusive), `Choose x:` / `When v:` / `Otherwise:`
 (switch), `Label name.` / `Go to name.`, the `a if c otherwise b` ternary,
-`Define name:` / `To name:` and `Do name` / `Call name`, `Return` / `Stop` (break) /
-`Skip` (continue), and bare `Ns.Method(a, b).` host calls. Comparisons read as words
+`Define name:` / `To name:` and `Do name` / `Call name`, `Define constant NAME as expr.`,
+`Define enum Name:` blocks, `Return` / `Stop` (break) / `Skip` (continue), and bare
+`Ns.Method(a, b).` host calls. Comparisons read as words
 (`is greater than`, `is at least`, `is`, `is not`, `exceeds`, …) joined by
 `and`/`or`/`not`; arithmetic may be `plus`/`minus`/`times`/`divided by`/`modulo` or
 the usual symbols. Line comments `#`.
@@ -217,6 +219,7 @@ idiomatically for its surface; equivalent programs lower to identical bytecode:
 | Construct | C-syntax | BASIC | Python-style | Natural-English |
 |-----------|----------|-------|--------------|-----------------|
 | declare / assign | `int x = e;` | `DIM X = e` / `X = e` | `x = e` | `Set x to e.` |
+| const / enum | `const A=1; enum E { X=1 };` | `CONST A = 1` / `ENUM E ... ENDENUM` | `const A = 1` / `enum E:` | `Define constant A as 1.` / `Define enum E:` |
 | print | `print(x);` | `PRINT X` | `print(x)` | `Print x.` |
 | if / else | `if (c) {…} else {…}` | `IF c THEN … ELSE … ENDIF` | `if c:` / `elif` / `else:` | `If c:` / `Otherwise if c:` / `Otherwise:` |
 | while | `while (c) {…}` | `WHILE c … ENDWHILE` | `while c:` | `While c:` / `As long as c:` |

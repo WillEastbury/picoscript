@@ -29,13 +29,13 @@ from typing import List, Optional
 from picoscript_basic import (  # reuse AST + lowering unchanged
     Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
     Switch, Goto, Label, Sub, Gosub, Return, Break, Skip, Print, CallStmt, Lowerer,
-    Dispatch, TryExcept, Raise, OnBlock,
+    Dispatch, TryExcept, Raise, OnBlock, ConstDecl, EnumDecl,
 )
 
 KEYWORDS = {
     "if", "elif", "else", "while", "for", "in", "range", "def", "return",
     "break", "continue", "pass", "and", "or", "not", "print", "true", "false",
-    "match", "case", "do", "until", "goto", "label", "dispatch",
+    "match", "case", "do", "until", "goto", "label", "dispatch", "const", "enum",
     "try", "except", "finally", "raise", "on",
 }
 
@@ -267,6 +267,30 @@ class Parser:
                 return self.parse_try()
             if kw == "on":
                 return self.parse_on()
+            if kw == "const":
+                self.next()
+                name = self.expect("id").value
+                self.expect("op", "=")
+                value = self.parse_expr()
+                self.expect("newline")
+                return ConstDecl(name, value)
+            if kw == "enum":
+                self.next()
+                enum_name = self.expect("id").value
+                self.expect("op", ":")
+                self.expect("newline")
+                self.expect("indent")
+                members = []
+                while not self.at("dedent"):
+                    m = self.expect("id").value
+                    mv = None
+                    if self.at("op", "="):
+                        self.next()
+                        mv = self.parse_expr()
+                    self.expect("newline")
+                    members.append((m, mv))
+                self.expect("dedent")
+                return EnumDecl(enum_name, members)
             if kw == "raise":
                 self.next()
                 if self.at("newline"):

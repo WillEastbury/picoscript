@@ -42,7 +42,7 @@ from typing import List, Optional
 from picoscript_basic import (  # reuse AST + lowering unchanged
     Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
     Switch, Goto, Label, Sub, Gosub, Return, Break, Skip, Print, CallStmt, Lowerer,
-    Dispatch,
+    Dispatch, ConstDecl, EnumDecl,
 )
 
 _TWO = {"==", "!=", "<=", ">=", "<>"}
@@ -291,6 +291,33 @@ class Parser:
                 self.next()
                 if self.at_word("a", "an", "the"):
                     self.next()
+                if self.at_word("constant", "const"):
+                    self.next()
+                    name = self.expect("word").value
+                    if self.at_word("as", "to", "is", "equals", "be"):
+                        self.next()
+                    value = self.parse_expr()
+                    self.end_stmt()
+                    return ConstDecl(name, value)
+                if self.at_word("enum", "enumeration"):
+                    self.next()
+                    enum_name = self.expect("word").value
+                    self.expect("op", ":")
+                    self.expect("newline")
+                    self.expect("indent")
+                    members = []
+                    while not self.at("dedent"):
+                        if self.at_word("member"):
+                            self.next()
+                        member_name = self.expect("word").value
+                        member_value = None
+                        if self.at_word("is", "equals", "as", "to", "be"):
+                            self.next()
+                            member_value = self.parse_expr()
+                        self.end_stmt()
+                        members.append((member_name, member_value))
+                    self.expect("dedent")
+                    return EnumDecl(enum_name, members)
                 if self.at_word("routine", "subroutine", "procedure", "function"):
                     self.next()
                     if self.at_word("called", "named"):

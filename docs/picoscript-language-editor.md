@@ -73,6 +73,7 @@ for its surface (see the per-frontend tables below).
 | Construct | C-syntax | BASIC | Python-style | Natural-English |
 |-----------|----------|-------|--------------|-----------------|
 | assign | `x = e;` | `x = e` / `DIM` | `x = e` | `Set x to e.` |
+| const / enum | `const A=1; enum E { X=1 };` | `CONST A = 1` / `ENUM E ... ENDENUM` | `const A = 1` / `enum E:` | `Define constant A as 1.` / `Define enum E:` |
 | if / else | `if (c) {} else {}` | `IF c THEN … ELSE … ENDIF` | `if c:` / `elif` / `else:` | `If c:` / `Otherwise if c:` / `Otherwise:` |
 | while | `while (c) {}` | `WHILE c … ENDWHILE` | `while c:` | `While c:` / `As long as c:` |
 | do-loop (post-test) | `do {} while (c);` | `DO … LOOP UNTIL c` | `do:` … `until c` | `Repeat:` … `Until c.` |
@@ -91,8 +92,8 @@ assignment (`+= -= *= /= %=`), arithmetic `+ - * / %`, comparisons, logical
 `&& || !`, the ternary `?:`, pre/post `++`/`--`, `if/else`, `while`,
 `do { … } while (c);`, `for`, `switch (x) { case N: … break; default: … }`,
 `goto L;` + `L:` labels, `break`, `continue`, `return`, `void` subroutines and
-calls, `print(expr)`, and `Namespace.Method(...)` (Net/Storage/host) calls. Line
-comments `//`, block `/* */`.
+calls, compile-time `const` declarations and `enum` blocks, `print(expr)`, and
+`Namespace.Method(...)` (Net/Storage/host) calls. Line comments `//`, block `/* */`.
 
 **BASIC-like constructs:** `DIM`/`LET` declaration and `x = expr` assignment (plus
 compound `+= -= *= /=`), `INC`/`DEC`, arithmetic `+ - * / MOD`, comparisons by
@@ -101,7 +102,7 @@ inside a test, logical `AND OR NOT`, the `IIF(cond, a, b)` ternary,
 `IF/THEN/ELSEIF/ELSE/ENDIF`, `WHILE/ENDWHILE`, `DO/LOOP` (with a `WHILE`/`UNTIL`
 guard at the `DO` for pre-test or at the `LOOP` for post-test), `FOR/TO/STEP/NEXT`,
 `FOREACH/IN/ENDFOREACH`, `SWITCH/CASE/DEFAULT/ENDSWITCH`, `GOTO` + `name:` labels,
-`GOSUB`/`SUB`/`ENDSUB`, `RETURN`, `BREAK` (exit nearest loop or `SWITCH`), `SKIP`
+`GOSUB`/`SUB`/`ENDSUB`, `CONST`, `ENUM ... ENDENUM`, `RETURN`, `BREAK` (exit nearest loop or `SWITCH`), `SKIP`
 (continue nearest loop), `PRINT expr`. Line comments `'` or `//`.
 
 **Python-style constructs:** first assignment declares (`x = expr`), augmented
@@ -110,7 +111,8 @@ logical `and`/`or`/`not`, the conditional expression `a if c else b`, `if:` /
 `elif:` / `else:` indentation blocks, `while:`, the post-test `do:` … `until c` /
 `while c`, `for i in range(n):` (0..n-1) and `for i in range(a, b[, step]):`,
 `match x:` / `case N:` / `case _:` (switch), `goto L` + `label L`, `def name():`
-subroutines and `name()` calls, `return` / `break` / `continue` / `pass`,
+subroutines and `name()` calls, `const NAME = expr`, `enum Name:` declarations,
+`return` / `break` / `continue` / `pass`,
 `print(expr)`, and `Namespace.Method(...)` host calls. Line comments `#`. Example:
 
 ```python
@@ -142,6 +144,8 @@ trailing `.` is allowed and idiomatic).
 | `Label <name>.` / `Go to <name>.` | label and goto |
 | `<a> if <cond> otherwise <b>` | ternary expression |
 | `Define <name>:` / `To <name>:` | subroutine (globals; no params) |
+| `Define constant <name> as <expr>.` | compile-time constant declaration |
+| `Define enum <name>:` | enum block (member lines inside indented block) |
 | `Do <name>.` / `Call <name>.` | invoke a subroutine |
 | `Return.` / `Stop.` (break) / `Skip.` (continue) | control flow |
 | `Ns.Method(a, b).` | host hook call |
