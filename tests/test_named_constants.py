@@ -39,6 +39,14 @@ def check(src, compile_fn, lang, expected):
     return words
 
 
+def check_status(src, compile_fn, lang, expected_status):
+    words = lower_to_bytecode_safe(compile_fn(src))
+    vm = PicoVM().run(words)
+    assert vm.http_status == expected_status, f"{lang} status {vm.http_status!r} != {expected_status!r}"
+    assert words == js_compile(src, lang), f"{lang} frontend bytecode mismatch (python/js)"
+    return words
+
+
 def main():
     c_prog = (
         "int m = HTTP_METHOD_POST;"
@@ -169,6 +177,12 @@ def main():
     check(b_user, compile_basic, "basic", user_expected)
     check(p_user, compile_python, "python", user_expected)
     check(e_user, compile_english, "english", user_expected)
+
+    # Net.Status accepts named constants too, including English source.
+    check_status("Net.Status(STATUS_NOT_FOUND);", compile_c, "c", 404)
+    check_status("Net.Status(STATUS_NOT_FOUND)\n", compile_basic, "basic", 404)
+    check_status("Net.Status(STATUS_NOT_FOUND)\n", compile_python, "python", 404)
+    check_status("Net.Status(STATUS_NOT_FOUND).\n", compile_english, "english", 404)
 
     # Larger constants still resolve to exact numeric values.
     assert resolve_named_constant("CURRENCY_USD") == 840

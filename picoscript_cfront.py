@@ -1089,7 +1089,7 @@ class Lowerer:
         if ns.upper() == "NET":
             m = method.upper()
             if m == "STATUS":
-                self.b.net("status", _intlit(c.args[0]))
+                self.b.net("status", self._eval_const_expr(c.args[0]))
             elif m == "TYPE":
                 self.b.net("type", _strlit(c.args[0]))
             elif m == "BODY":

@@ -43,9 +43,9 @@ Keywords, variable names and `Namespace.Method` names are **case-insensitive**.
    parameters** and share the global variables (use them like shared registers).
 3. **≤ 16 live variables** at once (they map to registers `R0`–`R15`; the
    allocator spills, but keep programs small).
-4. **No string variables.** A string literal is only valid as a direct argument
-   to `print(...)` or a host call that expects a span (e.g. `Net.Type`,
-   `Json.Key`). You cannot assign a string to a variable.
+4. **Text values are span handles.** A string literal stages UTF-8 bytes into the
+   arena and evaluates to a span handle. You may assign it to a variable
+   (`msg = "ok"`) and pass that handle to span/text APIs.
 5. **Deterministic.** No wall-clock, no ambient I/O. The only randomness is
    `Random.U32` (explicit). The only output is `print` / `Io.*` / `Net.*`.
 6. **Host calls take at most 2 value arguments and return at most 1 value**
@@ -56,6 +56,7 @@ Keywords, variable names and `Namespace.Method` names are **case-insensitive**.
 | Construct          | c                                   | basic                              | python                       | english                                  |
 |--------------------|-------------------------------------|------------------------------------|------------------------------|------------------------------------------|
 | declare / assign   | `int x = e;`                        | `DIM X = e` / `X = e`              | `x = e`                      | `Set x to e.`                            |
+| const / enum       | `const A=1; enum E { X=1 };`        | `CONST A = 1` / `ENUM E … ENDENUM` | `const A = 1` / `enum E:`    | `Define constant A as 1.` / `Define enum E:` |
 | print number       | `print(x);`                         | `PRINT X`                          | `print(x)`                   | `Print x.`                               |
 | print string       | `print("hi");`                      | `PRINT "hi"`                       | `print("hi")`                | `Print "hi".`                            |
 | if / else          | `if (c) {…} else {…}`               | `IF c THEN … ELSE … ENDIF`        | `if c:` / `elif` / `else:`   | `If c:` / `Otherwise if c:` / `Otherwise:`|
@@ -102,6 +103,15 @@ Text exists only as **UTF-8 byte spans** in arena memory. To produce text:
 
 Only these are implemented end-to-end; do **not** invent others.
 
+- Use built-in named constants instead of magic protocol numbers:
+  `METHOD_GET`, `METHOD_POST`, `STATUS_OK`, `STATUS_CREATED`,
+  `HTTP_STATUS_NOT_FOUND`, `DAY_MONDAY`, `MONTH_JANUARY`, `TZ_UTC`,
+  `TZ_EUROPE_LONDON`, `CURRENCY_USD`, `COUNTRY_GB`, `UOM_METER`,
+  `COLOR_BLUE`, `INT32_MAX`, `UINT32_MAX`, `MASK16`.
+  In English, write the same constant directly: `Net.Status(STATUS_NOT_FOUND).`
+- User constants/enums are compile-time only. Prefer `ENUMNAME_MEMBER` form
+  (`HTTPCODE_CREATED`) for cross-language examples; C-style may also use dotted
+  enum members (`HttpCode.CREATED`).
 - `Net.Status(code)`, `Net.Type("mime")`, `Net.Body(span)` — HTTP response.
 - `print(...)`, `Io.Write(span)`, `Io.WriteByte(reg)` — output buffer.
 - `Memory.Set(addr,val)`, `Memory.Get(addr)` — byte memory.
@@ -182,6 +192,30 @@ For each i from 1 to 10:
         Skip.
     Increase s by i.
 Print s.
+```
+
+## Constants / enum example
+
+**c**
+```c
+const RETRY_LIMIT = 3;
+enum HttpCode { OK = 200, CREATED = 201, ACCEPTED };
+Resp.Status(HttpCode.CREATED);
+Io.WriteByte(RETRY_LIMIT);
+Io.WriteByte(STATUS_ACCEPTED);
+```
+
+**basic**
+```basic
+CONST RETRY_LIMIT = 3
+ENUM HTTPCODE
+OK = 200
+CREATED = 201
+ACCEPTED
+ENDENUM
+Resp.Status(HTTPCODE_CREATED)
+Io.WriteByte(RETRY_LIMIT)
+Io.WriteByte(STATUS_ACCEPTED)
 ```
 
 ## Validating generated code

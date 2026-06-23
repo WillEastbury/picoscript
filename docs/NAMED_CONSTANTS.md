@@ -36,6 +36,13 @@ in the browser compiler (`vm/picoc.js`) with Python/JS bytecode parity.
 `INTERNAL_SERVER_ERROR=500`, `NOT_IMPLEMENTED=501`, `BAD_GATEWAY=502`,
 `SERVICE_UNAVAILABLE=503`
 
+Short aliases also work everywhere: `STATUS_OK`, `STATUS_CREATED`,
+`STATUS_NOT_FOUND`, etc. For English source:
+
+```text
+Net.Status(STATUS_NOT_FOUND).
+```
+
 ### Days / months
 - Days: `DAY_MONDAY..DAY_SUNDAY` = `1..7`
 - Months: `MONTH_JANUARY..MONTH_DECEMBER` = `1..12`

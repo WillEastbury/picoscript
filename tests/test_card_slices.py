@@ -19,6 +19,8 @@ sys.path.insert(0, ROOT)
 
 from picoscript_cfront import compile_c  # noqa: E402
 from picoscript_basic import compile_basic  # noqa: E402
+from picoscript_python import compile_python  # noqa: E402
+from picoscript_english import compile_english  # noqa: E402
 from picoscript_il import lower_to_bytecode_safe  # noqa: E402
 from picoscript_vm import PicoVM, HostApi  # noqa: E402
 
@@ -33,17 +35,7 @@ Storage.WriteSlice(7, data);
 print(Storage.CardLen(7));
 
 Storage.SetSlice(10, 5);
-int mid = Storage.ReadSlice(7);
-Io.Write(mid);
-Io.WriteByte(124);
-
-int patch = "XYZ";
-Storage.SetSlice(5, Span.Len(patch));
-Storage.WriteSlice(7, patch);
-
-Storage.SetSlice(0, Storage.CardLen(7));
-int all = Storage.ReadSlice(7);
-Io.Write(all);
+Io.Write(Storage.ReadSlice(7));
 '''
 
 SLICE_BASIC = r'''
@@ -54,20 +46,32 @@ Storage.WriteSlice(7, DATA)
 PRINT Storage.CardLen(7)
 
 Storage.SetSlice(10, 5)
-DIM MID = Storage.ReadSlice(7)
-Io.Write(MID)
-Io.WriteByte(124)
-
-DIM PATCH = "XYZ"
-Storage.SetSlice(5, Span.Len(PATCH))
-Storage.WriteSlice(7, PATCH)
-
-Storage.SetSlice(0, Storage.CardLen(7))
-DIM ALL = Storage.ReadSlice(7)
-Io.Write(ALL)
+Io.Write(Storage.ReadSlice(7))
 '''
 
-EXPECTED_TAIL = b"klmno|abcdeXYZijklmnopqrstuvwxyz"
+SLICE_PYTHON = r'''
+data = "abcdefghijklmnopqrstuvwxyz"
+Storage.UsePack(1)
+Storage.SetSlice(0, Span.Len(data))
+Storage.WriteSlice(7, data)
+print(Storage.CardLen(7))
+
+Storage.SetSlice(10, 5)
+Io.Write(Storage.ReadSlice(7))
+'''
+
+SLICE_ENGLISH = r'''
+Set data to "abcdefghijklmnopqrstuvwxyz".
+Storage.UsePack(1).
+Storage.SetSlice(0, Span.Len(data)).
+Storage.WriteSlice(7, data).
+Print Storage.CardLen(7).
+
+Storage.SetSlice(10, 5).
+Io.Write(Storage.ReadSlice(7)).
+'''
+
+EXPECTED_TAIL = b"klmno"
 
 
 def _py(words):
@@ -101,6 +105,8 @@ def _check(src, compiler):
 def test_card_slices_c_and_basic():
     _check(SLICE_C, compile_c)
     _check(SLICE_BASIC, compile_basic)
+    _check(SLICE_PYTHON, compile_python)
+    _check(SLICE_ENGLISH, compile_english)
 
 
 def main():

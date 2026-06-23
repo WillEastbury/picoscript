@@ -1,0 +1,14 @@
+Define constant RETRY_LIMIT as 3.
+
+Define enum HttpCode:
+    OK is 200.
+    CREATED is 201.
+    ACCEPTED.
+
+Set method to METHOD_POST.
+If method is METHOD_POST:
+    Resp.Status(HTTPCODE_CREATED).
+    Io.WriteByte(RETRY_LIMIT).
+    Io.WriteByte(HTTPCODE_OK).
+    Io.WriteByte(HTTPCODE_CREATED).
+    Io.WriteByte(STATUS_ACCEPTED).

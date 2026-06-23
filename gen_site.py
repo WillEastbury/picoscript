@@ -28,7 +28,7 @@ from gen_playground import CONSTRUCTS, build_example, _styles   # reuse verified
 from picoscript_basic import compile_basic
 from picoscript_il import lower_to_bytecode_safe
 from picoscript_vm import PicoVM
-from picoscript_lang import encode_card_addr, HOST_HOOK_CODES
+from picoscript_lang import encode_card_addr, HOST_HOOK_CODES, NAMED_CONSTANTS
 
 RESPONDER = """' HTTP responder -- reads the request descriptor from PicoWAL and replies.
 ' The simulator writes these cards before running the program:
@@ -165,6 +165,7 @@ def main():
     html = html.replace("/*__STORE__*/", store_js)
     html = html.replace("/*__DATA__*/", json.dumps(gallery))
     html = html.replace("/*__NSDATA__*/", json.dumps(ns_data))
+    html = html.replace("/*__CONSTANTS__*/", json.dumps(sorted(NAMED_CONSTANTS.keys())))
     html = html.replace("/*__RESPONDER__*/", json.dumps(RESPONDER))
     html = html.replace("<!--__DOCNAV__-->", docnav)
     html = html.replace("<!--__DOCBODY__-->", docbody)
@@ -585,7 +586,22 @@ function setLang(lang){
   else{showGuideCard(CUR_GUIDE_CARD);}
 }
 
-var GROUPS=[{name:'Basics',items:[0]},{name:'Control Flow',items:[1,2,3,4,10,11]},{name:'Operators',items:[5]},{name:'Dispatch / State Machine',items:[6,7]},{name:'Subroutines',items:[8,9]},{name:'I/O & Cards',items:[12,13,14,15,16]},{name:'Streams & Events',items:[17,18,19,20,21]},{name:'AI & Hardware',items:[22,23,24,25]},{name:'Functions & Errors',items:[26,27]},{name:'OS & Web Hooks',items:[28,29]}];
+var CONSTANT_NAMES=/*__CONSTANTS__*/;
+function idxByTitle(t){for(var i=0;i<DATA.length;i++)if(DATA[i].title===t)return i;return -1;}
+function idxList(titles){var out=[];titles.forEach(function(t){var i=idxByTitle(t);if(i>=0)out.push(i);});return out;}
+var GROUPS=[
+  {name:'Basics',items:idxList(['Variables & arithmetic'])},
+  {name:'Constants & Locale',items:idxList(['User constants &amp; enums','Built-in constants &amp; locale metadata','Locale.SetLocale + UTC display offsets'])},
+  {name:'Control Flow',items:idxList(['Conditional (if / else)','While loop','Counted loop (for)','Index iteration (foreach)','Unconditional jump (goto)','Post-test loop (do)','Early exit &amp; skip (break / skip)'])},
+  {name:'Operators',items:idxList(['Operators (++ -- ?: && % )'])},
+  {name:'Dispatch / State Machine',items:idxList(['Multi-way branch (switch)','Jump-table dispatch (state machine)'])},
+  {name:'Subroutines',items:idxList(['Subroutine (call / gosub)','Function parameters + return (def/void)'])},
+  {name:'I/O & Cards',items:idxList(['HTTP response (Net.*)','HTML streaming (TextRender.*)','Cards: create &amp; update','Cards: query records','Cards: active-record style','HTTP request: parse query + body','TCP stream: parse parameter frame','Large cards: partial slice reads'])},
+  {name:'Streams & Events',items:idxList(['Stream data: slice a frame','Event handler: slice payload','Streaming: DMA ring (Device.* / Stream.*)','Remote UI: a window (Ui.* / Event.*)'])},
+  {name:'AI & Hardware',items:idxList(['AI tensors: matvec + bitlinear'])},
+  {name:'Functions & Errors',items:idxList(['Testing: PSUnit assertions (Assert.*)','Error handling (try / except)'])},
+  {name:'OS & Web Hooks',items:idxList(['OS-worker: Process + Timer','Base64 + Req.Param (web hooks)'])}
+];
 function buildGuideTree(){
   var html='';
   GROUPS.forEach(function(g){
@@ -686,7 +702,15 @@ function monacoLangId(lang){return{c:'picoc',basic:'picobasic',python:'picopytho
 function onLangChange(){if(EDITOR)monaco.editor.setModelLanguage(EDITOR.getModel(),monacoLangId(document.getElementById('lang').value));if(typeof filesRender==='function')filesRender();}
 function hookNames(){var H=(typeof PV_HOOKS!=='undefined'&&PV_HOOKS.BY_CODE)?PV_HOOKS.BY_CODE:{};var out=[];for(var k in H)out.push(H[k]);return out;}
 var MONARCH={picoc:{keywords:['int','var','void','if','else','while','for','return','break','continue','print','switch','case','default','do','goto','dispatch'],tokenizer:{root:[[/\/\/.*$/,'comment'],[/\/\*/,'comment','@block'],[/[A-Za-z_]\w*(?=\s*\.)/,'type'],[/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],[/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],[/[{}()\[\];,.]/,'delimiter'],[/[+\-*/%=<>!&|?:]+/,'operator']],block:[[/\*\//,'comment','@pop'],[/./,'comment']],str:[[/[^"]+/,'string'],[/"/,'string','@pop']]}},picobasic:{ignoreCase:true,keywords:['DIM','LET','IF','THEN','ELSEIF','ELSE','ENDIF','WHILE','ENDWHILE','FOR','TO','STEP','NEXT','FOREACH','IN','ENDFOREACH','SWITCH','CASE','DEFAULT','ENDSWITCH','DISPATCH','ENDDISPATCH','GOTO','GOSUB','SUB','ENDSUB','RETURN','PRINT','AND','OR','NOT','DO','LOOP','UNTIL','BREAK','SKIP','INC','DEC','IIF','EQ','NE','LT','GT','LE','GE','MOD'],tokenizer:{root:[[/'.*$/,'comment'],[/\/\/.*$/,'comment'],[/[A-Za-z_]\w*(?=\s*\.)/,'type'],[/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],[/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],[/[()\[\];,.:]/,'delimiter'],[/[+\-*/=<>]+/,'operator']],str:[[/[^"]+/,'string'],[/"/,'string','@pop']]}},picopython:{keywords:['if','elif','else','while','for','in','range','def','return','break','continue','pass','and','or','not','print','True','False','match','case','dispatch'],tokenizer:{root:[[/#.*$/,'comment'],[/[A-Za-z_]\w*(?=\s*\.)/,'type'],[/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],[/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],[/'/,'string','@str2'],[/[()\[\]:,.]/,'delimiter'],[/[+\-*/%=<>!]+/,'operator']],str:[[/[^"]+/,'string'],[/"/,'string','@pop']],str2:[[/[^']+/,'string'],[/'/,'string','@pop']]}},picoenglish:{ignoreCase:true,keywords:['set','let','to','be','add','subtract','from','increase','decrease','multiply','divide','by','print','show','display','if','otherwise','while','repeat','as','long','for','each','times','with','define','do','call','return','stop','break','skip','continue','choose','when','dispatch','on','is','greater','less','than','at','least','most','equal','equals','exceeds','plus','minus','modulo','mod','over','and','or','not','true','false'],tokenizer:{root:[[/#.*$/,'comment'],[/[A-Za-z_]\w*(?=\s*\.\s*[A-Za-z_]\w*\s*\()/,'type'],[/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],[/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],[/[()\[\],.:]/,'delimiter'],[/[+\-*/%=<>]+/,'operator']],str:[[/[^"]+/,'string'],[/"/,'string','@pop']]}}};
-function registerLang(id){monaco.languages.register({id:id});monaco.languages.setMonarchTokensProvider(id,MONARCH[id]);monaco.languages.registerCompletionItemProvider(id,{provideCompletionItems:function(model,pos){var kw=MONARCH[id].keywords||[];var sug=kw.map(function(k){return{label:k,kind:monaco.languages.CompletionItemKind.Keyword,insertText:k};});hookNames().forEach(function(name){sug.push({label:name,kind:monaco.languages.CompletionItemKind.Function,insertText:name+'('});});return{suggestions:sug};}});}
+function constantDoc(name){
+  if(/^STATUS_/.test(name)||/^HTTP_STATUS_/.test(name))return'HTTP response status constant for Net.Status/Resp.Status';
+  if(/^METHOD_/.test(name)||/^HTTP_METHOD_/.test(name))return'HTTP request method constant for Req.Method';
+  if(/^TZ_/.test(name)||/^TIMEZONE\./.test(name))return'Timezone enum id';
+  if(/^CURRENCY_/.test(name))return'ISO-4217 currency constant';
+  if(/^COUNTRY_/.test(name))return'ISO-3166 country constant';
+  return'PicoScript named constant';
+}
+function registerLang(id){monaco.languages.register({id:id});monaco.languages.setMonarchTokensProvider(id,MONARCH[id]);monaco.languages.registerCompletionItemProvider(id,{provideCompletionItems:function(model,pos){var kw=MONARCH[id].keywords||[];var sug=kw.map(function(k){return{label:k,kind:monaco.languages.CompletionItemKind.Keyword,insertText:k};});hookNames().forEach(function(name){sug.push({label:name,kind:monaco.languages.CompletionItemKind.Function,insertText:name+'('});});CONSTANT_NAMES.forEach(function(name){sug.push({label:name,kind:monaco.languages.CompletionItemKind.Constant,insertText:name,detail:constantDoc(name),documentation:'Use directly in expressions, e.g. Net.Status('+name+').' });});return{suggestions:sug};}});}
 function initMonaco(){if(typeof require==='undefined'||!require.config){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';return;}try{require.config({paths:{vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs'}});require(['vs/editor/editor.main'],function(){['picoc','picobasic','picopython','picoenglish'].forEach(registerLang);EDITOR=monaco.editor.create(document.getElementById('monaco'),{value:document.getElementById('src').value,language:monacoLangId(document.getElementById('lang').value),theme:'vs-dark',minimap:{enabled:false},fontSize:13,lineNumbers:'on',scrollBeyondLastLine:false,automaticLayout:true,tabSize:4,insertSpaces:true});EDITOR.onDidChangeModelContent(function(){document.getElementById('src').value=EDITOR.getValue();filesRender();});},function(){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';});}catch(e){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';}}
 
 // localStorage-backed playground files
@@ -936,7 +960,7 @@ function renderSyntaxRef(){
 function renderSamples(){
   var lang=CUR_LANG,SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cobstyle',report:'rptstyle',functional:'fnstyle'};
   var samples=[
-    {title:'PicoWAL API Server',desc:'CRUD API routing by method',c:'int method = Req.Method();\nStorage.UsePack(1);\nif (method == 2) {\n    int id = Storage.AddCard();\n    Resp.Status(201);\n    print(id);\n} else {\n    int n = Storage.QueryCard(0);\n    Resp.Status(200);\n    print(n);\n}\nResp.End();',basic:"DIM METHOD = Req.Method()\nStorage.UsePack(1)\nIF METHOD EQ 2 THEN\n    DIM ID = Storage.AddCard()\n    Resp.Status(201)\n    PRINT ID\nELSE\n    DIM N = Storage.QueryCard(0)\n    Resp.Status(200)\n    PRINT N\nENDIF\nResp.End()",python:'method = Req.Method()\nStorage.UsePack(1)\nif method == 2:\n    id = Storage.AddCard()\n    Resp.Status(201)\n    print(id)\nelse:\n    n = Storage.QueryCard(0)\n    Resp.Status(200)\n    print(n)\nResp.End()',english:'Set method to Req.Method().\nStorage.UsePack(1).\nIf method is 2:\n    Set id to Storage.AddCard().\n    Resp.Status(201).\n    Print id.\nOtherwise:\n    Set n to Storage.QueryCard(0).\n    Resp.Status(200).\n    Print n.\nResp.End().'},
+    {title:'PicoWAL API Server',desc:'CRUD API routing by readable HTTP constants',c:'int method = Req.Method();\nStorage.UsePack(1);\nif (method == METHOD_POST) {\n    int id = Storage.AddCard();\n    Resp.Status(STATUS_CREATED);\n    print(id);\n} else {\n    int n = Storage.QueryCard(0);\n    Resp.Status(STATUS_OK);\n    print(n);\n}\nResp.End();',basic:"DIM METHOD = Req.Method()\nStorage.UsePack(1)\nIF METHOD EQ METHOD_POST THEN\n    DIM ID = Storage.AddCard()\n    Resp.Status(STATUS_CREATED)\n    PRINT ID\nELSE\n    DIM N = Storage.QueryCard(0)\n    Resp.Status(STATUS_OK)\n    PRINT N\nENDIF\nResp.End()",python:'method = Req.Method()\nStorage.UsePack(1)\nif method == METHOD_POST:\n    id = Storage.AddCard()\n    Resp.Status(STATUS_CREATED)\n    print(id)\nelse:\n    n = Storage.QueryCard(0)\n    Resp.Status(STATUS_OK)\n    print(n)\nResp.End()',english:'Set method to Req.Method().\nStorage.UsePack(1).\nIf method is METHOD_POST:\n    Set id to Storage.AddCard().\n    Resp.Status(STATUS_CREATED).\n    Print id.\nOtherwise:\n    Set n to Storage.QueryCard(0).\n    Resp.Status(STATUS_OK).\n    Print n.\nResp.End().'},
     {title:'Template Web Server',desc:'Load template card, render page',c:'Resp.Status(200);\nResp.Header(0);\nStorage.UsePack(2);\nStorage.EditCard(1);\nint tpl = Storage.GetField(0);\nprint(tpl);\nResp.End();',basic:"Resp.Status(200)\nResp.Header(0)\nStorage.UsePack(2)\nStorage.EditCard(1)\nDIM TPL = Storage.GetField(0)\nPRINT TPL\nResp.End()",python:'Resp.Status(200)\nResp.Header(0)\nStorage.UsePack(2)\nStorage.EditCard(1)\ntpl = Storage.GetField(0)\nprint(tpl)\nResp.End()',english:'Resp.Status(200).\nResp.Header(0).\nStorage.UsePack(2).\nStorage.EditCard(1).\nSet tpl to Storage.GetField(0).\nPrint tpl.\nResp.End().'},
     {title:'App Status Page',desc:'JSON stats with request counter',c:'Resp.Status(200);\nStorage.UsePack(3);\nStorage.EditCard(1);\nint count = Storage.GetField(0);\ncount++;\nStorage.SetField(0, count);\nprint(count);\nResp.End();',basic:"Resp.Status(200)\nStorage.UsePack(3)\nStorage.EditCard(1)\nDIM COUNT = Storage.GetField(0)\nINC COUNT\nStorage.SetField(0, COUNT)\nPRINT COUNT\nResp.End()",python:'Resp.Status(200)\nStorage.UsePack(3)\nStorage.EditCard(1)\ncount = Storage.GetField(0)\ncount += 1\nStorage.SetField(0, count)\nprint(count)\nResp.End()',english:'Resp.Status(200).\nStorage.UsePack(3).\nStorage.EditCard(1).\nSet count to Storage.GetField(0).\nIncrease count by 1.\nStorage.SetField(0, count).\nPrint count.\nResp.End().'}
   ];

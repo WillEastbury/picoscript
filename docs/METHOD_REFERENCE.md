@@ -64,6 +64,13 @@ Resp.Status(HTTP_STATUS_NOT_FOUND);
 print(TZ_EUROPE_LONDON);
 ```
 
+In English, constants are the same identifiers:
+
+```text
+Net.Status(STATUS_NOT_FOUND).
+Print TZ_EUROPE_LONDON.
+```
+
 For localized human-readable labels/descriptions, use:
 - Python: `picoscript_lang.toLocale(name, locale, user_dictionary)`
 - Browser hooks: `PV_HOOKS.toLocale(name, locale, userDictionary)`

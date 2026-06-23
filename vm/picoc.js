@@ -1040,7 +1040,7 @@
       }
       if (ns.toUpperCase() === "NET") {
         var M = m.toUpperCase();
-        if (M === "STATUS") this.b.net("status", intlit(c.args[0]));
+        if (M === "STATUS") this.b.net("status", this.evalConstExpr(c.args[0]));
         else if (M === "TYPE") this.b.net("type", strlit(c.args[0]));
         else if (M === "BODY") this.b.net("body");
         else if (M === "CLOSE") this.b.net("close");
@@ -1769,7 +1769,7 @@
       }
       if (ns != null && ns.toUpperCase() === "NET") {
         var M = m.toUpperCase();
-        if (M === "STATUS") this.b.net("status", intlit(c.args[0]));
+        if (M === "STATUS") this.b.net("status", this.evalConstExpr(c.args[0]));
         else if (M === "TYPE") this.b.net("type", strlit(c.args[0]));
         else if (M === "BODY") this.b.net("body");
         else if (M === "CLOSE") this.b.net("close");

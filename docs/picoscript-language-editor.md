@@ -287,6 +287,8 @@ The editor can derive completions from the language namespace table:
 | Trigger | Suggestions |
 |---------|-------------|
 | start of statement | `Storage`, `Thread`, `Math`, `Flow`, `Dsp`, `Net`, `Kernel`, `Queue`, `Random`, `Memory`, `Span`, `Descriptor`, `Lease` |
+| expression / identifier | built-in constants such as `METHOD_POST`, `STATUS_CREATED`, `HTTP_STATUS_NOT_FOUND`, `DAY_MONDAY`, `MONTH_JANUARY`, `TZ_UTC`, `CURRENCY_USD`, `COUNTRY_GB`, `UOM_METER`, `COLOR_BLUE`, `INT32_MAX`, `UINT32_MAX`, `MASK16` |
+| enum member | user enum aliases in `ENUM_MEMBER` form (for example `HTTPCODE_CREATED`); C-style may also offer dotted `Enum.Member` |
 | `Storage.` | `Load`, `Save`, `Pipe`, `GetSchemaForPack`, `SetSchemaForPack`, `AddCard`, `UpdateCard`, `DeleteCard`, `PatchCard`, `ReadCard`, `QueryCard`, `UsePack`, `EditCard`, `GetField`, `SetField`, `SetFieldStr`, `GetFieldStr`, `QueryResult`, `SetSlice`, `CardLen`, `ReadSlice`, `WriteSlice`, `GetCard`, `SaveCard`, `QueryCards` |
 | `Req.` | `Seq`, `Principal`, `Method`, `Path`, `Header`, `BodyMode`, `BodyCount`, `BodySpan`, `SetSlice`, `BodySlice`, `BodyLen` |
 | `Stream.` | `Open`, `Next`, `Span`, `Submit`, `Release`, `Close`, `SetSlice`, `Slice` |

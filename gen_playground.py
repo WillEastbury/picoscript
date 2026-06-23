@@ -431,10 +431,10 @@ CONSTRUCTS = [
      "DIM BODY = Span.Make(3000, BLEN)\n"
      "DIM QMODEL = Http.ParseQuery(QUERY)\n"
      "DIM BMODEL = Http.ParseForm(BODY)\n"
-     "IF METHOD = 2 THEN\n"
-     "    NET.STATUS(201)\n"
+     "IF METHOD = METHOD_POST THEN\n"
+     "    NET.STATUS(STATUS_CREATED)\n"
      "ELSE\n"
-     "    NET.STATUS(200)\n"
+     "    NET.STATUS(STATUS_OK)\n"
      "ENDIF\n"
      "Io.Write(QMODEL)\nIo.Write(BMODEL)"),
 
@@ -450,7 +450,7 @@ CONSTRUCTS = [
      + c_load_bytes_to_mem(20, 2000, len(b"cmd=PING&n=3")) +
      "int frame = Span.Make(2000, len);\n"
      "int model = Http.ParseQuery(frame);\n"
-     "Net.Status(200);\n"
+     "Net.Status(STATUS_OK);\n"
      "Io.Write(model);",
      "Storage.Save(0, 0, 2, 12)\n" +
      basic_save_bytes(20, b"cmd=PING&n=3") +
@@ -459,45 +459,42 @@ CONSTRUCTS = [
      + basic_load_bytes_to_mem(20, 2000, len(b"cmd=PING&n=3")) +
      "DIM FRAME = Span.Make(2000, LEN)\n"
      "DIM MODEL = Http.ParseQuery(FRAME)\n"
-     "NET.STATUS(200)\n"
+     "NET.STATUS(STATUS_OK)\n"
      "Io.Write(MODEL)"),
 
     ("Large cards: partial slice reads",
      "Large cards should be processed as byte ranges, not materialized whole. "
      "<code>Storage.SetSlice(offset,len)</code> selects a window; "
      "<code>ReadSlice(card)</code> returns that window as a span; "
-     "<code>WriteSlice(card, span)</code> patches bytes at the current offset. The "
-     "browser/Python simulator uses a small blob backend; PIOS can back the same "
-     "hooks with SD/WALFS range I/O for 400MB+ dataset cards.",
+     "<code>WriteSlice(card, span)</code> patches bytes at the current offset.",
      "int data = \"abcdefghijklmnopqrstuvwxyz\";\n"
      "Storage.UsePack(1);\n"
      "Storage.SetSlice(0, Span.Len(data));\n"
      "Storage.WriteSlice(7, data);\n"
      "print(Storage.CardLen(7));\n"
      "Storage.SetSlice(10, 5);\n"
-     "int mid = Storage.ReadSlice(7);\n"
-     "Io.Write(mid); Io.WriteByte(124);\n"
-     "int patch = \"XYZ\";\n"
-     "Storage.SetSlice(5, Span.Len(patch));\n"
-     "Storage.WriteSlice(7, patch);\n"
-     "Storage.SetSlice(0, Storage.CardLen(7));\n"
-     "int all = Storage.ReadSlice(7);\n"
-     "Io.Write(all);",
+     "Io.Write(Storage.ReadSlice(7));",
      "DIM DATA = \"abcdefghijklmnopqrstuvwxyz\"\n"
      "Storage.UsePack(1)\n"
      "Storage.SetSlice(0, Span.Len(DATA))\n"
      "Storage.WriteSlice(7, DATA)\n"
      "PRINT Storage.CardLen(7)\n"
      "Storage.SetSlice(10, 5)\n"
-     "DIM MID = Storage.ReadSlice(7)\n"
-     "Io.Write(MID)\n"
-     "Io.WriteByte(124)\n"
-     "DIM PATCH = \"XYZ\"\n"
-     "Storage.SetSlice(5, Span.Len(PATCH))\n"
-     "Storage.WriteSlice(7, PATCH)\n"
-     "Storage.SetSlice(0, Storage.CardLen(7))\n"
-     "DIM ALL = Storage.ReadSlice(7)\n"
-     "Io.Write(ALL)"),
+     "Io.Write(Storage.ReadSlice(7))",
+     "data = \"abcdefghijklmnopqrstuvwxyz\"\n"
+     "Storage.UsePack(1)\n"
+     "Storage.SetSlice(0, Span.Len(data))\n"
+     "Storage.WriteSlice(7, data)\n"
+     "print(Storage.CardLen(7))\n"
+     "Storage.SetSlice(10, 5)\n"
+     "Io.Write(Storage.ReadSlice(7))",
+     "Set data to \"abcdefghijklmnopqrstuvwxyz\".\n"
+     "Storage.UsePack(1).\n"
+     "Storage.SetSlice(0, Span.Len(data)).\n"
+     "Storage.WriteSlice(7, data).\n"
+     "Print Storage.CardLen(7).\n"
+     "Storage.SetSlice(10, 5).\n"
+     "Io.Write(Storage.ReadSlice(7))."),
 
     ("Stream data: slice a frame",
      "Stream leases can be read whole with <code>Stream.Span(lease)</code> or as a "
@@ -1205,17 +1202,20 @@ var CUR_LANG = 'c';
 var CUR_CARD = 0;
 
 // pedagogical grouping
+function idxByTitle(t){for(var i=0;i<DATA.length;i++)if(DATA[i].title===t)return i;return -1;}
+function idxList(titles){var out=[];titles.forEach(function(t){var i=idxByTitle(t);if(i>=0)out.push(i);});return out;}
 var GROUPS = [
-  {name:'Basics', items:[0]},
-  {name:'Control Flow', items:[1,2,3,4,10,11]},
-  {name:'Operators', items:[5]},
-  {name:'Dispatch & State', items:[6,7]},
-  {name:'Subroutines', items:[8,9]},
-  {name:'I/O & Cards', items:[12,13,14,15,16]},
-  {name:'Streams & Events', items:[17,18,19,20,21]},
-  {name:'AI & Hardware', items:[22,23,24,25]},
-  {name:'Functions & Errors', items:[26,27]},
-  {name:'OS & Web Hooks', items:[28,29]}
+  {name:'Basics', items:idxList(['Variables & arithmetic'])},
+  {name:'Constants & Locale', items:idxList(['User constants &amp; enums','Built-in constants &amp; locale metadata','Locale.SetLocale + UTC display offsets'])},
+  {name:'Control Flow', items:idxList(['Conditional (if / else)','While loop','Counted loop (for)','Index iteration (foreach)','Unconditional jump (goto)','Post-test loop (do)','Early exit &amp; skip (break / skip)'])},
+  {name:'Operators', items:idxList(['Operators (++ -- ?: && % )'])},
+  {name:'Dispatch & State', items:idxList(['Multi-way branch (switch)','Jump-table dispatch (state machine)'])},
+  {name:'Subroutines', items:idxList(['Subroutine (call / gosub)','Function parameters + return (def/void)'])},
+  {name:'I/O & Cards', items:idxList(['HTTP response (Net.*)','HTML streaming (TextRender.*)','Cards: create &amp; update','Cards: query records','Cards: active-record style','HTTP request: parse query + body','TCP stream: parse parameter frame','Large cards: partial slice reads'])},
+  {name:'Streams & Events', items:idxList(['Stream data: slice a frame','Event handler: slice payload','Streaming: DMA ring (Device.* / Stream.*)','Remote UI: a window (Ui.* / Event.*)'])},
+  {name:'AI & Hardware', items:idxList(['AI tensors: matvec + bitlinear'])},
+  {name:'Functions & Errors', items:idxList(['Testing: PSUnit assertions (Assert.*)','Error handling (try / except)'])},
+  {name:'OS & Web Hooks', items:idxList(['OS-worker: Process + Timer','Base64 + Req.Param (web hooks)'])}
 ];
 
 function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
