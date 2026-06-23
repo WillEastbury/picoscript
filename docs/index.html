@@ -226,7 +226,7 @@
           </div>
           <div class="ref-section" id="ref-samples" style="display:none"><h2 style="color:var(--accent);margin-bottom:10px">Application Samples</h2><div id="samplesContent"></div></div>
           <div class="ref-section" id="ref-internals" style="display:none"><h2 style="color:var(--accent);margin-bottom:10px">Deep Technical Internals <span class="badge">implementer</span></h2><p style="color:var(--muted);font-size:12px;margin-bottom:10px">For contributors. Not required for app authors.</p><div class="docpanel active" style="display:block" id="doc-internals-inline"></div></div>
-          <div class="ref-section" id="ref-rawdocs" style="display:none"><h2 style="color:var(--accent);margin-bottom:10px">Source Documentation</h2><div class="docnav"><button class="docnav-btn active" onclick="showDoc('readme')" data-doc="readme">README</button><button class="docnav-btn" onclick="showDoc('tutorial')" data-doc="tutorial">Tutorial</button><button class="docnav-btn" onclick="showDoc('methods')" data-doc="methods">Method Reference</button><button class="docnav-btn" onclick="showDoc('constants')" data-doc="constants">Named Constants</button><button class="docnav-btn" onclick="showDoc('spec')" data-doc="spec">Language Spec</button><button class="docnav-btn" onclick="showDoc('arch')" data-doc="arch">Compiler Architecture</button><button class="docnav-btn" onclick="showDoc('editor')" data-doc="editor">Editor Contract</button><button class="docnav-btn" onclick="showDoc('agent')" data-doc="agent">Agent Prompt</button><button class="docnav-btn" onclick="showDoc('selfhost')" data-doc="selfhost">Self-Hosting</button><button class="docnav-btn" onclick="showDoc('iobinding')" data-doc="iobinding">PIOS I/O Binding</button><button class="docnav-btn" onclick="showDoc('iointegration')" data-doc="iointegration">PIOS Integration</button><button class="docnav-btn" onclick="showDoc('systems')" data-doc="systems">Systems Language</button><button class="docnav-btn" onclick="showDoc('strings')" data-doc="strings">Strings & Templates</button><button class="docnav-btn" onclick="showDoc('nsstatus')" data-doc="nsstatus">Namespace Status</button><button class="docnav-btn" onclick="showDoc('internals')" data-doc="internals">Internals</button></div><div class="docpanel active" id="doc-readme"><h1 id="picoscript">PicoScript</h1>
+          <div class="ref-section" id="ref-rawdocs" style="display:none"><h2 style="color:var(--accent);margin-bottom:10px">Source Documentation</h2><div class="docnav"><button class="docnav-btn active" onclick="showDoc('readme')" data-doc="readme">README</button><button class="docnav-btn" onclick="showDoc('tutorial')" data-doc="tutorial">Tutorial</button><button class="docnav-btn" onclick="showDoc('primitives')" data-doc="primitives">Primitive Guide</button><button class="docnav-btn" onclick="showDoc('methods')" data-doc="methods">Method Reference</button><button class="docnav-btn" onclick="showDoc('constants')" data-doc="constants">Named Constants</button><button class="docnav-btn" onclick="showDoc('spec')" data-doc="spec">Language Spec</button><button class="docnav-btn" onclick="showDoc('arch')" data-doc="arch">Compiler Architecture</button><button class="docnav-btn" onclick="showDoc('editor')" data-doc="editor">Editor Contract</button><button class="docnav-btn" onclick="showDoc('agent')" data-doc="agent">Agent Prompt</button><button class="docnav-btn" onclick="showDoc('selfhost')" data-doc="selfhost">Self-Hosting</button><button class="docnav-btn" onclick="showDoc('iobinding')" data-doc="iobinding">PIOS I/O Binding</button><button class="docnav-btn" onclick="showDoc('iointegration')" data-doc="iointegration">PIOS Integration</button><button class="docnav-btn" onclick="showDoc('systems')" data-doc="systems">Systems Language</button><button class="docnav-btn" onclick="showDoc('strings')" data-doc="strings">Strings & Templates</button><button class="docnav-btn" onclick="showDoc('nsstatus')" data-doc="nsstatus">Namespace Status</button><button class="docnav-btn" onclick="showDoc('internals')" data-doc="internals">Internals</button></div><div class="docpanel active" id="doc-readme"><h1 id="picoscript">PicoScript</h1>
 <p>PicoScript is a small deterministic language for embedded and edge programs in
 the Pico stack. It is designed for code that must run the same way in a browser,
 on a host, and on bare metal.</p>
@@ -396,6 +396,10 @@ decoded <code>text:</code> line when the output bytes are printable.</p>
 <tr>
 <td><code>docs/NAMED_CONSTANTS.md</code></td>
 <td>Standard enum/constant catalog, localization (<code>toLocale</code>), and user-defined <code>const</code>/<code>enum</code> syntax across all frontends</td>
+</tr>
+<tr>
+<td><code>docs/PRIMITIVES.md</code></td>
+<td>Maths, byte/span, string, encoding, crypto, RNG, compression, and streaming text primitive inventory</td>
 </tr>
 <tr>
 <td><code>docs/COMPILER_ARCHITECTURE.md</code></td>
@@ -1248,7 +1252,290 @@ int diff = DateTime.DiffDays(a, b);
 // Path parameter extraction: /api/orders/123
 int count = Req.ParamCount();   // 3
 int seg = Req.Param(2);         // &quot;123&quot;
-</code></pre></div><div class="docpanel" id="doc-methods"><h1 id="picoscript-method-reference">PicoScript Method Reference</h1>
+</code></pre></div><div class="docpanel" id="doc-primitives"><h1 id="picoscript-primitive-guide">PicoScript primitive guide</h1>
+<p>This guide groups the core runtime primitives by what you are trying to do:
+maths, byte arrays, strings, encodings, hashing/crypto, RNG, and streaming text.</p>
+<p>PicoScript values are signed 32-bit integers. Text and byte arrays are represented
+as <strong>spans</strong>: integer handles pointing at bytes in the arena.</p>
+<h2 id="maths-and-integer-primitives">Maths and integer primitives</h2>
+<table>
+<thead>
+<tr>
+<th>Namespace</th>
+<th>Methods</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Math</code></td>
+<td><code>Add</code>, <code>Sub</code>, <code>Mul</code>, <code>Div</code>, <code>Inc</code></td>
+<td>Core integer ALU operations; frontends usually emit these from operators.</td>
+</tr>
+<tr>
+<td><code>Maths</code></td>
+<td><code>Sin</code>, <code>Cos</code>, <code>Tan</code>, <code>Exp</code>, <code>Log</code>, <code>Log10</code>, <code>Power</code>, <code>Sqrt</code>, <code>Clamp</code>, <code>Lerp</code>, <code>Random</code>, <code>RandomRange</code></td>
+<td>Deterministic integer/fixed-point helpers. Trig/log/exp use Q16.16 fixed point. RNG-class methods require random capability.</td>
+</tr>
+<tr>
+<td><code>Bits</code></td>
+<td><code>And</code>, <code>Or</code>, <code>Xor</code>, <code>Not</code>, <code>Shl</code>, <code>Shr</code>, <code>Sar</code></td>
+<td>Bitwise and shift operations.</td>
+</tr>
+<tr>
+<td><code>Dot8</code></td>
+<td><code>Len</code>, <code>Of</code></td>
+<td>Signed int8 dot product; native C can use AArch64 SDOT or Cortex-M33 SMLAD.</td>
+</tr>
+</tbody>
+</table>
+<p>Example:</p>
+<pre><code class="language-c">int mask = Bits.And(flags, MASK16);
+int root = Maths.Sqrt(144);
+int s = Maths.Sin(RAD_PER_DEG_Q16 * 90);
+</code></pre>
+<h2 id="byte-arrays-and-spans">Byte arrays and spans</h2>
+<table>
+<thead>
+<tr>
+<th>Namespace</th>
+<th>Methods</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Memory</code></td>
+<td><code>Set</code>, <code>Get</code>, <code>ArenaInit</code>, <code>ArenaAlloc</code>, <code>ArenaReset</code>, <code>ArenaStats</code>, <code>Peek</code>, <code>Poke</code></td>
+<td>Byte-addressable arena and lower-level memory hooks. Prefer string literals/spans unless byte-by-byte work is the point.</td>
+</tr>
+<tr>
+<td><code>Span</code></td>
+<td><code>Make</code>, <code>Slice</code>, <code>Materialize</code>, <code>Len</code>, <code>Get</code></td>
+<td>A <code>span</code> is the byte-array handle. <code>Slice</code> is zero-copy; <code>Materialize</code> copies into a new contiguous span.</td>
+</tr>
+<tr>
+<td><code>Io</code></td>
+<td><code>Write</code>, <code>WriteByte</code></td>
+<td>Output bytes/spans.</td>
+</tr>
+</tbody>
+</table>
+<p>Example:</p>
+<pre><code class="language-c">int data = &quot;hello&quot;;          // string literal -&gt; UTF-8 span
+print(Span.Len(data));       // 5
+Io.Write(Span.Slice(data, 1));
+</code></pre>
+<h2 id="strings">Strings</h2>
+<p><code>String.*</code> methods operate on UTF-8 byte spans and return either integers or new
+spans.</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Length</code></td>
+<td>byte length</td>
+</tr>
+<tr>
+<td><code>Concat</code></td>
+<td>concatenate two spans</td>
+</tr>
+<tr>
+<td><code>Substring</code></td>
+<td>slice from an offset</td>
+</tr>
+<tr>
+<td><code>IndexOf</code></td>
+<td>find a subspan, sets <code>Status.Last</code> to <code>NOT_FOUND</code> on miss</td>
+</tr>
+<tr>
+<td><code>StartsWith</code>, <code>EndsWith</code>, <code>Eq</code></td>
+<td>comparisons</td>
+</tr>
+<tr>
+<td><code>ToUpper</code>, <code>ToLower</code>, <code>Trim</code></td>
+<td>ASCII-oriented text transforms</td>
+</tr>
+<tr>
+<td><code>SetReplace</code>, <code>Replace</code></td>
+<td>set replacement span, then replace a needle</td>
+</tr>
+<tr>
+<td><code>Split</code>, <code>Join</code></td>
+<td>ABI surface for split/join workflows</td>
+</tr>
+</tbody>
+</table>
+<p>Example:</p>
+<pre><code class="language-c">int name = &quot;Ada&quot;;
+int upper = String.ToUpper(name);
+Io.Write(upper);             // ADA
+</code></pre>
+<h2 id="number-formatting-and-parsing">Number formatting and parsing</h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Parse</code></td>
+<td>parse decimal text span to int; sets <code>Status.Last</code> on parse error</td>
+</tr>
+<tr>
+<td><code>ToString</code>, <code>ToHex</code>, <code>ToOctal</code>, <code>ToBinary</code></td>
+<td>integer to text span</td>
+</tr>
+<tr>
+<td><code>Abs</code>, <code>Min</code>, <code>Max</code>, <code>Floor</code>, <code>Ceiling</code>, <code>Round</code></td>
+<td>integer numeric helpers</td>
+</tr>
+</tbody>
+</table>
+<p>Example:</p>
+<pre><code class="language-c">int n = Number.Parse(&quot;42&quot;);
+Io.Write(Number.ToHex(n));    // 2a
+</code></pre>
+<h2 id="textbinary-encodings">Text/binary encodings</h2>
+<table>
+<thead>
+<tr>
+<th>Namespace</th>
+<th>Methods</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Base64</code></td>
+<td><code>Encode</code>, <code>Decode</code>, <code>UrlEncode</code>, <code>UrlDecode</code></td>
+<td>Standard and URL-safe Base64.</td>
+</tr>
+<tr>
+<td><code>Encoding</code></td>
+<td><code>AsciiEncode</code>, <code>AsciiDecode</code>, <code>Utf8Encode</code>, <code>Utf8Decode</code>, <code>Utf16LEEncode</code>, <code>Utf16LEDecode</code>, <code>Utf16BEEncode</code>, <code>Utf16BEDecode</code>, <code>Utf7Encode</code>, <code>Utf7Decode</code>, <code>HexEncode</code>, <code>HexDecode</code></td>
+<td>Explicit text/binary conversion. Decoders normalize text back to UTF-8 spans.</td>
+</tr>
+</tbody>
+</table>
+<p>Example:</p>
+<pre><code class="language-c">int text = &quot;Hello+£&quot;;
+int utf16 = Encoding.Utf16LEEncode(text);
+int back = Encoding.Utf16LEDecode(utf16);
+int b64 = Base64.UrlEncode(text);
+int raw = Base64.UrlDecode(b64);
+int hex = Encoding.HexEncode(raw);
+</code></pre>
+<p><code>Utf7*</code> exists for compatibility only. Prefer UTF-8/UTF-16 for new protocols.</p>
+<h2 id="streaming-builders">Streaming builders</h2>
+<table>
+<thead>
+<tr>
+<th>Namespace</th>
+<th>Methods</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Utf8Writer</code></td>
+<td><code>New</code>, <code>Byte</code>, <code>Int</code>, <code>Span</code>, <code>ToSpan</code>, <code>Len</code>, <code>Reset</code></td>
+<td>Build byte/text output in a caller-provided arena window.</td>
+</tr>
+<tr>
+<td><code>Utf8Reader</code></td>
+<td><code>New</code>, <code>Peek</code>, <code>Next</code>, <code>Int</code>, <code>SkipWs</code>, <code>Eof</code>, <code>Pos</code>, <code>Match</code></td>
+<td>Scan bytes from a span.</td>
+</tr>
+<tr>
+<td><code>Json</code></td>
+<td><code>BeginObject</code>, <code>EndObject</code>, <code>BeginArray</code>, <code>EndArray</code>, <code>Key</code>, <code>Str</code>, <code>Int</code>, <code>Bool</code>, <code>Null</code>, <code>Raw</code></td>
+<td>Streaming JSON with commas and escaping handled by runtime.</td>
+</tr>
+<tr>
+<td><code>Xml</code></td>
+<td><code>Open</code>, <code>AttrName</code>, <code>AttrValue</code>, <code>OpenEnd</code>, <code>Text</code>, <code>Close</code>, <code>Empty</code></td>
+<td>Escaped XML/HTML-style element writer.</td>
+</tr>
+<tr>
+<td><code>TextRender</code></td>
+<td><code>Raw</code>, <code>Text</code>, <code>Open</code>, <code>Attr</code>, <code>OpenEnd</code>, <code>Close</code>, <code>Empty</code>, <code>Hole</code>, <code>Br</code></td>
+<td>HTML streaming over <code>Utf8Writer</code>; escapes text/attributes and renders simple model holes.</td>
+</tr>
+</tbody>
+</table>
+<p>Example:</p>
+<pre><code class="language-c">int w = Utf8Writer.New(3000, 512);
+Json.BeginObject(w);
+Json.Key(w, &quot;status&quot;);
+Json.Str(w, &quot;ok&quot;);
+Json.EndObject(w);
+Io.Write(Utf8Writer.ToSpan(w));
+</code></pre>
+<h2 id="hashing-crypto-and-rng">Hashing, crypto, and RNG</h2>
+<table>
+<thead>
+<tr>
+<th>Namespace</th>
+<th>Methods</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Random</code></td>
+<td><code>U32</code></td>
+<td>Host-injected deterministic/random U32 source; capability-gated.</td>
+</tr>
+<tr>
+<td><code>Crypto</code></td>
+<td><code>Sha256</code>, <code>HmacSha256</code>, <code>Encrypt</code>, <code>Decrypt</code>, <code>RandomBytes</code></td>
+<td>Implemented runtime crypto primitives; encrypt/decrypt and random bytes are capability-gated.</td>
+</tr>
+<tr>
+<td><code>Crypto</code> ABI surface</td>
+<td><code>Sha1</code>, <code>Sha512</code>, <code>Md5</code>, <code>Blake2b</code>, <code>Blake3</code>, <code>HmacSha512</code>, <code>GenerateKeyPair</code>, <code>Sign</code>, <code>Verify</code>, <code>DeriveKey</code></td>
+<td>Hook surface for host-backed crypto; only use when the target host advertises support.</td>
+</tr>
+</tbody>
+</table>
+<p>Example:</p>
+<pre><code class="language-c">int digest = Crypto.Sha256(&quot;payload&quot;);
+int sig = Crypto.HmacSha256(&quot;key&quot;, &quot;payload&quot;);
+int nonce = Random.U32();
+</code></pre>
+<h2 id="compression">Compression</h2>
+<table>
+<thead>
+<tr>
+<th>Namespace</th>
+<th>Methods</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Compress</code></td>
+<td><code>PicoCompress</code>, <code>PicoDecompress</code>, <code>BrotliCompress</code>, <code>BrotliDecompress</code>, <code>DeflateCompress</code>, <code>DeflateDecompress</code>, <code>GzipCompress</code>, <code>GzipDecompress</code></td>
+</tr>
+</tbody>
+</table>
+<p>Example:</p>
+<pre><code class="language-c">int packed = Compress.GzipCompress(&quot;hello&quot;);
+int plain = Compress.GzipDecompress(packed);
+Io.Write(plain);
+</code></pre>
+<h2 id="capability-notes">Capability notes</h2>
+<p>Pure byte/text/math transforms need no external binding. Hooks that touch outside
+state are capability-gated: <code>Random.*</code>, <code>Crypto.RandomBytes</code>, <code>Crypto.Encrypt</code>,
+<code>Crypto.Decrypt</code>, <code>Storage.*</code>, <code>Req.*</code>, <code>Resp.*</code>, <code>DateTime.*</code>, <code>Locale.*</code>,
+device/stream/process/timer hooks, and similar host bindings.</p></div><div class="docpanel" id="doc-methods"><h1 id="picoscript-method-reference">PicoScript Method Reference</h1>
 <p><strong>Version:</strong> v0.3 (Lease-first, Case-insensitive v2 Language)</p>
 <h2 id="overview">Overview</h2>
 <p>This document provides a comprehensive reference for all PicoScript methods, organized by namespace. Each method shows:</p>
@@ -5699,7 +5986,7 @@ BASIC source -&gt; bytecode -&gt; BASIC source view -&gt; bytecode
 </tr>
 <tr>
 <td><code>Base64.</code></td>
-<td><code>Encode</code>, <code>Decode</code>, <code>UrlDecode</code></td>
+<td><code>Encode</code>, <code>Decode</code>, <code>UrlEncode</code>, <code>UrlDecode</code></td>
 </tr>
 <tr>
 <td><code>Encoding.</code></td>
