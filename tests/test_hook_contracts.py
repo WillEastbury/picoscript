@@ -62,5 +62,9 @@ def main():
     print(f"PASS hook contracts: {len(HOOK_CONTRACTS)} hooks covered")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

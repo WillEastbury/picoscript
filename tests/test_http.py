@@ -153,5 +153,9 @@ def main():
           "Python VM == JS VM byte-exact (incl. query/JSON -> Template.Render integration)")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

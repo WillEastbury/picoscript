@@ -155,5 +155,9 @@ def main():
           f"AArch64 emits SDOT x{sdot}, Cortex-M33 emits SMLAD x{smlad}")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

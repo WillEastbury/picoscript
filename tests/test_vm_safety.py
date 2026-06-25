@@ -244,5 +244,9 @@ def main():
           "pure/non-allocating hooks and below-floor user writes stay ungated")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

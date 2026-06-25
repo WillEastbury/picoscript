@@ -135,5 +135,9 @@ def main():
         shutil.rmtree(BUILD, ignore_errors=True)
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

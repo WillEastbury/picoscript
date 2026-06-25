@@ -70,5 +70,9 @@ def main():
           "Html.Encode/Decode -- Python VM == JS VM, known-answer verified (>0xFF dispatch OK)")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

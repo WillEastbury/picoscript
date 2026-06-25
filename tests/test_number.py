@@ -50,5 +50,9 @@ def main():
           f"(Abs/Min/Max/ToString/ToHex/Parse)")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

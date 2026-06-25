@@ -23,3 +23,29 @@ Repository = "https://github.com/WillEastbury/picoscript"
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py"]
+markers = ["slow: tests that build the C VM or take >30s"]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = [
+  "picoscript_lang",
+  "picoscript_vm",
+  "picoscript_il",
+  "picoscript_basic",
+  "picoscript_cfront",
+  "picoscript_python",
+  "picoscript_english",
+  "picoscript_cobol",
+  "picoscript_report",
+  "picoscript_functional",
+  "picoscript_opcodes",
+  "picoscript_runtime",
+  "picoscript_metrics",
+  "picoscript_build",
+]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+precision = 1

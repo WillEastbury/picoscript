@@ -216,5 +216,9 @@ def main():
           "across C/BASIC/Python/English, run correctly, and stay Python==JS byte-identical.")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

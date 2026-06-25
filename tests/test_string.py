@@ -64,5 +64,9 @@ def main():
           f"Length/IndexOf/StartsWith/EndsWith/Concat/ToUpper/Replace)")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

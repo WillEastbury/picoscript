@@ -116,5 +116,9 @@ def main():
           f"1536x1536 matvec in {dt*1000:.1f} ms (Python VM: ~79000 ms)")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

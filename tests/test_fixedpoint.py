@@ -132,5 +132,9 @@ def main():
           f"Python/C/JS; trig max err {max_err:.5f}, exp rel {me:.6f}, log {ml:.6f}, log10 {ml10:.6f}")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

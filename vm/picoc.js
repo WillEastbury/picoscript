@@ -541,21 +541,32 @@
     parseProgram: function () { var s = []; while (this.peek().kind !== "eof") s.push(this.parseToplevel()); return s; },
     parseToplevel: function () {
       var t = this.peek();
+      // void name(params) { } or int/var name(params) { } function definition
       if (t.kind === "kw" && t.value === "void") {
-        this.next(); var name = this.next().value; this.expect("(");
-        var params = [];
-        if (!this.accept(")")) {
-          while (true) {
-            var pt = this.peek();
-            if (pt.kind === "kw" && pt.value === "int") this.next();
-            params.push(this.next().value);
-            if (!this.accept(",")) break;
-          }
-          this.expect(")");
+        return this._parseFuncDef();
+      }
+      if (t.kind === "kw" && (t.value === "int" || t.value === "var")) {
+        // Disambiguate: int name( => function def; int name = / int name ; => var decl
+        if (this.i + 2 < this.toks.length && this.toks[this.i + 1].kind === "id" && this.toks[this.i + 2].value === "(") {
+          return this._parseFuncDef();
         }
-        return { t: "Func", name: name, body: this.parseBlock(), params: params.length ? params : null };
       }
       return this.parseStmt();
+    },
+    _parseFuncDef: function () {
+      this.next(); // consume return type (void/int/var)
+      var name = this.next().value; this.expect("(");
+      var params = [];
+      if (!this.accept(")")) {
+        while (true) {
+          var pt = this.peek();
+          if (pt.kind === "kw" && (pt.value === "int" || pt.value === "var")) this.next();
+          params.push(this.next().value);
+          if (!this.accept(",")) break;
+        }
+        this.expect(")");
+      }
+      return { t: "Func", name: name, body: this.parseBlock(), params: params.length ? params : null };
     },
     parseBlock: function () { this.expect("{"); var s = []; while (!this.accept("}")) { if (this.peek().kind === "eof") throw new Error("C: unterminated block"); s.push(this.parseStmt()); } return s; },
     parseStmt: function () {

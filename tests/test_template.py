@@ -79,5 +79,9 @@ def main():
           "(holes, sections, inverted, nesting, {{#each}} object/scalar/nested lists, missing-key)")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

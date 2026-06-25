@@ -24,3 +24,4 @@ data/*.jsonl
 .test_build_*/
 
 _commitmsg.txt
+.coverage

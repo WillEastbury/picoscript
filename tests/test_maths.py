@@ -52,5 +52,9 @@ def main():
     print("PASS Maths.*: Python VM == JS VM byte-exact (Power, integer Sqrt)")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

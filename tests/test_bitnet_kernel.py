@@ -154,5 +154,9 @@ def main():
     print(f"PASS bitnet ternary kernel: {total} cases, PicoScript == C engine (bit-exact)")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

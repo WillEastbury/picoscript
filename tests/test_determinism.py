@@ -86,5 +86,9 @@ def main():
     print("PASS determinism: host-injected Random.U32 seeds replay per runtime on Python / C / JS")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

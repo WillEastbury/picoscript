@@ -971,8 +971,12 @@ def main():
     check_selfhost("selfhost: emit print", "examples/selfhost_emit.pc", 1234)
 
     print(f"\n{passed} passed, {failed} failed (parity + semantics)")
-    sys.exit(1 if failed else 0)
+    assert failed == 0, f"{failed} test(s) failed"
 
+
+
+def test_main():
+    main()
 
 if __name__ == "__main__":
     main()

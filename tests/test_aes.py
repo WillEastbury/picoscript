@@ -116,5 +116,9 @@ def main():
           "(NIST SP800-38A vector), encrypt/decrypt round-trips, and is CAP_CRYPTO-gated (INV-17)")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

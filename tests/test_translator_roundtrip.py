@@ -146,10 +146,14 @@ def main():
         print("\nFAILED PAIRS:")
         for f in fails:
             print(f"  {f['name']} {f['from']}->{f['to']}: {f['status']}")
-        sys.exit(1)
+        assert False, f"{len(fails)} translator roundtrip(s) failed"
     else:
         print("\nALL TRANSLATOR ROUNDTRIPS PASS")
 
+
+
+def test_main():
+    main()
 
 if __name__ == "__main__":
     main()

@@ -192,5 +192,9 @@ print(Bits.Or(Bits.Shl(op, 28), imm));
     print("Bits tests passed")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

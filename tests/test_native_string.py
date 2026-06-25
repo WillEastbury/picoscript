@@ -110,5 +110,9 @@ def main():
           "-- spans, Io.Write, String.* (11 ops), Number.* (Parse/ToString/ToHex/Octal/Binary/Abs/Min/Max)")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

@@ -111,5 +111,9 @@ def main():
     print("PASS locale runtime: Locale.SetLocale/Format*/Translate work across C/BASIC/Python/English and keep Python==JS bytecode parity.")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

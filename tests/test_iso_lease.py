@@ -118,11 +118,15 @@ def main():
     total = len(VALID) + len(INVALID)
     print(f"{total - failed} passed, {failed} failed")
     if failed:
-        sys.exit(1)
+        assert False, f"{failed} iso-lease test(s) failed"
     print("PASS iso-lease: compile-time use-after-seal is a compile error; Python and JS "
           "gates make byte-identical accept/reject decisions with the identical first "
           "violation (INV-7 authoritative form; runtime Resp.* sim is the backstop)")
 
+
+
+def test_main():
+    main()
 
 if __name__ == "__main__":
     main()

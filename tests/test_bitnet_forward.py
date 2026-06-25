@@ -57,5 +57,9 @@ def main():
           f"at dims 8/32/128; 128-dim 4-layer prefill(5) in {dt*1000:.0f} ms, argmax={pred}")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

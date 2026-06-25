@@ -258,25 +258,35 @@ class Parser:
 
     def parse_toplevel(self) -> object:
         t = self.peek()
-        # void name(params) { } subroutine
+        # void name(params) { } subroutine (no return value)
         if t.kind == "kw" and t.value == "void":
-            self.next()
-            name = self.next().value
-            self.expect("(")
-            params = []
-            if not self.accept(")"):
-                # parse comma-separated param names (with optional type prefix)
-                while True:
-                    pt = self.peek()
-                    if pt.kind == "kw" and pt.value == "int":
-                        self.next()  # skip type prefix
-                    params.append(self.next().value)
-                    if not self.accept(","):
-                        break
-                self.expect(")")
-            body = self.parse_block()
-            return Func(name, body, params if params else None)
+            return self._parse_func_def()
+        # int name(params) { } function (with return value)
+        if t.kind == "kw" and t.value in ("int", "var"):
+            # Disambiguate: int name( => function def; int name = / int name ; => var decl
+            if (self.i + 2 < len(self.toks)
+                    and self.toks[self.i + 1].kind == "id"
+                    and self.toks[self.i + 2].value == "("):
+                return self._parse_func_def()
         return self.parse_stmt()
+
+    def _parse_func_def(self) -> Func:
+        """Parse: (void|int|var) name ( params ) { body }"""
+        self.next()  # consume return type keyword
+        name = self.next().value
+        self.expect("(")
+        params = []
+        if not self.accept(")"):
+            while True:
+                pt = self.peek()
+                if pt.kind == "kw" and pt.value in ("int", "var"):
+                    self.next()  # skip type prefix
+                params.append(self.next().value)
+                if not self.accept(","):
+                    break
+            self.expect(")")
+        body = self.parse_block()
+        return Func(name, body, params if params else None)
 
     def parse_block(self) -> List[object]:
         self.expect("{")

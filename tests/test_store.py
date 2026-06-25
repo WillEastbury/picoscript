@@ -95,8 +95,12 @@ def main():
     check("predicate eval", pred({"qty": 70, "sku": "B"}) and not pred({"qty": 1, "sku": "Z"}))
 
     print(f"\n{passed} passed, {failed} failed")
-    sys.exit(1 if failed else 0)
+    assert failed == 0, f"{failed} test(s) failed"
 
+
+
+def test_main():
+    main()
 
 if __name__ == "__main__":
     main()

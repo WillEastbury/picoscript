@@ -118,5 +118,9 @@ def main():
           f"and C runs a packed module + rejects a tampered one (INV-23)")
 
 
+
+def test_main():
+    main()
+
 if __name__ == "__main__":
     main()

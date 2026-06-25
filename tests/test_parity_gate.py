@@ -26,6 +26,7 @@ TESTS_DIR = ROOT_PATH / "tests"
 ALLOWLISTED_NAMESPACES = {
     "Auth",         # Host identity provider / token state.
     "Context",      # Live request, user, certificate, and tracing context.
+    "Data",         # Host-backed structured data source (query/cursor/schema).
     "DateTime",     # Wall-clock time and date formatting depend on host state.
     "Environment",  # OS, process, CPU, memory, timezone, and hostname facts.
     "Kernel",       # IRQ, software IRQ, profiling, and tracing are PIOS hooks.
