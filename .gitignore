@@ -25,3 +25,4 @@ data/*.jsonl
 
 _commitmsg.txt
 .coverage
+coverage.json
