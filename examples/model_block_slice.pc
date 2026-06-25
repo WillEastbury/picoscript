@@ -1,0 +1,27 @@
+// Model block slices: store weights as a card, read row blocks, run block matvec.
+// No whole-tensor materialization -- only the needed row window touches the arena.
+
+// Seed a small 4x3 int8 weight matrix into a blob card.
+Memory.Set(1000, 1); Memory.Set(1001, 2); Memory.Set(1002, 3);
+Memory.Set(1003, 4); Memory.Set(1004, 5); Memory.Set(1005, 6);
+Memory.Set(1006, 7); Memory.Set(1007, 8); Memory.Set(1008, 9);
+Memory.Set(1009, 10); Memory.Set(1010, 11); Memory.Set(1011, 12);
+int blob = Span.Make(1000, 12);
+Storage.UsePack(2);
+Storage.SetSlice(0, 12);
+Storage.WriteSlice(7, blob);
+
+// Define a tensor view: pack=2, card=7, offset=0, rows=4, cols=3, format=1 (int8).
+Model.TensorView(1, "2|7|0|4|3|1");
+
+// Read only rows 1..2 (a block of 2 rows starting at row 1).
+Model.SetBlock(1, 2);
+int block = Model.ReadTensorBlock(1, 0);
+Io.Write(block);
+Io.Write("|");
+
+// Block matvec: multiply rows 1..2 against activation [1,1,1].
+Memory.Set(1100, 1); Memory.Set(1101, 1); Memory.Set(1102, 1);
+int act = Span.Make(1100, 3);
+int result = Model.MatVecI8Block(1, act);
+Io.Write(result);

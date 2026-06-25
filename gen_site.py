@@ -620,7 +620,8 @@ var GROUPS=[
   {name:'Subroutines',items:idxList(['Subroutine (call / gosub)','Function parameters + return (def/void)'])},
   {name:'I/O & Cards',items:idxList(['HTTP response (Net.*)','HTML streaming (TextRender.*)','Cards: create &amp; update','Cards: query records','Cards: active-record style','HTTP request: parse query + body','TCP stream: parse parameter frame','Large cards: partial slice reads'])},
   {name:'Streams & Events',items:idxList(['Stream data: slice a frame','Event handler: slice payload','Streaming: DMA ring (Device.* / Stream.*)','Remote UI: a window (Ui.* / Event.*)'])},
-  {name:'AI & Hardware',items:idxList(['AI tensors: matvec + bitlinear'])},
+  {name:'AI & Hardware',items:idxList(['AI tensors: matvec + bitlinear','Model block slices'])},
+  {name:'Encoding',items:idxList(['Encoding round-trips'])},
   {name:'Functions & Errors',items:idxList(['Testing: PSUnit assertions (Assert.*)','Error handling (try / except)'])},
   {name:'OS & Web Hooks',items:idxList(['OS-worker: Process + Timer','Base64 + Req.Param (web hooks)'])}
 ];

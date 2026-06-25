@@ -1,0 +1,24 @@
+// Text encoding round-trips: UTF-8 -> UTF-16LE -> UTF-8, hex, base64url.
+int text = "Hello";
+
+// ASCII (non-ASCII becomes '?')
+int ascii = Encoding.AsciiEncode(text);
+Io.Write(ascii);
+Io.Write("|");
+
+// UTF-16LE round-trip
+int utf16 = Encoding.Utf16LEEncode(text);
+int back = Encoding.Utf16LEDecode(utf16);
+Io.Write(back);
+Io.Write("|");
+
+// Hex encode/decode round-trip
+int hex = Encoding.HexEncode(text);
+int fromHex = Encoding.HexDecode(hex);
+Io.Write(fromHex);
+Io.Write("|");
+
+// Base64 URL-safe round-trip
+int b64 = Base64.UrlEncode(text);
+int raw = Base64.UrlDecode(b64);
+Io.Write(raw);

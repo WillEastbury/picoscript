@@ -1,0 +1,15 @@
+// Locale formatting: set locale + timezone, format date/time/currency.
+// Date/time values are UTC epoch-seconds; display includes offset.
+int lang = "en-GB";
+int tz = "UTC";
+Locale.SetLocale(lang, tz);
+
+Io.Write(Locale.GetCurrentLocale());    // en-GB@UTC
+Io.Write("|");
+Io.Write(Locale.FormatDate(0, 0));      // 1970-01-01 +00:00
+Io.Write("|");
+Io.Write(Locale.FormatTime(0, 0));      // 00:00:00 +00:00
+Io.Write("|");
+Io.Write(Locale.FormatNumber(12345, 0));
+Io.Write("|");
+Io.Write(Locale.FormatCurrency(12345, CURRENCY_USD));

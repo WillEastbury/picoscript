@@ -714,6 +714,65 @@ CONSTRUCTS = [
      "DIM TW = Span.Make(1200, 2)\n"
      "Io.Write(BitLinear.MatVecTernary(TW, VEC))"),
 
+    ("Encoding round-trips",
+     "Explicit text/binary encoding hooks convert between UTF-8 spans and "
+     "ASCII, UTF-16, hex, and Base64 URL-safe formats. Decoders always "
+     "normalize back to UTF-8.",
+     "int text = \"Hello\";\n"
+     "Io.Write(Encoding.AsciiEncode(text)); Io.Write(\"|\");\n"
+     "Io.Write(Encoding.Utf16LEDecode(Encoding.Utf16LEEncode(text))); Io.Write(\"|\");\n"
+     "Io.Write(Encoding.HexDecode(Encoding.HexEncode(text))); Io.Write(\"|\");\n"
+     "Io.Write(Base64.UrlDecode(Base64.UrlEncode(text)));",
+     "DIM TEXT = \"Hello\"\n"
+     "Io.Write(Encoding.AsciiEncode(TEXT))\nIo.Write(\"|\")\n"
+     "Io.Write(Encoding.Utf16LEDecode(Encoding.Utf16LEEncode(TEXT)))\nIo.Write(\"|\")\n"
+     "Io.Write(Encoding.HexDecode(Encoding.HexEncode(TEXT)))\nIo.Write(\"|\")\n"
+     "Io.Write(Base64.UrlDecode(Base64.UrlEncode(TEXT)))",
+     "text = \"Hello\"\n"
+     "Io.Write(Encoding.AsciiEncode(text))\nIo.Write(\"|\")\n"
+     "Io.Write(Encoding.Utf16LEDecode(Encoding.Utf16LEEncode(text)))\nIo.Write(\"|\")\n"
+     "Io.Write(Encoding.HexDecode(Encoding.HexEncode(text)))\nIo.Write(\"|\")\n"
+     "Io.Write(Base64.UrlDecode(Base64.UrlEncode(text)))",
+     "Set text to \"Hello\".\n"
+     "Io.Write(Encoding.AsciiEncode(text)).\nIo.Write(\"|\").\n"
+     "Io.Write(Encoding.Utf16LEDecode(Encoding.Utf16LEEncode(text))).\nIo.Write(\"|\").\n"
+     "Io.Write(Encoding.HexDecode(Encoding.HexEncode(text))).\nIo.Write(\"|\").\n"
+     "Io.Write(Base64.UrlDecode(Base64.UrlEncode(text)))."),
+
+    ("Model block slices",
+     "Store model weights as large blob cards and read/compute only the row "
+     "block needed for each token. <code>Model.SetBlock</code> selects a row "
+     "window; <code>Model.MatVecI8Block</code> runs the matvec directly over "
+     "the card without materializing the full tensor.",
+     "// Seed a 4x3 int8 weight card.\n"
+     "Memory.Set(1000,1); Memory.Set(1001,2); Memory.Set(1002,3);\n"
+     "Memory.Set(1003,4); Memory.Set(1004,5); Memory.Set(1005,6);\n"
+     "Memory.Set(1006,7); Memory.Set(1007,8); Memory.Set(1008,9);\n"
+     "Memory.Set(1009,10); Memory.Set(1010,11); Memory.Set(1011,12);\n"
+     "int blob = Span.Make(1000, 12);\n"
+     "Storage.UsePack(2);\n"
+     "Storage.SetSlice(0, 12); Storage.WriteSlice(7, blob);\n"
+     "Model.TensorView(1, \"2|7|0|4|3|1\");\n"
+     "// Read rows 1..2 and block matvec against [1,1,1].\n"
+     "Model.SetBlock(1, 2);\n"
+     "Io.Write(Model.ReadTensorBlock(1, 0)); Io.Write(\"|\");\n"
+     "Memory.Set(1100,1); Memory.Set(1101,1); Memory.Set(1102,1);\n"
+     "int act = Span.Make(1100, 3);\n"
+     "Io.Write(Model.MatVecI8Block(1, act));",
+     "Memory.Set(1000,1)\nMemory.Set(1001,2)\nMemory.Set(1002,3)\n"
+     "Memory.Set(1003,4)\nMemory.Set(1004,5)\nMemory.Set(1005,6)\n"
+     "Memory.Set(1006,7)\nMemory.Set(1007,8)\nMemory.Set(1008,9)\n"
+     "Memory.Set(1009,10)\nMemory.Set(1010,11)\nMemory.Set(1011,12)\n"
+     "DIM BLOB = Span.Make(1000, 12)\n"
+     "Storage.UsePack(2)\n"
+     "Storage.SetSlice(0, 12)\nStorage.WriteSlice(7, BLOB)\n"
+     "Model.TensorView(1, \"2|7|0|4|3|1\")\n"
+     "Model.SetBlock(1, 2)\n"
+     "Io.Write(Model.ReadTensorBlock(1, 0))\nIo.Write(\"|\")\n"
+     "Memory.Set(1100,1)\nMemory.Set(1101,1)\nMemory.Set(1102,1)\n"
+     "DIM ACT = Span.Make(1100, 3)\n"
+     "Io.Write(Model.MatVecI8Block(1, ACT))"),
+
     ("Streaming: DMA ring (Device.* / Stream.*)",
      "Streaming hardware is a producer/consumer ring of DMA buffers, structurally "
      "like Req/Resp but over hardware. Device.Open names a device; Stream.Open starts "
@@ -1397,7 +1456,8 @@ var GROUPS = [
   {name:'Subroutines', items:idxList(['Subroutine (call / gosub)','Function parameters + return (def/void)'])},
   {name:'I/O & Cards', items:idxList(['HTTP response (Net.*)','HTML streaming (TextRender.*)','Cards: create &amp; update','Cards: query records','Cards: active-record style','HTTP request: parse query + body','TCP stream: parse parameter frame','Large cards: partial slice reads'])},
   {name:'Streams & Events', items:idxList(['Stream data: slice a frame','Event handler: slice payload','Streaming: DMA ring (Device.* / Stream.*)','Remote UI: a window (Ui.* / Event.*)'])},
-  {name:'AI & Hardware', items:idxList(['AI tensors: matvec + bitlinear'])},
+  {name:'AI & Hardware', items:idxList(['AI tensors: matvec + bitlinear','Model block slices'])},
+  {name:'Encoding', items:idxList(['Encoding round-trips'])},
   {name:'Functions & Errors', items:idxList(['Testing: PSUnit assertions (Assert.*)','Error handling (try / except)'])},
   {name:'OS & Web Hooks', items:idxList(['OS-worker: Process + Timer','Base64 + Req.Param (web hooks)'])}
 ];

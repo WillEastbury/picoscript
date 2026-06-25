@@ -33,6 +33,9 @@ asserting. See [`docs/PSUNIT.md`](../docs/PSUNIT.md).
 | `sum.ppy` / `sum.eng` | Python-like / English-like | the same sum in other frontends |
 | `fizzbuzz.pbas` | BASIC-like | control flow |
 | `constants_enums.pc` / `.pbas` / `.ppy` / `.eng` | all four | built-in named constants plus user-defined `const` / `enum` declarations |
+| `locale_formatting.pc` | C-syntax | `Locale.SetLocale`, `FormatDate`, `FormatTime`, `FormatNumber`, `FormatCurrency` |
+| `encoding_roundtrip.pc` | C-syntax | `Encoding.*` ASCII/UTF-16/hex round-trips + `Base64.UrlEncode/UrlDecode` |
+| `model_block_slice.pc` | C-syntax | `Model.SetBlock`, `ReadTensorBlock`, `MatVecI8Block` over card-backed tensors |
 | `filter.pico` | v1 | branching |
 | `selfhost_emit.pc` / `selfhost_asm.pc` | C-syntax | PicoScript emitting runnable PicoScript |
 | `bitnet_ternary_matvec.pc` / `bitnet_k_matvec.pc` / `bitnet_int8_matvec.pc` | C-syntax | quantized BitNet kernels (`Dot8` → NEON SDOT / Cortex-M33 SMLAD) |
