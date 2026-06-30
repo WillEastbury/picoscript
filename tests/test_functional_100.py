@@ -45,11 +45,16 @@ def test_functional_manual_parser_branches(monkeypatch):
     blank_suite = Parser([Tok("newline", "", 1, 0), Tok("indent", "", 2, 0), Tok("newline", "", 2, 0), Tok("dedent", "", 3, 0), Tok("eof", "", 3, 0)])
     assert blank_suite.parse_suite() == []
 
-    stmt_body = Parser([Tok("newline", "", 1, 0), Tok("eof", "", 1, 1)])
+    stmt_body = Parser([Tok("id", "x", 1, 0), Tok("eof", "", 1, 1)])
+    monkeypatch.setattr(stmt_body, "parse_stmt", lambda allow_func=False: None)
     assert stmt_body.parse_stmt_body() == []
 
     parse_stmt_none = Parser([Tok("newline", "", 1, 0), Tok("eof", "", 1, 1)])
     assert parse_stmt_none.parse_stmt() is None
+
+    parse_stmt_after_start = Parser([Tok("id", "x", 1, 0), Tok("eof", "", 1, 1)])
+    monkeypatch.setattr(parse_stmt_after_start, "_parse_stmt", lambda allow_func=False: None)
+    assert parse_stmt_after_start.parse_stmt() is None
 
     list_stmt = Parser([Tok("id", "x", 1, 11), Tok("eof", "", 1, 12)])
     monkeypatch.setattr(list_stmt, "_parse_stmt", lambda allow_func=False: [1])
@@ -60,11 +65,21 @@ def test_functional_manual_parser_branches(monkeypatch):
     assert node_stmt.parse_stmt() == 1
 
     program_extend = Parser([Tok("id", "x", 1, 0), Tok("eof", "", 1, 1)])
-    monkeypatch.setattr(program_extend, "parse_stmt", lambda allow_func=True: [Let("a", Var("b"))])
+
+    def program_list(allow_func=True):
+        program_extend.next()
+        return [Let("a", Var("b"))]
+
+    monkeypatch.setattr(program_extend, "parse_stmt", program_list)
     assert len(program_extend.parse_program()) == 1
 
     suite_extend = Parser([Tok("newline", "", 1, 0), Tok("indent", "", 2, 0), Tok("id", "x", 2, 0), Tok("dedent", "", 3, 0), Tok("eof", "", 3, 1)])
-    monkeypatch.setattr(suite_extend, "parse_stmt", lambda allow_func=False: [Let("a", Var("b"))])
+
+    def suite_list(allow_func=False):
+        suite_extend.next()
+        return [Let("a", Var("b"))]
+
+    monkeypatch.setattr(suite_extend, "parse_stmt", suite_list)
     assert len(suite_extend.parse_suite()) == 1
 
 
@@ -72,20 +87,32 @@ def test_functional_function_body_and_statement_errors(monkeypatch):
     with pytest.raises(SyntaxError, match="final line of a function body"):
         Parser(tokenize("let f x =\n    1\n    printfn 2\n")).parse_program()
 
+    body_none = Parser([Tok("newline", "", 1, 0), Tok("indent", "", 2, 0), Tok("newline", "", 2, 0), Tok("dedent", "", 3, 0), Tok("eof", "", 3, 1)])
+    body = body_none.parse_function_body()
+    assert len(body) == 1 and isinstance(body[0], Return)
+
     body_extend = Parser([Tok("newline", "", 1, 0), Tok("indent", "", 2, 0), Tok("kw", "return", 2, 0), Tok("newline", "", 2, 6), Tok("dedent", "", 3, 0), Tok("eof", "", 3, 1)])
     monkeypatch.setattr(body_extend, "_line_starts_expr", lambda: False)
-    monkeypatch.setattr(body_extend, "parse_stmt", lambda allow_func=False: [Let("x", Var("y"))])
+
+    def body_list(allow_func=False):
+        body_extend.next()
+        return [Let("x", Var("y"))]
+
+    monkeypatch.setattr(body_extend, "parse_stmt", body_list)
     body = body_extend.parse_function_body()
     assert isinstance(body[0], Let) and isinstance(body[-1], Return)
 
     prog = Parser(tokenize("return\nbreak\ngoto target\nlabel target\nprintfn 1\n"))
     ast = prog.parse_program()
     assert isinstance(ast[0], Return) and ast[0].value is None
-    assert ast[2].name == "target"
+    assert ast[2].label == "target"
     assert ast[3].name == "target"
 
     with pytest.raises(SyntaxError, match="expression statement must be a call"):
         Parser(tokenize("42\n")).parse_program()
+
+    with pytest.raises(SyntaxError, match="expression statement must be a call"):
+        Parser(tokenize("true\n")).parse_program()
 
     with pytest.raises(SyntaxError, match="only allowed at top level"):
         Parser(tokenize("if true then\n    let f x = x\n")).parse_program()

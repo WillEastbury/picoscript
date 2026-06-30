@@ -53,12 +53,24 @@ def test_english_manual_parser_error_branches(monkeypatch):
     with pytest.raises(SyntaxError, match="unexpected EOF inside block"):
         suite.parse_suite()
 
-    blank_program = Parser([Tok("newline", "", 1, 0), Tok("eof", "", 1, 1)])
+    blank_program = Parser([Tok("word", "x", 1, 0), Tok("eof", "", 1, 1)])
+    calls = {"n": 0}
+
+    def program_none():
+        calls["n"] += 1
+        blank_program.next()
+        return None
+
+    monkeypatch.setattr(blank_program, "parse_stmt", program_none)
     assert blank_program.parse_program() == []
 
-    blank_suite = Parser(
-        [Tok("op", ":", 1, 0), Tok("newline", "", 1, 1), Tok("indent", "", 2, 0), Tok("newline", "", 2, 0), Tok("dedent", "", 3, 0), Tok("eof", "", 3, 0)]
-    )
+    blank_suite = Parser([Tok("op", ":", 1, 0), Tok("newline", "", 1, 1), Tok("indent", "", 2, 0), Tok("word", "x", 2, 0), Tok("dedent", "", 3, 0), Tok("eof", "", 3, 0)])
+
+    def suite_none():
+        blank_suite.next()
+        return None
+
+    monkeypatch.setattr(blank_suite, "parse_stmt", suite_none)
     assert blank_suite.parse_suite() == []
 
     none_stmt = Parser([Tok("word", "x", 1, 7), Tok("eof", "", 1, 8)])
@@ -75,6 +87,9 @@ def test_english_manual_parser_error_branches(monkeypatch):
 
     with pytest.raises(SyntaxError, match="cannot parse statement"):
         Parser(tokenize(".")).parse_program()
+
+    with pytest.raises(SyntaxError, match="cannot parse statement"):
+        Parser(tokenize("Net.Ping.\n")).parse_program()
 
 
 def test_english_parser_constructs_and_operator_words():
@@ -114,13 +129,14 @@ Net.Ping().
     assert isinstance(prog[1], ConstDecl) and prog[1].name == "Limit"
     assert isinstance(prog[2], EnumDecl) and prog[2].members == [("Red", prog[2].members[0][1]), ("Blue", None)]
     assert isinstance(prog[3], Sub)
-    assert isinstance(prog[3].body[0], Return) and prog[3].body[0].value is None
-    assert isinstance(prog[3].body[1], Break)
-    assert isinstance(prog[3].body[2], Skip)
+    fn_if = prog[3].body[0]
+    assert isinstance(fn_if.arms[0][1][0], Return) and fn_if.arms[0][1][0].value is None
+    assert isinstance(fn_if.arms[1][1][0], Break)
+    assert isinstance(fn_if.els[0], Skip)
     assert isinstance(prog[4], Gosub) and prog[4].args is None
     assert isinstance(prog[5], Gosub) and len(prog[5].args) == 2
-    assert isinstance(prog[6], DoLoop) and prog[6].until is True
-    assert isinstance(prog[7], DoLoop) and prog[7].until is False
+    assert isinstance(prog[6], DoLoop) and prog[6].bottom_until is True
+    assert isinstance(prog[7], DoLoop) and prog[7].bottom_until is False
     assert prog[8].var == "idx"
     assert isinstance(prog[9], ForTo) and prog[9].step.value == 2
     assert isinstance(prog[10], Let) and prog[10].value.value == 0

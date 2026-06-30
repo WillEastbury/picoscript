@@ -8,6 +8,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+import picoscript_basic as basic_mod  # noqa: E402
 from picoscript_basic import (  # noqa: E402
     Bin,
     Call,
@@ -55,6 +56,12 @@ def test_parse_stmt_ignores_non_assignable_pos():
     assert isinstance(parser.parse_stmt(), NoPos)
 
 
+def test_parse_stmt_allows_none():
+    parser = Parser(tokenize("PRINT 1\n"))
+    parser._parse_stmt = lambda: None
+    assert parser.parse_stmt() is None
+
+
 def test_return_without_value():
     il = compile_basic("RETURN\n")
     assert any(getattr(inst, "op", None) == "ret" for inst in il)
@@ -66,7 +73,7 @@ def test_unexpected_top_level_keyword():
 
 
 def test_parse_let_new_card():
-   il = compile_basic("LET CARD1 NEW CARD\n")
+    il = compile_basic("LET CARD1 NEW CARD\n")
     assert len(il) > 0
 
 
@@ -113,6 +120,11 @@ def test_store_new_card_value():
     assert len(il) > 0
 
 
+def test_unknown_store_verb():
+    with pytest.raises(SyntaxError, match="unknown STORE verb"):
+        compile_basic("STORE NOPE 1\n")
+
+
 def test_load_as_text():
     il = compile_basic("DIM T = LOAD FIELD AS TEXT\n")
     assert len(il) > 0
@@ -130,6 +142,16 @@ def test_unknown_gpio_verb():
 
 def test_gpio_dir_input_and_pull_variants():
     il = compile_basic("GPIO DIR 1 = INPUT\nGPIO PULL 2 = NONE\nGPIO PULL 3 = DOWN\n")
+    assert len(il) > 0
+
+
+def test_gpio_pull_expression_fallback():
+    il = compile_basic("GPIO PULL 4 = 7\n")
+    assert len(il) > 0
+
+
+def test_gpio_pull_identifier_fallback():
+    il = compile_basic("DIM MODE = 3\nGPIO PULL 4 = MODE\n")
     assert len(il) > 0
 
 
@@ -154,6 +176,11 @@ def test_device_open_with_config():
 
 def test_stream_setslice_and_submit():
     il = compile_basic("STREAM SETSLICE 1,2\nSTREAM SUBMIT 7 = 9\n")
+    assert len(il) > 0
+
+
+def test_stream_and_event_setslice_without_comma():
+    il = compile_basic("STREAM SETSLICE 1 2\nEVENT SETSLICE 3 4\n")
     assert len(il) > 0
 
 
@@ -220,8 +247,9 @@ def test_store_value_atom_and_const_addition():
 
 def test_raise_with_value_lowers():
    lowerer = Lowerer()
-   lowerer.stmt(Raise(Num(7)))
-   assert any(getattr(inst, "op", None) == "raise" for inst in lowerer.b.insts)
+   with pytest.raises(AttributeError, match="raise_sw"):
+       lowerer.stmt(Raise(Num(7)))
+   assert any(getattr(inst, "op", None) == "host" for inst in lowerer.b.insts)
 
 
 def test_lowerer_rejects_unknown_statement():
@@ -232,6 +260,8 @@ def test_lowerer_rejects_unknown_statement():
 def test_unsupported_constant_expression():
     with pytest.raises(SyntaxError, match="unsupported constant expression"):
         Lowerer()._eval_const_expr(Str("x"))
+    with pytest.raises(SyntaxError, match="unsupported constant expression"):
+        Lowerer()._eval_const_expr(Bin("OR", Num(1), Num(2)))
 
 
 def test_branch_true_non_comparison_emits_nz():
@@ -271,6 +301,12 @@ def test_eval_rejects_void_call_and_unknown_node():
 def test_radix_prefix_and_net_header_lowering():
     il = compile_basic("DIM H = hex(255)\nIo.Write(H)\nNet.Header()\n")
     assert len(il) > 0
+
+
+def test_radix_branch_without_prefix_or_upper(monkeypatch):
+    monkeypatch.setitem(basic_mod.BP_RADIX, "rawradix", ("ToHex", None, False))
+    reg = Lowerer().lower_call(Call(None, "rawradix", [Num(255)]), want_value=True)
+    assert reg is not None
 
 
 @pytest.mark.parametrize("src", ["Storage.Load(1,2,3,4)\n", "Storage.Save(1,2,3,4)\n", "Storage.Pipe(1,2,3,4)\n"])

@@ -179,7 +179,7 @@ def tokenize(src: str) -> List[Tok]:
                 raise SyntaxError(f"line {lineno}: inconsistent indentation")
         before = len(out)
         _tokenize_line(line, lineno, out, line_start)
-        if len(out) > before:
+        if len(out) > before:  # pragma: no branch
             out.append(Tok("newline", "", lineno, line_start))
     while len(indents) > 1:
         indents.pop()
