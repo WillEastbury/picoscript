@@ -264,14 +264,14 @@ def test_req_param_unknown_method_logs():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def test_brotli_decompress_bad_data():
-    """Brotli BrotliDecompress with corrupt data → status=2, empty result (1285-1286)."""
+    """Compress.BrotliDecompress with corrupt data → host_status=2, empty result (1285-1286)."""
     vm = PicoVM(caps=0xFFFFFFFF)
-    bad_data = b"not valid brotli compressed data at all xxxxx"
+    # b'\xff\xff\xff\xff' causes picobrotli.decode to raise ValueError
+    bad_data = b"\xff\xff\xff\xff"
     dh = vm.host._new_span_bytes(vm, bad_data)
     vm.regs[1] = dh
-    h(vm, "Encoding", "BrotliDecompress", rd=0, rs1=1, rs2=0)
-    # Status 2 = error, or result is empty span
-    assert vm.host.host_status == 2 or vm.regs[0] == 0 or len(vm.host._span_raw(vm, vm.regs[0])) == 0
+    h(vm, "Compress", "BrotliDecompress", rd=0, rs1=1, rs2=0)
+    assert vm.host.host_status == 2
 
 
 # ══════════════════════════════════════════════════════════════════════════════
