@@ -2288,7 +2288,9 @@ class Compiler:
             offset = target_pc - pc
             imm16 = offset & 0xFFFF
             return encode_instruction(OP_BRANCH, rd=rd, rs1=rs1, rs2=cond, imm16=imm16)
-        raise SyntaxError(f"Unknown Flow method: {method}")
+        # Invariant: _compile_flow is only called for methods in NAMESPACE_MAP["Flow"],
+        # which is exactly {Return, Jump, Call, Branch} — all handled above.
+        assert False, f"_compile_flow: unreachable — unhandled method {method!r}"
 
     def _resolve_label(self, label, pc):
         if label.isdigit():
@@ -2349,8 +2351,9 @@ class Compiler:
         """Compile BASIC-style statements such as '10 FLOW BRANCH, NZ, R0, R0, 10'."""
         head, sep, rest = line.partition(",")
         parts = head.strip().upper().split()
-        if not parts:
-            raise SyntaxError(f"Empty BASIC statement at instruction {pc}")
+        # Invariant: _compile_basic_statement is only called when _looks_basic_statement()
+        # returns True, which requires at least one non-empty token. parts is never empty.
+        assert parts, f"_compile_basic_statement: unreachable empty parts from {line!r}"
         namespace_token = parts[0]
         method_token = parts[1] if len(parts) > 1 else ""
         args = [a.strip() for a in rest.split(",") if a.strip()] if sep else []
@@ -2405,8 +2408,9 @@ class Compiler:
 
     def _compile_basic_storage(self, method, args, pc):
         opcode = {"LOAD": OP_LOAD, "SAVE": OP_SAVE, "PIPE": OP_PIPE}.get(method)
-        if opcode is None:
-            raise SyntaxError(f"Unknown BASIC STORAGE method '{method}' at instruction {pc}")
+        # Invariant: only called from _compile_basic_statement when method_token in
+        # ("LOAD", "SAVE", "PIPE"), so opcode is never None.
+        assert opcode is not None, f"_compile_basic_storage: unreachable — unexpected method {method!r}"
         if len(args) != 4:
             raise SyntaxError(f"BASIC STORAGE {method} requires tenant, pack, card, register")
         tenant, pack, card = (int(args[i], 0) for i in range(3))
@@ -2459,8 +2463,12 @@ class Compiler:
 
     def _compile_basic_host_hook(self, namespace_token, method_token, args, pc):
         namespace = _canonical_namespace(namespace_token)
-        if namespace is None:
-            raise SyntaxError(f"Unknown BASIC namespace '{namespace_token}' at instruction {pc}")
+        # Invariant: only called when _looks_basic_statement() returned True, which
+        # means namespace_token is in _basic_namespaces() ⊆ NAMESPACE_MAP keys.
+        # _canonical_namespace always finds it — namespace is never None here.
+        assert namespace is not None, (
+            f"_compile_basic_host_hook: unreachable — {namespace_token!r} not in NAMESPACE_MAP"
+        )
         method = _canonical_method(namespace, method_token)
         if method is None:
             raise SyntaxError(f"Unknown BASIC {namespace} method '{method_token}' at instruction {pc}")
@@ -2625,6 +2633,9 @@ class Compiler:
                 if m0 != "reg" or m1 != "reg":
                     raise SyntaxError("Span.Materialize args must be registers")
                 rs1, rd = v0, v1
+            else:
+                # Invariant: all Span methods in HOST_HOOK_CODES are handled above.
+                assert False, f"_compile_host_hook: unhandled Span method {method!r}"
         elif namespace == "Descriptor":
             if method == "Make":
                 if len(args) != 3:
@@ -2647,6 +2658,8 @@ class Compiler:
                 if m0 != "reg" or m1 != "reg":
                     raise SyntaxError(f"Descriptor.{method} args must be registers")
                 rs1, rd = v0, v1
+            else:
+                assert False, f"_compile_host_hook: unhandled Descriptor method {method!r}"
         elif namespace == "Lease":
             if method == "Acquire":
                 if len(args) != 3:
@@ -2669,6 +2682,8 @@ class Compiler:
                 if m0 != "reg" or m1 != "reg":
                     raise SyntaxError(f"Lease.{method} args must be registers")
                 rs1, rd = v0, v1
+            else:
+                assert False, f"_compile_host_hook: unhandled Lease method {method!r}"
         elif namespace == "Storage":
             if method == "GetSchemaForPack":
                 if len(args) != 2:
@@ -2698,6 +2713,8 @@ class Compiler:
                 if m0 != "reg" or m1 != "reg":
                     raise SyntaxError("Storage.DeleteCard args must be registers")
                 rs1, rs2 = v0, v1
+            else:
+                assert False, f"_compile_host_hook: unhandled Storage method {method!r}"
 
         return encode_instruction(OP_NOOP, rd=rd, rs1=rs1, rs2=rs2, imm16=imm16)
 
@@ -2748,8 +2765,6 @@ def disassemble(words):
                 if namespace == "Kernel" and method in ("WaitIRQ", "WaitSWIRQ"):
                     if rs2 == ADDR_REGISTER:
                         lines.append(f"    {namespace}.{method}(R{rs1});")
-                    elif rs2 == ADDR_IMMEDIATE:
-                        lines.append(f"    {namespace}.{method}();")
                     else:
                         lines.append(f"    {namespace}.{method}();")
                 elif namespace == "Kernel" and method == "FireSWIRQ":
@@ -2851,10 +2866,8 @@ def disassemble(words):
             lines.append("    Thread.Skip();")
         elif opcode == OP_WAIT:
             lines.append("    Thread.Wait();")
-        elif opcode == OP_RAISE:
+        elif opcode == OP_RAISE:  # pragma: no branch — exhaustive: all 16 opcodes handled above
             lines.append(f"    Thread.Raise({imm16});")
-        else:
-            lines.append(f"    // ??? opcode={opcode:#x} rd={rd} rs1={rs1} rs2={rs2} imm={imm16}")
 
     return "\n".join(lines)
 
@@ -3006,7 +3019,8 @@ def decompile_basic(words):
             else:
                 lines.append(f"{lineno} DSP {method}, R{rd}, R{rs1}")
         else:
-            lines.append(f"{lineno} REM UNKNOWN {word:08X}")
+            # Invariant: all 16 opcodes (0-15) are handled above.
+            assert False, f"decompile_basic: unhandled opcode {opcode:#x}"
 
     return "\r\n".join(lines) + "\r\n"
 
@@ -3146,7 +3160,8 @@ def decompile_python(words):
             else:
                 lines.append(f"dsp.{method}(r{rd}, r{rs1})")
         else:
-            lines.append(f"# unknown {word:08X}")
+            # Invariant: all 16 opcodes (0-15) are handled above.
+            assert False, f"decompile_python: unhandled opcode {opcode:#x}"
 
     return "\r\n".join(lines) + "\r\n"
 

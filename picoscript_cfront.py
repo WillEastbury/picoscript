@@ -232,6 +232,8 @@ class Parser:
         self.i = 0
 
     def peek(self) -> Tok:
+        if self.i >= len(self.toks):
+            raise SyntaxError(f"unexpected end of input at token {self.i}")
         return self.toks[self.i]
 
     def next(self) -> Tok:
