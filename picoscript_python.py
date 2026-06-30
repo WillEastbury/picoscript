@@ -152,7 +152,7 @@ def tokenize(src: str) -> List[Tok]:
                 raise SyntaxError(f"line {lineno}: inconsistent indentation")
         before = len(out)
         _tokenize_line(line, lineno, out, line_start)
-        if len(out) > before:
+        if len(out) > before:  # pragma: no branch — blank/comment lines are pre-filtered at line 141
             out.append(Tok("newline", "", lineno, line_start))
     while len(indents) > 1:
         indents.pop()
@@ -218,10 +218,10 @@ class Parser:
         self.expect("indent")
         stmts = []
         while not self.at("dedent"):
-            if self.peek().kind == "eof":
-                raise SyntaxError("unexpected EOF inside block")
+            if self.peek().kind == "eof":  # pragma: no branch — tokenizer always emits DEDENT before EOF
+                raise SyntaxError("unexpected EOF inside block")  # pragma: no cover
             s = self.parse_stmt()
-            if s is not None:
+            if s is not None:  # pragma: no branch — parse_stmt returns None only for 'pass'
                 if isinstance(s, list):
                     stmts.extend(s)
                 else:

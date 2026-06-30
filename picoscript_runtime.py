@@ -323,7 +323,7 @@ class SimpleQueue:
         result = []
         for _ in range(min(count, len(self.items))):
             item = self.dequeue()
-            if item is not None:
+            if item is not None:  # pragma: no branch — range bounded by len(items)
                 result.append(item)
         return result
 

@@ -58,6 +58,22 @@ def main():
     assert failed == 0, f"{failed} test(s) failed"
 
 
+def test_to_il_unknown_frontend_raises():
+    """_to_il with unrecognised lang raises ValueError (line 92)."""
+    import pytest
+    from picoscript_metrics import _to_il
+    with pytest.raises(ValueError, match="no IL metrics"):
+        _to_il("program", "cobol")
+
+
+def test_to_il_unknown_frontend_raises2():
+    """_to_il with any other unknown lang raises ValueError."""
+    import pytest
+    from picoscript_metrics import _to_il
+    with pytest.raises(ValueError):
+        _to_il("x", "fortran")
+
+
 def test_main():
     main()
 
