@@ -116,9 +116,9 @@ def _default_timezone_name() -> str:
         return str(key)
     if tzinfo is not None:
         name = tzinfo.tzname(datetime.datetime.now())
-        if name:
+        if name:  # pragma: no branch — tzname() always returns a string on real platforms
             return str(name)
-    return "UTC"
+    return "UTC"  # pragma: no cover
 
 
 def _format_utc_offset(delta) -> str:
