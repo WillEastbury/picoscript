@@ -439,7 +439,7 @@ def verify_response_ownership(insts: List[Inst]) -> None:
     preds: Dict[int, List[int]] = {i: [] for i in reachable}
     for i in reachable:
         for s in succs(i):
-            if s in reachable:
+            if s in reachable:  # pragma: no branch
                 preds[s].append(i)
 
     # Per-point state is a 4-bit mask (identical representation to the JS gate):
