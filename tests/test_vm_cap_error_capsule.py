@@ -165,4 +165,4 @@ def test_locale_translate_missing():
     """Locale.Translate returns input when no translation available."""
     vm = fresh('int k = "hello"; int s = Locale.Translate(k); Io.Write(s);')
     got = b"".join(vm.output)
-    assert b"hello" in got or len(got) >= 0
+    assert b"hello" in got

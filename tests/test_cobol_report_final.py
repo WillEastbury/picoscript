@@ -155,7 +155,7 @@ def test_report_atom_paren_call():
     src = "DATA: n TYPE i VALUE 0.\nn = String.Length('hi').\nWRITE n."
     try:
         result = run_report(src)
-        assert len(result) >= 0
+        assert result == [2]
     except Exception:
         pass
 

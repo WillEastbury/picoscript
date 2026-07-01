@@ -37,7 +37,7 @@ def test_deflate_dynamic_huffman_tables():
     if result_s and result_s["len"] > 0:
         got = bytes(vm.mem[result_s["ptr"]:result_s["ptr"] + min(result_s["len"], len(data))])
         assert got == data[:len(got)]
-    assert vm.steps >= 0
+    assert result_s is not None and result_s["len"] > 0
 
 
 def test_deflate_btype2_short():
@@ -59,4 +59,4 @@ def test_deflate_btype2_short():
     if result_s and result_s["len"] > 0:
         got = bytes(vm.mem[result_s["ptr"]:result_s["ptr"] + result_s["len"]])
         assert got == data
-    assert vm.steps >= 0
+    assert result_s is not None and result_s["len"] > 0

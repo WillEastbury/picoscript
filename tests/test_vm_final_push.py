@@ -78,8 +78,7 @@ def test_deflate_stored_block():
     vm.spans.append({"ptr": 700, "len": len(stored)})
     h = len(vm.spans) - 1
     vm.host._compresslib(vm, "DeflateDecompress", 1, h, 0)
-    # Exercises the btype=0 code path; result may vary depending on bit alignment
-    assert vm.steps >= 0
+    assert vm.host.host_status == 2
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -149,8 +148,7 @@ def test_gzip_with_fextra_flag():
     vm.spans.append({"ptr": 800, "len": len(gz)})
     h = len(vm.spans) - 1
     vm.host._compresslib(vm, "GzipDecompress", 1, h, 0)
-    # Exercises lines 628-629 (FEXTRA skip)
-    assert vm.steps >= 0
+    assert vm.host.host_status == 2
 
 
 def test_gzip_with_fcomment_flag():
@@ -169,8 +167,7 @@ def test_gzip_with_fcomment_flag():
     vm.spans.append({"ptr": 900, "len": len(gz)})
     h = len(vm.spans) - 1
     vm.host._compresslib(vm, "GzipDecompress", 1, h, 0)
-    # Exercises lines 633-636 (FCOMMENT skip)
-    assert vm.steps >= 0
+    assert vm.host.host_status == 2
 
 
 def test_gzip_with_fhcrc_flag():
@@ -189,4 +186,4 @@ def test_gzip_with_fhcrc_flag():
     vm.spans.append({"ptr": 950, "len": len(gz)})
     h = len(vm.spans) - 1
     vm.host._compresslib(vm, "GzipDecompress", 1, h, 0)
-    assert vm.steps >= 0  # exercises FHCRC skip path
+    assert vm.host.host_status == 2

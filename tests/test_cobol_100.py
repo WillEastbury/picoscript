@@ -24,13 +24,13 @@ def test_end_simple_eof():
     """end_simple handles EOF gracefully (arc 158->exit)."""
     # A program ending without trailing dot or newline
     il = cc("IDENTIFICATION DIVISION.\nPROGRAM-ID. TEST.\nPROCEDURE DIVISION.\nSTOP RUN")
-    assert len(il) >= 0
+    assert isinstance(il, list)
 
 
 def test_end_header_eof():
     """end_header handles EOF (arc 165->exit)."""
     il = cc("IDENTIFICATION DIVISION.\nPROGRAM-ID. TEST")
-    assert len(il) >= 0
+    assert isinstance(il, list)
 
 
 # ── parse_data_division: skip non-num, non-section sentence (line 218) ───────
@@ -45,7 +45,7 @@ def test_data_division_unknown_clause():
         "PROCEDURE DIVISION.\nSTOP RUN.\n"
     )
     il = cc(src)
-    assert len(il) >= 0
+    assert len(il) > 0
 
 
 # ── arithmetic statements: ADD/SUBTRACT/MULTIPLY/DIVIDE ──────────────────────
@@ -201,13 +201,13 @@ def test_atom_unexpected_token_raises():
 def test_perform_until_n_lt_var():
     """PERFORM UNTIL 10 < X: rhs LT comparison (lines 557-560)."""
     il = cc(PROG_HEADER + "PERFORM VARYING X FROM 1 BY 1 UNTIL 10 < X\n    DISPLAY X\nEND-PERFORM.\nSTOP RUN.\n")
-    assert len(il) >= 0
+    assert len(il) > 0
 
 
 def test_perform_until_n_le_var():
     """PERFORM UNTIL 10 <= X (line 560-561)."""
     il = cc(PROG_HEADER + "PERFORM VARYING X FROM 1 BY 1 UNTIL 10 <= X\n    DISPLAY X\nEND-PERFORM.\nSTOP RUN.\n")
-    assert len(il) >= 0
+    assert len(il) > 0
 
 
 # ── self-test / main block ────────────────────────────────────────────────────
@@ -250,13 +250,13 @@ def test_end_simple_eof_no_trailing_newline():
     """end_simple at EOF without newline (arc 158->exit)."""
     # No trailing newline - source ends right after last statement
     il = cc("IDENTIFICATION DIVISION.\nPROGRAM-ID. T.\nPROCEDURE DIVISION.\nSTOP RUN")
-    assert len(il) >= 0
+    assert len(il) > 0
 
 
 def test_end_header_eof_no_newline():
     """end_header at EOF without newline (arc 165->exit)."""
     il = cc("IDENTIFICATION DIVISION.\nPROGRAM-ID. T")
-    assert len(il) >= 0
+    assert isinstance(il, list)
 
 
 # ── parse_stmt: cannot parse statement (line 299) ────────────────────────────
@@ -451,7 +451,7 @@ def test_not_fall_through_to_is():
     # Use 'NOT GREATER THAN' style comparison
     try:
         il = cc(PROG_HEADER + "IF X NOT GREATER THAN 5\n    DISPLAY X\nEND-IF.\nSTOP RUN.\n")
-        assert len(il) >= 0
+        assert isinstance(il, list)
     except SyntaxError:
         pass  # May not be supported; the arc is still covered by trying
 
@@ -477,7 +477,7 @@ def test_minus_one_non_num():
         "END-PERFORM.\n"
         "STOP RUN.\n"
     )
-    assert len(il) >= 0
+    assert isinstance(il, list)
 
 
 def test_parse_call_from_id_multi_args():
@@ -513,4 +513,3 @@ def test_parse_call_from_id_bad_method_direct():
     """parse_unary with '-' token (arc 472->exit via return)."""
     il = cc(PROG_HEADER + "COMPUTE X = -5.\nSTOP RUN.\n")
     assert len(il) > 0
-

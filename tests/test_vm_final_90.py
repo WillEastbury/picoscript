@@ -109,7 +109,7 @@ print(ok);
 def test_process_spawn():
     """Process.Spawn creates a new process entry."""
     vm = fresh("int pid = Process.Spawn(0, 0); print(pid);")
-    assert oints(vm)[0] >= 0
+    assert oints(vm)[0] == 101
 
 
 def test_process_status():

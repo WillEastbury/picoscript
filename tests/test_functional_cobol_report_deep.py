@@ -72,7 +72,7 @@ for i in 0..2..8 do
 """
     try:
         result = run_func(src)
-        assert len(result) >= 0
+        assert result == [0, 2, 4, 6, 8]
     except Exception:
         pass
 

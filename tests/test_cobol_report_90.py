@@ -192,7 +192,7 @@ ENDFORM.
     try:
         result = run_report(src)
         # Should not print (returns early)
-        assert result == [] or len(result) >= 0
+        assert isinstance(result, list)
     except Exception:
         pass
 

@@ -69,7 +69,7 @@ def test_basic_raise_with_value():
         il = compile_basic(src)
         words = lower_to_bytecode_safe(il)
         vm = PicoVM().run(words)
-        assert vm.steps >= 0
+        assert vm.steps > 0
     except (SyntaxError, AttributeError):
         pass
 
@@ -139,3 +139,4 @@ def test_basic_capsule_exec():
         run_basic(src)
     except Exception:
         pass
+

@@ -37,7 +37,7 @@ def test_tokenizer_unexpected_char():
 def test_parse_program_dot_skip():
     """Standalone dot in program is skipped (line 174-175)."""
     il = cr("DATA: x VALUE 1.\n.\nWRITE x.\n")
-    assert len(il) >= 0
+    assert isinstance(il, list)
 
 
 def test_parse_program_list_stmt():
@@ -51,14 +51,14 @@ def test_parse_program_list_stmt():
 def test_block_until_dot_skip():
     """parse_block_until skips dots (line 190)."""
     il = cr("CASE x.\n  WHEN 1.\n    .\n    WRITE 1.\nENDCASE.\n")
-    assert len(il) >= 0
+    assert isinstance(il, list)
 
 
 def test_block_until_list_stmt():
     """parse_block_until handles list-returning stmt (arc 195-196)."""
     # DATA inside a block returns a list
     il = cr("CASE x.\n  WHEN 1.\n    DATA: r VALUE 0.\n    WRITE r.\nENDCASE.\n")
-    assert len(il) >= 0
+    assert isinstance(il, list)
 
 
 # ── parse_stmt pos set on list (arc 203->210, 208-209) ───────────────────────
@@ -242,7 +242,7 @@ def test_report_main_block():
     except SystemExit:
         pass
     output = buf.getvalue()
-    assert "picoscript_4gl" in output.lower() or "pass" in output.lower() or len(output) >= 0
+    assert "picoscript_4gl" in output.lower() or "PASS" in output
 
 
 # ── Additional missing paths ─────────────────────────────────────────────────
@@ -253,20 +253,20 @@ def test_parse_program_none_stmt():
     # Actually parse_program already handles the dot skip at line 173-175
     # None from parse_stmt can happen when... let me use pass-like via a bare dot
     il = cr("DATA: x VALUE 1.\n.\nWRITE x.\n")
-    assert len(il) >= 0
+    assert len(il) > 0
 
 
 def test_parse_block_until_none_stmt():
     """parse_block_until skips None-returning stmts (line 194)."""
     # A dot inside a WHEN block returns None
     il = cr("CASE x.\n  WHEN 1.\n    .\n    WRITE 1.\nENDCASE.\n")
-    assert len(il) >= 0
+    assert len(il) > 0
 
 
 def test_parse_block_until_list_stmt():
     """parse_block_until handles list-returning stmt (arc 186->199: DATA returns list)."""
     il = cr("CASE x.\n  WHEN 1.\n    DATA: r VALUE 0.\n    WRITE r.\nENDCASE.\n")
-    assert len(il) >= 0
+    assert len(il) > 0
 
 
 def test_data_without_colon():
@@ -296,7 +296,7 @@ def test_parse_param_names_comma():
 def test_parse_expr_list_comma():
     """parse_expr_list_until_dot skips commas (lines 455-456)."""
     il = cr("PERFORM f USING 1, 2, 3.\n")
-    assert len(il) >= 0
+    assert len(il) > 0
 
 
 def test_negation_operator():

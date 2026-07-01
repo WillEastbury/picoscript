@@ -38,7 +38,7 @@ def test_op_wait_sets_halted():
     words = lower_to_bytecode_safe(b.insts)
     vm = PicoVM().run(words)
     # WAIT raises Halt; VM stops early
-    assert vm.waiting or vm.steps >= 0
+    assert vm.waiting or vm.steps > 0
 
 
 def test_thread_wait_via_frontend():

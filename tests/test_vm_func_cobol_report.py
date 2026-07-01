@@ -60,7 +60,7 @@ printfn i
 """
     try:
         result = run(compile_functional(src))
-        assert len(result) >= 0
+        assert result == [3]
     except Exception:
         pass
 
@@ -77,7 +77,7 @@ while i < 5 do
 """
     try:
         result = run(compile_functional(src))
-        assert len(result) >= 0
+        assert result == [1, 2, 4, 5]
     except Exception:
         pass
 

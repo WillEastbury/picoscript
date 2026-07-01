@@ -60,8 +60,7 @@ def test_gzip_decompress_with_fname():
     vm.spans.append({"ptr": 500, "len": len(gz)})
     h = len(vm.spans) - 1
     vm.host._compresslib(vm, "GzipDecompress", 1, h, 0)
-    # The _gzip_decompress should exercise lines 629-632
-    assert vm.steps >= 0  # exercises the FNAME path
+    assert vm.host.host_status == 2
 
 
 def test_gzip_roundtrip_python_stdlib():
@@ -75,8 +74,7 @@ def test_gzip_roundtrip_python_stdlib():
     vm.spans.append({"ptr": 600, "len": len(gz)})
     h = len(vm.spans) - 1
     vm.host._compresslib(vm, "GzipDecompress", 1, h, 0)
-    # Exercises FNAME/FEXTRA code paths; result may vary
-    assert vm.steps >= 0
+    assert vm.host.host_status == 2
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -223,4 +221,4 @@ Io.Write(resp);
 """))
     vm_h.run(words)
     got = obytes(vm_h)
-    assert len(got) >= 0  # may be empty if not implemented
+    assert isinstance(got, (bytes, bytearray))

@@ -230,7 +230,8 @@ def test_decode_row_spec_start_negative():
     from picoscript_vm import HostApi
     spec = 0xFFFF0005  # start = -1 (0xFFFF), count = 5
     start, count = HostApi._decode_row_spec(spec, 0, 5, 10)
-    assert start >= 0  # clamped
+    assert start == 10
+    assert count == 0
 
 
 def test_decode_row_spec_start_beyond_max():
@@ -357,7 +358,7 @@ def test_bitlinear_block_variants():
     vh = vm.host._new_span_bytes(vm, vec)
     vm.regs[1] = 1; vm.regs[2] = vh  # tid=1
     h(vm, "BitLinear", "MatVecTernaryBlock", rd=0, rs1=1, rs2=2)
-    assert vm.regs[0] >= 0
+    assert vm.regs[0] > 0
 
     vm.regs[1] = 1; vm.regs[2] = vh
     h(vm, "BitLinear", "MatVecBitmapBlock", rd=0, rs1=1, rs2=2)

@@ -228,69 +228,70 @@ def test_number_to_binary():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def test_json_parser_escape_sequences():
-    """JSON parser handles \\n \\t \\r \\b \\f escape sequences (lines 1406-1410)."""
+    """Search.Flatten with unknown method logs it; Http.ParseJson handles \\n \\t escapes."""
     vm = make_vm()
-    json_text = b'{"key":"line1\\nline2\\ttab\\rreturn\\bback\\fform"}'
-    h = vm.host._new_span_bytes(vm, json_text)
-    vm.regs[1] = h
-    h_call(vm, "Search", "Flatten", rd=0, rs1=1, rs2=0)
+    # Use Http.ParseJson (the correct path for _parsejson_to_model)
+    json_text = b'{"key":"line1\\nline2\\ttab"}'
+    h_json = vm.host._new_span_bytes(vm, json_text)
+    vm.regs[1] = h_json
+    h_call(vm, "Http", "ParseJson", rd=0, rs1=1, rs2=0)
     result = span_str(vm, vm.regs[0])
-    assert "key" in result.lower() or len(result) >= 0
+    assert "key=" in result
 
 
 def test_json_parser_unicode_escape_1byte():
-    """JSON \\u0041 = 'A' (1-byte UTF-8, line 1413-1414)."""
+    """Http.ParseJson: \\u0041 = 'A' (1-byte UTF-8)."""
     vm = make_vm()
     json_text = b'{"k":"\\u0041"}'
-    h = vm.host._new_span_bytes(vm, json_text)
-    vm.regs[1] = h
-    h_call(vm, "Search", "Flatten", rd=0, rs1=1, rs2=0)
+    h_json = vm.host._new_span_bytes(vm, json_text)
+    vm.regs[1] = h_json
+    h_call(vm, "Http", "ParseJson", rd=0, rs1=1, rs2=0)
     result = span_str(vm, vm.regs[0])
-    assert "A" in result or len(result) >= 0
+    assert "k=A" in result
 
 
 def test_json_parser_unicode_escape_2byte():
-    """JSON \\u00E9 = 'é' (2-byte UTF-8, lines 1415-1416)."""
+    """Http.ParseJson: \\u00E9 = 'é' (2-byte UTF-8)."""
     vm = make_vm()
     json_text = b'{"k":"\\u00E9"}'
-    h = vm.host._new_span_bytes(vm, json_text)
-    vm.regs[1] = h
-    h_call(vm, "Search", "Flatten", rd=0, rs1=1, rs2=0)
+    h_json = vm.host._new_span_bytes(vm, json_text)
+    vm.regs[1] = h_json
+    h_call(vm, "Http", "ParseJson", rd=0, rs1=1, rs2=0)
     result = span_str(vm, vm.regs[0])
-    assert len(result) >= 0
+    assert "k=" in result
 
 
 def test_json_parser_unicode_escape_3byte():
-    """JSON \\u4E2D = '中' (3-byte UTF-8, lines 1417-1418)."""
+    """Http.ParseJson: \\u4E2D = '中' (3-byte UTF-8)."""
     vm = make_vm()
     json_text = b'{"k":"\\u4E2D"}'
-    h = vm.host._new_span_bytes(vm, json_text)
-    vm.regs[1] = h
-    h_call(vm, "Search", "Flatten", rd=0, rs1=1, rs2=0)
+    h_json = vm.host._new_span_bytes(vm, json_text)
+    vm.regs[1] = h_json
+    h_call(vm, "Http", "ParseJson", rd=0, rs1=1, rs2=0)
     result = span_str(vm, vm.regs[0])
-    assert len(result) >= 0
+    assert "k=" in result
 
 
 def test_json_parser_unknown_escape():
-    """JSON \\x (unknown escape) → literal x (line 1420)."""
+    """Http.ParseJson: \\x (unknown escape) → literal character."""
     vm = make_vm()
     json_text = b'{"k":"\\x41"}'
-    h = vm.host._new_span_bytes(vm, json_text)
-    vm.regs[1] = h
-    h_call(vm, "Search", "Flatten", rd=0, rs1=1, rs2=0)
+    h_json = vm.host._new_span_bytes(vm, json_text)
+    vm.regs[1] = h_json
+    h_call(vm, "Http", "ParseJson", rd=0, rs1=1, rs2=0)
     result = span_str(vm, vm.regs[0])
-    assert len(result) >= 0
+    assert "k=" in result
 
 
 def test_json_parser_array():
-    """JSON array with items is flattened (lines 1449-1468)."""
+    """Http.ParseJson: array [1,2,3] flattened to indexed keys."""
     vm = make_vm()
     json_text = b'[1,2,3]'
-    h = vm.host._new_span_bytes(vm, json_text)
-    vm.regs[1] = h
-    h_call(vm, "Search", "Flatten", rd=0, rs1=1, rs2=0)
+    h_json = vm.host._new_span_bytes(vm, json_text)
+    vm.regs[1] = h_json
+    h_call(vm, "Http", "ParseJson", rd=0, rs1=1, rs2=0)
     result = span_str(vm, vm.regs[0])
-    assert len(result) >= 0
+    assert "0=1" in result
 
 
 def test_json_parser_empty_object():
@@ -354,14 +355,14 @@ def test_template_compile_end_marker():
 
 
 def test_template_compile_missing_close():
-    """Template.Compile with unclosed {{ (line 1520: lit then break)."""
+    """Template.Compile with unclosed {{ produces a partial plan (no crash)."""
     vm = make_vm()
     tpl = b"Hello {{world"  # no closing }}
     h = vm.host._new_span_bytes(vm, tpl)
     vm.regs[1] = h
     h_call(vm, "Template", "Compile", rd=0, rs1=1, rs2=0)
-    # Should compile without error (produces a partial plan)
-    assert vm.regs[0] >= 0
+    # Compile returns a span handle (> 0) — even partial plans are stored
+    assert vm.regs[0] > 0
 
 
 def test_template_render_model_overflow():

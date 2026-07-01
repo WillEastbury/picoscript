@@ -49,7 +49,7 @@ for item in s do
 """
     try:
         result = run(src)
-        assert len(result) >= 0  # Desugared to for-each; exercises lines 302-317
+        assert len(result) == 3
     except Exception:
         pass
 

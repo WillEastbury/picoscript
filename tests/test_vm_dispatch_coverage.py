@@ -220,17 +220,23 @@ def test_encoding_all_methods():
 
 
 def test_datetime_all_methods():
-    """DateTime extended methods (Year/Month/Day/DiffDays)."""
+    """DateTime Year/Month/Day return valid calendar values; DiffDays returns 1 for 1-day diff."""
     import time
-    vm = make_vm()
     now = int(time.time())
-    vm.regs[1] = now
-    for method in ["Year", "Month", "Day", "DiffDays"]:
+    import datetime as _dt
+    dt = _dt.datetime.fromtimestamp(now, tz=_dt.timezone.utc)
+
+    for method, lo, hi in [
+        ("Year",    2020, 2100),
+        ("Month",   1,    12),
+        ("Day",     1,    31),
+        ("DiffDays", 1,    1),  # now - (now - 86400) = exactly 1 day
+    ]:
         vm2 = make_vm()
-        vm2.regs[1] = now; vm2.regs[2] = now - 86400  # 1 day ago
+        vm2.regs[1] = now; vm2.regs[2] = now - 86400
         try:
             h(vm2, "DateTime", method, rd=0, rs1=1, rs2=2)
-            assert vm2.regs[0] >= 0
+            assert lo <= vm2.regs[0] <= hi, f"{method}: expected {lo}..{hi}, got {vm2.regs[0]}"
         except PicoFault:
             pass
 
@@ -418,7 +424,7 @@ def test_timer_now():
     vm = make_vm()
     try:
         result = h(vm, "Timer", "Now", rd=0)
-        assert result >= 0
+        assert isinstance(result, int)
     except PicoFault:
         pass
 

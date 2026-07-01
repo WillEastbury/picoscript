@@ -153,7 +153,7 @@ int id = Storage.AddCard(pack, card_data);
 int ok = Storage.EditCard(pack, id);
 print(ok);
 """)
-    assert oints(vm)[0] >= 0  # card handle
+    assert oints(vm)[0] == 1
 
 
 def test_storage_set_field():

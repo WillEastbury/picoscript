@@ -95,8 +95,8 @@ def test_v1_decompile_context_io():
     basic = decompile_basic(words)
     python = decompile_python(words)
     # These are ext-page hooks; verify decompiler handles them
-    assert len(basic) >= 0  # may be empty for ext hooks
-    assert len(python) >= 0
+    assert isinstance(basic, str)
+    assert isinstance(python, str)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

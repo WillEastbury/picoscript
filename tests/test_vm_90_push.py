@@ -60,8 +60,7 @@ def test_error_handler_recovery():
         vm.run(prog)
     except PicoFault:
         pass  # fault may propagate if not handled cleanly
-    # Line 4017-4020 was exercised
-    assert vm.steps >= 0
+    assert vm.steps == 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -80,7 +79,7 @@ int n = Search.IndexPack(pack);
 print(n);
 """)
     result = oints(vm)[0]
-    assert result >= 0  # 0 or more cards indexed
+    assert result == len(vm.host.search_docs)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -125,7 +124,7 @@ def test_locale_get_current():
     """Locale.GetCurrentLocale returns a span."""
     vm = fresh("int loc = Locale.GetCurrentLocale(); int n = Span.Len(loc); print(n);")
     result = oints(vm)[0]
-    assert result >= 0
+    assert result > 0
 
 
 def test_locale_set_get_roundtrip():
@@ -170,7 +169,7 @@ int decoded = Tokenizer.DecodeTrie();
 Io.Write(decoded);
 """)
     got = b"".join(vm.output)
-    assert len(got) >= 0  # exercises the decode path
+    assert len(got) > 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════

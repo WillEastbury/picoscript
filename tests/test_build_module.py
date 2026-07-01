@@ -106,7 +106,7 @@ def test_to_il_english():
     """to_il compiles English source to IL (line 69-71)."""
     try:
         il = to_il("set x to 42", "english")
-        assert len(il) >= 0
+        assert len(il) > 0
     except Exception:
         pass  # English frontend may reject minimal input
 
@@ -197,4 +197,3 @@ def test_cmd_run_print_false(tmp_path):
     except SystemExit:
         pass  # argparse with no args calls sys.exit(2)
     # Line 216 was hit regardless
-

@@ -57,7 +57,7 @@ def test_arena_alloc_negative_align():
     """Arena.alloc with align=-1 clamps to 1 (line 77)."""
     arena = ArenaAllocator(base_ptr=0, size=1024)
     ptr = arena.alloc(8, align=-5)
-    assert ptr >= 0
+    assert ptr == 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
