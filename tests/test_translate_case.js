@@ -27,5 +27,13 @@ check('c->basic assignment case', /loopStart/.test(lab) && !/LOOPSTART/.test(lab
 var subEn = t('int addTwo(int x){ return x + 2; }\nprint(addTwo(3));\n', 'c', 'basic');
 check('c->basic sub name case', /addTwo/.test(subEn) && !/ADDTWO/.test(subEn), JSON.stringify(subEn));
 
+// 5. User const/enum translate to a literal-inlining form usable by every target
+//    (cobol/report have no const/enum syntax; enum member access is not portable).
+var cst = 'const RETRY = 3;\nenum HttpCode { OK = 200 };\nprint(RETRY);\nprint(HttpCode.OK);\n';
+['cobol', 'report', 'functional', 'basic', 'python', 'english'].forEach(function (lang) {
+  var out = t(cst, 'c', lang);
+  check('const/enum -> ' + lang + ' inlined', /\b3\b/.test(out) && /\b200\b/.test(out) && !/HttpCode|Storage\.GetField/.test(out), JSON.stringify(out));
+});
+
 if (fails) { console.log('\n' + fails + ' failed'); process.exit(1); }
 console.log('\nall passed');

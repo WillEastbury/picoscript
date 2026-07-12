@@ -2574,7 +2574,7 @@
 
   // ---- Report/4GL frontend --------------------------------------------------
   var REP_KW = {};
-  ["DATA","TYPE","VALUE","IF","ELSE","ELSEIF","ENDIF","WRITE","FORM","ENDFORM","USING","PERFORM","CASE","WHEN","OTHERS","ENDCASE","LOOP","AT","INTO","WHERE","ENDLOOP","RETURN","EXIT","CONTINUE","AND","OR","NOT","WHILE","ENDWHILE","LABEL","GOTO","MOD"].forEach(function (k) { REP_KW[k] = 1; });
+  ["DATA","TYPE","VALUE","IF","ELSE","ELSEIF","ENDIF","WRITE","FORM","ENDFORM","USING","PERFORM","CASE","WHEN","OTHERS","ENDCASE","LOOP","AT","INTO","WHERE","ENDLOOP","RETURN","EXIT","CONTINUE","AND","OR","NOT","WHILE","ENDWHILE","LABEL","GOTO","MOD","COMPUTE","MOVE","TO"].forEach(function (k) { REP_KW[k] = 1; });
   var REP_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "<>":1 };
   var REP_ONE = "+-*/%()<>=,.:";
   var REP_CMP = { "=":"EQ", "==":"EQ", "!=":"NE", "<>":"NE", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
@@ -2629,6 +2629,8 @@
         if (t.value === "RETURN") { this.next(); if (this.at("op", ".") || this.at("nl") || this.at("eof")) { this.endStmt(); return { t: "Return" }; } var rv = this.parseExpr(); this.endStmt(); return { t: "Return", value: rv }; }
         if (t.value === "EXIT") { this.next(); this.endStmt(); return { t: "Break" }; }
         if (t.value === "CONTINUE") { this.next(); this.endStmt(); return { t: "Skip" }; }
+        if (t.value === "COMPUTE") { this.next(); var cName = this.next().value; this.expect("op", "="); var cVal = this.parseExpr(); this.endStmt(); return { t: "Let", name: cName, value: cVal }; }
+        if (t.value === "MOVE") { this.next(); var mVal = this.parseExpr(); this.expectKw("TO"); var mName = this.next().value; this.endStmt(); return { t: "Let", name: mName, value: mVal }; }
       }
       if (t.kind === "id") {
         if (this.peek(1).kind === "op" && this.peek(1).value === "=") { var name = this.next().value; this.next(); var vv = this.parseExpr(); this.endStmt(); return { t: "Let", name: name, value: vv }; }
@@ -3003,6 +3005,10 @@
       else if (fromLang === "functional") ast = new FunParser(funtokenize(src)).parseProgram();
       else return src;
     } catch (e) { return src; }
+    // Resolve user const/enum declarations to literal values before emitting, so
+    // every target compiles identically -- some frontends (cobol, report) have no
+    // const/enum syntax, and enum member access (Enum.Member) is not portable.
+    try { ast = resolveConstantsInAst(ast); } catch (e) { /* keep original ast */ }
     if (toLang === "c") return astToC(ast);
     if (toLang === "basic") return astToBasic(ast);
     if (toLang === "python") return astToPython(ast);
@@ -3012,6 +3018,75 @@
     if (toLang === "functional") return astToFunctional(ast);
     return src;
   }
+
+  // Inline user constants and enum members as Num literals and drop the ConstDecl
+  // / EnumDecl nodes. Mirrors the compiler's evalConstExpr + defineEnum so the
+  // portable ("ENUM_MEMBER") and dotted (Enum.Member) forms both resolve.
+  function resolveConstantsInAst(prog) {
+    var consts = {};
+    function ev(e) {
+      if (!e) return null;
+      if (e.t === "Num") return e.value | 0;
+      if (e.t === "Var") {
+        var k = String(e.name).toUpperCase();
+        if (Object.prototype.hasOwnProperty.call(consts, k)) return consts[k] | 0;
+        return namedConstant(e.name);
+      }
+      if (e.t === "FieldRef") {
+        var fk = (e.obj + "." + e.field).toUpperCase();
+        if (Object.prototype.hasOwnProperty.call(consts, fk)) return consts[fk] | 0;
+        return namedConstant(e.obj + "." + e.field);
+      }
+      if (e.t === "Unary" && e.op === "-") { var u = ev(e.operand); return u == null ? null : (-u) | 0; }
+      if (e.t === "Bin") {
+        var a = ev(e.lhs), b = ev(e.rhs);
+        if (a == null || b == null) return null;
+        if (e.op === "+") return (a + b) | 0;
+        if (e.op === "-") return (a - b) | 0;
+        if (e.op === "*") return (a * b) | 0;
+        if (e.op === "/") return b ? (a / b) | 0 : null;
+        if (e.op === "%" || e.op === "MOD") return b ? (a - ((a / b) | 0) * b) | 0 : null;
+      }
+      return null;
+    }
+    function collect(node) {
+      if (node == null || typeof node !== "object") return;
+      if (Array.isArray(node)) { node.forEach(collect); return; }
+      if (node.t === "ConstDecl") { consts[String(node.name).trim().toUpperCase()] = ev(node.value) | 0; }
+      else if (node.t === "EnumDecl") {
+        var ek = String(node.enum_name).trim().toUpperCase(), cur = -1;
+        (node.members || []).forEach(function (m) {
+          cur = (m[1] == null) ? (cur + 1) : (ev(m[1]) | 0);
+          var mk = String(m[0]).trim().toUpperCase();
+          consts[mk] = cur; consts[ek + "_" + mk] = cur; consts[ek + "." + mk] = cur;
+        });
+      }
+      for (var k in node) if (Object.prototype.hasOwnProperty.call(node, k)) collect(node[k]);
+    }
+    function lookup(name) {
+      var k = String(name).toUpperCase();
+      return Object.prototype.hasOwnProperty.call(consts, k) ? consts[k] : null;
+    }
+    function xform(node) {
+      if (Array.isArray(node)) {
+        var out = [];
+        node.forEach(function (n) {
+          if (n && typeof n === "object" && (n.t === "ConstDecl" || n.t === "EnumDecl")) return;
+          out.push(xform(n));
+        });
+        return out;
+      }
+      if (node == null || typeof node !== "object") return node;
+      if (node.t === "Var") { var v = lookup(node.name); return (v == null) ? node : { t: "Num", value: v | 0 }; }
+      if (node.t === "FieldRef") { var fv = lookup(node.obj + "." + node.field); if (fv != null) return { t: "Num", value: fv | 0 }; }
+      var copy = {};
+      for (var k in node) if (Object.prototype.hasOwnProperty.call(node, k)) copy[k] = xform(node[k]);
+      return copy;
+    }
+    collect(prog);
+    return xform(prog);
+  }
+
   function exprStr(e, L) {
     if (!e) return "0";
     if (e.t === "Num") return String(e.value);
