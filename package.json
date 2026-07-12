@@ -4,6 +4,7 @@
   "description": "PicoScript toolchain — JS VM/compiler dev tooling + browser GUI tests",
   "scripts": {
     "test:translate": "node tests/test_translate_case.js",
+    "test:layout": "node tests/test_layout_engine.js",
     "test:gui": "node tests/test_gui_roundtrip.js"
   },
   "devDependencies": {

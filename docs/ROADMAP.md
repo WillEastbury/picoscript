@@ -30,23 +30,33 @@ COBOL / report / functional — with a **visual designer** as its primary editor
 - ☐ **Examples** — arithmetic+conditional, array `FOREACH` sum, reject/budget
   flow in the playground catalog.
 
-## 2. Report designer
+## 2. Reports & forms — a 2-stage templated layout engine
 
-A first-class **report designer** built on the existing `picoscript_report.py`
-(4GL) frontend: visual band/column report → report model → PicoIL, rendered via
-the `Json` / `TextRender` / `Utf8Writer` hooks.
+A report is simply **a data-producer program + a layout template**; a form is the
+same with a **read-write** layout instead of read-only. So there are two stages
+and one shared engine:
 
-- ☑ **Report model schema** — data source (array / variable-in-Memory), detail row
-  expression, `where` filter, and `count`/`sum`/`min`/`max` aggregates
-  (`picoscript_reportmodel.py`).
-- ☑ **Compiler** — `compile_report_model(json) → PicoIL` (lowers to English:
-  materialise rows in `Memory`, loop the detail band, print the aggregate footer);
-  wired as `--lang report-model` (`.rptmodel`) in `picoscript_build.py`. Tested in
-  `tests/test_report_model.py`.
-- ☐ **Designer UI** — visual band/column designer surface in the playground
-  emitting the report model JSON, with a live rendered preview.
-- ☐ **Richer rendering** — Storage/Query data sources, text/column formatting via
-  `TextRender` / `Utf8Writer` / `Json`, grouping; C# VM golden differential.
+- **Stage 1 — data program:** an ordinary PicoScript program (any frontend,
+  e.g. the `report` 4GL, or the convenience `picoscript_reportmodel.py`) whose VM
+  output is the data.
+- **Stage 2 — templated layout engine (`picolayout.py` / `vm/picolayout.js`):**
+  renders that data with a layout template. Shared by reports and forms via a
+  `mode`:
+  - ☑ **report (read-only)** — text, or an HTML table + aggregate footer
+    (`count`/`sum`/`min`/`max`/`avg`).
+  - ☑ **form (read-write)** — an HTML form of labelled inputs bound to the data;
+    `editable:false` fields render read-only. `PicoLayout.collect(formEl)` reads
+    inputs back to rows for write-back via the data ABI.
+  - ☑ **tests** — `tests/test_layout_engine.py` + `tests/test_layout_engine.js`
+    (Python == JS byte-identical text/HTML; full 2-stage pipeline).
+- ☐ **Form write-back** — `collect()` → persist through Context/Memory scratch or
+  Storage; wire into `BareMetal.Forms`/`Workflow`.
+- ☐ **Layout designer** — a visual band/column/field designer surface in the
+  playground emitting the template JSON, with a live preview (run the stage-1
+  program, render its output); `report`(RO) / `form`(RW) toggle.
+
+Stage-1 convenience (kept): `picoscript_reportmodel.py` (`--lang report-model`)
+materialises rows in `Memory`, loops the detail band, prints an aggregate footer.
 
 ## 3. Event hooks — RAISE & subscribe
 
