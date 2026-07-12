@@ -359,3 +359,36 @@ int cube(int x) { return x * square(x); }
 print(cube(3));
 """
     assert run(compile_c(src)) == [27]
+
+
+# ── English "For each X in <collection>" (value iteration via Span) ───────────
+
+def test_english_foreach_in_prints_each_element():
+    src = """\
+Set data to "AB".
+For each ch in data:
+    Print ch.
+"""
+    assert run(compile_english(src)) == [65, 66]  # byte values of 'A','B'
+
+
+def test_english_foreach_in_sums_element_values():
+    src = """\
+Set data to "ABC".
+Set s to 0.
+For each ch in data:
+    Set s to s plus ch.
+Print s.
+"""
+    assert run(compile_english(src)) == [198]  # 65 + 66 + 67
+
+
+def test_english_foreach_from_to_still_works():
+    src = """\
+Set s to 0.
+For each i from 1 to 3:
+    Set s to s plus i.
+Print s.
+"""
+    assert run(compile_english(src)) == [6]
+

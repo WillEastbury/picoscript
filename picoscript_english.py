@@ -21,6 +21,7 @@ the Python frontend); simple statements end at the line (an optional trailing
   While <cond>:               Repeat while <cond>:    As long as <cond>:
   Repeat <n> times with X:    -> X counts 0..n-1
   For each X from <a> to <b>: -> X counts a..b inclusive
+  For each X in <collection>: -> X takes each element value (Span.Len / Span.Get)
   Define <name>:              To <name>:              -> subroutine (globals; no params)
   Do <name>.                  Call <name>.            -> invoke a subroutine
   Return.   Stop.  (break)    Skip.  (continue)
@@ -38,6 +39,7 @@ Comparisons (in <cond>):
 combined with  and / or / not.
 """
 from typing import List, Optional
+import copy
 
 from picoscript_basic import (  # reuse AST + lowering unchanged
     Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
@@ -459,10 +461,17 @@ class Parser:
             var = self.expect("word").value
         return ForEach(var, count, self.parse_suite())
 
-    def parse_for(self) -> ForTo:
+    def parse_for(self):
         self.eat_word("for")
         self.eat_word("each")
         var = self.expect("word").value
+        if self.at_word("in"):                   # "For each X in <collection>:"
+            self.eat_word("in")                  #   iterates element values via Span.Len/Span.Get
+            coll = self.parse_expr()
+            body = self.parse_suite()
+            idx = "__idx_" + var + "__"
+            inner = [Let(var, Call("Span", "Get", [copy.deepcopy(coll), Var(idx)]))] + body
+            return ForEach(idx, Call("Span", "Len", [coll]), inner)
         self.eat_word("from")
         start = self.parse_expr()
         self.eat_word("to")
