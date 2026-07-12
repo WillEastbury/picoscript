@@ -143,6 +143,31 @@ def test_raise_lowers_to_event_post():
     assert warnings == []
 
 
+def test_on_subscribe_drains_and_dispatches():
+    # three events (two of type 7); ON 7 handler counts matching events
+    assert tail([
+        {"type": "RAISE", "event": 7},
+        {"type": "RAISE", "event": 8},
+        {"type": "RAISE", "event": 7},
+        {"type": "SET", "name": "hits", "value": 0},
+        {"type": "ON", "event": 7},
+        {"type": "SET", "name": "hits", "expr": "hits + 1"},
+        {"type": "END"},
+        {"type": "LOG", "message": "hits"},
+    ]) == 2
+
+
+def test_on_lowers_to_event_drain_loop():
+    src, warnings = workflow_to_english([
+        {"type": "ON", "event": 5},
+        {"type": "LOG", "message": "1"},
+        {"type": "END"},
+    ])
+    assert "For each _on0 from 0 to (Event.Count() minus 1):" in src
+    assert "Set _ev1 to Event.Next()." in src
+    assert "If Event.Type(_ev1) is 5:" in src
+
+
 # ── input shapes ──────────────────────────────────────────────────────────────
 
 def test_accepts_json_string_and_steps_object():

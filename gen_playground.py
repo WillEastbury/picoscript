@@ -1848,7 +1848,7 @@ function getSrc(){return document.getElementById('src').value;}
 function setSrc(v){document.getElementById('src').value=v;if(typeof filesRender==='function')filesRender();}
 
 // ---- visual workflow designer (edits the JSON step list; syncs to #src) ------
-var WF_TYPES=['SET','IF','ELSE','END','FOR','FOREACH','FOREACHP','LOG','WAIT','RAISE','LOAD','SAVE','WEB','CALL'];
+var WF_TYPES=['SET','IF','ELSE','END','FOR','FOREACH','FOREACHP','LOG','WAIT','RAISE','ON','LOAD','SAVE','WEB','CALL'];
 var WF_EXAMPLES={
   'Array sum':[
     {type:'SET',name:'data',value:[10,20,30,40]},
@@ -1901,6 +1901,7 @@ function wfTemplate(type){
     case 'LOG': return {type:'LOG',message:'x'};
     case 'WAIT': return {type:'WAIT',ms:100};
     case 'RAISE': return {type:'RAISE',event:1,target:0};
+    case 'ON': return {type:'ON',event:1};
     case 'LOAD': return {type:'LOAD',name:'x',from:'memory',key:0};
     case 'SAVE': return {type:'SAVE',name:'x',to:'memory',key:0};
     case 'WEB': return {type:'WEB',method:'GET',url:'/api'};
@@ -1920,6 +1921,7 @@ function wfSummary(s){
     if(t==='SAVE') return s.name+' -> '+s.to+(s.key!=null?' ['+s.key+']':'');
     if(t==='WAIT') return (s.ms||0)+'ms';
     if(t==='RAISE'||t==='EMIT') return 'event '+(s.event==null?'':s.event)+(s.target!=null?' -> '+s.target:'');
+    if(t==='ON'||t==='SUBSCRIBE') return 'on event '+(s.event==null?'':s.event);
     if(t==='WEB') return (s.method||'GET')+' '+(s.url||'');
     if(t==='CALL') return s.workflow||'';
   } catch(e){}
@@ -1952,7 +1954,7 @@ function wfRenderDesigner(){
         '<button class="ghost" onclick="wfEditStep('+i+')" title="edit JSON">&#9998;</button>'+
         '<button class="ghost" onclick="wfDelStep('+i+')" title="delete">&#10005;</button>'+
       '</span></div>';
-    if(t==='IF'||t==='FOR'||t==='FOREACH'||t==='FOREACHP'||t==='ELSE') indent++;
+    if(t==='IF'||t==='FOR'||t==='FOREACH'||t==='FOREACHP'||t==='ON'||t==='ELSE') indent++;
   }
   // live derived-English preview (the pre-compile target) + warnings
   var eng='';

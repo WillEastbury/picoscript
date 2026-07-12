@@ -327,6 +327,8 @@ def _emit_step(step, t, steps, pos, indent, ctx: _Ctx):
             out.append(_pad(indent) + "Set %s to %s." % (sanitize_id(step["result"]), call))
         else:
             out.append(_pad(indent) + call + ".")
+    elif t in ("ON", "SUBSCRIBE"):
+        _emit_on(step, steps, pos, indent, ctx)
     elif t == "LOAD":
         _emit_load(step, indent, ctx)
     elif t == "SAVE":
@@ -374,6 +376,29 @@ def _resolve_array(step, indent, ctx: _Ctx, label: str):
     if lit is not None:
         return _materialize(ctx, indent, lit, label)
     return None
+
+
+def _emit_on(step, steps, pos, indent, ctx: _Ctx):
+    """ON/SUBSCRIBE <event>: drain the Event.* queue and run the handler body for
+    each matching event. Lowers to a bounded drain loop over the pending count."""
+    ev = emit_operand(step.get("event", 0), ctx.warnings, "ON event")
+    var = sanitize_id(step.get("var") or "event")
+    loop = "_on%d" % ctx.temp_n
+    ctx.temp_n += 1
+    evid = "_ev%d" % ctx.temp_n
+    ctx.temp_n += 1
+    out = ctx.out
+    out.append(_pad(indent) + "For each %s from 0 to (Event.Count() minus 1):" % loop)
+    out.append(_pad(indent + 1) + "Set %s to Event.Next()." % evid)
+    out.append(_pad(indent + 1) + "If Event.Type(%s) is %s:" % (evid, ev))
+    out.append(_pad(indent + 2) + "Set %s to %s." % (var, evid))
+    start = len(out)
+    term = _emit_seq(steps, pos, indent + 2, ctx)
+    if len(out) == start:
+        out.append(_pad(indent + 2) + "Set _nop to 0.")
+    if term == "ELSE":
+        pos[0] += 1
+        ctx.warnings.append("ELSE without a matching IF; ignored")
 
 
 def _emit_foreach(step, t, steps, pos, indent, ctx: _Ctx):

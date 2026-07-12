@@ -55,6 +55,7 @@ an object with a `steps` array, and returns PicoIL like every other frontend.
 | `LOG` | `message` | `Print <value>.` for numeric/identifier/`${expr}`; free text → comment + warning. |
 | `WAIT` | `ms` | `Timer.After(<ms>).` (non-blocking; warns). |
 | `RAISE`/`EMIT` | `event`, `target?`, `result?` | `Event.Post(<event>, <target>).` (posts onto the reactive event queue; `result` captures the event id). |
+| `ON`/`SUBSCRIBE` … `END` | `event`, `var?` | Block: drains the `Event.*` queue and runs the handler body for each pending event of `<event>` (binds `var`, default `event`, to the event id). |
 | `LOAD` | `name`, `from`, `key?` | `variable` → assignment; `memory`/`scratch` → `Memory.Get`/`Context.GetScratchValue`; storage/HTTP → comment + warning. |
 | `SAVE` | `name`, `to`, `key?` | `variable` → assignment; `memory`/`scratch` → `Memory.Set`/`Context.SetScratchValue`; storage → comment + warning. |
 | `WEB` | `method`, `url`, `result?` | `# WEB …` comment + warning (needs a host transport hook). |
