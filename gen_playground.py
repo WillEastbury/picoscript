@@ -1095,6 +1095,7 @@ def main():
     hooks_js = open(os.path.join(ROOT, "vm", "pico_hooks.js"), encoding="utf-8").read()
     vm_js = open(os.path.join(ROOT, "vm", "picovm.js"), encoding="utf-8").read()
     picoc_js = open(os.path.join(ROOT, "vm", "picoc.js"), encoding="utf-8").read()
+    wf_js = open(os.path.join(ROOT, "vm", "picoworkflow.js"), encoding="utf-8").read()
     ser_js = open(os.path.join(ROOT, "vm", "picoserializer.js"), encoding="utf-8").read()
     store_js = open(os.path.join(ROOT, "vm", "picostore.js"), encoding="utf-8").read()
     pcz_js = open(os.path.join(ROOT, "vm", "picocompress.js"), encoding="utf-8").read()
@@ -1106,6 +1107,7 @@ def main():
                .replace("/*__PBZ__*/", pbz_js) \
                .replace("/*__VM__*/", vm_js) \
                .replace("/*__PICOC__*/", picoc_js) \
+               .replace("/*__WF__*/", wf_js) \
                .replace("/*__SER__*/", ser_js) \
                .replace("/*__STORE__*/", store_js) \
                .replace("/*__DATA__*/", payload)
@@ -1318,8 +1320,9 @@ PAGE = r"""<!DOCTYPE html>
     <button data-lang="cobol" onclick="setLang('cobol')">COBOL</button>
     <button data-lang="report" onclick="setLang('report')">Report</button>
     <button data-lang="functional" onclick="setLang('functional')">Functional</button>
+    <button data-lang="workflow" onclick="setLang('workflow')">Workflow</button>
   </div>
-  <span class="pill">7 languages</span>
+  <span class="pill">7 languages + workflow</span>
   <span class="pill">same bytecode</span>
   <a href="index.html" style="margin-left:auto;font-size:11px;color:var(--accent);text-decoration:none">&#128214; Full language guide &amp; reference &#8599;</a>
 </div>
@@ -1383,6 +1386,7 @@ PAGE = r"""<!DOCTYPE html>
           <option value="python">Python</option><option value="english">English</option>
           <option value="cobol">COBOL</option><option value="report">Report</option>
           <option value="functional">Functional</option>
+          <option value="workflow">Workflow</option>
         </select>
         <textarea id="src" style="height:100px" spellcheck="false"></textarea>
         <div class="controls">
@@ -1437,6 +1441,7 @@ PAGE = r"""<!DOCTYPE html>
 <script>/*__PBZ__*/</script>
 <script>/*__VM__*/</script>
 <script>/*__PICOC__*/</script>
+<script>/*__WF__*/</script>
 <script>/*__SER__*/</script>
 <script>/*__STORE__*/</script>
 <script>
@@ -1464,6 +1469,23 @@ var GROUPS = [
 
 function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+// ---- workflow surface (visual step list -> English pre-compile) -------------
+var WF_SNIPPET = JSON.stringify([
+  {type:'SET', name:'data', value:[10,20,30,40]},
+  {type:'SET', name:'sum', value:0},
+  {type:'FOREACH', var:'item', in:'data'},
+  {type:'SET', name:'sum', expr:'sum + item'},
+  {type:'END'},
+  {type:'IF', condition:'sum >= 50'},
+  {type:'LOG', message:'sum'},
+  {type:'END'}
+], null, 2);
+function looksLikeWorkflowJson(src){
+  if(!src||!src.trim()) return false;
+  try { var d=JSON.parse(src); return Array.isArray(d) || (d && Array.isArray(d.steps)); }
+  catch(e){ return false; }
+}
+
 // ---- language toggle -------------------------------------------------------
 function setLang(lang){
   var oldLang = CUR_LANG;
@@ -1475,7 +1497,11 @@ function setLang(lang){
   if (sel) sel.value = lang;
   // auto-translate editor content to new language
   var src = getSrc();
-  if (src && src.trim() && oldLang !== lang) {
+  if (lang==='workflow' || oldLang==='workflow') {
+    // Workflow is a visual/JSON surface: there is no text<->workflow translator.
+    // On entering workflow with non-workflow content, seed a starter step list.
+    if (lang==='workflow' && !looksLikeWorkflowJson(src)) setSrc(WF_SNIPPET);
+  } else if (src && src.trim() && oldLang !== lang) {
     var m = sampleMatch(src);
     if (m && DATA[m.idx][lang]) {
       setSrc(DATA[m.idx][lang].src);
@@ -1923,9 +1949,16 @@ function compileSrc(run){
   var lang=document.getElementById('lang').value, src=getSrc();
   var err=document.getElementById('cerr');
   try {
-    var r=PicoCompile.compileDebug(src,lang);
-    DBG.words=r.words.map(function(w){return w>>>0;}); DBG.disasm=DBG.words.map(jsDisasm); DBG.vars=r.vars||{}; DBG.debug=r.debug||{}; DBG.src=src; rebuildDebugMaps();
-    err.textContent='compiled '+DBG.words.length+' words'; err.style.color='#7ee787';
+    var compileLang=lang, compileText=src, wfNote='';
+    if(lang==='workflow'){
+      // pre-compile step: visual workflow (JSON steps) -> English -> bytecode
+      var wf=PicoWorkflow.toEnglish(src);
+      compileText=wf.source; compileLang='english';
+      wfNote=' (workflow \u2192 english'+(wf.warnings&&wf.warnings.length?', '+wf.warnings.length+' warning(s)':'')+')';
+    }
+    var r=PicoCompile.compileDebug(compileText,compileLang);
+    DBG.words=r.words.map(function(w){return w>>>0;}); DBG.disasm=DBG.words.map(jsDisasm); DBG.vars=r.vars||{}; DBG.debug=r.debug||{}; DBG.src=compileText; rebuildDebugMaps();
+    err.textContent='compiled '+DBG.words.length+' words'+wfNote; err.style.color='#7ee787';
     dbgReset(); if(run) dbgRun();
   } catch(e){ err.textContent=String(e.message||e); err.style.color='#ff7b72'; }
 }
