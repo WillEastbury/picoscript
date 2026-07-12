@@ -110,6 +110,13 @@
     border-radius:6px; padding:6px 8px; font-family:inherit; font-size:12px; }
   textarea { font-family:"SF Mono",Consolas,monospace; width:100%; resize:vertical; }
   .controls { display:flex; gap:6px; margin:8px 0; flex-wrap:wrap; align-items:center; }
+  .wf-designer { margin:6px 0; border:1px solid #2c313f; border-radius:6px; padding:6px; background:#0c0e14; }
+  .wf-designer .wf-add { display:flex; gap:6px; align-items:center; margin-bottom:6px; }
+  .wf-row { display:flex; gap:8px; align-items:center; padding:3px 6px; margin:3px 0; border:1px solid #2c313f;
+    border-radius:6px; background:#11141c; }
+  .wf-badge { min-width:70px; font-weight:700; font-size:11px; color:var(--accent); }
+  .wf-sum { flex:1 1 auto; font-family:"SF Mono",Consolas,monospace; font-size:12px; word-break:break-word; }
+  .wf-acts button { padding:1px 6px; font-size:12px; }
   .file-sidebar { width:230px; background:var(--panel); border-right:1px solid #2c313f;
     flex-shrink:0; display:flex; flex-direction:column; overflow:hidden; }
   .file-sidebar.collapsed { width:36px; }
@@ -270,6 +277,7 @@
           <option value="workflow">Workflow</option>
         </select>
         <textarea id="src" style="height:100px" spellcheck="false"></textarea>
+        <div id="wfDesigner" class="wf-designer" style="display:none"></div>
         <div class="controls">
           <button class="act" onclick="compileSrc(true)">Compile &amp; Run &#9654;</button>
           <button class="ghost" onclick="compileSrc(false)">Compile &amp; Step</button>
@@ -9314,6 +9322,7 @@ function setLang(lang){
     }
   }
   if(typeof onLangChange==='function') onLangChange();
+  if(typeof wfToggle==='function') wfToggle();
   showCard(CUR_CARD);
 }
 
@@ -9627,6 +9636,78 @@ function togglePinnedPanel(id){DBG_LAYOUT.pinned[id]=!DBG_LAYOUT.pinned[id];appl
 
 function getSrc(){return document.getElementById('src').value;}
 function setSrc(v){document.getElementById('src').value=v;if(typeof filesRender==='function')filesRender();}
+
+// ---- visual workflow designer (edits the JSON step list; syncs to #src) ------
+var WF_TYPES=['SET','IF','ELSE','END','FOR','FOREACH','FOREACHP','LOG','WAIT','LOAD','SAVE','WEB','CALL'];
+function wfTemplate(type){
+  switch(type){
+    case 'SET': return {type:'SET',name:'x',value:0};
+    case 'IF': return {type:'IF',condition:'x >= 1'};
+    case 'ELSE': return {type:'ELSE'};
+    case 'END': return {type:'END'};
+    case 'FOR': return {type:'FOR','var':'i',from:1,to:5};
+    case 'FOREACH': return {type:'FOREACH','var':'item','in':'data'};
+    case 'FOREACHP': return {type:'FOREACHP','var':'item','in':'data'};
+    case 'LOG': return {type:'LOG',message:'x'};
+    case 'WAIT': return {type:'WAIT',ms:100};
+    case 'LOAD': return {type:'LOAD',name:'x',from:'memory',key:0};
+    case 'SAVE': return {type:'SAVE',name:'x',to:'memory',key:0};
+    case 'WEB': return {type:'WEB',method:'GET',url:'/api'};
+    case 'CALL': return {type:'CALL',workflow:'other'};
+    default: return {type:type};
+  }
+}
+function wfSummary(s){
+  var t=(s.type||'').toUpperCase();
+  try {
+    if(t==='SET') return s.name+' = '+(('expr' in s)?s.expr:JSON.stringify(s.value));
+    if(t==='IF') return s.condition||'';
+    if(t==='FOR') return s['var']+' = '+s.from+'..'+s.to+(s.step!=null?' by '+s.step:'');
+    if(t==='FOREACH'||t==='FOREACHP') return s['var']+' in '+JSON.stringify(s['in']);
+    if(t==='LOG') return String(s.message==null?'':s.message);
+    if(t==='LOAD') return s.name+' <- '+s.from+(s.key!=null?' ['+s.key+']':'');
+    if(t==='SAVE') return s.name+' -> '+s.to+(s.key!=null?' ['+s.key+']':'');
+    if(t==='WAIT') return (s.ms||0)+'ms';
+    if(t==='WEB') return (s.method||'GET')+' '+(s.url||'');
+    if(t==='CALL') return s.workflow||'';
+  } catch(e){}
+  return '';
+}
+function wfParseSteps(){ try{ var d=JSON.parse(getSrc()); if(Array.isArray(d)) return d; if(d&&Array.isArray(d.steps)) return d.steps; }catch(e){} return null; }
+function wfWriteSteps(steps){ setSrc(JSON.stringify(steps,null,2)); wfRenderDesigner(); compileSrc(false); }
+function wfAddStep(){ var sel=document.getElementById('wfAddType'); if(!sel) return; var steps=wfParseSteps()||[]; steps.push(wfTemplate(sel.value)); wfWriteSteps(steps); }
+function wfDelStep(i){ var steps=wfParseSteps(); if(!steps) return; steps.splice(i,1); wfWriteSteps(steps); }
+function wfMove(i,d){ var steps=wfParseSteps(); if(!steps) return; var j=i+d; if(j<0||j>=steps.length) return; var tmp=steps[i]; steps[i]=steps[j]; steps[j]=tmp; wfWriteSteps(steps); }
+function wfEditStep(i){ var steps=wfParseSteps(); if(!steps) return; var v=prompt('Edit step JSON',JSON.stringify(steps[i])); if(v==null) return; var parsed; try{ parsed=JSON.parse(v); }catch(e){ alert('Invalid JSON: '+e.message); return; } steps[i]=parsed; wfWriteSteps(steps); }
+function wfRenderDesigner(){
+  var host=document.getElementById('wfDesigner'); if(!host) return;
+  var add='<div class="wf-add"><select id="wfAddType">'+WF_TYPES.map(function(t){return '<option>'+t+'</option>';}).join('')+'</select>'+
+    '<button class="ghost" onclick="wfAddStep()">+ Add step</button>'+
+    '<span class="muted" style="font-size:11px">visual designer &mdash; edits sync to the JSON below &amp; recompile</span></div>';
+  var steps=wfParseSteps();
+  if(!steps){ host.innerHTML=add+'<div class="muted" style="font-size:12px;padding:4px">(editor text is not a JSON step array &mdash; edit the JSON or add a step)</div>'; return; }
+  var indent=0, rows='';
+  for(var i=0;i<steps.length;i++){ var s=steps[i]||{}, t=(s.type||'?').toUpperCase();
+    if(t==='ELSE'||t==='END') indent=Math.max(0,indent-1);
+    rows+='<div class="wf-row" style="margin-left:'+(indent*18)+'px">'+
+      '<span class="wf-badge">'+esc(t)+'</span>'+
+      '<span class="wf-sum">'+esc(wfSummary(s))+'</span>'+
+      '<span class="wf-acts">'+
+        '<button class="ghost" onclick="wfMove('+i+',-1)" title="move up">&#8593;</button>'+
+        '<button class="ghost" onclick="wfMove('+i+',1)" title="move down">&#8595;</button>'+
+        '<button class="ghost" onclick="wfEditStep('+i+')" title="edit JSON">&#9998;</button>'+
+        '<button class="ghost" onclick="wfDelStep('+i+')" title="delete">&#10005;</button>'+
+      '</span></div>';
+    if(t==='IF'||t==='FOR'||t==='FOREACH'||t==='FOREACHP'||t==='ELSE') indent++;
+  }
+  host.innerHTML=add+rows;
+}
+function wfToggle(){
+  var on=(CUR_LANG==='workflow');
+  var host=document.getElementById('wfDesigner');
+  if(host) host.style.display=on?'block':'none';
+  if(on){ try{ wfRenderDesigner(); }catch(e){} }
+}
 function onLangChange(){if(typeof filesRender==='function')filesRender();}
 
 // editor language switch (PIOS feedback): if the current source is a known guide
@@ -9820,6 +9901,7 @@ showCard(0);
 document.getElementById('lang').value='basic';
 setSrc(DATA[3] && DATA[3].basic ? DATA[3].basic.src : '');
 document.getElementById('src').addEventListener('input',filesRender);
+document.getElementById('src').addEventListener('input',function(){ if(CUR_LANG==='workflow'&&typeof wfRenderDesigner==='function'){ try{ wfRenderDesigner(); }catch(e){} } });
 document.getElementById('lang').addEventListener('change',function(){editorLangChange();});
 (function(){var ls=filesSafeLocalStorage(),active='';try{active=ls?ls.getItem(PS_ACTIVE_FILE_KEY)||'':'';}catch(e){} if(active&&filesRead()[active]) psFilesOpen(active); else filesRender();})();
 compileSrc(false);
