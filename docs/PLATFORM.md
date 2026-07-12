@@ -30,7 +30,7 @@ Author once → run everywhere → verify by differential oracle.
 | **Query** | the `Query` namespace (`QueryCard` / `QueryResult` / `BuildLookupFilter`) · `BareMetal.Metadata` FK/lookup selects. |
 | **Ontology** | developercli forge (`forge_ontology.c`, `forge_ir.c`) — the schema/entity model that drives app generation. |
 | **Memory / data ABI** | `Memory.Get/Set` (0x37/0x36) and `Context.Get/SetScratchValue` (0xeb/0xea) — the integer data plane shared by all runtimes (arrays, fields, scratch). |
-| **Events** | `RAISE` opcode `0xE`, the `Event.*` reactive queue (0x0180–0x0186), `ON Ns.Method:` handlers, `CAP_EVENT` — being elevated to first-class RAISE/subscribe (see [ROADMAP.md](ROADMAP.md)). |
+| **Events** | `RAISE` opcode `0xE`, the `Event.*` reactive queue (0x0180–0x0186), `ON` handlers, `CAP_EVENT` — first-class RAISE/subscribe with the `Event.*` FIFO across the Python/JS/C# VMs and a `BareMetal.PubSub` browser bridge. See [EVENTS.md](EVENTS.md). |
 
 ## The shared-ISA contract
 

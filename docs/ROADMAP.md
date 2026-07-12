@@ -59,19 +59,15 @@ runtimes. Builds on existing primitives:
 - the `CAP_EVENT` capability
 
 Work items:
-- ☐ **RAISE surface** — `Raise <event> [with <data>].` in English → `Event.Post` /
-  `Thread.Raise`; a workflow `RAISE`/`EMIT` step type.
-- ☐ **Subscribe surface** — `ON Ns.Method:` handler blocks from English + a
-  workflow `ON`/`SUBSCRIBE` step type; dispatch wired to the `Event.Next()` drain
-  so raised events invoke subscribers deterministically.
-- ☐ **JS runtime** — bridge platform events to `BareMetal.PubSub` so browser
-  workflows raise onto / subscribe from the app bus; mirror the `Event.*` queue.
-- ☐ **C# runtime** — implement RAISE (swirq / `Event.Post`) + host subscription
-  dispatch in `developercli/workflow` (`PicoVm.cs` already logs swirq for `0xE`;
-  `WorkflowHost` needs `Event.*` + subscriber callbacks) + oracle cases.
-- ☐ **Workflow steps** — add `RAISE` and `ON`/`SUBSCRIBE` step types to all three
-  workflow compilers (`BareMetal.Workflow`, `BareMetal.WorkflowPico`,
-  `picoscript_workflow.py`), kept byte-aligned.
-- ☐ **Tests & docs** — raise→subscriber fires, event-data round-trip; a
-  `docs/EVENTS.md` contract (RAISE/ON surface, `Event.*` ABI, PubSub bridge,
-  reserved channels); differential oracle cases.
+- ☑ **RAISE surface** — `RAISE`/`EMIT` workflow step → `Event.Post`; `Event.*` is a
+  uniform host-call primitive in every frontend.
+- ☑ **Subscribe surface** — `ON`/`SUBSCRIBE` workflow block → an `Event.*`
+  drain-and-dispatch loop; handler runs per matching pending event.
+- ☑ **JS runtime** — `BareMetal.Workflow` engine bridges `RAISE`→`PubSub.emit` and
+  `ON`→`PubSub.on`.
+- ☑ **C# runtime** — the `Event.*` FIFO (Post/Next/Count/Type/Target, 0x180–0x186)
+  in `WorkflowHost`; `oracle.js` `wf_events` case reproduced by the C# `PicoVm`.
+- ☑ **Workflow steps** — `RAISE`/`ON` in all three workflow compilers
+  (`BareMetal.Workflow`, `BareMetal.WorkflowPico`, `picoscript_workflow.py`).
+- ☑ **Tests & docs** — reference/browser/cross-language tests; see
+  [EVENTS.md](EVENTS.md).
