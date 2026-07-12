@@ -117,6 +117,10 @@
   .wf-badge { min-width:70px; font-weight:700; font-size:11px; color:var(--accent); }
   .wf-sum { flex:1 1 auto; font-family:"SF Mono",Consolas,monospace; font-size:12px; word-break:break-word; }
   .wf-acts button { padding:1px 6px; font-size:12px; }
+  .wf-eng-h { font-size:11px; color:var(--muted); margin:8px 0 2px; }
+  .wf-eng { font-family:"SF Mono",Consolas,monospace; font-size:12px; background:#0a0c12; border:1px solid #2c313f;
+    border-radius:6px; padding:6px; margin:0; white-space:pre-wrap; color:#9fb0c8; }
+  .wf-warn { font-size:11px; color:var(--warn); margin-top:4px; }
   .file-sidebar { width:230px; background:var(--panel); border-right:1px solid #2c313f;
     flex-shrink:0; display:flex; flex-direction:column; overflow:hidden; }
   .file-sidebar.collapsed { width:36px; }
@@ -9639,6 +9643,46 @@ function setSrc(v){document.getElementById('src').value=v;if(typeof filesRender=
 
 // ---- visual workflow designer (edits the JSON step list; syncs to #src) ------
 var WF_TYPES=['SET','IF','ELSE','END','FOR','FOREACH','FOREACHP','LOG','WAIT','LOAD','SAVE','WEB','CALL'];
+var WF_EXAMPLES={
+  'Array sum':[
+    {type:'SET',name:'data',value:[10,20,30,40]},
+    {type:'SET',name:'sum',value:0},
+    {type:'FOREACH','var':'item','in':'data'},
+    {type:'SET',name:'sum',expr:'sum + item'},
+    {type:'END'},
+    {type:'LOG',message:'sum'}
+  ],
+  'Filter & sum (>= 10)':[
+    {type:'SET',name:'data',value:[5,12,8,20,3]},
+    {type:'SET',name:'sum',value:0},
+    {type:'FOREACH','var':'item','in':'data'},
+    {type:'IF',condition:'item >= 10'},
+    {type:'SET',name:'sum',expr:'sum + item'},
+    {type:'END'},
+    {type:'END'},
+    {type:'LOG',message:'sum'}
+  ],
+  'Counted loop (1..5)':[
+    {type:'SET',name:'sum',value:0},
+    {type:'FOR','var':'i',from:1,to:5},
+    {type:'SET',name:'sum',expr:'sum + i'},
+    {type:'END'},
+    {type:'LOG',message:'sum'}
+  ],
+  'Budget reject flow':[
+    {type:'LOAD',name:'total',from:'scratch',key:0},
+    {type:'LOAD',name:'budget',from:'scratch',key:1},
+    {type:'IF',condition:'total > budget'},
+    {type:'SAVE',name:'total',to:'scratch',key:4000},
+    {type:'END'},
+    {type:'LOG',message:'total'}
+  ]
+};
+function wfLoadExample(){
+  var sel=document.getElementById('wfExample'); if(!sel||!sel.value) return;
+  var ex=WF_EXAMPLES[sel.value]; if(!ex) return;
+  wfWriteSteps(ex.map(function(s){return JSON.parse(JSON.stringify(s));}));
+}
 function wfTemplate(type){
   switch(type){
     case 'SET': return {type:'SET',name:'x',value:0};
@@ -9683,6 +9727,8 @@ function wfRenderDesigner(){
   var host=document.getElementById('wfDesigner'); if(!host) return;
   var add='<div class="wf-add"><select id="wfAddType">'+WF_TYPES.map(function(t){return '<option>'+t+'</option>';}).join('')+'</select>'+
     '<button class="ghost" onclick="wfAddStep()">+ Add step</button>'+
+    '<select id="wfExample"><option value="">example\u2026</option>'+Object.keys(WF_EXAMPLES).map(function(n){return '<option>'+esc(n)+'</option>';}).join('')+'</select>'+
+    '<button class="ghost" onclick="wfLoadExample()">Load</button>'+
     '<span class="muted" style="font-size:11px">visual designer &mdash; edits sync to the JSON below &amp; recompile</span></div>';
   var steps=wfParseSteps();
   if(!steps){ host.innerHTML=add+'<div class="muted" style="font-size:12px;padding:4px">(editor text is not a JSON step array &mdash; edit the JSON or add a step)</div>'; return; }
@@ -9700,7 +9746,15 @@ function wfRenderDesigner(){
       '</span></div>';
     if(t==='IF'||t==='FOR'||t==='FOREACH'||t==='FOREACHP'||t==='ELSE') indent++;
   }
-  host.innerHTML=add+rows;
+  // live derived-English preview (the pre-compile target) + warnings
+  var eng='';
+  try {
+    var wf=PicoWorkflow.toEnglish(getSrc());
+    var warn=(wf.warnings&&wf.warnings.length)?('<div class="wf-warn">'+wf.warnings.map(function(w){return '&#9888; '+esc(w);}).join('<br>')+'</div>'):'';
+    eng='<div class="wf-eng-h">derived English (compiles &amp; runs; IL / bytecode / output in the debugger below)</div>'+
+        '<pre class="wf-eng">'+esc(wf.source)+'</pre>'+warn;
+  } catch(e){ eng='<div class="wf-warn">&#9888; '+esc(String(e.message||e))+'</div>'; }
+  host.innerHTML=add+rows+eng;
 }
 function wfToggle(){
   var on=(CUR_LANG==='workflow');
