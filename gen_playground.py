@@ -1096,6 +1096,7 @@ def main():
     vm_js = open(os.path.join(ROOT, "vm", "picovm.js"), encoding="utf-8").read()
     picoc_js = open(os.path.join(ROOT, "vm", "picoc.js"), encoding="utf-8").read()
     wf_js = open(os.path.join(ROOT, "vm", "picoworkflow.js"), encoding="utf-8").read()
+    layout_js = open(os.path.join(ROOT, "vm", "picolayout.js"), encoding="utf-8").read()
     ser_js = open(os.path.join(ROOT, "vm", "picoserializer.js"), encoding="utf-8").read()
     store_js = open(os.path.join(ROOT, "vm", "picostore.js"), encoding="utf-8").read()
     pcz_js = open(os.path.join(ROOT, "vm", "picocompress.js"), encoding="utf-8").read()
@@ -1108,6 +1109,7 @@ def main():
                .replace("/*__VM__*/", vm_js) \
                .replace("/*__PICOC__*/", picoc_js) \
                .replace("/*__WF__*/", wf_js) \
+               .replace("/*__LAYOUT__*/", layout_js) \
                .replace("/*__SER__*/", ser_js) \
                .replace("/*__STORE__*/", store_js) \
                .replace("/*__DATA__*/", payload)
@@ -1240,6 +1242,14 @@ PAGE = r"""<!DOCTYPE html>
   .wf-eng { font-family:"SF Mono",Consolas,monospace; font-size:12px; background:#0a0c12; border:1px solid #2c313f;
     border-radius:6px; padding:6px; margin:0; white-space:pre-wrap; color:#9fb0c8; }
   .wf-warn { font-size:11px; color:var(--warn); margin-top:4px; }
+  .layout-preview { margin:8px 0; padding:8px; border:1px solid #2c313f; border-radius:6px; background:#fff; color:#111; overflow:auto; }
+  .layout-preview table.pico-report { border-collapse:collapse; font-size:13px; }
+  .layout-preview table.pico-report th, .layout-preview table.pico-report td { border:1px solid #ccc; padding:2px 8px; text-align:left; }
+  .layout-preview table.pico-report tfoot td { font-weight:700; background:#f3f3f3; }
+  .layout-preview .pico-form-row { display:flex; gap:10px; flex-wrap:wrap; margin:4px 0; }
+  .layout-preview .pico-field { display:flex; flex-direction:column; font-size:12px; }
+  .layout-preview .pico-field input { border:1px solid #bbb; border-radius:4px; padding:2px 4px; }
+  .layout-text { font-family:"SF Mono",Consolas,monospace; font-size:12px; color:#9fb0c8; white-space:pre-wrap; margin:0; }
   .file-sidebar { width:230px; background:var(--panel); border-right:1px solid #2c313f;
     flex-shrink:0; display:flex; flex-direction:column; overflow:hidden; }
   .file-sidebar.collapsed { width:36px; }
@@ -1376,6 +1386,7 @@ PAGE = r"""<!DOCTYPE html>
       <button onclick="toggleDbg(this,'dbg-stream')">Stream</button>
       <button class="dbg-pin" data-pin="dbg-stream" onclick="togglePinnedPanel('dbg-stream')" title="Pin Stream">📌</button>
       <button onclick="toggleDbg(this,'dbg-ui')">Remote UI</button>
+      <button onclick="toggleDbg(this,'dbg-layout')">Report/Form</button>
       <button class="dbg-pin" data-pin="dbg-ui" onclick="togglePinnedPanel('dbg-ui')" title="Pin UI">📌</button>
       <select class="dbg-size" id="dbgSize" onchange="setDbgSize(this.value)"><option value="shallow">Shallow</option><option value="normal" selected>Normal</option><option value="deep">Deep</option><option value="dynamic">Dynamic</option></select>
       <button style="margin-left:auto" onclick="collapseDbg()">&#9660; Collapse</button>
@@ -1444,6 +1455,19 @@ PAGE = r"""<!DOCTYPE html>
         <div id="uiEvents" class="out" style="font-size:12px;margin-top:8px"></div>
         <div class="state vm-state"></div>
       </div>
+      <div class="dbg-panel" id="dbg-layout">
+        <div class="stream-tools">
+          <span class="muted">2-stage <b>report / form</b>: the <b>current program is stage&nbsp;1</b> (its output ints are the data); the <b>template</b> below is stage&nbsp;2. <b>report</b> = read-only, <b>form</b> = editable inputs.</span>
+        </div>
+        <div class="controls" style="margin:6px 0">
+          <label><input type="radio" name="layoutMode" value="report" checked onchange="renderLayout()"> report</label>
+          <label><input type="radio" name="layoutMode" value="form" onchange="renderLayout()"> form</label>
+          <button class="act" onclick="renderLayout()">Render &#9654;</button>
+        </div>
+        <textarea id="layoutTmpl" style="height:120px" spellcheck="false"></textarea>
+        <div class="layout-preview" id="layoutPreview"></div>
+        <pre class="layout-text" id="layoutText"></pre>
+      </div>
     </div>
   </div>
 </div>
@@ -1454,6 +1478,7 @@ PAGE = r"""<!DOCTYPE html>
 <script>/*__VM__*/</script>
 <script>/*__PICOC__*/</script>
 <script>/*__WF__*/</script>
+<script>/*__LAYOUT__*/</script>
 <script>/*__SER__*/</script>
 <script>/*__STORE__*/</script>
 <script>
@@ -1820,6 +1845,7 @@ function toggleDbg(btn, panelId){
   showDbgPanel(panelId);
   applyDbgLayout();
   expandDbg();
+  if(panelId==='dbg-layout' && typeof renderLayout==='function'){ try{ renderLayout(); }catch(e){} }
 }
 function showDbgPanel(id){
   document.querySelectorAll('.dbg-panel').forEach(function(p){ p.classList.remove('active'); });
@@ -1971,6 +1997,33 @@ function wfToggle(){
   var host=document.getElementById('wfDesigner');
   if(host) host.style.display=on?'block':'none';
   if(on){ try{ wfRenderDesigner(); }catch(e){} }
+}
+
+// ---- report/form layout preview (stage 2 over the current program output) ---
+var LAYOUT_DEFAULT_TMPL=JSON.stringify({
+  title:'Report',
+  columns:[{label:'A',field:0,width:6},{label:'B',field:1,width:6}],
+  aggregates:[{column:0,fn:'sum'},{column:1,fn:'sum'}]
+}, null, 2);
+function layoutMode(){
+  var r=document.querySelector('input[name="layoutMode"]:checked');
+  return r?r.value:'report';
+}
+function renderLayout(){
+  var pv=document.getElementById('layoutPreview'), tx=document.getElementById('layoutText');
+  var ta=document.getElementById('layoutTmpl');
+  if(!pv||!ta) return;
+  if(!ta.value||!ta.value.trim()) ta.value=LAYOUT_DEFAULT_TMPL;
+  var data=(DBG.vm&&DBG.vm.outputInts)?DBG.vm.outputInts():[];
+  try {
+    var tmpl=JSON.parse(ta.value);
+    var mode=layoutMode();
+    pv.innerHTML=PicoLayout.renderHtml(data,tmpl,mode);
+    if(tx) tx.textContent=PicoLayout.renderText(data,tmpl);
+  } catch(e){
+    if(tx) tx.textContent='';
+    pv.innerHTML='<span style="color:var(--warn)">'+esc(String(e.message||e))+'</span>';
+  }
 }
 function onLangChange(){if(typeof filesRender==='function')filesRender();}
 
