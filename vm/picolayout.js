@@ -163,7 +163,30 @@
     });
   }
 
-  var api = { renderText: renderText, renderHtml: renderHtml, render: render, collect: collect, VERSION: '1.0.0' };
+  // Flatten rows (row-major) back to the flat int list the layout engine consumed.
+  function flatten(rows) {
+    var out = [];
+    (rows || []).forEach(function (row) { (row || []).forEach(function (v) { out.push(v | 0); }); });
+    return out;
+  }
+
+  // Write-back into the data ABI: rows -> { key: value } scratch/memory map keyed
+  // by (base + rowIndex*stride + field). `stride` defaults to the widest row so a
+  // stage-1 program can read each field back via Context.GetScratchValue/Memory.Get.
+  function toWrites(rows, opts) {
+    opts = opts || {};
+    var base = opts.base | 0;
+    var stride = opts.stride | 0;
+    if (!stride) { stride = 0; (rows || []).forEach(function (r) { stride = Math.max(stride, (r || []).length); }); stride = Math.max(1, stride); }
+    var map = {};
+    (rows || []).forEach(function (row, ri) {
+      (row || []).forEach(function (v, fi) { map[base + ri * stride + fi] = v | 0; });
+    });
+    return map;
+  }
+
+  var api = { renderText: renderText, renderHtml: renderHtml, render: render,
+    collect: collect, flatten: flatten, toWrites: toWrites, VERSION: '1.0.0' };
   root.PicoLayout = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

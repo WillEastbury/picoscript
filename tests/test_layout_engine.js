@@ -30,5 +30,19 @@ function agg(fn) { return L.renderText([4, 2, 6, 8], { columns: [{ label: 'N', f
 check('agg count', agg('count') === 'count=4');
 check('agg avg', agg('avg') === 'avg=5');
 
+// form write-back round-trip: collect() -> toWrites() -> data ABI map.
+// Simulate a rendered form with a minimal fake element (no DOM needed).
+function fakeInput(row, field, value) {
+  return { getAttribute: function (a) { return a === 'data-row' ? String(row) : a === 'data-field' ? String(field) : null; }, value: String(value) };
+}
+var inputs = [fakeInput(0, 0, 2), fakeInput(0, 1, 99), fakeInput(1, 0, 3), fakeInput(1, 1, 20)];
+var fakeForm = { querySelectorAll: function () { return inputs; } };
+var rows = L.collect(fakeForm);
+check('collect rows', JSON.stringify(rows) === JSON.stringify([[2, 99], [3, 20]]), JSON.stringify(rows));
+check('flatten', JSON.stringify(L.flatten(rows)) === JSON.stringify([2, 99, 3, 20]));
+var writes = L.toWrites(rows, { base: 8192 });
+// row 0 field 1 (edited to 99) -> key 8192 + 0*2 + 1 = 8193
+check('toWrites edited value', writes[8193] === 99, JSON.stringify(writes));
+
 if (fails) { console.log('\n' + fails + ' failed'); process.exit(1); }
 console.log('\nall passed');

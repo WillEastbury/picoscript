@@ -79,3 +79,16 @@ def test_two_stage_pipeline():
     out = L.render_text(data, TMPL)
     assert "sum=5" in out.splitlines()[-1]   # 2 + 3
     assert "max=20" in out.splitlines()[-1]
+
+
+def test_form_writeback_roundtrips_through_memory():
+    # Form (read-write): edit a value, write it back to Memory, and a program
+    # reads the edited value back via Memory.Get -- the full read-write loop.
+    rows = [[2, 99], [3, 20]]   # as if collected from an edited form (row0 field1 -> 99)
+    assert L.flatten(rows) == [2, 99, 3, 20]
+    writes = L.to_writes(rows, base=8192)     # {8192:2, 8193:99, 8194:3, 8195:20}
+    assert writes[8193] == 99
+    # A stage-1 program seeds Memory from the write map, then reads a field back.
+    seed = "\n".join("Memory.Set(%d, %d)." % (k, v) for k, v in sorted(writes.items()))
+    prog = seed + "\nPrint Memory.Get(8193).\n"
+    assert _prog_output(prog)[-1] == 99          # edited value survives the round-trip

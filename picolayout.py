@@ -188,3 +188,26 @@ def render(data, template, mode: Optional[str] = None) -> str:
     if out_kind == "text":
         return render_text(data, template)
     return render_html(data, template, mode)
+
+
+def flatten(rows) -> List[int]:
+    """Flatten rows (row-major) back to the flat int list the engine consumed."""
+    out = []
+    for row in rows or []:
+        for v in row or []:
+            out.append(int(v))
+    return out
+
+
+def to_writes(rows, base: int = 0, stride: int = 0) -> dict:
+    """Write-back into the data ABI: rows -> { key: value } keyed by
+    (base + rowIndex*stride + field), so a stage-1 program can read each field
+    back via Context.GetScratchValue / Memory.Get. `stride` defaults to the
+    widest row."""
+    if not stride:
+        stride = max([len(r or []) for r in (rows or [])] + [1])
+    out = {}
+    for ri, row in enumerate(rows or []):
+        for fi, v in enumerate(row or []):
+            out[base + ri * stride + fi] = int(v)
+    return out
