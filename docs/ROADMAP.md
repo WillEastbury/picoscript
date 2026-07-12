@@ -36,16 +36,17 @@ A first-class **report designer** built on the existing `picoscript_report.py`
 (4GL) frontend: visual band/column report → report model → PicoIL, rendered via
 the `Json` / `TextRender` / `Utf8Writer` hooks.
 
-- ☐ **Report model schema** — data source (card/query/array), bands
-  (title / pageHeader / columnHeader / detail / footer / summary), columns
-  (field, width, format, aggregate), grouping and totals.
-- ☐ **Compiler** — `compile_report_model(json) → PicoIL` (iterate rows via
-  `FOREACH` / `Storage.QueryResult`, emit cells via `TextRender` / `Utf8Writer` /
-  `Json`); wire a `--lang` into `picoscript_build.py`.
+- ☑ **Report model schema** — data source (array / variable-in-Memory), detail row
+  expression, `where` filter, and `count`/`sum`/`min`/`max` aggregates
+  (`picoscript_reportmodel.py`).
+- ☑ **Compiler** — `compile_report_model(json) → PicoIL` (lowers to English:
+  materialise rows in `Memory`, loop the detail band, print the aggregate footer);
+  wired as `--lang report-model` (`.rptmodel`) in `picoscript_build.py`. Tested in
+  `tests/test_report_model.py`.
 - ☐ **Designer UI** — visual band/column designer surface in the playground
   emitting the report model JSON, with a live rendered preview.
-- ☐ **Tests** — compile a report model and assert rendered output on the PicoVM;
-  golden differential case if it runs on the C# VM.
+- ☐ **Richer rendering** — Storage/Query data sources, text/column formatting via
+  `TextRender` / `Utf8Writer` / `Json`, grouping; C# VM golden differential.
 
 ## 3. Event hooks — RAISE & subscribe
 
