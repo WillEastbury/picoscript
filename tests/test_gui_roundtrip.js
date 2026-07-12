@@ -8,7 +8,7 @@ const path = require('path');
 const LANGS = ['c', 'basic', 'python', 'english', 'cobol', 'report', 'functional'];
 
 (async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, channel: 'msedge' });
   const page = await browser.newPage();
   const url = 'file:///' + path.resolve('docs/index.html').replace(/\\/g, '/');
   await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });

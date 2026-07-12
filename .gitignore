@@ -26,3 +26,7 @@ data/*.jsonl
 _commitmsg.txt
 .coverage
 coverage.json
+
+# Node / Playwright (JS GUI tests)
+node_modules/
+package-lock.json

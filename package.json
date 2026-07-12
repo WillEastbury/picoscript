@@ -1,0 +1,12 @@
+{
+  "name": "picoscript",
+  "private": true,
+  "description": "PicoScript toolchain — JS VM/compiler dev tooling + browser GUI tests",
+  "scripts": {
+    "test:translate": "node tests/test_translate_case.js",
+    "test:gui": "node tests/test_gui_roundtrip.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  }
+}
