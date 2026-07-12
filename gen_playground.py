@@ -1509,10 +1509,19 @@ function setLang(lang){
   if (sel) sel.value = lang;
   // auto-translate editor content to new language
   var src = getSrc();
-  if (lang==='workflow' || oldLang==='workflow') {
-    // Workflow is a visual/JSON surface: there is no text<->workflow translator.
-    // On entering workflow with non-workflow content, seed a starter step list.
-    if (lang==='workflow' && !looksLikeWorkflowJson(src)) setSrc(WF_SNIPPET);
+  if (lang==='workflow') {
+    // Workflow is a visual/JSON surface: seed a starter step list if needed.
+    if (!looksLikeWorkflowJson(src)) setSrc(WF_SNIPPET);
+  } else if (oldLang==='workflow') {
+    // Design in workflow, then view as a text language: workflow -> English -> target.
+    if (looksLikeWorkflowJson(src)) {
+      try {
+        var _eng = PicoWorkflow.toEnglish(src).source;
+        var _out = (lang==='english') ? _eng
+          : ((typeof PicoCompile !== 'undefined' && PicoCompile.translate) ? PicoCompile.translate(_eng, 'english', lang) : _eng);
+        if (_out) setSrc(_out);
+      } catch (e) {}
+    }
   } else if (src && src.trim() && oldLang !== lang) {
     var m = sampleMatch(src);
     if (m && DATA[m.idx][lang]) {
