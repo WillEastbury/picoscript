@@ -122,6 +122,27 @@ def test_load_variable_and_memory_roundtrip():
     ]) == 42
 
 
+# ── RAISE / EMIT events (Event.Post) ───────────────────────────────────────────
+
+def test_raise_posts_events():
+    # two RAISE steps post two events; Event.Count() reports the pending queue depth
+    assert tail([
+        {"type": "RAISE", "event": 7},
+        {"type": "RAISE", "event": 8, "target": 3},
+        {"type": "LOG", "message": "${Event.Count()}"},
+    ]) == 2
+
+
+def test_raise_lowers_to_event_post():
+    src, warnings = workflow_to_english([
+        {"type": "RAISE", "event": 7, "target": 3, "result": "eid"},
+        {"type": "EMIT", "event": 9},
+    ])
+    assert "Set eid to Event.Post(7, 3)." in src
+    assert "Event.Post(9, 0)." in src
+    assert warnings == []
+
+
 # ── input shapes ──────────────────────────────────────────────────────────────
 
 def test_accepts_json_string_and_steps_object():

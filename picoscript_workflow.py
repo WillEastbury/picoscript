@@ -161,6 +161,7 @@ def translate_expr(src) -> str:
             prev_value = (val == ")")
     out = " ".join(parts)
     out = out.replace("( ", "(").replace(" )", ")").replace(" ,", ",")
+    out = re.sub(r"\s*\.\s*", ".", out)
     out = re.sub(r"\s+", " ", out).strip()
     return out
 
@@ -318,6 +319,14 @@ def _emit_step(step, t, steps, pos, indent, ctx: _Ctx):
     elif t == "WAIT":
         out.append(_pad(indent) + "Timer.After(%s)." % emit_operand(step.get("ms", 0), warnings, "WAIT ms"))
         warnings.append("WAIT: Timer.After schedules but does not block the VM")
+    elif t in ("RAISE", "EMIT"):
+        ev = emit_operand(step.get("event", 0), warnings, "RAISE event")
+        tgt = emit_operand(step.get("target", 0), warnings, "RAISE target") if step.get("target") is not None else "0"
+        call = "Event.Post(%s, %s)" % (ev, tgt)
+        if step.get("result"):
+            out.append(_pad(indent) + "Set %s to %s." % (sanitize_id(step["result"]), call))
+        else:
+            out.append(_pad(indent) + call + ".")
     elif t == "LOAD":
         _emit_load(step, indent, ctx)
     elif t == "SAVE":
