@@ -53,6 +53,8 @@ def detect_lang(path: str, forced: str | None) -> str:
         return "english"
     if ext == ".pico":
         return "v1"
+    if ext in (".wf", ".workflow"):
+        return "workflow"
     return "c"
 
 
@@ -69,6 +71,9 @@ def to_il(source: str, lang: str):
     if lang == "english":
         from picoscript_english import compile_english
         return compile_english(source)
+    if lang == "workflow":
+        from picoscript_workflow import compile_workflow
+        return compile_workflow(source)
     raise ValueError(f"frontend {lang!r} has no IL stage (v1 compiles straight to bytecode)")
 
 

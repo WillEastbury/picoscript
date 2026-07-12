@@ -200,7 +200,8 @@ Statements: `Set X to …` / `Let X be …`, `Add … to X` / `Subtract … from
 `Increase/Decrease/Multiply/Divide X by …`, `Print/Show/Display …`, `If …:` /
 `Otherwise if …:` / `Otherwise:`, `While …:` / `Repeat while …:` / `As long as …:`,
 the post-test `Repeat:` … `Until c.` / `While c.`, `Repeat n times with X:` (0..n-1),
-`For each X from a to b:` (a..b inclusive), `Choose x:` / `When v:` / `Otherwise:`
+`For each X from a to b:` (a..b inclusive), `For each X in <collection>:`
+(iterates element values via `Span.Len`/`Span.Get`), `Choose x:` / `When v:` / `Otherwise:`
 (switch), `Label name.` / `Go to name.`, the `a if c otherwise b` ternary,
 `Define name:` / `To name:` and `Do name` / `Call name`, `Define constant NAME as expr.`,
 `Define enum Name:` blocks, `Return` / `Stop` (break) / `Skip` (continue), and bare
@@ -623,7 +624,7 @@ display in a v1/v2 view, re-save; output matches input).
 - **L1 (Queue host):** inbound queue drain + outbound queue emit integration.
 - **L2 (Kernel-coupled):** IRQ/SW_IRQ wake-fire lifecycle integrated with FIFO ownership transfer.
 - **L3 (Profiling & amortization):** optional performance hooks (batching, profiling, fast-path validation).
-- **L4 (v2 syntax):** case-insensitive, block-structured source syntax + library namespaces (String, Number, Maths, DateTime, Locale). Includes the four high-level frontends — C-syntax, BASIC, Python-style and natural-English (named variables, expressions, structured control flow: `IF`, `WHILE`, `DO/LOOP`, `FOR`, `FOREACH`, `SWITCH`, `BREAK`/`SKIP`, `GOTO`/`GOSUB`) — lowering through PicoIL.
+- **L4 (v2 syntax):** case-insensitive, block-structured source syntax + library namespaces (String, Number, Maths, DateTime, Locale). Includes the four high-level frontends — C-syntax, BASIC, Python-style and natural-English (named variables, expressions, structured control flow: `IF`, `WHILE`, `DO/LOOP`, `FOR`, `FOREACH`, `SWITCH`, `BREAK`/`SKIP`, `GOTO`/`GOSUB`) — lowering through PicoIL. A fifth **workflow** frontend (`picoscript_workflow.py`, `--lang workflow`) compiles visual-workflow step lists (JSON) to PicoIL by lowering them to natural-English; see [docs/WORKFLOW_DIALECT.md](docs/WORKFLOW_DIALECT.md).
 - **L5 (Context & environment):** lazy/on-demand context decoding (Environment.*, Context.* with cheap/expensive split + scratch bucket).
 - **L6 (Cryptography):** userland hashing (hardware-accelerated) + kernel-wrapped keyed operations (HMAC, Sign, Verify, Encrypt, Decrypt) with audit logging and handle-based key access.
 

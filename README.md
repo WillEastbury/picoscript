@@ -72,6 +72,7 @@ PicoScript runs inside picoweb/PIOS as deterministic, bounded userland logic for
 | `picoscript_basic.py` | **BASIC-like** frontend (block-structured, case-insensitive → PicoIL) |
 | `picoscript_python.py` | **Python-style** frontend (significant indentation, colon blocks → reuses BASIC AST + Lowerer) |
 | `picoscript_english.py` | **Natural-English** frontend (plain imperative sentences → reuses BASIC AST + Lowerer) |
+| `picoscript_workflow.py` | **Workflow** frontend (visual-workflow step-list JSON → English → PicoIL; `--lang workflow`; see [docs/WORKFLOW_DIALECT.md](docs/WORKFLOW_DIALECT.md)) |
 | `picoscript_vm.py` | **PicoVM**: Python reference runtime for the 16-opcode ISA |
 | `picoscript_build.py` | unified driver: source → `run` / `emit il\|bytecode\|c\|js` / `native` / `stats` |
 | `picoscript_metrics.py` | IL/bytecode size, opcode histogram, static + (profiled) dynamic cycle estimates, C/JS backend sizes |
