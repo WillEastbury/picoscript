@@ -372,6 +372,7 @@ PAGE = r"""<!DOCTYPE html>
   <div class="tabs">
     <button class="tab active" onclick="showView('guide')">Guide &amp; Reference</button>
     <button class="tab" onclick="showView('play')">WebIDE</button>
+    <a class="tab" href="showcase.html" style="text-decoration:none">&#128295; Showcase</a>
   </div>
   <div class="lang-toggle" id="langToggle">
     <button data-lang="c" class="active" onclick="setLang('c')">C &#123;&#125;</button>

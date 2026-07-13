@@ -5,6 +5,9 @@ Tracked feature work for the PicoScript platform (reference toolchain +
 `developercli`). Status legend: ☐ planned · ◐ in progress · ☑ done.
 
 Foundation already shipped:
+- ☑ **Showcase** — `docs/showcase.html` ("PicoShop"): a self-contained demo app
+  (workflow → PicoScript → report/form → events) built from the repo's own inlined
+  `vm/*.js`, linked from the site + playground (`gen_showcase.py`).
 - ☑ **Workflow frontend** — `picoscript_workflow.py` (`--lang workflow`): visual
   step-list JSON → natural-English → PicoIL. See
   [docs/WORKFLOW_DIALECT.md](WORKFLOW_DIALECT.md). Byte-aligned with
