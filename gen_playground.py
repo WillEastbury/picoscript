@@ -1523,6 +1523,14 @@ function looksLikeWorkflowJson(src){
   try { var d=JSON.parse(src); return Array.isArray(d) || (d && Array.isArray(d.steps)); }
   catch(e){ return false; }
 }
+// BareMetal.WorkflowPico.compile expects a steps ARRAY (or registered name); the
+// editor surface is a JSON string, so parse it here before compiling.
+function wfCompileSrc(src){
+  var d=JSON.parse(src);
+  var steps=Array.isArray(d)?d:(d&&Array.isArray(d.steps)?d.steps:null);
+  if(!steps) throw new Error('workflow: expected a JSON step array');
+  return BareMetal.WorkflowPico.compile(steps);
+}
 
 // ---- language toggle -------------------------------------------------------
 function setLang(lang){
@@ -1542,7 +1550,7 @@ function setLang(lang){
     // Design in workflow, then view as a text language: workflow -> English -> target.
     if (looksLikeWorkflowJson(src)) {
       try {
-        var _eng = BareMetal.WorkflowPico.compile(src).source;
+        var _eng = wfCompileSrc(src).source;
         var _out = (lang==='english') ? _eng
           : ((typeof PicoCompile !== 'undefined' && PicoCompile.translate) ? PicoCompile.translate(_eng, 'english', lang) : _eng);
         if (_out) setSrc(_out);
@@ -1986,7 +1994,7 @@ function wfRenderDesigner(){
   // live derived-English preview (the pre-compile target) + warnings
   var eng='';
   try {
-    var wf=BareMetal.WorkflowPico.compile(getSrc());
+    var wf=wfCompileSrc(getSrc());
     var warn=(wf.warnings&&wf.warnings.length)?('<div class="wf-warn">'+wf.warnings.map(function(w){return '&#9888; '+esc(w);}).join('<br>')+'</div>'):'';
     eng='<div class="wf-eng-h">derived English (compiles &amp; runs; IL / bytecode / output in the debugger below)</div>'+
         '<pre class="wf-eng">'+esc(wf.source)+'</pre>'+warn;
@@ -2154,7 +2162,7 @@ function compileSrc(run){
     var compileLang=lang, compileText=src, wfNote='';
     if(lang==='workflow'){
       // pre-compile step: visual workflow (JSON steps) -> English -> bytecode
-      var wf=BareMetal.WorkflowPico.compile(src);
+      var wf=wfCompileSrc(src);
       compileText=wf.source; compileLang='english';
       wfNote=' (workflow \u2192 english'+(wf.warnings&&wf.warnings.length?', '+wf.warnings.length+' warning(s)':'')+')';
     }

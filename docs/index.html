@@ -161,6 +161,25 @@
   .ref-content { flex:1; overflow-y:auto; padding:18px 24px; }
   .ref-section { display:none; }
   .ref-section.active { display:block; }
+  .wf-designer { margin:6px 0; border:1px solid #2c313f; border-radius:6px; padding:6px; background:#0c0e14; }
+  .wf-designer .wf-add { display:flex; gap:6px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
+  .wf-row { display:flex; gap:8px; align-items:center; padding:3px 6px; margin:3px 0; border:1px solid #2c313f;
+    border-radius:6px; background:#11141c; }
+  .wf-badge { min-width:70px; font-weight:700; font-size:11px; color:var(--accent); }
+  .wf-sum { flex:1 1 auto; font-family:"SF Mono",Consolas,monospace; font-size:12px; word-break:break-word; }
+  .wf-acts button { padding:1px 6px; font-size:12px; }
+  .wf-eng-h { font-size:11px; color:var(--muted); margin:8px 0 2px; }
+  .wf-eng { font-family:"SF Mono",Consolas,monospace; font-size:12px; background:#0a0c12; border:1px solid #2c313f;
+    border-radius:6px; padding:6px; margin:0; white-space:pre-wrap; color:#9fb0c8; }
+  .wf-warn { font-size:11px; color:var(--warn); margin-top:4px; }
+  .layout-preview { margin:8px 0; padding:8px; border:1px solid #2c313f; border-radius:6px; background:#fff; color:#111; overflow:auto; }
+  .layout-preview table.pico-report { border-collapse:collapse; font-size:13px; }
+  .layout-preview table.pico-report th, .layout-preview table.pico-report td { border:1px solid #ccc; padding:2px 8px; text-align:left; }
+  .layout-preview table.pico-report tfoot td { font-weight:700; background:#f3f3f3; }
+  .layout-preview .pico-form-row { display:flex; gap:10px; flex-wrap:wrap; margin:4px 0; }
+  .layout-preview .pico-field { display:flex; flex-direction:column; font-size:12px; }
+  .layout-preview .pico-field input { border:1px solid #bbb; border-radius:4px; padding:2px 4px; }
+  .layout-text { font-family:"SF Mono",Consolas,monospace; font-size:12px; color:#9fb0c8; white-space:pre-wrap; margin:0; }
   .docnav { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:12px; }
   .docnav-btn { background:#2c313f; color:var(--muted); border:none; border-radius:6px; padding:6px 10px; font-weight:600; cursor:pointer; font-size:11.5px; }
   .docnav-btn.active { background:var(--accent); color:#fff; }
@@ -200,6 +219,7 @@
     <button data-lang="cobol" onclick="setLang('cobol')">COBOL</button>
     <button data-lang="report" onclick="setLang('report')">Report</button>
     <button data-lang="functional" onclick="setLang('functional')">Functional</button>
+    <button data-lang="workflow" onclick="setLang('workflow')">Workflow</button>
   </div>
 </div>
 <div class="main">
@@ -8566,6 +8586,7 @@ lowering convention or host contract.</p>
           <button class="ghost" onclick="dbgReset()">Reset</button>
         </div>
         <div id="cerr" class="cerr"></div>
+        <div id="wfDesigner" class="wf-designer" style="display:none"></div>
       </div>
     </div>
     <div class="dbg-bar" id="playDbgBar">
@@ -8595,6 +8616,7 @@ lowering convention or host contract.</p>
     <button onclick="openToolPanel('cards')">Cards</button>
     <button onclick="openToolPanel('query')">Query</button>
     <button onclick="openToolPanel('spans')">Spans</button>
+    <button onclick="openToolPanel('report')">Report</button>
   </div>
   <div class="flyout-overlay" id="flyoutOverlay" onclick="closeToolPanel(false)"></div>
   <div class="tool-panel" id="toolPanel">
@@ -8605,6 +8627,7 @@ lowering convention or host contract.</p>
         <button data-tool="cards" onclick="selectToolTab('cards')">Cards</button>
         <button data-tool="query" onclick="selectToolTab('query')">Query</button>
         <button data-tool="spans" onclick="selectToolTab('spans')">Spans</button>
+        <button data-tool="report" onclick="selectToolTab('report')">Report/Form</button>
       </div>
       <div class="tool-actions">
         <button id="toolPin" onclick="toggleToolPin()" title="Pin tools panel" aria-label="Pin tools panel">📌</button>
@@ -8649,6 +8672,19 @@ lowering convention or host contract.</p>
           <b>Span.Slice(span, off, len)</b> zero-copy view<br><b>Span.Materialize(span)</b> copy to new region<br>
           <b>Span.Len/Get</b> length and indexed read
         </p>
+      </div>
+      <div class="tool-tab" id="tool-report">
+        <h3>Report / Form <span class="badge">2-stage</span></h3>
+        <p style="color:var(--muted);font-size:12px;line-height:1.5">Stage&nbsp;1 = the <b>current program</b> (its output ints are the data). Stage&nbsp;2 = the <b>template</b> below. <b>report</b> = read-only table + aggregate footer; <b>form</b> = editable inputs &amp; <b>Save</b> writes back through the data ABI (into PicoWAL memory).</p>
+        <div class="controls" style="margin:6px 0">
+          <label><input type="radio" name="layoutMode" value="report" checked onchange="renderLayout()"> report</label>
+          <label><input type="radio" name="layoutMode" value="form" onchange="renderLayout()"> form</label>
+          <button class="act" onclick="renderLayout()">Render &#9654;</button>
+        </div>
+        <textarea id="layoutTmpl" style="height:110px" spellcheck="false"></textarea>
+        <div class="layout-preview" id="layoutPreview"></div>
+        <div style="display:flex;gap:6px;margin:6px 0"><button class="ghost" onclick="layoutSave()">Save form &#128190;</button><span class="muted" id="layoutSaveMsg" style="font-size:11px"></span></div>
+        <pre class="layout-text" id="layoutText"></pre>
       </div>
     </div>
   </div>
@@ -17118,6 +17154,1001 @@ function compressBound(inputLen) {
   };
 });
 </script>
+<script>// VENDORED from BareMetalJsTools (single source of truth). Do not edit here;
+// edit upstream in baremetaljstools/src and re-run tools/vendor_baremetal.py.
+// Upstream: BareMetal.WorkflowPico.js
+// BareMetal.WorkflowPico.js — compile BareMetal.Workflow step lists into
+// PicoScript (English dialect) so the visual workflow designer becomes a
+// PicoScript frontend. The emitted source runs on any PicoScript VM
+// (BareMetal.PicoScript in the browser, the RP2350/PIOS VM, or the C# VM in
+// developercli/workflow/PicoVm.cs).
+//
+// Cross-language contract (kept in sync with developercli/workflow):
+//   • Target dialect: PicoScript ENGLISH, word-form operators (plus, minus,
+//     times, divided by, modulo, is / is not, is greater than, ...), matching
+//     developercli/workflow/test/oracle.js which is the differential oracle.
+//   • Data ABI: field/scratch values via Context.GetScratchValue(key) /
+//     Context.SetScratchValue(key,value) (hooks 0xeb/0xea); array/general
+//     memory via Memory.Get(addr) / Memory.Set(addr,value) (hooks 0x37/0x36).
+//     These hook codes are identical in BareMetal.PicoScript and the C#
+//     WorkflowHost, so compiled workflows run bit-identically on both VMs.
+//   • Arrays: an array is a base address + length in Memory; elements live at
+//     consecutive addresses; FOREACH iterates values via Memory.Get(base+i).
+//
+// The VM is a deterministic 32-bit integer machine. Arithmetic/control-flow and
+// integer arrays lower faithfully; genuinely host-side steps (WEB, HTTP/JSON
+// LOAD, localStorage SAVE, CALL) lower to host-hook calls or annotated comments
+// and are reported through the returned `warnings` array.
+var BareMetal = (typeof BareMetal !== 'undefined') ? BareMetal : {};
+BareMetal.WorkflowPico = (() => {
+  'use strict';
+
+  var VERSION = '1.1.0';
+  var UNIT = '    ';
+  var DEFAULT_ARRAY_BASE = 8192; // 0x2000 — well above workflow scratch/field keys
+  var hasOwn = Object.prototype.hasOwnProperty;
+
+  function own(o, k) { return o != null && hasOwn.call(o, k); }
+  function pad(n) { var s = ''; for (var i = 0; i < n; i++) s += UNIT; return s; }
+
+  // ── identifiers ────────────────────────────────────────────────────────────
+  function sanitizeId(name) {
+    var s = String(name == null ? '' : name).replace(/[^A-Za-z0-9_]/g, '_');
+    if (!s) s = '_v';
+    if (/^[0-9]/.test(s)) s = '_' + s;
+    return s;
+  }
+
+  // ── expression translation (JS-ish subset → English word operators) ─────────
+  var BINARY_WORD = {
+    '==': 'is', '===': 'is', '!=': 'is not', '!==': 'is not',
+    '>=': 'is at least', '<=': 'is at most',
+    '>': 'is greater than', '<': 'is less than',
+    '&&': 'and', '||': 'or',
+    '+': 'plus', '-': 'minus', '*': 'times', '/': 'divided by', '%': 'modulo'
+  };
+
+  function tokenizeExpr(s) {
+    var toks = [];
+    var i = 0;
+    var n = s.length;
+    while (i < n) {
+      var c = s.charAt(i);
+      if (/\s/.test(c)) { i++; continue; }
+      if (c === '"' || c === "'") {
+        var q = c;
+        var j = i + 1;
+        var str = c;
+        while (j < n) {
+          var d = s.charAt(j);
+          str += d;
+          if (d === '\\' && j + 1 < n) { str += s.charAt(j + 1); j += 2; continue; }
+          if (d === q) { j++; break; }
+          j++;
+        }
+        toks.push({ type: 'str', value: str }); i = j; continue;
+      }
+      if (/[0-9]/.test(c)) {
+        var jn = i;
+        while (jn < n && /[0-9.]/.test(s.charAt(jn))) jn++;
+        toks.push({ type: 'num', value: s.slice(i, jn) }); i = jn; continue;
+      }
+      if (/[A-Za-z_$]/.test(c)) {
+        var ji = i;
+        while (ji < n && /[A-Za-z0-9_$]/.test(s.charAt(ji))) ji++;
+        toks.push({ type: 'id', value: s.slice(i, ji) }); i = ji; continue;
+      }
+      var three = s.substr(i, 3);
+      if (three === '===' || three === '!==') { toks.push({ type: 'op', value: three }); i += 3; continue; }
+      var two = s.substr(i, 2);
+      if (two === '==' || two === '!=' || two === '>=' || two === '<=' || two === '&&' || two === '||') {
+        toks.push({ type: 'op', value: two }); i += 2; continue;
+      }
+      if ('+-*/%<>!'.indexOf(c) >= 0) { toks.push({ type: 'op', value: c }); i++; continue; }
+      toks.push({ type: 'punct', value: c }); i++;
+    }
+    return toks;
+  }
+
+  function translateExpr(src) {
+    var toks = tokenizeExpr(String(src == null ? '' : src));
+    var parts = [];
+    var prevValue = false;
+    for (var i = 0; i < toks.length; i++) {
+      var t = toks[i];
+      if (t.type === 'op') {
+        if ((t.value === '-' || t.value === '+') && !prevValue) {
+          if (t.value === '-') { parts.push('0'); parts.push('minus'); } // unary minus
+          prevValue = false;
+        } else if (t.value === '!' && !prevValue) {
+          parts.push('not'); prevValue = false;
+        } else {
+          parts.push(own(BINARY_WORD, t.value) ? BINARY_WORD[t.value] : t.value);
+          prevValue = false;
+        }
+      } else if (t.type === 'id') {
+        parts.push(sanitizeId(t.value)); prevValue = true;
+      } else if (t.type === 'num' || t.type === 'str') {
+        parts.push(t.value); prevValue = true;
+      } else {
+        parts.push(t.value);
+        prevValue = (t.value === ')');
+      }
+    }
+    return parts.join(' ')
+      .replace(/\(\s+/g, '(')
+      .replace(/\s+\)/g, ')')
+      .replace(/\s+,/g, ',')
+      .replace(/\s*\.\s*/g, '.')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // ── literals ────────────────────────────────────────────────────────────────
+  function numLit(n) {
+    if (typeof n !== 'number' || !isFinite(n)) return '0';
+    n = Math.trunc(n);
+    return n < 0 ? '(0 minus ' + Math.abs(n) + ')' : String(n);
+  }
+
+  function quoteStr(s) {
+    return '"' + String(s)
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\t/g, '\\t') + '"';
+  }
+
+  function emitScalar(value, warnings, label) {
+    if (value === null || value === undefined) return '0';
+    if (typeof value === 'number') return numLit(value);
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (typeof value === 'string') return emitStringValue(value, warnings, label);
+    warnings.push(label + ': non-scalar value is not representable on the integer VM; emitted 0');
+    return '0';
+  }
+
+  function emitStringValue(v, warnings, label) {
+    var exact = /^\$\{([\s\S]+)\}$/.exec(v);
+    if (exact) return '(' + translateExpr(exact[1]) + ')';
+    var trimmed = v.trim();
+    if (/^-?\d+$/.test(trimmed)) return numLit(parseInt(trimmed, 10));
+    if (/\$\{[\s\S]*\}/.test(v)) {
+      warnings.push(label + ': string interpolation ' + JSON.stringify(v) + ' is not representable; emitted quoted literal');
+    }
+    return quoteStr(v);
+  }
+
+  function emitOperand(value, warnings, label) {
+    if (typeof value === 'number') return numLit(value);
+    if (typeof value === 'string') {
+      var t = value.trim();
+      if (/^-?\d+$/.test(t)) return numLit(parseInt(t, 10));
+      return translateExpr(value);
+    }
+    return emitScalar(value, warnings, label);
+  }
+
+  function literalArray(v) {
+    if (Array.isArray(v)) return v;
+    if (typeof v === 'string') {
+      var t = v.trim();
+      if (t.charAt(0) === '[') { try { var a = JSON.parse(t); if (Array.isArray(a)) return a; } catch (_) {} }
+    }
+    return null;
+  }
+
+  // ── array allocation ─────────────────────────────────────────────────────────
+  function allocArray(ctx, len) {
+    var base = ctx.memNext;
+    ctx.memNext += Math.max(1, len);
+    return base;
+  }
+
+  // Materialise an array literal into consecutive Memory cells; returns {base,len}.
+  function materializeArray(ctx, indent, values, label) {
+    var base = allocArray(ctx, values.length);
+    for (var k = 0; k < values.length; k++) {
+      ctx.out.push(pad(indent) + 'Memory.Set(' + (base + k) + ', ' + emitScalar(values[k], ctx.warnings, label + '[' + k + ']') + ').');
+    }
+    return { base: base, len: values.length };
+  }
+
+  // ── recursive lowering ──────────────────────────────────────────────────────
+  function emitSeq(steps, pos, indent, ctx) {
+    while (pos.i < steps.length) {
+      var step = steps[pos.i] || {};
+      var type = String(step.type || '').toUpperCase();
+      if (type === 'END') { pos.i++; return 'END'; }
+      if (type === 'ELSE') return 'ELSE';
+      pos.i++;
+      emitStep(step, type, steps, pos, indent, ctx);
+    }
+    return 'EOF';
+  }
+
+  function emitBody(steps, pos, indent, ctx) {
+    var start = ctx.out.length;
+    var term = emitSeq(steps, pos, indent, ctx);
+    if (ctx.out.length === start) ctx.out.push(pad(indent) + 'Set _nop to 0.');
+    return term;
+  }
+
+  function closeLoop(steps, pos, indent, ctx) {
+    var term = emitBody(steps, pos, indent + 1, ctx);
+    if (term === 'ELSE') { pos.i++; ctx.warnings.push('ELSE without a matching IF; ignored'); }
+  }
+
+  function emitStep(step, type, steps, pos, indent, ctx) {
+    var out = ctx.out;
+    var warnings = ctx.warnings;
+    var line;
+    switch (type) {
+      case 'SET':
+        emitSet(step, indent, ctx);
+        break;
+
+      case 'IF':
+        out.push(pad(indent) + 'If ' + translateExpr(step.condition || 'false') + ':');
+        var term = emitBody(steps, pos, indent + 1, ctx);
+        if (term === 'ELSE') {
+          pos.i++;
+          out.push(pad(indent) + 'Otherwise:');
+          term = emitBody(steps, pos, indent + 1, ctx);
+        }
+        if (term === 'ELSE') { pos.i++; warnings.push('IF: multiple ELSE branches; extra ELSE ignored'); }
+        break;
+
+      case 'FOR':
+        var v = sanitizeId(step.var || 'i');
+        line = pad(indent) + 'For each ' + v +
+          ' from ' + emitOperand(step.from, warnings, 'FOR from') +
+          ' to ' + emitOperand(step.to, warnings, 'FOR to');
+        if (step.step != null) line += ' by ' + emitOperand(step.step, warnings, 'FOR step');
+        out.push(line + ':');
+        closeLoop(steps, pos, indent, ctx);
+        break;
+
+      case 'FOREACH':
+      case 'FOREACHP':
+        emitForeach(step, type, steps, pos, indent, ctx);
+        break;
+
+      case 'LOG':
+        emitLog(step, indent, ctx);
+        break;
+
+      case 'WAIT':
+        out.push(pad(indent) + 'Timer.After(' + emitOperand(step.ms == null ? 0 : step.ms, warnings, 'WAIT ms') + ').');
+        warnings.push('WAIT: Timer.After schedules but does not block the VM');
+        break;
+
+      case 'RAISE':
+      case 'EMIT':
+        var ev = emitOperand(step.event == null ? 0 : step.event, warnings, 'RAISE event');
+        var tgt = step.target != null ? emitOperand(step.target, warnings, 'RAISE target') : '0';
+        var call = 'Event.Post(' + ev + ', ' + tgt + ')';
+        if (step.result) out.push(pad(indent) + 'Set ' + sanitizeId(step.result) + ' to ' + call + '.');
+        else out.push(pad(indent) + call + '.');
+        break;
+
+      case 'ON':
+      case 'SUBSCRIBE':
+        emitOn(step, steps, pos, indent, ctx);
+        break;
+
+      case 'LOAD':
+        emitLoad(step, indent, ctx);
+        break;
+
+      case 'SAVE':
+        emitSave(step, indent, ctx);
+        break;
+
+      case 'WEB':
+        out.push(pad(indent) + '# WEB ' + String(step.method || 'GET').toUpperCase() + ' ' + (step.url || '') +
+          (step.result ? ' -> ' + step.result : ''));
+        warnings.push('WEB: HTTP requests require a host transport hook and are not executed by the integer VM');
+        break;
+
+      case 'CALL':
+        out.push(pad(indent) + '# CALL ' + (step.workflow || ''));
+        warnings.push('CALL: nested workflow ' + JSON.stringify(step.workflow || '') + ' must be compiled separately and is not linked');
+        break;
+
+      case 'ELSE':
+        pos.i++;
+        warnings.push('ELSE without a matching IF; ignored');
+        break;
+
+      default:
+        out.push(pad(indent) + '# ' + type + ' (unsupported step type)');
+        warnings.push('Unsupported step type ' + JSON.stringify(type) + '; emitted as comment');
+    }
+  }
+
+  function emitSet(step, indent, ctx) {
+    var name = sanitizeId(step.name);
+    if (own(step, 'expr')) {
+      ctx.out.push(pad(indent) + 'Set ' + name + ' to ' + translateExpr(step.expr) + '.');
+      delete ctx.arrays[name];
+      return;
+    }
+    var arr = literalArray(step.value);
+    if (arr) {
+      var info = materializeArray(ctx, indent, arr, 'SET ' + step.name);
+      ctx.arrays[name] = info;
+      ctx.out.push(pad(indent) + 'Set ' + name + ' to ' + info.base + '.');
+      ctx.out.push(pad(indent) + 'Set ' + name + '_len to ' + numLit(info.len) + '.');
+      return;
+    }
+    delete ctx.arrays[name];
+    ctx.out.push(pad(indent) + 'Set ' + name + ' to ' + emitScalar(step.value, ctx.warnings, 'SET ' + step.name) + '.');
+  }
+
+  function resolveArray(step, indent, ctx, label) {
+    var inRaw = step.in;
+    if (typeof inRaw === 'string') {
+      var key = sanitizeId(inRaw.trim());
+      if (own(ctx.arrays, key)) return ctx.arrays[key];
+    }
+    var lit = literalArray(inRaw);
+    if (lit) return materializeArray(ctx, indent, lit, label);
+    return null;
+  }
+
+  // ON/SUBSCRIBE <event>: drain the Event.* queue, running the handler body for
+  // each matching event (bounded by the pending count).
+  function emitOn(step, steps, pos, indent, ctx) {
+    var ev = emitOperand(step.event == null ? 0 : step.event, ctx.warnings, 'ON event');
+    var v = sanitizeId(step.var || 'event');
+    var loop = '_on' + (ctx.tempN++);
+    var evid = '_ev' + (ctx.tempN++);
+    ctx.out.push(pad(indent) + 'For each ' + loop + ' from 0 to (Event.Count() minus 1):');
+    ctx.out.push(pad(indent + 1) + 'Set ' + evid + ' to Event.Next().');
+    ctx.out.push(pad(indent + 1) + 'If Event.Type(' + evid + ') is ' + ev + ':');
+    ctx.out.push(pad(indent + 2) + 'Set ' + v + ' to ' + evid + '.');
+    var start = ctx.out.length;
+    var term = emitSeq(steps, pos, indent + 2, ctx);
+    if (ctx.out.length === start) ctx.out.push(pad(indent + 2) + 'Set _nop to 0.');
+    if (term === 'ELSE') { pos.i++; ctx.warnings.push('ELSE without a matching IF; ignored'); }
+  }
+
+  function emitForeach(step, type, steps, pos, indent, ctx) {
+    var v = sanitizeId(step.var || 'item');
+    if (type === 'FOREACHP') ctx.warnings.push('FOREACHP: parallel iteration lowered to sequential');
+    var info = resolveArray(step, indent, ctx, 'FOREACH ' + (step.var || 'item'));
+    if (info) {
+      var idx = '_fe' + (ctx.tempN++);
+      ctx.out.push(pad(indent) + 'For each ' + idx + ' from 0 to ' + numLit(info.len - 1) + ':');
+      ctx.out.push(pad(indent + 1) + 'Set ' + v + ' to Memory.Get(' + info.base + ' plus ' + idx + ').');
+      var start = ctx.out.length;
+      var term = emitSeq(steps, pos, indent + 1, ctx);
+      if (ctx.out.length === start) ctx.out.push(pad(indent + 1) + 'Set _nop to 0.');
+      if (term === 'ELSE') { pos.i++; ctx.warnings.push('ELSE without a matching IF; ignored'); }
+      return;
+    }
+    ctx.out.push(pad(indent) + '# FOREACH ' + v + ' in ' + (step.in || '') + ' — runtime array not resolvable; body runs once with ' + v + ' = 0');
+    ctx.out.push(pad(indent) + 'For each ' + v + ' from 0 to 0:');
+    ctx.warnings.push('FOREACH over ' + JSON.stringify(step.in || '') + ' is not representable on the integer VM; body lowered to a single iteration');
+    closeLoop(steps, pos, indent, ctx);
+  }
+
+  // LOAD name from <source>. `variable` clones another context value (a plain
+  // assignment, array-aware); `memory`/`scratch` read a Memory/Context cell.
+  function emitLoad(step, indent, ctx) {
+    var name = sanitizeId(step.name);
+    var from = String(step.from || '').toLowerCase();
+    if (from === 'variable') {
+      var srcRaw = step.key || step.var || step.source || '';
+      var srcId = sanitizeId(String(srcRaw).trim());
+      if (own(ctx.arrays, srcId)) ctx.arrays[name] = ctx.arrays[srcId];
+      else delete ctx.arrays[name];
+      ctx.out.push(pad(indent) + 'Set ' + name + ' to ' + translateExpr(String(srcRaw)) + '.');
+      return;
+    }
+    if (from === 'memory' || from === 'scratch') {
+      var hook = from === 'scratch' ? 'Context.GetScratchValue' : 'Memory.Get';
+      ctx.out.push(pad(indent) + 'Set ' + name + ' to ' + hook + '(' + emitOperand(step.key == null ? 0 : step.key, ctx.warnings, 'LOAD key') + ').');
+      delete ctx.arrays[name];
+      return;
+    }
+    ctx.out.push(pad(indent) + '# LOAD ' + (step.name || '') + ' <- ' + (step.from || '') + (step.key ? ' [' + step.key + ']' : ''));
+    ctx.warnings.push('LOAD from ' + JSON.stringify(step.from || '') + ' requires a host storage/transport hook and is not executed by the integer VM');
+  }
+
+  // SAVE name to <target>. `variable` copies into another context key; `memory`/
+  // `scratch` write a Memory/Context cell.
+  function emitSave(step, indent, ctx) {
+    var name = sanitizeId(step.name);
+    var to = String(step.to || '').toLowerCase();
+    if (to === 'variable') {
+      var target = sanitizeId(step.key || step.target || step.name);
+      ctx.out.push(pad(indent) + 'Set ' + target + ' to ' + name + '.');
+      if (own(ctx.arrays, name)) ctx.arrays[target] = ctx.arrays[name];
+      return;
+    }
+    if (to === 'memory' || to === 'scratch') {
+      var hook = to === 'scratch' ? 'Context.SetScratchValue' : 'Memory.Set';
+      ctx.out.push(pad(indent) + hook + '(' + emitOperand(step.key == null ? 0 : step.key, ctx.warnings, 'SAVE key') + ', ' + name + ').');
+      return;
+    }
+    ctx.out.push(pad(indent) + '# SAVE ' + (step.name || '') + ' -> ' + (step.to || '') + (step.key ? ' [' + step.key + ']' : ''));
+    ctx.warnings.push('SAVE to ' + JSON.stringify(step.to || '') + ' requires a host storage hook and is not executed by the integer VM');
+  }
+
+  function emitLog(step, indent, ctx) {
+    var msg = step.message;
+    if (typeof msg === 'number') { ctx.out.push(pad(indent) + 'Print ' + numLit(msg) + '.'); return; }
+    if (typeof msg === 'string') {
+      var exact = /^\$\{([\s\S]+)\}$/.exec(msg);
+      if (exact) { ctx.out.push(pad(indent) + 'Print ' + translateExpr(exact[1]) + '.'); return; }
+      if (/^-?\d+$/.test(msg.trim())) { ctx.out.push(pad(indent) + 'Print ' + numLit(parseInt(msg.trim(), 10)) + '.'); return; }
+      if (/^[A-Za-z_]\w*$/.test(msg.trim())) { ctx.out.push(pad(indent) + 'Print ' + sanitizeId(msg.trim()) + '.'); return; }
+    }
+    ctx.out.push(pad(indent) + '# LOG ' + (step.level ? '[' + step.level + '] ' : '') + String(msg == null ? '' : msg));
+    ctx.warnings.push('LOG: console strings are not printable on the integer VM; emitted as comment');
+  }
+
+  // ── public compile ──────────────────────────────────────────────────────────
+  function resolveSteps(stepsOrName) {
+    if (Array.isArray(stepsOrName)) return stepsOrName;
+    if (typeof stepsOrName === 'string') {
+      var WF = BareMetal.Workflow;
+      if (WF && typeof WF.get === 'function') {
+        var s = WF.get(stepsOrName);
+        if (s) return s;
+      }
+      throw new Error('Workflow not found: ' + stepsOrName);
+    }
+    throw new Error('WorkflowPico.compile expects a steps array or a registered workflow name');
+  }
+
+  function compile(stepsOrName, opts) {
+    opts = opts || {};
+    var steps = resolveSteps(stepsOrName);
+    var ctx = {
+      out: [],
+      warnings: [],
+      arrays: {},
+      memNext: opts.arrayBase || DEFAULT_ARRAY_BASE,
+      tempN: 0,
+      opts: opts
+    };
+    var pos = { i: 0 };
+    while (pos.i < steps.length) {
+      var term = emitSeq(steps, pos, 0, ctx);
+      if (term === 'ELSE') { pos.i++; ctx.warnings.push('ELSE without a matching IF; ignored'); }
+      else if (term === 'END') { ctx.warnings.push('END without a matching block; ignored'); }
+      else break;
+    }
+    return { source: ctx.out.join('\n') + '\n', warnings: ctx.warnings };
+  }
+
+  // ── PicoScript integration ──────────────────────────────────────────────────
+  function resolvePico(opts) {
+    if (opts && opts.pico) return opts.pico;
+    if (typeof BareMetal !== 'undefined' && BareMetal.PicoScript) return BareMetal.PicoScript;
+    if (typeof window !== 'undefined' && window.BareMetal && window.BareMetal.PicoScript) return window.BareMetal.PicoScript;
+    return null;
+  }
+
+  function toWords(stepsOrName, opts) {
+    var c = compile(stepsOrName, opts);
+    var ps = resolvePico(opts);
+    if (!ps || typeof ps.compileEnglish !== 'function') {
+      throw new Error('BareMetal.PicoScript is not available; load it or pass opts.pico');
+    }
+    var r = ps.compileEnglish(c.source);
+    return { source: c.source, words: r.words, warnings: c.warnings };
+  }
+
+  function run(stepsOrName, opts) {
+    opts = opts || {};
+    var w = toWords(stepsOrName, opts);
+    var ps = resolvePico(opts);
+    var vm = opts.vmOptions ? new ps.VM(opts.vmOptions) : new ps.VM();
+    vm.run(w.words);
+    return { source: w.source, words: w.words, output: vm.output, vm: vm, warnings: w.warnings };
+  }
+
+  // ── designer integration ────────────────────────────────────────────────────
+  function attachToDesigner(controller, opts) {
+    opts = opts || {};
+    if (typeof document === 'undefined' || !controller || !controller.element) return null;
+    var toolbar = controller.element.querySelector('.bm-wf-toolbar') || controller.element;
+    var btn = document.createElement('button');
+    btn.className = 'bt bm-wf-pico';
+    btn.textContent = opts.label || 'Compile to PicoScript';
+    btn.onclick = function () {
+      var steps = typeof controller.getSteps === 'function' ? controller.getSteps() : [];
+      var detail;
+      try {
+        var res = opts.run ? run(steps, opts) : compile(steps, opts);
+        detail = {
+          steps: steps,
+          source: res.source,
+          words: res.words || null,
+          output: res.output || null,
+          warnings: res.warnings
+        };
+      } catch (error) {
+        controller.element.dispatchEvent(new CustomEvent('bm:workflow-pico-error', { detail: { error: error }, bubbles: true }));
+        return;
+      }
+      controller.element.dispatchEvent(new CustomEvent('bm:workflow-pico', { detail: detail, bubbles: true }));
+      if (typeof opts.onResult === 'function') opts.onResult(detail);
+      else if (typeof window !== 'undefined' && typeof window.prompt === 'function') window.prompt('PicoScript (English dialect)', detail.source);
+    };
+    toolbar.appendChild(btn);
+    return btn;
+  }
+
+  return {
+    VERSION: VERSION,
+    compile: compile,
+    compileWorkflow: compile,
+    toWords: toWords,
+    run: run,
+    translateExpr: translateExpr,
+    attachToDesigner: attachToDesigner
+  };
+})();
+if (typeof module !== 'undefined' && module.exports) module.exports = BareMetal.WorkflowPico;
+</script>
+<script>// VENDORED from BareMetalJsTools (single source of truth). Do not edit here;
+// edit upstream in baremetaljstools/src and re-run tools/vendor_baremetal.py.
+// Upstream: BareMetal.Report.js
+// BareMetal.Report.js — report & form builder for the BareMetal suite.
+//
+// Reports and forms are two faces of one templated layout engine (the 2-stage
+// model shared with picoscript's picolayout): stage 1 is a data producer (an API
+// call, a Workflow, a PicoScript program, a Storage query, or a literal array)
+// whose output is a flat list of integer values; stage 2 is a layout *template*
+// that renders that data.
+//
+//   mode "report" -> read-only  (an HTML table + aggregate footer)
+//   mode "form"   -> read-write (labelled inputs bound to the data)
+//
+// A report is a data source with a read-only layout attached; a form is the same
+// with a read-write layout. This module provides:
+//   • the layout engine  — renderText / renderHtml (byte-aligned with picolayout)
+//   • DOM rendering       — render(container, data, template, opts)
+//   • form write-back     — collect(formEl) / flatten / toWrites (data ABI map)
+//   • a visual designer   — designer(container, opts): CREATE/edit a template
+//                           (columns, aggregates, mode) with a live preview.
+var BareMetal = (typeof BareMetal !== 'undefined') ? BareMetal : {};
+BareMetal.Report = (() => {
+  'use strict';
+
+  var VALID_AGG = ['count', 'sum', 'min', 'max', 'avg'];
+  var FORMATS = ['int', 'hex', 'raw'];
+
+  function chunk(data, ncols) {
+    ncols = Math.max(1, ncols);
+    var rows = [];
+    for (var i = 0; i < data.length; i += ncols) rows.push(data.slice(i, i + ncols));
+    return rows;
+  }
+
+  function fmt(value, f) {
+    if (value == null) return '';
+    if (f === 'hex') { var n = Number(value) >>> 0; return '0x' + n.toString(16); }
+    if (f === 'raw') return String(value);
+    var iv = parseInt(value, 10);
+    return isNaN(iv) ? String(value) : String(iv);
+  }
+
+  function columns(template) {
+    var cols = template.columns || template.fields || [];
+    return cols.map(function (c) { return (c && typeof c === 'object') ? c : { label: String(c) }; });
+  }
+
+  function colField(col, idx) { return (typeof col.field === 'number') ? col.field : idx; }
+
+  function agg(rows, col, fn) {
+    var vals = [];
+    for (var i = 0; i < rows.length; i++) { var v = rows[i][col]; if (typeof v === 'number') vals.push(v); }
+    if (fn === 'count') return vals.length;
+    if (!vals.length) return 0;
+    if (fn === 'sum') return vals.reduce(function (a, b) { return a + b; }, 0);
+    if (fn === 'min') return Math.min.apply(null, vals);
+    if (fn === 'max') return Math.max.apply(null, vals);
+    if (fn === 'avg') return Math.trunc(vals.reduce(function (a, b) { return a + b; }, 0) / vals.length);
+    return 0;
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function padEnd(s, w) { s = String(s); while (s.length < w) s += ' '; return s; }
+  function padStart(s, w) { s = String(s); while (s.length < w) s = ' ' + s; return s; }
+
+  // ── layout engine (aligned with picolayout.js / picolayout.py) ───────────────
+  function renderText(data, template) {
+    var cols = columns(template);
+    if (!cols.length) return '';
+    var widths = cols.map(function (c) { return Math.max(3, parseInt(c.width, 10) || 8); });
+    var lines = [];
+    if (template.title) lines.push(String(template.title));
+    lines.push(cols.map(function (c, i) { return padEnd(c.label || '', widths[i]); }).join('  '));
+    lines.push(widths.map(function (w) { return new Array(w + 1).join('-'); }).join('  '));
+    var rows = chunk(data.slice(), cols.length);
+    rows.forEach(function (row) {
+      lines.push(cols.map(function (c, i) {
+        var fi = colField(c, i);
+        var s = fmt(fi < row.length ? row[fi] : null, c.format || 'int');
+        return c.align === 'right' ? padStart(s, widths[i]) : padEnd(s, widths[i]);
+      }).join('  '));
+    });
+    var aggs = template.aggregates || [];
+    if (aggs.length) {
+      lines.push(widths.map(function (w) { return new Array(w + 1).join('-'); }).join('  '));
+      lines.push(aggs.map(function (a) { var fn = a.fn || 'sum'; return fn + '=' + agg(rows, parseInt(a.column, 10) || 0, fn); }).join('  '));
+    }
+    return lines.join('\n') + '\n';
+  }
+
+  function renderHtml(data, template, mode) {
+    var cols = columns(template);
+    mode = (mode || template.mode || 'report').toLowerCase();
+    var rows = chunk(data.slice(), cols.length || 1);
+
+    if (mode === 'form') {
+      var out = ['<form class="pico-form">'];
+      if (template.title) out.push('<h3 class="pico-form-title">' + esc(template.title) + '</h3>');
+      rows.forEach(function (row, ri) {
+        out.push('<div class="pico-form-row" data-row="' + ri + '">');
+        cols.forEach(function (c, i) {
+          var fi = colField(c, i);
+          var v = fi < row.length ? row[fi] : 0;
+          var sval = esc(fmt(v, c.format || 'int'));
+          if (c.editable !== false) {
+            out.push('<label class="pico-field"><span>' + esc(c.label || '') + '</span>' +
+              '<input name="c' + i + '" data-field="' + fi + '" data-row="' + ri + '" value="' + sval + '"></label>');
+          } else {
+            out.push('<label class="pico-field"><span>' + esc(c.label || '') + '</span>' +
+              '<output data-field="' + fi + '" data-row="' + ri + '">' + sval + '</output></label>');
+          }
+        });
+        out.push('</div>');
+      });
+      out.push('</form>');
+      return out.join('\n') + '\n';
+    }
+
+    var t = ['<table class="pico-report">'];
+    if (template.title) t.push('<caption>' + esc(template.title) + '</caption>');
+    t.push('<thead><tr>' + cols.map(function (c) { return '<th>' + esc(c.label || '') + '</th>'; }).join('') + '</tr></thead>');
+    t.push('<tbody>');
+    rows.forEach(function (row) {
+      t.push('<tr>' + cols.map(function (c, i) {
+        var fi = colField(c, i);
+        return '<td>' + esc(fmt(fi < row.length ? row[fi] : null, c.format || 'int')) + '</td>';
+      }).join('') + '</tr>');
+    });
+    t.push('</tbody>');
+    var aggs = template.aggregates || [];
+    if (aggs.length) {
+      var cellmap = {};
+      aggs.forEach(function (a) { var col = parseInt(a.column, 10) || 0; var fn = a.fn || 'sum'; cellmap[col] = fn + '=' + agg(rows, col, fn); });
+      var tf = '';
+      for (var i = 0; i < cols.length; i++) tf += '<td>' + esc(cellmap[i] || '') + '</td>';
+      t.push('<tfoot><tr>' + tf + '</tr></tfoot>');
+    }
+    t.push('</table>');
+    return t.join('\n') + '\n';
+  }
+
+  // ── DOM rendering ────────────────────────────────────────────────────────────
+  // render(container, data, template, opts) -> { element, form, collect, refresh }
+  function render(container, data, template, opts) {
+    opts = opts || {};
+    if (!container || typeof document === 'undefined') return null;
+    if (typeof template === 'string') template = JSON.parse(template);
+    var mode = (opts.mode || template.mode || 'report').toLowerCase();
+    container.innerHTML = renderHtml(data || [], template, mode);
+    var form = container.querySelector('form.pico-form');
+    return {
+      element: container,
+      form: form,
+      collect: function () { return collect(form); },
+      refresh: function (nextData, nextTemplate) {
+        return render(container, nextData || data, nextTemplate || template, opts);
+      }
+    };
+  }
+
+  // ── form write-back (data ABI) ───────────────────────────────────────────────
+  function collect(formEl) {
+    if (!formEl || !formEl.querySelectorAll) return [];
+    var rows = {};
+    formEl.querySelectorAll('input[data-row]').forEach(function (inp) {
+      var r = parseInt(inp.getAttribute('data-row'), 10) || 0;
+      var f = parseInt(inp.getAttribute('data-field'), 10) || 0;
+      var val = parseInt(inp.value, 10); if (isNaN(val)) val = 0;
+      (rows[r] = rows[r] || {})[f] = val;
+    });
+    return Object.keys(rows).sort(function (a, b) { return a - b; }).map(function (r) {
+      var obj = rows[r], arr = [];
+      Object.keys(obj).map(Number).sort(function (a, b) { return a - b; }).forEach(function (k) { arr[k] = obj[k]; });
+      return arr;
+    });
+  }
+
+  function flatten(rows) {
+    var out = [];
+    (rows || []).forEach(function (row) { (row || []).forEach(function (v) { out.push(v | 0); }); });
+    return out;
+  }
+
+  function toWrites(rows, opts) {
+    opts = opts || {};
+    var base = opts.base | 0, stride = opts.stride | 0;
+    if (!stride) { stride = 0; (rows || []).forEach(function (r) { stride = Math.max(stride, (r || []).length); }); stride = Math.max(1, stride); }
+    var map = {};
+    (rows || []).forEach(function (row, ri) { (row || []).forEach(function (v, fi) { map[base + ri * stride + fi] = v | 0; }); });
+    return map;
+  }
+
+  // ── stage-1 data sources ─────────────────────────────────────────────────────
+  // A report/form needs a flat list of ints. loadData resolves a data-source
+  // descriptor to that list (async), decoupling the layout (stage 2) from where
+  // the data comes from (stage 1): a literal array, a REST endpoint, a Workflow
+  // (BareMetal.WorkflowPico) program, a PicoScript program, or a custom function.
+  function normalizeInts(d) {
+    if (Array.isArray(d)) return d.map(function (v) { return v | 0; });
+    return flattenNumbers(d);
+  }
+
+  // Extract every number from a JSON value in document order.
+  function flattenNumbers(json) {
+    var out = [];
+    (function walk(v) {
+      if (typeof v === 'number') out.push(v | 0);
+      else if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === 'object') Object.keys(v).forEach(function (k) { walk(v[k]); });
+    })(json);
+    return out;
+  }
+
+  // Decode a PicoScript VM output buffer to ints. `Print` writes each value as a
+  // 4-byte big-endian int, so decode in 4-byte groups.
+  function decodeVmInts(output) {
+    var bytes = [];
+    (output || []).forEach(function (chunk) {
+      if (Array.isArray(chunk) || (typeof Uint8Array !== 'undefined' && chunk instanceof Uint8Array)) {
+        for (var i = 0; i < chunk.length; i++) bytes.push(chunk[i] & 0xFF);
+      } else bytes.push(chunk & 0xFF);
+    });
+    var out = [];
+    for (var j = 0; j + 4 <= bytes.length; j += 4) {
+      out.push(((bytes[j] << 24) | (bytes[j + 1] << 16) | (bytes[j + 2] << 8) | bytes[j + 3]) | 0);
+    }
+    return out;
+  }
+
+  function resolvePico(opts) {
+    if (opts && opts.pico) return opts.pico;
+    if (typeof BareMetal !== 'undefined' && BareMetal.PicoScript) return BareMetal.PicoScript;
+    if (typeof window !== 'undefined' && window.BareMetal && window.BareMetal.PicoScript) return window.BareMetal.PicoScript;
+    return null;
+  }
+
+  function loadData(source, opts) {
+    opts = opts || {};
+    return new Promise(function (resolve, reject) {
+      if (!source) return resolve([]);
+      if (Array.isArray(source)) return resolve(normalizeInts(source));
+      var kind = String(source.kind || 'literal').toLowerCase();
+      try {
+        if (kind === 'literal') return resolve(normalizeInts(source.values || []));
+        if (kind === 'function' && typeof source.fn === 'function') {
+          return Promise.resolve(source.fn()).then(function (d) { resolve(normalizeInts(d)); }, reject);
+        }
+        if (kind === 'rest' || kind === 'fetch' || kind === 'url') {
+          var Comm = BareMetal.Communications;
+          var getter;
+          if (Comm && typeof Comm.get === 'function') getter = Comm.get(source.url, source.opts);
+          else if (typeof fetch === 'function') getter = fetch(source.url).then(function (r) { return r.json(); });
+          else return reject(new Error('no transport (BareMetal.Communications or fetch) for a rest data source'));
+          return Promise.resolve(getter).then(function (json) { resolve(flattenNumbers(json)); }, reject);
+        }
+        if (kind === 'workflow') {
+          var WP = BareMetal.WorkflowPico;
+          if (!WP || typeof WP.run !== 'function') return reject(new Error('BareMetal.WorkflowPico is not loaded'));
+          var wr = WP.run(source.steps || [], { pico: resolvePico(opts) });
+          return resolve(decodeVmInts(wr.output));
+        }
+        if (kind === 'pico' || kind === 'picoscript') {
+          var ps = resolvePico(opts);
+          if (!ps || typeof ps.compile !== 'function') return reject(new Error('BareMetal.PicoScript is not loaded'));
+          var compiled = ps.compile(source.source || '', source.lang || 'english');
+          var vm = new ps.VM();
+          vm.run(compiled.words);
+          return resolve(decodeVmInts(vm.output));
+        }
+      } catch (e) { return reject(e); }
+      reject(new Error('unknown data source kind: ' + kind));
+    });
+  }
+
+  // ── visual designer (CREATE / edit a report or form template) ────────────────
+  function applyStyle(el, s) { for (var k in s) if (Object.prototype.hasOwnProperty.call(s, k)) el.style[k] = s[k]; }
+  function emit(el, name, detail) {
+    if (typeof CustomEvent !== 'function') return;
+    el.dispatchEvent(new CustomEvent(name, { detail: detail, bubbles: true }));
+  }
+  function parseData(text) {
+    return String(text || '').split(/[\s,]+/).map(function (t) { return parseInt(t, 10); }).filter(function (n) { return !isNaN(n); });
+  }
+
+  function designer(container, opts) {
+    opts = opts || {};
+    if (!container || typeof document === 'undefined') return null;
+    var template = opts.template || { title: 'Report', mode: 'report', columns: [{ label: 'A', field: 0, width: 6, format: 'int', editable: true }], aggregates: [] };
+    var data = opts.data || [];
+    var source = opts.source || { kind: 'literal' };
+
+    var root = document.createElement('div');
+    root.className = 'bm-report-designer cd';
+    var bar = document.createElement('div');
+    bar.className = 'bm-report-bar rw';
+    var body = document.createElement('div');
+    var preview = document.createElement('div');
+    preview.className = 'bm-report-preview';
+    var text = document.createElement('pre');
+    text.className = 'bm-report-text';
+    root.appendChild(bar);
+    root.appendChild(body);
+    root.appendChild(preview);
+    root.appendChild(text);
+    container.innerHTML = '';
+    container.appendChild(root);
+    applyStyle(bar, { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '8px' });
+
+    function refresh() {
+      renderBar();
+      renderColumns();
+      var mode = template.mode || 'report';
+      preview.innerHTML = renderHtml(data, template, mode);
+      text.textContent = renderText(data, template);
+      emit(root, 'bm:report-change', { template: JSON.parse(JSON.stringify(template)), mode: mode });
+    }
+
+    function renderBar() {
+      bar.innerHTML = '';
+      var title = document.createElement('input');
+      title.className = 'bt'; title.value = template.title || ''; title.placeholder = 'title';
+      title.oninput = function () { template.title = title.value; scheduleRefresh(); };
+      var modeSel = document.createElement('select');
+      modeSel.className = 'bt';
+      ['report', 'form'].forEach(function (m) { var o = document.createElement('option'); o.value = o.textContent = m; if ((template.mode || 'report') === m) o.selected = true; modeSel.appendChild(o); });
+      modeSel.onchange = function () { template.mode = modeSel.value; refresh(); };
+      var addCol = document.createElement('button'); addCol.className = 'bt'; addCol.textContent = '+ Column';
+      addCol.onclick = function () { (template.columns = template.columns || []).push({ label: 'Col', field: template.columns.length, width: 6, format: 'int', editable: true }); refresh(); };
+      var addAgg = document.createElement('button'); addAgg.className = 'bt'; addAgg.textContent = '+ Aggregate';
+      addAgg.onclick = function () { (template.aggregates = template.aggregates || []).push({ column: 0, fn: 'sum' }); refresh(); };
+      var exp = document.createElement('button'); exp.className = 'bt'; exp.textContent = 'Export';
+      exp.onclick = function () { var j = JSON.stringify(template, null, 2); if (typeof window !== 'undefined' && window.prompt) window.prompt('Report template', j); emit(root, 'bm:report-export', { template: JSON.parse(j), json: j }); };
+      var dataIn = document.createElement('input');
+      dataIn.className = 'bt'; dataIn.value = data.join(', '); dataIn.placeholder = 'data (ints)';
+      dataIn.oninput = function () { data = parseData(dataIn.value); scheduleRefresh(); };
+      bar.appendChild(title); bar.appendChild(modeSel); bar.appendChild(addCol); bar.appendChild(addAgg); bar.appendChild(exp); bar.appendChild(dataIn);
+
+      // stage-1 data-source picker: choose where the report data comes from.
+      var srcSel = document.createElement('select');
+      srcSel.className = 'bt'; srcSel.title = 'stage-1 data source';
+      [['literal', 'literal'], ['rest', 'REST'], ['workflow', 'workflow'], ['pico', 'PicoScript']].forEach(function (o) {
+        var opt = document.createElement('option'); opt.value = o[0]; opt.textContent = o[1];
+        if ((source.kind || 'literal') === o[0]) opt.selected = true; srcSel.appendChild(opt);
+      });
+      var srcCfg = document.createElement('input');
+      srcCfg.className = 'bt'; applyStyle(srcCfg, { minWidth: '160px' });
+      function cfgPlaceholder() {
+        var k = srcSel.value;
+        srcCfg.placeholder = k === 'rest' ? 'url' : k === 'workflow' ? 'steps JSON' : k === 'pico' ? 'English source' : '(uses data box)';
+        srcCfg.value = source.url || (source.steps ? JSON.stringify(source.steps) : '') || source.source || '';
+      }
+      srcSel.onchange = function () { source = { kind: srcSel.value }; cfgPlaceholder(); };
+      srcCfg.oninput = function () {
+        var k = srcSel.value;
+        if (k === 'rest') source = { kind: 'rest', url: srcCfg.value };
+        else if (k === 'workflow') { try { source = { kind: 'workflow', steps: JSON.parse(srcCfg.value) }; } catch (e) { source = { kind: 'workflow', steps: [] }; } }
+        else if (k === 'pico') source = { kind: 'pico', source: srcCfg.value, lang: 'english' };
+      };
+      var loadBtn = document.createElement('button');
+      loadBtn.className = 'bt'; loadBtn.textContent = 'Load';
+      loadBtn.onclick = function () {
+        loadData(source, opts).then(function (rows) {
+          data = rows; refresh();
+          emit(root, 'bm:report-data', { source: source, data: rows.slice() });
+        }, function (err) {
+          emit(root, 'bm:report-error', { source: source, error: err });
+        });
+      };
+      cfgPlaceholder();
+      bar.appendChild(srcSel); bar.appendChild(srcCfg); bar.appendChild(loadBtn);
+    }
+
+    function renderColumns() {
+      body.innerHTML = '';
+      (template.columns || []).forEach(function (c, idx) {
+        var row = document.createElement('div');
+        row.className = 'bm-report-col rw';
+        applyStyle(row, { display: 'flex', gap: '6px', alignItems: 'center', margin: '3px 0' });
+        var label = document.createElement('input'); label.className = 'bt'; label.value = c.label || ''; label.placeholder = 'label';
+        label.oninput = function () { c.label = label.value; scheduleRefresh(); };
+        var field = document.createElement('input'); field.className = 'bt'; field.type = 'number'; field.value = (typeof c.field === 'number' ? c.field : idx); field.title = 'field index'; applyStyle(field, { width: '56px' });
+        field.oninput = function () { c.field = parseInt(field.value, 10) || 0; scheduleRefresh(); };
+        var width = document.createElement('input'); width.className = 'bt'; width.type = 'number'; width.value = c.width || 6; width.title = 'width'; applyStyle(width, { width: '56px' });
+        width.oninput = function () { c.width = parseInt(width.value, 10) || 6; scheduleRefresh(); };
+        var fmtSel = document.createElement('select'); fmtSel.className = 'bt';
+        FORMATS.forEach(function (f) { var o = document.createElement('option'); o.value = o.textContent = f; if ((c.format || 'int') === f) o.selected = true; fmtSel.appendChild(o); });
+        fmtSel.onchange = function () { c.format = fmtSel.value; refresh(); };
+        var edit = document.createElement('label'); edit.style.fontSize = '12px';
+        var ecb = document.createElement('input'); ecb.type = 'checkbox'; ecb.checked = c.editable !== false;
+        ecb.onchange = function () { c.editable = ecb.checked; refresh(); };
+        edit.appendChild(ecb); edit.appendChild(document.createTextNode(' editable'));
+        var del = document.createElement('button'); del.className = 'bt'; del.textContent = '\u00d7';
+        del.onclick = function () { template.columns.splice(idx, 1); refresh(); };
+        row.appendChild(label); row.appendChild(field); row.appendChild(width); row.appendChild(fmtSel); row.appendChild(edit); row.appendChild(del);
+        body.appendChild(row);
+      });
+      (template.aggregates || []).forEach(function (a, idx) {
+        var row = document.createElement('div');
+        row.className = 'bm-report-agg rw';
+        applyStyle(row, { display: 'flex', gap: '6px', alignItems: 'center', margin: '3px 0' });
+        var span = document.createElement('span'); span.textContent = 'agg'; span.style.fontSize = '12px';
+        var colIn = document.createElement('input'); colIn.className = 'bt'; colIn.type = 'number'; colIn.value = a.column || 0; colIn.title = 'column'; applyStyle(colIn, { width: '56px' });
+        colIn.oninput = function () { a.column = parseInt(colIn.value, 10) || 0; scheduleRefresh(); };
+        var fnSel = document.createElement('select'); fnSel.className = 'bt';
+        VALID_AGG.forEach(function (f) { var o = document.createElement('option'); o.value = o.textContent = f; if ((a.fn || 'sum') === f) o.selected = true; fnSel.appendChild(o); });
+        fnSel.onchange = function () { a.fn = fnSel.value; refresh(); };
+        var del = document.createElement('button'); del.className = 'bt'; del.textContent = '\u00d7';
+        del.onclick = function () { template.aggregates.splice(idx, 1); refresh(); };
+        row.appendChild(span); row.appendChild(colIn); row.appendChild(fnSel); row.appendChild(del);
+        body.appendChild(row);
+      });
+    }
+
+    var pending = null;
+    function scheduleRefresh() {
+      var mode = template.mode || 'report';
+      preview.innerHTML = renderHtml(data, template, mode);
+      text.textContent = renderText(data, template);
+      emit(root, 'bm:report-change', { template: JSON.parse(JSON.stringify(template)), mode: mode });
+    }
+
+    refresh();
+    return {
+      element: root,
+      getTemplate: function () { return JSON.parse(JSON.stringify(template)); },
+      setTemplate: function (t) { template = (typeof t === 'string') ? JSON.parse(t) : t; refresh(); return this; },
+      getData: function () { return data.slice(); },
+      setData: function (d) { data = Array.isArray(d) ? d.slice() : parseData(d); refresh(); return this; },
+      getSource: function () { return JSON.parse(JSON.stringify(source)); },
+      setSource: function (s) { source = s || { kind: 'literal' }; renderBar(); return this; },
+      load: function () { return loadData(source, opts).then(function (rows) { data = rows; refresh(); return rows.slice(); }); },
+      refresh: refresh,
+      destroy: function () { if (root.parentNode) root.parentNode.removeChild(root); }
+    };
+  }
+
+  return {
+    VERSION: '1.0.0',
+    renderText: renderText,
+    renderHtml: renderHtml,
+    render: render,
+    collect: collect,
+    flatten: flatten,
+    toWrites: toWrites,
+    loadData: loadData,
+    designer: designer
+  };
+})();
+if (typeof module !== 'undefined' && module.exports) module.exports = BareMetal.Report;
+</script>
 <script>// picoserializer.js -- PicoBinarySerializer in JavaScript (browser + Node).
 // Byte-for-byte identical to picoserializer.py. See that file for the layout.
 (function (root, factory) {
@@ -17331,12 +18362,25 @@ function setLang(lang){
   // Roundtrip editor code to new language
   if(typeof getSrc==='function'&&typeof setSrc==='function'){
     var src=getSrc();
-    if(src&&src.trim()&&oldLang!==lang&&typeof PicoCompile!=='undefined'&&PicoCompile.translate){
+    if(lang==='workflow'){
+      // Workflow is a visual/JSON surface: seed a starter step list if needed.
+      if(typeof looksLikeWorkflowJson==='function'&&!looksLikeWorkflowJson(src)) setSrc(WF_SNIPPET);
+    } else if(oldLang==='workflow'){
+      // Design in workflow, then view as text: workflow -> English -> target.
+      if(typeof looksLikeWorkflowJson==='function'&&looksLikeWorkflowJson(src)){
+        try{
+          var _eng=wfCompileSrc(src).source;
+          var _out=(lang==='english')?_eng:((typeof PicoCompile!=='undefined'&&PicoCompile.translate)?PicoCompile.translate(_eng,'english',lang):_eng);
+          if(_out) setSrc(_out);
+        }catch(e){}
+      }
+    } else if(src&&src.trim()&&oldLang!==lang&&typeof PicoCompile!=='undefined'&&PicoCompile.translate){
       var translated=PicoCompile.translate(src,oldLang,lang);
       if(translated)setSrc(translated);
     }
   }
   if(typeof onLangChange==='function') onLangChange();
+  if(typeof wfToggle==='function') wfToggle();
   renderSyntaxRef(); renderSamples();
   if(CUR_REF_SECTION){showRefInline(CUR_REF_SECTION);}
   else{showGuideCard(CUR_GUIDE_CARD);}
@@ -17503,7 +18547,7 @@ function constantDoc(name){
   return'PicoScript named constant';
 }
 function registerLang(id){monaco.languages.register({id:id});monaco.languages.setMonarchTokensProvider(id,MONARCH[id]);monaco.languages.registerCompletionItemProvider(id,{provideCompletionItems:function(model,pos){var kw=MONARCH[id].keywords||[];var sug=kw.map(function(k){return{label:k,kind:monaco.languages.CompletionItemKind.Keyword,insertText:k};});hookNames().forEach(function(name){sug.push({label:name,kind:monaco.languages.CompletionItemKind.Function,insertText:name+'('});});CONSTANT_NAMES.forEach(function(name){sug.push({label:name,kind:monaco.languages.CompletionItemKind.Constant,insertText:name,detail:constantDoc(name),documentation:'Use directly in expressions, e.g. Net.Status('+name+').' });});return{suggestions:sug};}});}
-function initMonaco(){if(typeof require==='undefined'||!require.config){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';return;}try{require.config({paths:{vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs'}});require(['vs/editor/editor.main'],function(){['picoc','picobasic','picopython','picoenglish'].forEach(registerLang);EDITOR=monaco.editor.create(document.getElementById('monaco'),{value:document.getElementById('src').value,language:monacoLangId(document.getElementById('lang').value),theme:'vs-dark',minimap:{enabled:false},fontSize:13,lineNumbers:'on',scrollBeyondLastLine:false,automaticLayout:true,tabSize:4,insertSpaces:true,glyphMargin:true});EDITOR.onDidChangeModelContent(function(){document.getElementById('src').value=EDITOR.getValue();filesRender();});EDITOR.onMouseDown(function(e){if(e.target&&e.target.position&&(e.target.type===monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN||e.target.type===monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS)){toggleSourceBreakpoint(e.target.position.lineNumber);}});updateSourceDecorations();},function(){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';});}catch(e){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';}}
+function initMonaco(){if(typeof require==='undefined'||!require.config){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';return;}try{require.config({paths:{vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs'}});require(['vs/editor/editor.main'],function(){['picoc','picobasic','picopython','picoenglish'].forEach(registerLang);EDITOR=monaco.editor.create(document.getElementById('monaco'),{value:document.getElementById('src').value,language:monacoLangId(document.getElementById('lang').value),theme:'vs-dark',minimap:{enabled:false},fontSize:13,lineNumbers:'on',scrollBeyondLastLine:false,automaticLayout:true,tabSize:4,insertSpaces:true,glyphMargin:true});EDITOR.onDidChangeModelContent(function(){document.getElementById('src').value=EDITOR.getValue();filesRender();if(CUR_LANG==='workflow'){try{wfRenderDesigner();}catch(e){}}});EDITOR.onMouseDown(function(e){if(e.target&&e.target.position&&(e.target.type===monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN||e.target.type===monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS)){toggleSourceBreakpoint(e.target.position.lineNumber);}});updateSourceDecorations();},function(){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';});}catch(e){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';}}
 
 // localStorage-backed playground files
 var PS_FILES_KEY='picoscript.files.v1';
@@ -17586,7 +18630,12 @@ function psFilesDelete(name,skipConfirm){
 
 function compileSrc(run){
   var lang=document.getElementById('lang').value,src=getSrc(),err=document.getElementById('cerr');
-  try{var r=PicoCompile.compileDebug(src,lang);DBG.words=r.words.map(function(w){return w>>>0;});DBG.disasm=DBG.words.map(jsDisasm);DBG.vars=r.vars||{};DBG.debug=r.debug||{};DBG.src=src;rebuildDebugMaps();err.textContent='compiled '+DBG.words.length+' words';err.style.color='#7ee787';dbgReset();if(run)dbgRun();}
+  if(lang==='workflow'){
+    if(typeof looksLikeWorkflowJson!=='function'||!looksLikeWorkflowJson(src)){err.textContent='workflow: editor is not a JSON step array';err.style.color='#ff7b72';return;}
+    try{var wf=wfCompileSrc(src);src=wf.source;lang='english';}
+    catch(e){err.textContent='workflow: '+String(e.message||e);err.style.color='#ff7b72';return;}
+  }
+  try{var r=PicoCompile.compileDebug(src,lang);DBG.words=r.words.map(function(w){return w>>>0;});DBG.disasm=DBG.words.map(jsDisasm);DBG.vars=r.vars||{};DBG.debug=r.debug||{};DBG.src=src;rebuildDebugMaps();err.textContent='compiled '+DBG.words.length+' words';err.style.color='#7ee787';dbgReset();if(run)dbgRun();if(typeof renderLayout==='function')try{renderLayout();}catch(e){}}
   catch(e){err.textContent=String(e.message||e);err.style.color='#ff7b72';}
 }
 function dbgReset(){DBG.vm=new PicoVM({cards:walBackend()});DBG.vm.load(DBG.words);render();renderWal();updateSourceDecorations();}
@@ -17694,6 +18743,7 @@ function selectToolTab(tab){
   document.querySelectorAll('.tool-tab').forEach(function(p){p.classList.toggle('active',p.id==='tool-'+TOOL_TAB);});
   document.querySelectorAll('.tool-tabs button').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-tool')===TOOL_TAB);});
   if(TOOL_TAB==='cards'||TOOL_TAB==='query')try{cardRender();}catch(e){}
+  if(TOOL_TAB==='report')try{renderLayout();}catch(e){}
 }
 function openToolPanel(tab){
   selectToolTab(tab||TOOL_TAB);
@@ -17766,6 +18816,185 @@ function renderSamples(){
   document.getElementById('samplesContent').innerHTML=html;
 }
 
+// ---- workflow surface (visual step list -> English pre-compile) -------------
+// The compiler is BareMetal.WorkflowPico (vendored from BareMetalJsTools); the
+// designer below edits a JSON step list that syncs to the editor and recompiles.
+var WF_SNIPPET=JSON.stringify([
+  {type:'SET', name:'data', value:[10,20,30,40]},
+  {type:'SET', name:'sum', value:0},
+  {type:'FOREACH', var:'item', in:'data'},
+  {type:'SET', name:'sum', expr:'sum + item'},
+  {type:'END'},
+  {type:'IF', condition:'sum >= 50'},
+  {type:'LOG', message:'sum'},
+  {type:'END'}
+], null, 2);
+function looksLikeWorkflowJson(src){
+  if(!src||!src.trim()) return false;
+  try{ var d=JSON.parse(src); return Array.isArray(d)||(d&&Array.isArray(d.steps)); }
+  catch(e){ return false; }
+}
+// BareMetal.WorkflowPico.compile expects a steps ARRAY (or registered name); the
+// editor surface is a JSON string, so parse it here before compiling.
+function wfCompileSrc(src){
+  var d=JSON.parse(src);
+  var steps=Array.isArray(d)?d:(d&&Array.isArray(d.steps)?d.steps:null);
+  if(!steps) throw new Error('workflow: expected a JSON step array');
+  return BareMetal.WorkflowPico.compile(steps);
+}
+var WF_TYPES=['SET','IF','ELSE','END','FOR','FOREACH','FOREACHP','LOG','WAIT','RAISE','ON','LOAD','SAVE','WEB','CALL'];
+var WF_EXAMPLES={
+  'Array sum':[
+    {type:'SET',name:'data',value:[10,20,30,40]},
+    {type:'SET',name:'sum',value:0},
+    {type:'FOREACH','var':'item','in':'data'},
+    {type:'SET',name:'sum',expr:'sum + item'},
+    {type:'END'},
+    {type:'LOG',message:'sum'}
+  ],
+  'Filter & sum (>= 10)':[
+    {type:'SET',name:'data',value:[5,12,8,20,3]},
+    {type:'SET',name:'sum',value:0},
+    {type:'FOREACH','var':'item','in':'data'},
+    {type:'IF',condition:'item >= 10'},
+    {type:'SET',name:'sum',expr:'sum + item'},
+    {type:'END'},
+    {type:'END'},
+    {type:'LOG',message:'sum'}
+  ],
+  'Counted loop (1..5)':[
+    {type:'SET',name:'sum',value:0},
+    {type:'FOR','var':'i',from:1,to:5},
+    {type:'SET',name:'sum',expr:'sum + i'},
+    {type:'END'},
+    {type:'LOG',message:'sum'}
+  ],
+  'Budget reject flow':[
+    {type:'LOAD',name:'total',from:'scratch',key:0},
+    {type:'LOAD',name:'budget',from:'scratch',key:1},
+    {type:'IF',condition:'total > budget'},
+    {type:'SAVE',name:'total',to:'scratch',key:4000},
+    {type:'END'},
+    {type:'LOG',message:'total'}
+  ]
+};
+function wfTemplate(type){
+  switch(type){
+    case 'SET': return {type:'SET',name:'x',value:0};
+    case 'IF': return {type:'IF',condition:'x >= 1'};
+    case 'ELSE': return {type:'ELSE'};
+    case 'END': return {type:'END'};
+    case 'FOR': return {type:'FOR','var':'i',from:1,to:5};
+    case 'FOREACH': return {type:'FOREACH','var':'item','in':'data'};
+    case 'FOREACHP': return {type:'FOREACHP','var':'item','in':'data'};
+    case 'LOG': return {type:'LOG',message:'x'};
+    case 'WAIT': return {type:'WAIT',ms:100};
+    case 'RAISE': return {type:'RAISE',event:1,target:0};
+    case 'ON': return {type:'ON',event:1};
+    case 'LOAD': return {type:'LOAD',name:'x',from:'memory',key:0};
+    case 'SAVE': return {type:'SAVE',name:'x',to:'memory',key:0};
+    case 'WEB': return {type:'WEB',method:'GET',url:'/api'};
+    case 'CALL': return {type:'CALL',workflow:'other'};
+    default: return {type:type};
+  }
+}
+function wfSummary(s){
+  var t=(s.type||'').toUpperCase();
+  try{
+    if(t==='SET') return s.name+' = '+(('expr' in s)?s.expr:JSON.stringify(s.value));
+    if(t==='IF') return s.condition||'';
+    if(t==='FOR') return s['var']+' = '+s.from+'..'+s.to+(s.step!=null?' by '+s.step:'');
+    if(t==='FOREACH'||t==='FOREACHP') return s['var']+' in '+JSON.stringify(s['in']);
+    if(t==='LOG') return String(s.message==null?'':s.message);
+    if(t==='LOAD') return s.name+' <- '+s.from+(s.key!=null?' ['+s.key+']':'');
+    if(t==='SAVE') return s.name+' -> '+s.to+(s.key!=null?' ['+s.key+']':'');
+    if(t==='WAIT') return (s.ms||0)+'ms';
+    if(t==='RAISE'||t==='EMIT') return 'event '+(s.event==null?'':s.event)+(s.target!=null?' -> '+s.target:'');
+    if(t==='ON'||t==='SUBSCRIBE') return 'on event '+(s.event==null?'':s.event);
+    if(t==='WEB') return (s.method||'GET')+' '+(s.url||'');
+    if(t==='CALL') return s.workflow||'';
+  }catch(e){}
+  return '';
+}
+function wfParseSteps(){ try{ var d=JSON.parse(getSrc()); if(Array.isArray(d)) return d; if(d&&Array.isArray(d.steps)) return d.steps; }catch(e){} return null; }
+function wfWriteSteps(steps){ setSrc(JSON.stringify(steps,null,2)); wfRenderDesigner(); compileSrc(false); }
+function wfAddStep(){ var sel=document.getElementById('wfAddType'); if(!sel) return; var steps=wfParseSteps()||[]; steps.push(wfTemplate(sel.value)); wfWriteSteps(steps); }
+function wfDelStep(i){ var steps=wfParseSteps(); if(!steps) return; steps.splice(i,1); wfWriteSteps(steps); }
+function wfMove(i,d){ var steps=wfParseSteps(); if(!steps) return; var j=i+d; if(j<0||j>=steps.length) return; var tmp=steps[i]; steps[i]=steps[j]; steps[j]=tmp; wfWriteSteps(steps); }
+function wfEditStep(i){ var steps=wfParseSteps(); if(!steps) return; var v=prompt('Edit step JSON',JSON.stringify(steps[i])); if(v==null) return; var parsed; try{ parsed=JSON.parse(v); }catch(e){ alert('Invalid JSON: '+e.message); return; } steps[i]=parsed; wfWriteSteps(steps); }
+function wfLoadExample(){ var sel=document.getElementById('wfExample'); if(!sel||!sel.value) return; var ex=WF_EXAMPLES[sel.value]; if(!ex) return; wfWriteSteps(ex.map(function(s){return JSON.parse(JSON.stringify(s));})); }
+function wfRenderDesigner(){
+  var host=document.getElementById('wfDesigner'); if(!host) return;
+  var add='<div class="wf-add"><select id="wfAddType">'+WF_TYPES.map(function(t){return '<option>'+t+'</option>';}).join('')+'</select>'+
+    '<button class="ghost" onclick="wfAddStep()">+ Add step</button>'+
+    '<select id="wfExample"><option value="">example\u2026</option>'+Object.keys(WF_EXAMPLES).map(function(n){return '<option>'+esc(n)+'</option>';}).join('')+'</select>'+
+    '<button class="ghost" onclick="wfLoadExample()">Load</button>'+
+    '<span class="muted" style="font-size:11px">visual designer &mdash; edits sync to the JSON above &amp; recompile</span></div>';
+  var steps=wfParseSteps();
+  if(!steps){ host.innerHTML=add+'<div class="muted" style="font-size:12px;padding:4px">(editor text is not a JSON step array &mdash; edit the JSON or add a step)</div>'; return; }
+  var indent=0, rows='';
+  for(var i=0;i<steps.length;i++){ var s=steps[i]||{}, t=(s.type||'?').toUpperCase();
+    if(t==='ELSE'||t==='END') indent=Math.max(0,indent-1);
+    rows+='<div class="wf-row" style="margin-left:'+(indent*18)+'px">'+
+      '<span class="wf-badge">'+esc(t)+'</span>'+
+      '<span class="wf-sum">'+esc(wfSummary(s))+'</span>'+
+      '<span class="wf-acts">'+
+        '<button class="ghost" onclick="wfMove('+i+',-1)" title="move up">&#8593;</button>'+
+        '<button class="ghost" onclick="wfMove('+i+',1)" title="move down">&#8595;</button>'+
+        '<button class="ghost" onclick="wfEditStep('+i+')" title="edit JSON">&#9998;</button>'+
+        '<button class="ghost" onclick="wfDelStep('+i+')" title="delete">&#10005;</button>'+
+      '</span></div>';
+    if(t==='IF'||t==='FOR'||t==='FOREACH'||t==='FOREACHP'||t==='ON'||t==='ELSE') indent++;
+  }
+  var eng='';
+  try{
+    var wf=wfCompileSrc(getSrc());
+    var warn=(wf.warnings&&wf.warnings.length)?('<div class="wf-warn">'+wf.warnings.map(function(w){return '&#9888; '+esc(w);}).join('<br>')+'</div>'):'';
+    eng='<div class="wf-eng-h">derived English (compiles &amp; runs; IL / bytecode / output in the debugger below)</div>'+
+        '<pre class="wf-eng">'+esc(wf.source)+'</pre>'+warn;
+  }catch(e){ eng='<div class="wf-warn">&#9888; '+esc(String(e.message||e))+'</div>'; }
+  host.innerHTML=add+rows+eng;
+}
+function wfToggle(){
+  var on=(CUR_LANG==='workflow');
+  var host=document.getElementById('wfDesigner');
+  if(host) host.style.display=on?'block':'none';
+  if(on){ try{ wfRenderDesigner(); }catch(e){} }
+}
+
+// ---- report/form layout (stage 2 over the current program output) -----------
+var LAYOUT_DEFAULT_TMPL=JSON.stringify({
+  title:'Report',
+  columns:[{label:'A',field:0,width:6},{label:'B',field:1,width:6}],
+  aggregates:[{column:0,fn:'sum'},{column:1,fn:'sum'}]
+}, null, 2);
+function layoutMode(){ var r=document.querySelector('input[name="layoutMode"]:checked'); return r?r.value:'report'; }
+function renderLayout(){
+  var pv=document.getElementById('layoutPreview'), tx=document.getElementById('layoutText'), ta=document.getElementById('layoutTmpl');
+  if(!pv||!ta) return;
+  if(!ta.value||!ta.value.trim()) ta.value=LAYOUT_DEFAULT_TMPL;
+  var data=(DBG.vm&&DBG.vm.outputInts)?DBG.vm.outputInts():[];
+  try{
+    var tmpl=JSON.parse(ta.value), mode=layoutMode();
+    pv.innerHTML=BareMetal.Report.renderHtml(data,tmpl,mode);
+    if(tx) tx.textContent=BareMetal.Report.renderText(data,tmpl);
+  }catch(e){
+    if(tx) tx.textContent='';
+    pv.innerHTML='<span style="color:var(--warn)">'+esc(String(e.message||e))+'</span>';
+  }
+}
+function layoutSave(){
+  var host=document.getElementById('layoutPreview'), msg=document.getElementById('layoutSaveMsg');
+  var form=host?host.querySelector('form'):null;
+  if(!form){ if(msg) msg.textContent='(switch to form mode, then Render)'; return; }
+  try{
+    var rows=BareMetal.Report.collect(form), writes=BareMetal.Report.toWrites(rows,{base:0}), be=walBackend();
+    Object.keys(writes).forEach(function(k){ be.set(parseInt(k,10),writes[k]); });
+    renderWal();
+    if(msg) msg.textContent='saved '+rows.length+' rows \u2192 data ABI: '+JSON.stringify(writes);
+  }catch(e){ if(msg) msg.textContent=String(e.message||e); }
+}
+
 // Init
 buildGuideTree();showGuideCard(0);buildRefTree();buildNsRef();renderSyntaxRef();renderSamples();applyDbgLayout('guide');applyDbgLayout('play');
 (function(){var src=document.getElementById('doc-internals');var dst=document.getElementById('doc-internals-inline');if(src&&dst)dst.innerHTML=src.innerHTML;})();
@@ -17773,10 +19002,10 @@ buildGuideTree();showGuideCard(0);buildRefTree();buildNsRef();renderSyntaxRef();
 function loadExample(){var i=parseInt(document.getElementById('example').value,10)||0;var lang=document.getElementById('lang').value;var d=DATA[i];if(!d[lang])lang='basic';setSrc(d[lang].src);compileSrc(false);}
 document.getElementById('example').onchange=loadExample;
 document.getElementById('lang').addEventListener('change',function(){onLangChange();});
-document.getElementById('src').addEventListener('input',filesRender);
+document.getElementById('src').addEventListener('input',function(){filesRender();if(CUR_LANG==='workflow'){try{wfRenderDesigner();}catch(e){}}});
 document.getElementById('lang').value='basic';
 document.getElementById('src').value=RESPONDER;
-initMonaco();compileSrc(false);loadSample();renderWal();
+initMonaco();compileSrc(false);loadSample();renderWal();renderLayout();
 (function(){var ls=filesSafeLocalStorage(),active='';try{active=ls?ls.getItem(PS_ACTIVE_FILE_KEY)||'':'';}catch(e){} if(active&&filesRead()[active]) psFilesOpen(active); else filesRender();})();
 document.getElementById('flyoutTriggers').style.display='none';
 </script>

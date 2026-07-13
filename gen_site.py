@@ -155,6 +155,10 @@ def main():
     store_js = open(os.path.join(ROOT, "vm", "picostore.js"), encoding="utf-8").read()
     pcz_js = open(os.path.join(ROOT, "vm", "picocompress.js"), encoding="utf-8").read()
     pbz_js = open(os.path.join(ROOT, "vm", "picobrotli.js"), encoding="utf-8").read()
+    # Reusable browser modules are the single source of truth in BareMetalJsTools;
+    # picoscript vendors them into vm/vendor/ (see tools/vendor_baremetal.py).
+    wf_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.WorkflowPico.js"), encoding="utf-8").read()
+    layout_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.Report.js"), encoding="utf-8").read()
 
     html = PAGE
     html = html.replace("/*__HOOKS__*/", hooks_js)
@@ -162,6 +166,8 @@ def main():
     html = html.replace("/*__PBZ__*/", pbz_js)
     html = html.replace("/*__VM__*/", vm_js)
     html = html.replace("/*__PICOC__*/", picoc_js)
+    html = html.replace("/*__WF__*/", wf_js)
+    html = html.replace("/*__LAYOUT__*/", layout_js)
     html = html.replace("/*__SER__*/", ser_js)
     html = html.replace("/*__STORE__*/", store_js)
     html = html.replace("/*__DATA__*/", json.dumps(gallery))
@@ -343,6 +349,25 @@ PAGE = r"""<!DOCTYPE html>
   .ref-content { flex:1; overflow-y:auto; padding:18px 24px; }
   .ref-section { display:none; }
   .ref-section.active { display:block; }
+  .wf-designer { margin:6px 0; border:1px solid #2c313f; border-radius:6px; padding:6px; background:#0c0e14; }
+  .wf-designer .wf-add { display:flex; gap:6px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
+  .wf-row { display:flex; gap:8px; align-items:center; padding:3px 6px; margin:3px 0; border:1px solid #2c313f;
+    border-radius:6px; background:#11141c; }
+  .wf-badge { min-width:70px; font-weight:700; font-size:11px; color:var(--accent); }
+  .wf-sum { flex:1 1 auto; font-family:"SF Mono",Consolas,monospace; font-size:12px; word-break:break-word; }
+  .wf-acts button { padding:1px 6px; font-size:12px; }
+  .wf-eng-h { font-size:11px; color:var(--muted); margin:8px 0 2px; }
+  .wf-eng { font-family:"SF Mono",Consolas,monospace; font-size:12px; background:#0a0c12; border:1px solid #2c313f;
+    border-radius:6px; padding:6px; margin:0; white-space:pre-wrap; color:#9fb0c8; }
+  .wf-warn { font-size:11px; color:var(--warn); margin-top:4px; }
+  .layout-preview { margin:8px 0; padding:8px; border:1px solid #2c313f; border-radius:6px; background:#fff; color:#111; overflow:auto; }
+  .layout-preview table.pico-report { border-collapse:collapse; font-size:13px; }
+  .layout-preview table.pico-report th, .layout-preview table.pico-report td { border:1px solid #ccc; padding:2px 8px; text-align:left; }
+  .layout-preview table.pico-report tfoot td { font-weight:700; background:#f3f3f3; }
+  .layout-preview .pico-form-row { display:flex; gap:10px; flex-wrap:wrap; margin:4px 0; }
+  .layout-preview .pico-field { display:flex; flex-direction:column; font-size:12px; }
+  .layout-preview .pico-field input { border:1px solid #bbb; border-radius:4px; padding:2px 4px; }
+  .layout-text { font-family:"SF Mono",Consolas,monospace; font-size:12px; color:#9fb0c8; white-space:pre-wrap; margin:0; }
   .docnav { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:12px; }
   .docnav-btn { background:#2c313f; color:var(--muted); border:none; border-radius:6px; padding:6px 10px; font-weight:600; cursor:pointer; font-size:11.5px; }
   .docnav-btn.active { background:var(--accent); color:#fff; }
@@ -382,6 +407,7 @@ PAGE = r"""<!DOCTYPE html>
     <button data-lang="cobol" onclick="setLang('cobol')">COBOL</button>
     <button data-lang="report" onclick="setLang('report')">Report</button>
     <button data-lang="functional" onclick="setLang('functional')">Functional</button>
+    <button data-lang="workflow" onclick="setLang('workflow')">Workflow</button>
   </div>
 </div>
 <div class="main">
@@ -474,6 +500,7 @@ PAGE = r"""<!DOCTYPE html>
           <button class="ghost" onclick="dbgReset()">Reset</button>
         </div>
         <div id="cerr" class="cerr"></div>
+        <div id="wfDesigner" class="wf-designer" style="display:none"></div>
       </div>
     </div>
     <div class="dbg-bar" id="playDbgBar">
@@ -503,6 +530,7 @@ PAGE = r"""<!DOCTYPE html>
     <button onclick="openToolPanel('cards')">Cards</button>
     <button onclick="openToolPanel('query')">Query</button>
     <button onclick="openToolPanel('spans')">Spans</button>
+    <button onclick="openToolPanel('report')">Report</button>
   </div>
   <div class="flyout-overlay" id="flyoutOverlay" onclick="closeToolPanel(false)"></div>
   <div class="tool-panel" id="toolPanel">
@@ -513,6 +541,7 @@ PAGE = r"""<!DOCTYPE html>
         <button data-tool="cards" onclick="selectToolTab('cards')">Cards</button>
         <button data-tool="query" onclick="selectToolTab('query')">Query</button>
         <button data-tool="spans" onclick="selectToolTab('spans')">Spans</button>
+        <button data-tool="report" onclick="selectToolTab('report')">Report/Form</button>
       </div>
       <div class="tool-actions">
         <button id="toolPin" onclick="toggleToolPin()" title="Pin tools panel" aria-label="Pin tools panel">📌</button>
@@ -558,6 +587,19 @@ PAGE = r"""<!DOCTYPE html>
           <b>Span.Len/Get</b> length and indexed read
         </p>
       </div>
+      <div class="tool-tab" id="tool-report">
+        <h3>Report / Form <span class="badge">2-stage</span></h3>
+        <p style="color:var(--muted);font-size:12px;line-height:1.5">Stage&nbsp;1 = the <b>current program</b> (its output ints are the data). Stage&nbsp;2 = the <b>template</b> below. <b>report</b> = read-only table + aggregate footer; <b>form</b> = editable inputs &amp; <b>Save</b> writes back through the data ABI (into PicoWAL memory).</p>
+        <div class="controls" style="margin:6px 0">
+          <label><input type="radio" name="layoutMode" value="report" checked onchange="renderLayout()"> report</label>
+          <label><input type="radio" name="layoutMode" value="form" onchange="renderLayout()"> form</label>
+          <button class="act" onclick="renderLayout()">Render &#9654;</button>
+        </div>
+        <textarea id="layoutTmpl" style="height:110px" spellcheck="false"></textarea>
+        <div class="layout-preview" id="layoutPreview"></div>
+        <div style="display:flex;gap:6px;margin:6px 0"><button class="ghost" onclick="layoutSave()">Save form &#128190;</button><span class="muted" id="layoutSaveMsg" style="font-size:11px"></span></div>
+        <pre class="layout-text" id="layoutText"></pre>
+      </div>
     </div>
   </div>
 </div>
@@ -567,6 +609,8 @@ PAGE = r"""<!DOCTYPE html>
 <script>/*__PBZ__*/</script>
 <script>/*__VM__*/</script>
 <script>/*__PICOC__*/</script>
+<script>/*__WF__*/</script>
+<script>/*__LAYOUT__*/</script>
 <script>/*__SER__*/</script>
 <script>/*__STORE__*/</script>
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
@@ -598,12 +642,25 @@ function setLang(lang){
   // Roundtrip editor code to new language
   if(typeof getSrc==='function'&&typeof setSrc==='function'){
     var src=getSrc();
-    if(src&&src.trim()&&oldLang!==lang&&typeof PicoCompile!=='undefined'&&PicoCompile.translate){
+    if(lang==='workflow'){
+      // Workflow is a visual/JSON surface: seed a starter step list if needed.
+      if(typeof looksLikeWorkflowJson==='function'&&!looksLikeWorkflowJson(src)) setSrc(WF_SNIPPET);
+    } else if(oldLang==='workflow'){
+      // Design in workflow, then view as text: workflow -> English -> target.
+      if(typeof looksLikeWorkflowJson==='function'&&looksLikeWorkflowJson(src)){
+        try{
+          var _eng=wfCompileSrc(src).source;
+          var _out=(lang==='english')?_eng:((typeof PicoCompile!=='undefined'&&PicoCompile.translate)?PicoCompile.translate(_eng,'english',lang):_eng);
+          if(_out) setSrc(_out);
+        }catch(e){}
+      }
+    } else if(src&&src.trim()&&oldLang!==lang&&typeof PicoCompile!=='undefined'&&PicoCompile.translate){
       var translated=PicoCompile.translate(src,oldLang,lang);
       if(translated)setSrc(translated);
     }
   }
   if(typeof onLangChange==='function') onLangChange();
+  if(typeof wfToggle==='function') wfToggle();
   renderSyntaxRef(); renderSamples();
   if(CUR_REF_SECTION){showRefInline(CUR_REF_SECTION);}
   else{showGuideCard(CUR_GUIDE_CARD);}
@@ -770,7 +827,7 @@ function constantDoc(name){
   return'PicoScript named constant';
 }
 function registerLang(id){monaco.languages.register({id:id});monaco.languages.setMonarchTokensProvider(id,MONARCH[id]);monaco.languages.registerCompletionItemProvider(id,{provideCompletionItems:function(model,pos){var kw=MONARCH[id].keywords||[];var sug=kw.map(function(k){return{label:k,kind:monaco.languages.CompletionItemKind.Keyword,insertText:k};});hookNames().forEach(function(name){sug.push({label:name,kind:monaco.languages.CompletionItemKind.Function,insertText:name+'('});});CONSTANT_NAMES.forEach(function(name){sug.push({label:name,kind:monaco.languages.CompletionItemKind.Constant,insertText:name,detail:constantDoc(name),documentation:'Use directly in expressions, e.g. Net.Status('+name+').' });});return{suggestions:sug};}});}
-function initMonaco(){if(typeof require==='undefined'||!require.config){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';return;}try{require.config({paths:{vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs'}});require(['vs/editor/editor.main'],function(){['picoc','picobasic','picopython','picoenglish'].forEach(registerLang);EDITOR=monaco.editor.create(document.getElementById('monaco'),{value:document.getElementById('src').value,language:monacoLangId(document.getElementById('lang').value),theme:'vs-dark',minimap:{enabled:false},fontSize:13,lineNumbers:'on',scrollBeyondLastLine:false,automaticLayout:true,tabSize:4,insertSpaces:true,glyphMargin:true});EDITOR.onDidChangeModelContent(function(){document.getElementById('src').value=EDITOR.getValue();filesRender();});EDITOR.onMouseDown(function(e){if(e.target&&e.target.position&&(e.target.type===monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN||e.target.type===monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS)){toggleSourceBreakpoint(e.target.position.lineNumber);}});updateSourceDecorations();},function(){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';});}catch(e){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';}}
+function initMonaco(){if(typeof require==='undefined'||!require.config){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';return;}try{require.config({paths:{vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs'}});require(['vs/editor/editor.main'],function(){['picoc','picobasic','picopython','picoenglish'].forEach(registerLang);EDITOR=monaco.editor.create(document.getElementById('monaco'),{value:document.getElementById('src').value,language:monacoLangId(document.getElementById('lang').value),theme:'vs-dark',minimap:{enabled:false},fontSize:13,lineNumbers:'on',scrollBeyondLastLine:false,automaticLayout:true,tabSize:4,insertSpaces:true,glyphMargin:true});EDITOR.onDidChangeModelContent(function(){document.getElementById('src').value=EDITOR.getValue();filesRender();if(CUR_LANG==='workflow'){try{wfRenderDesigner();}catch(e){}}});EDITOR.onMouseDown(function(e){if(e.target&&e.target.position&&(e.target.type===monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN||e.target.type===monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS)){toggleSourceBreakpoint(e.target.position.lineNumber);}});updateSourceDecorations();},function(){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';});}catch(e){document.getElementById('monaco').style.display='none';document.getElementById('src').style.display='block';}}
 
 // localStorage-backed playground files
 var PS_FILES_KEY='picoscript.files.v1';
@@ -853,7 +910,12 @@ function psFilesDelete(name,skipConfirm){
 
 function compileSrc(run){
   var lang=document.getElementById('lang').value,src=getSrc(),err=document.getElementById('cerr');
-  try{var r=PicoCompile.compileDebug(src,lang);DBG.words=r.words.map(function(w){return w>>>0;});DBG.disasm=DBG.words.map(jsDisasm);DBG.vars=r.vars||{};DBG.debug=r.debug||{};DBG.src=src;rebuildDebugMaps();err.textContent='compiled '+DBG.words.length+' words';err.style.color='#7ee787';dbgReset();if(run)dbgRun();}
+  if(lang==='workflow'){
+    if(typeof looksLikeWorkflowJson!=='function'||!looksLikeWorkflowJson(src)){err.textContent='workflow: editor is not a JSON step array';err.style.color='#ff7b72';return;}
+    try{var wf=wfCompileSrc(src);src=wf.source;lang='english';}
+    catch(e){err.textContent='workflow: '+String(e.message||e);err.style.color='#ff7b72';return;}
+  }
+  try{var r=PicoCompile.compileDebug(src,lang);DBG.words=r.words.map(function(w){return w>>>0;});DBG.disasm=DBG.words.map(jsDisasm);DBG.vars=r.vars||{};DBG.debug=r.debug||{};DBG.src=src;rebuildDebugMaps();err.textContent='compiled '+DBG.words.length+' words';err.style.color='#7ee787';dbgReset();if(run)dbgRun();if(typeof renderLayout==='function')try{renderLayout();}catch(e){}}
   catch(e){err.textContent=String(e.message||e);err.style.color='#ff7b72';}
 }
 function dbgReset(){DBG.vm=new PicoVM({cards:walBackend()});DBG.vm.load(DBG.words);render();renderWal();updateSourceDecorations();}
@@ -961,6 +1023,7 @@ function selectToolTab(tab){
   document.querySelectorAll('.tool-tab').forEach(function(p){p.classList.toggle('active',p.id==='tool-'+TOOL_TAB);});
   document.querySelectorAll('.tool-tabs button').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-tool')===TOOL_TAB);});
   if(TOOL_TAB==='cards'||TOOL_TAB==='query')try{cardRender();}catch(e){}
+  if(TOOL_TAB==='report')try{renderLayout();}catch(e){}
 }
 function openToolPanel(tab){
   selectToolTab(tab||TOOL_TAB);
@@ -1033,6 +1096,185 @@ function renderSamples(){
   document.getElementById('samplesContent').innerHTML=html;
 }
 
+// ---- workflow surface (visual step list -> English pre-compile) -------------
+// The compiler is BareMetal.WorkflowPico (vendored from BareMetalJsTools); the
+// designer below edits a JSON step list that syncs to the editor and recompiles.
+var WF_SNIPPET=JSON.stringify([
+  {type:'SET', name:'data', value:[10,20,30,40]},
+  {type:'SET', name:'sum', value:0},
+  {type:'FOREACH', var:'item', in:'data'},
+  {type:'SET', name:'sum', expr:'sum + item'},
+  {type:'END'},
+  {type:'IF', condition:'sum >= 50'},
+  {type:'LOG', message:'sum'},
+  {type:'END'}
+], null, 2);
+function looksLikeWorkflowJson(src){
+  if(!src||!src.trim()) return false;
+  try{ var d=JSON.parse(src); return Array.isArray(d)||(d&&Array.isArray(d.steps)); }
+  catch(e){ return false; }
+}
+// BareMetal.WorkflowPico.compile expects a steps ARRAY (or registered name); the
+// editor surface is a JSON string, so parse it here before compiling.
+function wfCompileSrc(src){
+  var d=JSON.parse(src);
+  var steps=Array.isArray(d)?d:(d&&Array.isArray(d.steps)?d.steps:null);
+  if(!steps) throw new Error('workflow: expected a JSON step array');
+  return BareMetal.WorkflowPico.compile(steps);
+}
+var WF_TYPES=['SET','IF','ELSE','END','FOR','FOREACH','FOREACHP','LOG','WAIT','RAISE','ON','LOAD','SAVE','WEB','CALL'];
+var WF_EXAMPLES={
+  'Array sum':[
+    {type:'SET',name:'data',value:[10,20,30,40]},
+    {type:'SET',name:'sum',value:0},
+    {type:'FOREACH','var':'item','in':'data'},
+    {type:'SET',name:'sum',expr:'sum + item'},
+    {type:'END'},
+    {type:'LOG',message:'sum'}
+  ],
+  'Filter & sum (>= 10)':[
+    {type:'SET',name:'data',value:[5,12,8,20,3]},
+    {type:'SET',name:'sum',value:0},
+    {type:'FOREACH','var':'item','in':'data'},
+    {type:'IF',condition:'item >= 10'},
+    {type:'SET',name:'sum',expr:'sum + item'},
+    {type:'END'},
+    {type:'END'},
+    {type:'LOG',message:'sum'}
+  ],
+  'Counted loop (1..5)':[
+    {type:'SET',name:'sum',value:0},
+    {type:'FOR','var':'i',from:1,to:5},
+    {type:'SET',name:'sum',expr:'sum + i'},
+    {type:'END'},
+    {type:'LOG',message:'sum'}
+  ],
+  'Budget reject flow':[
+    {type:'LOAD',name:'total',from:'scratch',key:0},
+    {type:'LOAD',name:'budget',from:'scratch',key:1},
+    {type:'IF',condition:'total > budget'},
+    {type:'SAVE',name:'total',to:'scratch',key:4000},
+    {type:'END'},
+    {type:'LOG',message:'total'}
+  ]
+};
+function wfTemplate(type){
+  switch(type){
+    case 'SET': return {type:'SET',name:'x',value:0};
+    case 'IF': return {type:'IF',condition:'x >= 1'};
+    case 'ELSE': return {type:'ELSE'};
+    case 'END': return {type:'END'};
+    case 'FOR': return {type:'FOR','var':'i',from:1,to:5};
+    case 'FOREACH': return {type:'FOREACH','var':'item','in':'data'};
+    case 'FOREACHP': return {type:'FOREACHP','var':'item','in':'data'};
+    case 'LOG': return {type:'LOG',message:'x'};
+    case 'WAIT': return {type:'WAIT',ms:100};
+    case 'RAISE': return {type:'RAISE',event:1,target:0};
+    case 'ON': return {type:'ON',event:1};
+    case 'LOAD': return {type:'LOAD',name:'x',from:'memory',key:0};
+    case 'SAVE': return {type:'SAVE',name:'x',to:'memory',key:0};
+    case 'WEB': return {type:'WEB',method:'GET',url:'/api'};
+    case 'CALL': return {type:'CALL',workflow:'other'};
+    default: return {type:type};
+  }
+}
+function wfSummary(s){
+  var t=(s.type||'').toUpperCase();
+  try{
+    if(t==='SET') return s.name+' = '+(('expr' in s)?s.expr:JSON.stringify(s.value));
+    if(t==='IF') return s.condition||'';
+    if(t==='FOR') return s['var']+' = '+s.from+'..'+s.to+(s.step!=null?' by '+s.step:'');
+    if(t==='FOREACH'||t==='FOREACHP') return s['var']+' in '+JSON.stringify(s['in']);
+    if(t==='LOG') return String(s.message==null?'':s.message);
+    if(t==='LOAD') return s.name+' <- '+s.from+(s.key!=null?' ['+s.key+']':'');
+    if(t==='SAVE') return s.name+' -> '+s.to+(s.key!=null?' ['+s.key+']':'');
+    if(t==='WAIT') return (s.ms||0)+'ms';
+    if(t==='RAISE'||t==='EMIT') return 'event '+(s.event==null?'':s.event)+(s.target!=null?' -> '+s.target:'');
+    if(t==='ON'||t==='SUBSCRIBE') return 'on event '+(s.event==null?'':s.event);
+    if(t==='WEB') return (s.method||'GET')+' '+(s.url||'');
+    if(t==='CALL') return s.workflow||'';
+  }catch(e){}
+  return '';
+}
+function wfParseSteps(){ try{ var d=JSON.parse(getSrc()); if(Array.isArray(d)) return d; if(d&&Array.isArray(d.steps)) return d.steps; }catch(e){} return null; }
+function wfWriteSteps(steps){ setSrc(JSON.stringify(steps,null,2)); wfRenderDesigner(); compileSrc(false); }
+function wfAddStep(){ var sel=document.getElementById('wfAddType'); if(!sel) return; var steps=wfParseSteps()||[]; steps.push(wfTemplate(sel.value)); wfWriteSteps(steps); }
+function wfDelStep(i){ var steps=wfParseSteps(); if(!steps) return; steps.splice(i,1); wfWriteSteps(steps); }
+function wfMove(i,d){ var steps=wfParseSteps(); if(!steps) return; var j=i+d; if(j<0||j>=steps.length) return; var tmp=steps[i]; steps[i]=steps[j]; steps[j]=tmp; wfWriteSteps(steps); }
+function wfEditStep(i){ var steps=wfParseSteps(); if(!steps) return; var v=prompt('Edit step JSON',JSON.stringify(steps[i])); if(v==null) return; var parsed; try{ parsed=JSON.parse(v); }catch(e){ alert('Invalid JSON: '+e.message); return; } steps[i]=parsed; wfWriteSteps(steps); }
+function wfLoadExample(){ var sel=document.getElementById('wfExample'); if(!sel||!sel.value) return; var ex=WF_EXAMPLES[sel.value]; if(!ex) return; wfWriteSteps(ex.map(function(s){return JSON.parse(JSON.stringify(s));})); }
+function wfRenderDesigner(){
+  var host=document.getElementById('wfDesigner'); if(!host) return;
+  var add='<div class="wf-add"><select id="wfAddType">'+WF_TYPES.map(function(t){return '<option>'+t+'</option>';}).join('')+'</select>'+
+    '<button class="ghost" onclick="wfAddStep()">+ Add step</button>'+
+    '<select id="wfExample"><option value="">example\u2026</option>'+Object.keys(WF_EXAMPLES).map(function(n){return '<option>'+esc(n)+'</option>';}).join('')+'</select>'+
+    '<button class="ghost" onclick="wfLoadExample()">Load</button>'+
+    '<span class="muted" style="font-size:11px">visual designer &mdash; edits sync to the JSON above &amp; recompile</span></div>';
+  var steps=wfParseSteps();
+  if(!steps){ host.innerHTML=add+'<div class="muted" style="font-size:12px;padding:4px">(editor text is not a JSON step array &mdash; edit the JSON or add a step)</div>'; return; }
+  var indent=0, rows='';
+  for(var i=0;i<steps.length;i++){ var s=steps[i]||{}, t=(s.type||'?').toUpperCase();
+    if(t==='ELSE'||t==='END') indent=Math.max(0,indent-1);
+    rows+='<div class="wf-row" style="margin-left:'+(indent*18)+'px">'+
+      '<span class="wf-badge">'+esc(t)+'</span>'+
+      '<span class="wf-sum">'+esc(wfSummary(s))+'</span>'+
+      '<span class="wf-acts">'+
+        '<button class="ghost" onclick="wfMove('+i+',-1)" title="move up">&#8593;</button>'+
+        '<button class="ghost" onclick="wfMove('+i+',1)" title="move down">&#8595;</button>'+
+        '<button class="ghost" onclick="wfEditStep('+i+')" title="edit JSON">&#9998;</button>'+
+        '<button class="ghost" onclick="wfDelStep('+i+')" title="delete">&#10005;</button>'+
+      '</span></div>';
+    if(t==='IF'||t==='FOR'||t==='FOREACH'||t==='FOREACHP'||t==='ON'||t==='ELSE') indent++;
+  }
+  var eng='';
+  try{
+    var wf=wfCompileSrc(getSrc());
+    var warn=(wf.warnings&&wf.warnings.length)?('<div class="wf-warn">'+wf.warnings.map(function(w){return '&#9888; '+esc(w);}).join('<br>')+'</div>'):'';
+    eng='<div class="wf-eng-h">derived English (compiles &amp; runs; IL / bytecode / output in the debugger below)</div>'+
+        '<pre class="wf-eng">'+esc(wf.source)+'</pre>'+warn;
+  }catch(e){ eng='<div class="wf-warn">&#9888; '+esc(String(e.message||e))+'</div>'; }
+  host.innerHTML=add+rows+eng;
+}
+function wfToggle(){
+  var on=(CUR_LANG==='workflow');
+  var host=document.getElementById('wfDesigner');
+  if(host) host.style.display=on?'block':'none';
+  if(on){ try{ wfRenderDesigner(); }catch(e){} }
+}
+
+// ---- report/form layout (stage 2 over the current program output) -----------
+var LAYOUT_DEFAULT_TMPL=JSON.stringify({
+  title:'Report',
+  columns:[{label:'A',field:0,width:6},{label:'B',field:1,width:6}],
+  aggregates:[{column:0,fn:'sum'},{column:1,fn:'sum'}]
+}, null, 2);
+function layoutMode(){ var r=document.querySelector('input[name="layoutMode"]:checked'); return r?r.value:'report'; }
+function renderLayout(){
+  var pv=document.getElementById('layoutPreview'), tx=document.getElementById('layoutText'), ta=document.getElementById('layoutTmpl');
+  if(!pv||!ta) return;
+  if(!ta.value||!ta.value.trim()) ta.value=LAYOUT_DEFAULT_TMPL;
+  var data=(DBG.vm&&DBG.vm.outputInts)?DBG.vm.outputInts():[];
+  try{
+    var tmpl=JSON.parse(ta.value), mode=layoutMode();
+    pv.innerHTML=BareMetal.Report.renderHtml(data,tmpl,mode);
+    if(tx) tx.textContent=BareMetal.Report.renderText(data,tmpl);
+  }catch(e){
+    if(tx) tx.textContent='';
+    pv.innerHTML='<span style="color:var(--warn)">'+esc(String(e.message||e))+'</span>';
+  }
+}
+function layoutSave(){
+  var host=document.getElementById('layoutPreview'), msg=document.getElementById('layoutSaveMsg');
+  var form=host?host.querySelector('form'):null;
+  if(!form){ if(msg) msg.textContent='(switch to form mode, then Render)'; return; }
+  try{
+    var rows=BareMetal.Report.collect(form), writes=BareMetal.Report.toWrites(rows,{base:0}), be=walBackend();
+    Object.keys(writes).forEach(function(k){ be.set(parseInt(k,10),writes[k]); });
+    renderWal();
+    if(msg) msg.textContent='saved '+rows.length+' rows \u2192 data ABI: '+JSON.stringify(writes);
+  }catch(e){ if(msg) msg.textContent=String(e.message||e); }
+}
+
 // Init
 buildGuideTree();showGuideCard(0);buildRefTree();buildNsRef();renderSyntaxRef();renderSamples();applyDbgLayout('guide');applyDbgLayout('play');
 (function(){var src=document.getElementById('doc-internals');var dst=document.getElementById('doc-internals-inline');if(src&&dst)dst.innerHTML=src.innerHTML;})();
@@ -1040,10 +1282,10 @@ buildGuideTree();showGuideCard(0);buildRefTree();buildNsRef();renderSyntaxRef();
 function loadExample(){var i=parseInt(document.getElementById('example').value,10)||0;var lang=document.getElementById('lang').value;var d=DATA[i];if(!d[lang])lang='basic';setSrc(d[lang].src);compileSrc(false);}
 document.getElementById('example').onchange=loadExample;
 document.getElementById('lang').addEventListener('change',function(){onLangChange();});
-document.getElementById('src').addEventListener('input',filesRender);
+document.getElementById('src').addEventListener('input',function(){filesRender();if(CUR_LANG==='workflow'){try{wfRenderDesigner();}catch(e){}}});
 document.getElementById('lang').value='basic';
 document.getElementById('src').value=RESPONDER;
-initMonaco();compileSrc(false);loadSample();renderWal();
+initMonaco();compileSrc(false);loadSample();renderWal();renderLayout();
 (function(){var ls=filesSafeLocalStorage(),active='';try{active=ls?ls.getItem(PS_ACTIVE_FILE_KEY)||'':'';}catch(e){} if(active&&filesRead()[active]) psFilesOpen(active); else filesRender();})();
 document.getElementById('flyoutTriggers').style.display='none';
 </script>

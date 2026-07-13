@@ -53,6 +53,15 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
   pg.on('console', m => { if (m.type() === 'error') perrors.push('console.error: ' + m.text()); });
   await pg.goto(fileUrl(path.join(__dirname, '..', 'docs', 'playground.html')));
   await pg.waitForTimeout(800);
+  // Drive the playground workflow designer (same vendored compile path as WebIDE)
+  const pgwf = await pg.evaluate(() => {
+    setLang('workflow');
+    compileSrc(true);
+    var host = document.getElementById('wfDesigner');
+    return { out: DBG.vm.outputInts(), eng: host.innerHTML.indexOf('wf-eng') >= 0 };
+  });
+  const okPgWf = JSON.stringify(pgwf.out) === '[100]' && pgwf.eng;
+  console.log('PLAYGROUND workflow compile [100]:', okPgWf, '|', JSON.stringify(pgwf));
   const pgErrs = perrors.filter(e => !/favicon/i.test(e));
   console.log('PLAYGROUND loaded, errors:', pgErrs.length);
   if (pgErrs.length) console.log(pgErrs.slice(0, 6).join('\n'));
@@ -63,7 +72,7 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
   console.log('SHOWCASE page errors:', showErrs.length);
   if (showErrs.length) console.log(showErrs.slice(0, 6).join('\n'));
 
-  const allOk = okCompile && okReport && okForm && okActivity && showErrs.length === 0 && pgErrs.length === 0;
+  const allOk = okCompile && okReport && okForm && okActivity && okPgWf && showErrs.length === 0 && pgErrs.length === 0;
   console.log(allOk ? '\nALL VERIFIED OK' : '\nVERIFICATION FAILED');
   process.exit(allOk ? 0 : 1);
 })();
