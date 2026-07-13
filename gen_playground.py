@@ -1095,8 +1095,8 @@ def main():
     hooks_js = open(os.path.join(ROOT, "vm", "pico_hooks.js"), encoding="utf-8").read()
     vm_js = open(os.path.join(ROOT, "vm", "picovm.js"), encoding="utf-8").read()
     picoc_js = open(os.path.join(ROOT, "vm", "picoc.js"), encoding="utf-8").read()
-    wf_js = open(os.path.join(ROOT, "vm", "picoworkflow.js"), encoding="utf-8").read()
-    layout_js = open(os.path.join(ROOT, "vm", "picolayout.js"), encoding="utf-8").read()
+    wf_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.WorkflowPico.js"), encoding="utf-8").read()
+    layout_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.Report.js"), encoding="utf-8").read()
     ser_js = open(os.path.join(ROOT, "vm", "picoserializer.js"), encoding="utf-8").read()
     store_js = open(os.path.join(ROOT, "vm", "picostore.js"), encoding="utf-8").read()
     pcz_js = open(os.path.join(ROOT, "vm", "picocompress.js"), encoding="utf-8").read()
@@ -1542,7 +1542,7 @@ function setLang(lang){
     // Design in workflow, then view as a text language: workflow -> English -> target.
     if (looksLikeWorkflowJson(src)) {
       try {
-        var _eng = PicoWorkflow.toEnglish(src).source;
+        var _eng = BareMetal.WorkflowPico.compile(src).source;
         var _out = (lang==='english') ? _eng
           : ((typeof PicoCompile !== 'undefined' && PicoCompile.translate) ? PicoCompile.translate(_eng, 'english', lang) : _eng);
         if (_out) setSrc(_out);
@@ -1986,7 +1986,7 @@ function wfRenderDesigner(){
   // live derived-English preview (the pre-compile target) + warnings
   var eng='';
   try {
-    var wf=PicoWorkflow.toEnglish(getSrc());
+    var wf=BareMetal.WorkflowPico.compile(getSrc());
     var warn=(wf.warnings&&wf.warnings.length)?('<div class="wf-warn">'+wf.warnings.map(function(w){return '&#9888; '+esc(w);}).join('<br>')+'</div>'):'';
     eng='<div class="wf-eng-h">derived English (compiles &amp; runs; IL / bytecode / output in the debugger below)</div>'+
         '<pre class="wf-eng">'+esc(wf.source)+'</pre>'+warn;
@@ -2019,8 +2019,8 @@ function renderLayout(){
   try {
     var tmpl=JSON.parse(ta.value);
     var mode=layoutMode();
-    pv.innerHTML=PicoLayout.renderHtml(data,tmpl,mode);
-    if(tx) tx.textContent=PicoLayout.renderText(data,tmpl);
+    pv.innerHTML=BareMetal.Report.renderHtml(data,tmpl,mode);
+    if(tx) tx.textContent=BareMetal.Report.renderText(data,tmpl);
   } catch(e){
     if(tx) tx.textContent='';
     pv.innerHTML='<span style="color:var(--warn)">'+esc(String(e.message||e))+'</span>';
@@ -2154,7 +2154,7 @@ function compileSrc(run){
     var compileLang=lang, compileText=src, wfNote='';
     if(lang==='workflow'){
       // pre-compile step: visual workflow (JSON steps) -> English -> bytecode
-      var wf=PicoWorkflow.toEnglish(src);
+      var wf=BareMetal.WorkflowPico.compile(src);
       compileText=wf.source; compileLang='english';
       wfNote=' (workflow \u2192 english'+(wf.warnings&&wf.warnings.length?', '+wf.warnings.length+' warning(s)':'')+')';
     }

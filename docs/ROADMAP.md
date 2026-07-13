@@ -42,7 +42,8 @@ and one shared engine:
 - **Stage 1 — data program:** an ordinary PicoScript program (any frontend,
   e.g. the `report` 4GL, or the convenience `picoscript_reportmodel.py`) whose VM
   output is the data.
-- **Stage 2 — templated layout engine (`picolayout.py` / `vm/picolayout.js`):**
+- **Stage 2 — templated layout engine (`picolayout.py` Python ref /
+  vendored `BareMetal.Report` from BareMetalJsTools):**
   renders that data with a layout template. Shared by reports and forms via a
   `mode`:
   - ☑ **report (read-only)** — text, or an HTML table + aggregate footer

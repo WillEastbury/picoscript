@@ -1,7 +1,8 @@
 // tests/test_layout_engine.js -- JS layout engine smoke + form collect().
+// The browser layout engine is vendored from BareMetalJsTools (BareMetal.Report).
 // Run: node tests/test_layout_engine.js
 const path = require('path');
-const L = require(path.join(__dirname, '..', 'vm', 'picolayout.js'));
+const L = require(path.join(__dirname, '..', 'vm', 'vendor', 'BareMetal.Report.js'));
 
 let fails = 0;
 function check(name, cond, detail) {

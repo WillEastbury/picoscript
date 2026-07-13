@@ -11,7 +11,8 @@ Story (hash-routed tabs):
   3. Form    -- the same template rendered read-write; Save collects + writes back.
   4. Activity-- a tiny in-page event bus logs compile / load / save.
 
-pico_hooks.js, picovm.js, picoc.js, picoworkflow.js and picolayout.js are inlined
+pico_hooks.js, picovm.js, picoc.js and the vendored BareMetal.WorkflowPico.js /
+BareMetal.Report.js (from BareMetalJsTools) are inlined
 (same pattern as gen_playground.py / gen_site.py).
 """
 
@@ -80,7 +81,7 @@ PAGE = r"""<!DOCTYPE html>
 <script>
 (function () {
   'use strict';
-  var WF = PicoWorkflow, L = PicoLayout;
+  var WF = BareMetal.WorkflowPico, L = BareMetal.Report;   // vendored from BareMetalJsTools
 
   // Stage 1: an "orders" workflow that materialises line items [qty, price] and
   // emits them -- the data producer (the logic layer).
@@ -128,7 +129,7 @@ PAGE = r"""<!DOCTYPE html>
   }
 
   function runFlow() {
-    var eng = WF.toEnglish(ordersFlow);
+    var eng = WF.compile(ordersFlow);
     var r = PicoCompile.compileDebug(eng.source, 'english');
     var vm = new PicoVM(); vm.run(r.words.map(function (w) { return w >>> 0; }));
     return { source: eng.source, words: r.words, output: vm.outputInts ? vm.outputInts() : decodeInts(vm.output), warnings: eng.warnings };
@@ -218,8 +219,8 @@ def main():
         ("/*__HOOKS__*/", "pico_hooks.js"),
         ("/*__VM__*/", "picovm.js"),
         ("/*__PICOC__*/", "picoc.js"),
-        ("/*__WF__*/", "picoworkflow.js"),
-        ("/*__LAYOUT__*/", "picolayout.js"),
+        ("/*__WF__*/", os.path.join("vendor", "BareMetal.WorkflowPico.js")),
+        ("/*__LAYOUT__*/", os.path.join("vendor", "BareMetal.Report.js")),
     ]:
         with open(os.path.join(VM, fname), encoding="utf-8") as f:
             html = html.replace(marker, f.read())
