@@ -31,7 +31,6 @@
   .lang-toggle button[data-lang="english"].active { background:var(--en); color:#0f1117; }
   .lang-toggle button[data-lang="cobol"].active { background:var(--cob); color:#0f1117; }
   .lang-toggle button[data-lang="report"].active { background:var(--rpt); color:#0f1117; }
-  .lang-toggle button[data-lang="functional"].active { background:var(--fn); color:#0f1117; }
   .pill { display:inline-block; padding:2px 7px; border-radius:10px; font-size:10px; font-weight:600;
           background:#2c313f; color:var(--muted); }
   .main { display:flex; flex:1; overflow:hidden; position:relative; }
@@ -236,7 +235,6 @@
     <button data-lang="english" onclick="setLang('english')">English</button>
     <button data-lang="cobol" onclick="setLang('cobol')">COBOL</button>
     <button data-lang="report" onclick="setLang('report')">Report</button>
-    <button data-lang="functional" onclick="setLang('functional')">Functional</button>
     <button data-lang="workflow" onclick="setLang('workflow')">Workflow</button>
   </div>
 </div>
@@ -251,7 +249,8 @@
           <div class="ref-section" id="ref-overview" style="display:none">
             <h2 style="color:var(--accent);margin-bottom:10px">Overview</h2>
             <p style="color:var(--muted);font-size:13px;max-width:750px;line-height:1.7">
-              <b>PicoScript</b> compiles from seven interchangeable surface syntaxes (C, BASIC, Python, English, COBOL, Report, Functional)
+              <b>PicoScript</b> compiles from five interchangeable surface syntaxes (C, BASIC, Python, English, COBOL)
+              plus two visual designers (Workflow, Report) that lower to English
               to a single 16-opcode 32-bit bytecode. Programs run on embedded VMs, can be AOT-compiled to C or JS,
               and are designed for request-response workloads on bare-metal or browser runtimes.<br><br>
               <b>Why?</b> One semantic model, seven reading styles. A diverse team picks the syntax they know and
@@ -10413,10 +10412,11 @@ lowering convention or host contract.</p>
         </div>
       </div>
       <div class="ide-editor">
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+        <div id="codeControlsRow" style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
           <select id="example" style="width:auto"></select>
           <input type="hidden" id="lang" value="basic">
         </div>
+        <div id="staticInfo" style="display:none;color:var(--muted);font-size:12px;margin-bottom:6px"></div>
         <div id="monaco" style="flex:1;border:1px solid #2c313f;border-radius:6px;overflow:hidden;min-height:120px"></div>
         <textarea id="src" style="flex:1;display:none;min-height:120px" spellcheck="false"></textarea>
         <div class="controls">
@@ -10436,6 +10436,15 @@ lowering convention or host contract.</p>
           <pre class="wf-eng" id="wfEng"></pre>
           <div class="wf-warn" id="wfWarn"></div>
         </div>
+        <div id="reportDesigner" class="wf-designer" style="display:none">
+          <div class="wf-add">
+            <button class="ghost" onclick="rptOpenJson()" title="View / edit the backing report JSON">&#123; &#125; JSON</button>
+            <span class="muted" style="font-size:11px">edit title / columns / rows &mdash; Compile &amp; Run lowers this to English and prints the real report text</span>
+          </div>
+          <div id="rptForm"></div>
+          <div class="wf-eng-h">derived English (compiles &amp; runs; IL / bytecode / output in the debugger below)</div>
+          <pre class="wf-eng" id="rptEng"></pre>
+        </div>
         <div class="wf-modal" id="pkgModal">
           <div class="wf-modal-box">
             <div class="wf-modal-head" id="pkgTitle">Card package<button class="ghost" onclick="pkgModalClose()">&#10005;</button></div>
@@ -10448,6 +10457,13 @@ lowering convention or host contract.</p>
             <div class="wf-modal-head">Workflow JSON (backing step array)<button class="ghost" onclick="wfCloseJson()">&#10005;</button></div>
             <div class="wf-modal-body"><textarea id="wfJsonText" spellcheck="false"></textarea><div id="wfJsonErr" class="cerr"></div></div>
             <div class="wf-modal-foot"><button class="act" onclick="wfApplyJson()">Apply</button><button class="ghost" onclick="wfCloseJson()">Cancel</button></div>
+          </div>
+        </div>
+        <div class="wf-modal" id="rptJsonModal">
+          <div class="wf-modal-box">
+            <div class="wf-modal-head">Report JSON (backing template)<button class="ghost" onclick="rptCloseJson()">&#10005;</button></div>
+            <div class="wf-modal-body"><textarea id="rptJsonText" spellcheck="false"></textarea><div id="rptJsonErr" class="cerr"></div></div>
+            <div class="wf-modal-foot"><button class="act" onclick="rptApplyJson()">Apply</button><button class="ghost" onclick="rptCloseJson()">Cancel</button></div>
           </div>
         </div>
       </div>
@@ -16630,8 +16646,23 @@ function compressBound(inputLen) {
   function isComposite(e) { return !!(e && e.t === "Bin" && e.op === "+" && exprHasStr(e)); }
   function flattenPlus(e) { return (e && e.t === "Bin" && e.op === "+") ? flattenPlus(e.lhs).concat(flattenPlus(e.rhs)) : [e]; }
   function emitComposedPrint(self, expr) {
+    // Utf8Writer.New(ptr, cap) needs a real scratch buffer -- calling it with no
+    // args leaves ptr/cap as whatever garbage happens to be in those registers,
+    // which "works" once by luck and then corrupts/truncates on every subsequent
+    // composed print (each New() call must get its own non-overlapping region).
+    // Reserve fixed 512-byte scratch buffers, bump-allocated downward from a high
+    // address well clear of the string-literal pool (which grows down from
+    // 0x8000), one per composed-print call site (compile-time, not per iteration
+    // -- loops safely reuse the same buffer since each Print fully completes
+    // New->fill->ToSpan->Io.Write before the next one runs).
+    if (self._scratchTop === undefined) self._scratchTop = 0x40000;
+    var CAP = 512;
+    self._scratchTop -= CAP;
+    var ptrReg = self.b.vreg(), capReg = self.b.vreg();
+    self.b.const_(ptrReg, self._scratchTop);
+    self.b.const_(capReg, CAP);
     var w = self.b.vreg();
-    self.b.host("Utf8Writer", "New", [], w);
+    self.b.host("Utf8Writer", "New", [ptrReg, capReg], w);
     flattenPlus(expr).forEach(function (part) {
       if (part && part.t === "Str") self.b.host("Utf8Writer", "Span", [w, emitStrSpan(self, part.value)], null);
       else { var pr = self.eval(part); self.b.host("Utf8Writer", "Int", [w, pr], null); }
@@ -22623,6 +22654,12 @@ function setLang(lang){
         try{ if(typeof PicoCompile!=='undefined'&&PicoCompile.toWorkflow&&oldLang&&oldLang!=='workflow'&&src&&src.trim()) raised=PicoCompile.toWorkflow(src,oldLang); }catch(e){}
         setSrc((raised&&looksLikeWorkflowJson(raised))?raised:((typeof WF_LAST==='string'&&WF_LAST)?WF_LAST:WF_SNIPPET));
       }
+    } else if(lang==='report'){
+      // The Report dialect is a visual template designer (title/columns/rows),
+      // not raised from arbitrary code -- keep the template if it already is one,
+      // else restore what we last left, else seed a starter template.
+      if(!(typeof looksLikeReportJson==='function'&&looksLikeReportJson(src)))
+        setSrc((typeof RPT_LAST==='string'&&RPT_LAST)?RPT_LAST:JSON.stringify(RPT_DEFAULT,null,2));
     } else if(oldLang==='workflow'){
       // Design in workflow, then view as text: workflow -> English -> target.
       if(typeof looksLikeWorkflowJson==='function'&&looksLikeWorkflowJson(src)){
@@ -22633,6 +22670,16 @@ function setLang(lang){
           if(_out) setSrc(_out);
         }catch(e){}
       }
+    } else if(oldLang==='report'){
+      // Design a report, then view as text: report -> English -> target.
+      if(typeof looksLikeReportJson==='function'&&looksLikeReportJson(src)){
+        RPT_LAST=src;
+        try{
+          var _eng2=rptCompileSrc(src).source;
+          var _out2=(lang==='english')?_eng2:((typeof PicoCompile!=='undefined'&&PicoCompile.translate)?PicoCompile.translate(_eng2,'english',lang):_eng2);
+          if(_out2) setSrc(_out2);
+        }catch(e){}
+      }
     } else if(src&&src.trim()&&oldLang!==lang&&typeof PicoCompile!=='undefined'&&PicoCompile.translate){
       var translated=PicoCompile.translate(src,oldLang,lang);
       if(translated)setSrc(translated);
@@ -22640,6 +22687,7 @@ function setLang(lang){
   }
   if(typeof onLangChange==='function') onLangChange();
   if(typeof wfToggle==='function') wfToggle();
+  if(typeof reportToggle==='function') reportToggle();
   renderSyntaxRef(); renderSamples();
   if(CUR_REF_SECTION){showRefInline(CUR_REF_SECTION);}
   else{showGuideCard(CUR_GUIDE_CARD);}
@@ -22793,8 +22841,52 @@ function runCard(i){
 var EDITOR=null;
 function getSrc(){return EDITOR?EDITOR.getValue():document.getElementById('src').value;}
 function setSrc(v){document.getElementById('src').value=v;if(EDITOR)EDITOR.setValue(v);if(typeof filesRender==='function')filesRender();}
-function monacoLangId(lang){return{c:'picoc',basic:'picobasic',python:'picopython',english:'picoenglish'}[lang]||'picoc';}
+function monacoLangId(lang){return{c:'picoc',basic:'picobasic',python:'picopython',english:'picoenglish',workflow:'json',report:'json'}[lang]||'picoc';}
 function onLangChange(){if(EDITOR)monaco.editor.setModelLanguage(EDITOR.getModel(),monacoLangId(document.getElementById('lang').value));if(typeof filesRender==='function')filesRender();}
+
+// ---- static file editing (md/json/html/etc.): own tabs, no dialect/diags ------
+// A file whose kind isn't 'code' (schemas, cards, static assets) is a plain file:
+// no PicoScript dialect applies, so the dialect toggle, example dropdown, compile
+// controls and debugger are hidden while it's open, and Monaco gets the file's
+// *own* language (markdown/json/html/...) for correct highlighting + intellisense
+// (Monaco ships these natively). Opening a code file restores the normal IDE.
+var STATIC_MODE=false;
+function staticMonacoLang(name){
+  var n=String(name||'').toLowerCase();
+  if(/\.md$/.test(n)) return 'markdown';
+  if(/\.json$/.test(n)) return 'json';
+  if(/\.html?$/.test(n)) return 'html';
+  if(/\.css$/.test(n)) return 'css';
+  if(/\.js$/.test(n)) return 'javascript';
+  return 'plaintext';
+}
+function enterStaticMode(name,kind){
+  STATIC_MODE=true;
+  var lt=document.getElementById('langToggle'), cc=document.getElementById('codeControlsRow'),
+    ctl=document.querySelector('.controls'), cerr=document.getElementById('cerr'),
+    wd=document.getElementById('wfDesigner'), rd=document.getElementById('reportDesigner'),
+    bar=document.getElementById('playDbgBar'), panels=document.getElementById('playDbgPanels'),
+    info=document.getElementById('staticInfo');
+  if(lt) lt.style.display='none'; if(cc) cc.style.display='none'; if(ctl) ctl.style.display='none';
+  if(cerr) cerr.style.display='none'; if(wd) wd.style.display='none'; if(rd) rd.style.display='none';
+  if(bar) bar.style.display='none'; if(panels) panels.style.display='none';
+  if(info){ info.style.display='block'; info.textContent='Editing '+name+' \u2014 a plain '+kind+' file (no dialect switching or diagnostics; Save writes it'+(kind==='card'?' and pushes it to picowal':'')+')'; }
+  if(EDITOR){ try{ monaco.editor.setModelLanguage(EDITOR.getModel(),staticMonacoLang(name)); }catch(e){} }
+}
+function exitStaticMode(){
+  if(!STATIC_MODE) return;
+  STATIC_MODE=false;
+  var lt=document.getElementById('langToggle'), cc=document.getElementById('codeControlsRow'),
+    ctl=document.querySelector('.controls'), cerr=document.getElementById('cerr'),
+    bar=document.getElementById('playDbgBar'), panels=document.getElementById('playDbgPanels'),
+    info=document.getElementById('staticInfo');
+  if(lt) lt.style.display=''; if(cc) cc.style.display=''; if(ctl) ctl.style.display='';
+  if(cerr) cerr.style.display=''; if(bar) bar.style.display=''; if(panels) panels.style.display='';
+  if(info) info.style.display='none';
+  if(EDITOR){ try{ monaco.editor.setModelLanguage(EDITOR.getModel(),monacoLangId(document.getElementById('lang').value)); }catch(e){} }
+  if(typeof wfToggle==='function') wfToggle();
+  if(typeof reportToggle==='function') reportToggle();
+}
 function hookNames(){var H=(typeof PV_HOOKS!=='undefined'&&PV_HOOKS.BY_CODE)?PV_HOOKS.BY_CODE:{};var out=[];for(var k in H)out.push(H[k]);return out;}
 var MONARCH={picoc:{keywords:['int','var','void','if','else','while','for','return','break','continue','print','switch','case','default','do','goto','dispatch'],tokenizer:{root:[[/\/\/.*$/,'comment'],[/\/\*/,'comment','@block'],[/[A-Za-z_]\w*(?=\s*\.)/,'type'],[/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],[/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],[/[{}()\[\];,.]/,'delimiter'],[/[+\-*/%=<>!&|?:]+/,'operator']],block:[[/\*\//,'comment','@pop'],[/./,'comment']],str:[[/[^"]+/,'string'],[/"/,'string','@pop']]}},picobasic:{ignoreCase:true,keywords:['DIM','LET','IF','THEN','ELSEIF','ELSE','ENDIF','WHILE','ENDWHILE','FOR','TO','STEP','NEXT','FOREACH','IN','ENDFOREACH','SWITCH','CASE','DEFAULT','ENDSWITCH','DISPATCH','ENDDISPATCH','GOTO','GOSUB','SUB','ENDSUB','RETURN','PRINT','AND','OR','NOT','DO','LOOP','UNTIL','BREAK','SKIP','INC','DEC','IIF','EQ','NE','LT','GT','LE','GE','MOD'],tokenizer:{root:[[/'.*$/,'comment'],[/\/\/.*$/,'comment'],[/[A-Za-z_]\w*(?=\s*\.)/,'type'],[/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],[/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],[/[()\[\];,.:]/,'delimiter'],[/[+\-*/=<>]+/,'operator']],str:[[/[^"]+/,'string'],[/"/,'string','@pop']]}},picopython:{keywords:['if','elif','else','while','for','in','range','def','return','break','continue','pass','and','or','not','print','True','False','match','case','dispatch'],tokenizer:{root:[[/#.*$/,'comment'],[/[A-Za-z_]\w*(?=\s*\.)/,'type'],[/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],[/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],[/'/,'string','@str2'],[/[()\[\]:,.]/,'delimiter'],[/[+\-*/%=<>!]+/,'operator']],str:[[/[^"]+/,'string'],[/"/,'string','@pop']],str2:[[/[^']+/,'string'],[/'/,'string','@pop']]}},picoenglish:{ignoreCase:true,keywords:['set','let','to','be','add','subtract','from','increase','decrease','multiply','divide','by','print','show','display','if','otherwise','while','repeat','as','long','for','each','times','with','define','do','call','return','stop','break','skip','continue','choose','when','dispatch','on','is','greater','less','than','at','least','most','equal','equals','exceeds','plus','minus','modulo','mod','over','and','or','not','true','false'],tokenizer:{root:[[/#.*$/,'comment'],[/[A-Za-z_]\w*(?=\s*\.\s*[A-Za-z_]\w*\s*\()/,'type'],[/[A-Za-z_]\w*/,{cases:{'@keywords':'keyword','@default':'identifier'}}],[/0[xX][0-9a-fA-F]+|\d+/,'number'],[/"/,'string','@str'],[/[()\[\],.:]/,'delimiter'],[/[+\-*/%=<>]+/,'operator']],str:[[/[^"]+/,'string'],[/"/,'string','@pop']]}}};
 function constantDoc(name){
@@ -22911,6 +23003,7 @@ function psFilesNew(name){
   if(!name) return null;
   if(files[name]&&typeof confirm==='function'&&!confirm('Replace "'+name+'"?')) return null;
   var kind=fileKind(name);
+  if(kind==='code'){ if(typeof exitStaticMode==='function') exitStaticMode(); } else if(typeof enterStaticMode==='function') enterStaticMode(name,kind);
   setSrc(''); files[name]={kind:kind,lang:kind==='code'?(document.getElementById('lang').value||'basic'):'',src:'',updated:Date.now()}; filesWrite(files); filesSetActive(name); filesRender(); filesStatus('New '+kind+' '+name); return name;
 }
 function psFilesSave(name){
@@ -22929,8 +23022,8 @@ function psFilesOpen(name){
   name=(name||((typeof prompt==='function')?prompt('Open file',ACTIVE_FILE||names[0]||''):'')||'').trim();
   if(!name||!files[name]){filesStatus(name?'File not found: '+name:'Open cancelled',!!name);return null;}
   var kind=fileKind(name);
-  if(kind==='code'){document.getElementById('lang').value=files[name].lang||'basic'; if(typeof setLang==='function'){setLang(document.getElementById('lang').value);} else onLangChange(); setSrc(files[name].src); filesSetActive(name); filesRender(); filesStatus('Opened '+name); compileSrc(false);}
-  else {setSrc(files[name].src); filesSetActive(name); filesRender(); filesStatus('Opened '+kind+' '+name+(kind==='card'?' (Save writes it to picowal)':''));}
+  if(kind==='code'){if(typeof exitStaticMode==='function')exitStaticMode(); document.getElementById('lang').value=files[name].lang||'basic'; if(typeof setLang==='function'){setLang(document.getElementById('lang').value);} else onLangChange(); setSrc(files[name].src); filesSetActive(name); filesRender(); filesStatus('Opened '+name); compileSrc(false);}
+  else {if(typeof enterStaticMode==='function')enterStaticMode(name,kind); setSrc(files[name].src); filesSetActive(name); filesRender(); filesStatus('Opened '+kind+' '+name+(kind==='card'?' (Save writes it to picowal)':''));}
   return files[name];
 }
 function psFilesRename(oldName,newName){
@@ -23018,6 +23111,10 @@ function compileSrc(run){
     if(typeof looksLikeWorkflowJson!=='function'||!looksLikeWorkflowJson(src)){err.textContent='workflow: editor is not a JSON step array';err.style.color='#ff7b72';return;}
     try{var wf=wfCompileSrc(src);src=wf.source;lang='english';WF_LINE_STEPS=wf.lineSteps||null;}
     catch(e){err.textContent='workflow: '+String(e.message||e);err.style.color='#ff7b72';return;}
+  } else if(lang==='report'){
+    if(typeof looksLikeReportJson!=='function'||!looksLikeReportJson(src)){err.textContent='report: editor is not a {title,columns,rows} template';err.style.color='#ff7b72';return;}
+    try{var rr=rptCompileSrc(src);src=rr.source;lang='english';WF_LINE_STEPS=null;}
+    catch(e){err.textContent='report: '+String(e.message||e);err.style.color='#ff7b72';return;}
   } else { WF_LINE_STEPS=null; }
   try{var r=PicoCompile.compileDebug(src,lang);DBG.words=r.words.map(function(w){return w>>>0;});DBG.disasm=DBG.words.map(jsDisasm);DBG.vars=r.vars||{};DBG.debug=r.debug||{};DBG.src=src;rebuildDebugMaps();err.textContent='compiled '+DBG.words.length+' words';err.style.color='#7ee787';busEmit('compile.ok',{lang:CUR_LANG,words:DBG.words.length});dbgReset();if(run)dbgRun();if(typeof renderLayout==='function')try{renderLayout();}catch(e){}}
   catch(e){err.textContent=String(e.message||e);err.style.color='#ff7b72';busEmit('compile.error',{lang:CUR_LANG,message:String(e.message||e)});}
@@ -23114,7 +23211,7 @@ function writeDescriptor(wal,req){
   /* Low-card mirrors for simple Storage.Load examples (old 5-bit card address form). */
   writeBytes(wal,10,req.queryBytes,10); writeBytes(wal,20,req.bodyBytes,12);
 }
-function toCompilable(){var lang=document.getElementById('lang').value,src=getSrc();if(lang==='workflow'){var wf=wfCompileSrc(src);return{src:wf.source,lang:'english'};}return{src:src,lang:lang};}
+function toCompilable(){var lang=document.getElementById('lang').value,src=getSrc();if(lang==='workflow'){var wf=wfCompileSrc(src);return{src:wf.source,lang:'english'};}if(lang==='report'){var rr=rptCompileSrc(src);return{src:rr.source,lang:'english'};}return{src:src,lang:lang};}
 function fileCompilable(f){if(!f)return null;if(f.lang==='workflow'){var wf=wfCompileSrc(f.src);return{src:wf.source,lang:'english'};}return{src:f.src,lang:f.lang||'basic'};}
 function sendRequest(){var text=document.getElementById('reqbox').value,isHex=document.getElementById('reqmode').value==='hex';var req=parseRequest(text,isHex),wal=walBackend();writeDescriptor(wal,req);var routed=matchRoute(req.method,req.path),cl;try{cl=routed?fileCompilable(filesRead()[routed.file]):toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('respout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderResponse(vm,req);if(routed){var el=document.getElementById('respout');el.textContent='\u2192 routed to '+routed.file+'\n'+el.textContent;}renderWal();busEmit('http.request',{method:req.method,path:req.path,status:vm.httpStatus,route:routed?routed.file:null});}
 function sendTcp(){var text=document.getElementById('tcpbox').value;var req=parseRequest(text,true),wal=walBackend();writeDescriptor(wal,req);var cl;try{cl=toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('tcpout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderTcpResponse(vm,req);renderWal();}
@@ -23177,7 +23274,7 @@ function buildNsRef(){
   document.getElementById('nsContent').innerHTML=html;
 }
 function renderSyntaxRef(){
-  var lang=CUR_LANG,SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cobstyle',report:'rptstyle',functional:'fnstyle'};
+  var lang=CUR_LANG,SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cobstyle',report:'rptstyle'};
   var html='<p style="color:var(--muted);font-size:12px;margin-bottom:12px">Showing <b>'+lang.toUpperCase()+'</b>. Toggle dialect above.</p>';
   DATA.forEach(function(d,i){
     var src;
@@ -23190,7 +23287,7 @@ function renderSyntaxRef(){
   document.getElementById('syntaxContent').innerHTML=html;
 }
 function renderSamples(){
-  var lang=CUR_LANG,SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cobstyle',report:'rptstyle',functional:'fnstyle'};
+  var lang=CUR_LANG,SC={c:'cstyle',basic:'bstyle',python:'pystyle',english:'enstyle',cobol:'cobstyle',report:'rptstyle'};
   var samples=[
     {title:'PicoWAL API Server',desc:'CRUD API routing by readable HTTP constants',c:'int method = Req.Method();\nStorage.UsePack(1);\nif (method == METHOD_POST) {\n    int id = Storage.AddCard();\n    Resp.Status(STATUS_CREATED);\n    print(id);\n} else {\n    int n = Storage.QueryCard(0);\n    Resp.Status(STATUS_OK);\n    print(n);\n}\nResp.End();',basic:"DIM METHOD = Req.Method()\nStorage.UsePack(1)\nIF METHOD EQ METHOD_POST THEN\n    DIM ID = Storage.AddCard()\n    Resp.Status(STATUS_CREATED)\n    PRINT ID\nELSE\n    DIM N = Storage.QueryCard(0)\n    Resp.Status(STATUS_OK)\n    PRINT N\nENDIF\nResp.End()",python:'method = Req.Method()\nStorage.UsePack(1)\nif method == METHOD_POST:\n    id = Storage.AddCard()\n    Resp.Status(STATUS_CREATED)\n    print(id)\nelse:\n    n = Storage.QueryCard(0)\n    Resp.Status(STATUS_OK)\n    print(n)\nResp.End()',english:'Set method to Req.Method().\nStorage.UsePack(1).\nIf method is METHOD_POST:\n    Set id to Storage.AddCard().\n    Resp.Status(STATUS_CREATED).\n    Print id.\nOtherwise:\n    Set n to Storage.QueryCard(0).\n    Resp.Status(STATUS_OK).\n    Print n.\nResp.End().'},
     {title:'Template Web Server',desc:'Load template card, render page',c:'Resp.Status(200);\nResp.Header(0);\nStorage.UsePack(2);\nStorage.EditCard(1);\nint tpl = Storage.GetField(0);\nprint(tpl);\nResp.End();',basic:"Resp.Status(200)\nResp.Header(0)\nStorage.UsePack(2)\nStorage.EditCard(1)\nDIM TPL = Storage.GetField(0)\nPRINT TPL\nResp.End()",python:'Resp.Status(200)\nResp.Header(0)\nStorage.UsePack(2)\nStorage.EditCard(1)\ntpl = Storage.GetField(0)\nprint(tpl)\nResp.End()',english:'Resp.Status(200).\nResp.Header(0).\nStorage.UsePack(2).\nStorage.EditCard(1).\nSet tpl to Storage.GetField(0).\nPrint tpl.\nResp.End().'},
@@ -23389,16 +23486,20 @@ function wfToggle(){
   var on=(CUR_LANG==='workflow');
   var host=document.getElementById('wfDesigner');
   if(host) host.style.display=on?'block':'none';
+  if(typeof STATIC_MODE!=='undefined'&&STATIC_MODE) return;
   // In workflow mode the christmas-tree designer is the main surface, so the
   // backing-JSON editor is hidden -- BUT only when the JSON is valid (the designer
   // can render it). If the text isn't a step array yet, keep the editor visible so
   // the user can always see/fix it (never a blank editor area). The { } JSON modal
-  // is available regardless.
+  // is available regardless. Guarded against the Report designer (whichever of
+  // wfToggle/reportToggle is "on" owns monaco/src visibility; the other backs off)
+  // so entering/leaving either surface doesn't fight over the shared editor.
   var mon=document.getElementById('monaco'), src=document.getElementById('src');
   var validWf=on&&(typeof looksLikeWorkflowJson==='function')&&looksLikeWorkflowJson(getSrc());
   function showEditor(){ if(EDITOR){ if(mon)mon.style.display='block'; if(src)src.style.display='none'; try{EDITOR.layout();}catch(e){} } else { if(mon)mon.style.display='none'; if(src)src.style.display='block'; } }
   if(on&&validWf){ if(mon)mon.style.display='none'; if(src)src.style.display='none'; }
-  else showEditor();
+  else if(on) showEditor();
+  else if(CUR_LANG!=='report') showEditor();
   if(!on) wfCloseJson();
   if(on){ try{ wfRenderDesigner(); }catch(e){} }
 }
@@ -23415,6 +23516,119 @@ function wfApplyJson(){
   catch(err){ if(e){ e.textContent='invalid JSON: '+String(err.message||err); e.style.color='#ff7b72'; } return; }
   setSrc(t.value); WF_LAST=t.value; wfCloseJson();
   try{ wfRenderDesigner(); }catch(_){}
+  compileSrc(false);
+}
+
+// ---- report surface (visual template designer -> English pre-compile) -------
+// Report is now first-class like Workflow: a visual designer (title/columns/
+// aggregates/rows) whose backing artifact is a JSON template. Compile & Run
+// lowers the template to English (rptCompileSrc) which composes and prints the
+// real report text (header, rows, aggregate footer) via first-class string
+// composition -- it doesn't just render a client-side preview of separate
+// output, it generates the report.
+var RPT_LAST=null;   // last report JSON, so dialect excursions round-trip back
+var RPT_DEFAULT={title:'Orders', columns:[{label:'Qty',agg:'sum'},{label:'Price',agg:'sum'}], rows:[[2,10],[3,20],[1,50]]};
+function looksLikeReportJson(src){
+  if(!src||!src.trim()) return false;
+  try{ var d=JSON.parse(src); return !!(d&&typeof d==='object'&&Array.isArray(d.columns)&&Array.isArray(d.rows)); }
+  catch(e){ return false; }
+}
+function rptEsc(s){ return String(s==null?'':s).replace(/\\/g,'\\\\').replace(/"/g,'\\"'); }
+// Lower {title,columns,rows} -> English source. No array indexing is needed: each
+// row is unrolled into its own composed Print statement (string parts + int
+// values via first-class `+`/`plus` composition); aggregate columns accumulate
+// into a running SET and print a "sum=X sum=Y" footer, matching the Showcase
+// report/form style but as a real runnable program.
+function rptToEnglish(d){
+  var cols=d.columns||[], rows=d.rows||[], lines=[], aggCols=[];
+  cols.forEach(function(c,i){ if(c&&c.agg==='sum'){ lines.push('Set sum'+i+' to 0.'); aggCols.push(i); } });
+  if(d.title) lines.push('Print "'+rptEsc(d.title)+'\\n".');
+  var header=cols.map(function(c,i){ return rptEsc((c&&c.label)||('Col'+i)); }).join(' | ');
+  lines.push('Print "'+header+'\\n".');
+  rows.forEach(function(row){
+    var parts=[];
+    row.forEach(function(v,i){ parts.push(String((typeof v==='number')?(v|0):0)); if(i<row.length-1) parts.push('" | "'); });
+    parts.push('"\\n"');
+    lines.push('Print '+parts.join(' plus ')+'.');
+    aggCols.forEach(function(i){ var v=row[i]; lines.push('Set sum'+i+' to sum'+i+' plus '+((typeof v==='number')?(v|0):0)+'.'); });
+  });
+  if(aggCols.length){
+    var fparts=[];
+    aggCols.forEach(function(i,idx){ fparts.push('"'+(idx?' sum=':'sum=')+'"'); fparts.push('sum'+i); });
+    fparts.push('"\\n"');
+    lines.push('Print '+fparts.join(' plus ')+'.');
+  }
+  return lines.join('\n')+'\n';
+}
+function rptCompileSrc(src){
+  var d=JSON.parse(src);
+  if(!d||!Array.isArray(d.columns)||!Array.isArray(d.rows)) throw new Error('report: expected {title,columns,rows}');
+  return { source: rptToEnglish(d) };
+}
+function rptGetTemplate(){
+  try{ var d=JSON.parse(getSrc()); if(d&&Array.isArray(d.columns)&&Array.isArray(d.rows)) return d; }catch(e){}
+  return JSON.parse(JSON.stringify(RPT_DEFAULT));
+}
+function rptSetTemplate(d){ setSrc(JSON.stringify(d,null,2)); RPT_LAST=getSrc(); rptRenderDesigner(); compileSrc(false); }
+function rptSetTitle(v){ var d=rptGetTemplate(); d.title=v; rptSetTemplate(d); }
+function rptAddColumn(){ var d=rptGetTemplate(); d.columns.push({label:'Col'+(d.columns.length+1),agg:'none'}); d.rows.forEach(function(r){r.push(0);}); rptSetTemplate(d); }
+function rptRemoveColumn(i){ var d=rptGetTemplate(); d.columns.splice(i,1); d.rows.forEach(function(r){r.splice(i,1);}); rptSetTemplate(d); }
+function rptSetColLabel(i,v){ var d=rptGetTemplate(); if(d.columns[i]) d.columns[i].label=v; rptSetTemplate(d); }
+function rptSetColAgg(i,v){ var d=rptGetTemplate(); if(d.columns[i]) d.columns[i].agg=v; rptSetTemplate(d); }
+function rptAddRow(){ var d=rptGetTemplate(); d.rows.push(d.columns.map(function(){return 0;})); rptSetTemplate(d); }
+function rptRemoveRow(i){ var d=rptGetTemplate(); d.rows.splice(i,1); rptSetTemplate(d); }
+function rptSetCell(r,c,v){ var d=rptGetTemplate(); var n=parseInt(v,10); if(isNaN(n))n=0; if(d.rows[r]) d.rows[r][c]=n; rptSetTemplate(d); }
+function rptRenderDesigner(){
+  var host=document.getElementById('rptForm'); if(!host) return;
+  var d=rptGetTemplate();
+  var html='<div style="margin-bottom:8px;display:flex;align-items:center;gap:6px"><label class="muted" style="font-size:11px">title</label>'+
+    '<input type="text" value="'+filesEscAttr(d.title||'')+'" style="width:180px" onchange="rptSetTitle(this.value)"></div>';
+  html+='<table class="wal" style="margin-bottom:8px"><thead><tr>';
+  d.columns.forEach(function(c,i){ html+='<th>col '+i+'</th>'; });
+  html+='<th></th></tr><tr>';
+  d.columns.forEach(function(c,i){
+    html+='<td><input type="text" value="'+filesEscAttr(c.label||'')+'" style="width:80px" onchange="rptSetColLabel('+i+',this.value)"> '+
+      '<select onchange="rptSetColAgg('+i+',this.value)"><option value="none"'+(c.agg!=='sum'?' selected':'')+'>none</option><option value="sum"'+(c.agg==='sum'?' selected':'')+'>sum</option></select> '+
+      '<button class="ghost" style="padding:1px 5px" onclick="rptRemoveColumn('+i+')" title="remove column">&times;</button></td>';
+  });
+  html+='<td><button class="ghost" onclick="rptAddColumn()">+ col</button></td></tr></thead><tbody>';
+  d.rows.forEach(function(row,ri){
+    html+='<tr>';
+    row.forEach(function(v,ci){ html+='<td><input type="number" value="'+esc(String(v))+'" style="width:70px" onchange="rptSetCell('+ri+','+ci+',this.value)"></td>'; });
+    html+='<td><button class="ghost" onclick="rptRemoveRow('+ri+')" title="remove row">&times;</button></td></tr>';
+  });
+  html+='</tbody></table><button class="ghost" onclick="rptAddRow()">+ row</button>';
+  host.innerHTML=html;
+  var e=document.getElementById('rptEng');
+  if(e){ try{ e.textContent=rptCompileSrc(getSrc()).source; }catch(err){ e.textContent=''; } }
+}
+function reportToggle(){
+  var on=(CUR_LANG==='report');
+  var host=document.getElementById('reportDesigner');
+  if(host) host.style.display=on?'block':'none';
+  if(typeof STATIC_MODE!=='undefined'&&STATIC_MODE) return;
+  var mon=document.getElementById('monaco'), src=document.getElementById('src');
+  var validRpt=on&&(typeof looksLikeReportJson==='function')&&looksLikeReportJson(getSrc());
+  function showEditor(){ if(EDITOR){ if(mon)mon.style.display='block'; if(src)src.style.display='none'; try{EDITOR.layout();}catch(e){} } else { if(mon)mon.style.display='none'; if(src)src.style.display='block'; } }
+  if(on&&validRpt){ if(mon)mon.style.display='none'; if(src)src.style.display='none'; }
+  else if(on) showEditor();
+  else if(CUR_LANG!=='workflow') showEditor();
+  if(!on) rptCloseJson();
+  if(on){ try{ rptRenderDesigner(); }catch(e){} }
+}
+function rptOpenJson(){
+  var m=document.getElementById('rptJsonModal'), t=document.getElementById('rptJsonText'), e=document.getElementById('rptJsonErr');
+  if(!m||!t) return; if(e) e.textContent='';
+  t.value=getSrc(); m.classList.add('open'); t.focus();
+}
+function rptCloseJson(){ var m=document.getElementById('rptJsonModal'); if(m) m.classList.remove('open'); }
+function rptApplyJson(){
+  var t=document.getElementById('rptJsonText'), e=document.getElementById('rptJsonErr');
+  if(!t) return;
+  try{ var d=JSON.parse(t.value); if(!d||!Array.isArray(d.columns)||!Array.isArray(d.rows)) throw new Error('expected {title,columns,rows}'); }
+  catch(err){ if(e){ e.textContent='invalid JSON: '+String(err.message||err); e.style.color='#ff7b72'; } return; }
+  setSrc(t.value); RPT_LAST=t.value; rptCloseJson();
+  try{ rptRenderDesigner(); }catch(_){}
   compileSrc(false);
 }
 

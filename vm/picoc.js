@@ -785,8 +785,23 @@
   function isComposite(e) { return !!(e && e.t === "Bin" && e.op === "+" && exprHasStr(e)); }
   function flattenPlus(e) { return (e && e.t === "Bin" && e.op === "+") ? flattenPlus(e.lhs).concat(flattenPlus(e.rhs)) : [e]; }
   function emitComposedPrint(self, expr) {
+    // Utf8Writer.New(ptr, cap) needs a real scratch buffer -- calling it with no
+    // args leaves ptr/cap as whatever garbage happens to be in those registers,
+    // which "works" once by luck and then corrupts/truncates on every subsequent
+    // composed print (each New() call must get its own non-overlapping region).
+    // Reserve fixed 512-byte scratch buffers, bump-allocated downward from a high
+    // address well clear of the string-literal pool (which grows down from
+    // 0x8000), one per composed-print call site (compile-time, not per iteration
+    // -- loops safely reuse the same buffer since each Print fully completes
+    // New->fill->ToSpan->Io.Write before the next one runs).
+    if (self._scratchTop === undefined) self._scratchTop = 0x40000;
+    var CAP = 512;
+    self._scratchTop -= CAP;
+    var ptrReg = self.b.vreg(), capReg = self.b.vreg();
+    self.b.const_(ptrReg, self._scratchTop);
+    self.b.const_(capReg, CAP);
     var w = self.b.vreg();
-    self.b.host("Utf8Writer", "New", [], w);
+    self.b.host("Utf8Writer", "New", [ptrReg, capReg], w);
     flattenPlus(expr).forEach(function (part) {
       if (part && part.t === "Str") self.b.host("Utf8Writer", "Span", [w, emitStrSpan(self, part.value)], null);
       else { var pr = self.eval(part); self.b.host("Utf8Writer", "Int", [w, pr], null); }
