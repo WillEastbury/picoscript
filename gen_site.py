@@ -1785,11 +1785,44 @@ function rptSetColAgg(i,v){ var d=rptGetTemplate(); if(d.columns[i]) d.columns[i
 function rptAddRow(){ var d=rptGetTemplate(); d.rows.push(d.columns.map(function(){return 0;})); rptSetTemplate(d); }
 function rptRemoveRow(i){ var d=rptGetTemplate(); d.rows.splice(i,1); rptSetTemplate(d); }
 function rptSetCell(r,c,v){ var d=rptGetTemplate(); var n=parseInt(v,10); if(isNaN(n))n=0; if(d.rows[r]) d.rows[r][c]=n; rptSetTemplate(d); }
+// ---- schema binding (Report can be bound to a pack's typed schema) ----------
+// Optional d.pack names a picowal pack; if schemas/<pack>.schema.json exists,
+// "Use schema columns" replaces the column list with the schema's fields (label
+// = field name; aggregate stays a report-only choice) and "Load rows from cards"
+// snapshots the pack's current PicoStore cards into literal rows. The report
+// keeps generating a real runnable program either way (unrolled Print
+// statements) -- this just gives a fast, deterministic way to seed it from an
+// actual typed pack instead of hand-typing every row.
+function rptSetPack(v){ var d=rptGetTemplate(); d.pack=v; rptSetTemplate(d); }
+function rptUseSchemaColumns(){
+  var d=rptGetTemplate(), fields=schemaForPack(d.pack||'');
+  if(!fields){ if(typeof alert==='function') alert('pack "'+(d.pack||'')+'" has no bound schema (add schemas/'+(d.pack||'<pack>')+'.schema.json)'); return; }
+  var oldCols=d.columns||[];
+  d.columns=fields.map(function(f,i){ return {label:f.name, agg:(oldCols[i]&&oldCols[i].agg)||'none'}; });
+  d.rows=(d.rows||[]).map(function(r){ return fields.map(function(f,i){ return (typeof r[i]==='number')?r[i]:0; }); });
+  rptSetTemplate(d);
+}
+function rptLoadRowsFromCards(){
+  var d=rptGetTemplate(), fields=schemaForPack(d.pack||'');
+  if(!fields){ if(typeof alert==='function') alert('pack "'+(d.pack||'')+'" has no bound schema (add schemas/'+(d.pack||'<pack>')+'.schema.json)'); return; }
+  if(typeof STORE==='undefined'||!STORE){ if(typeof alert==='function') alert('Cards store is not available'); return; }
+  var entries=STORE.all(d.pack);
+  d.rows=entries.map(function(e){ var rec=e[1]||{}; return fields.map(function(f){ var v=rec[f.name]; return (typeof v==='number')?(v|0):0; }); });
+  rptSetTemplate(d);
+}
 function rptRenderDesigner(){
   var host=document.getElementById('rptForm'); if(!host) return;
   var d=rptGetTemplate();
-  var html='<div style="margin-bottom:8px;display:flex;align-items:center;gap:6px"><label class="muted" style="font-size:11px">title</label>'+
-    '<input type="text" value="'+filesEscAttr(d.title||'')+'" style="width:180px" onchange="rptSetTitle(this.value)"></div>';
+  var fields=schemaForPack(d.pack||'');
+  var html='<div style="margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+
+    '<label class="muted" style="font-size:11px">title</label><input type="text" value="'+filesEscAttr(d.title||'')+'" style="width:180px" onchange="rptSetTitle(this.value)">'+
+    '<label class="muted" style="font-size:11px">pack</label><input type="text" value="'+filesEscAttr(d.pack||'')+'" style="width:110px" placeholder="(optional)" onchange="rptSetPack(this.value)">'+
+    (fields
+      ? '<span style="color:var(--accent);font-size:11px">bound to schemas/'+esc(d.pack)+'.schema.json ('+fields.length+' field'+(fields.length===1?'':'s')+')</span>'+
+        '<button class="ghost" onclick="rptUseSchemaColumns()">Use schema columns</button>'+
+        '<button class="ghost" onclick="rptLoadRowsFromCards()">Load rows from cards</button>'
+      : (d.pack ? '<span class="muted" style="font-size:11px">no schema at schemas/'+esc(d.pack)+'.schema.json</span>' : ''))+
+    '</div>';
   html+='<table class="wal" style="margin-bottom:8px"><thead><tr>';
   d.columns.forEach(function(c,i){ html+='<th>col '+i+'</th>'; });
   html+='<th></th></tr><tr>';
