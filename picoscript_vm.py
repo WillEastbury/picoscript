@@ -852,6 +852,10 @@ class HostApi:
         fn = self.handlers.get((ns, method))
         if fn is not None:
             return fn(vm, rd, rs1, rs2, imm16)
+        # Map.* first-class dictionary (active-handle model; see docs/MAP.md).
+        if ns == "Map":
+            if self._map_hook(vm, method, rd, rs1, rs2):
+                return
         # Built-in defaults for a few common hooks.
         if ns == "Random" and method == "U32":
             x = self.rng_state
@@ -1155,6 +1159,154 @@ class HostApi:
         vm.arena_top += len(data)
         vm.spans.append({"ptr": dst, "len": len(data)})
         return len(vm.spans) - 1
+
+    def _map_hook(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        # Active-handle dictionary; keys int/string, values int/string/null;
+        # insertion-order enumeration. FNV-1a: offset 0x811c9dc5, prime 0x01000193,
+        # 32-bit (identical across all VM implementations). See docs/MAP.md.
+        R = vm.regs
+        if not hasattr(self, "maps"):
+            self.maps = [None]
+            self.active_map = 0
+
+        def fnv1a(bs: bytes) -> int:
+            h = 0x811c9dc5
+            for b in bs:
+                h ^= (b & 0xFF)
+                h = (h * 0x01000193) & MASK32
+            return h & MASK32
+
+        def cur():
+            return self.maps[self.active_map] if 0 <= self.active_map < len(self.maps) else None
+
+        def ikey(k):
+            return ("i", k & MASK32)
+
+        def skey(b):
+            return ("s", bytes(b))
+
+        m = cur()
+        if method == "New":
+            self.maps.append({})
+            self.active_map = len(self.maps) - 1
+            R[rd] = self.active_map & MASK32
+            return True
+        if method == "Use":
+            h = R[rs1] & MASK32
+            self.active_map = h if (0 < h < len(self.maps) and self.maps[h] is not None) else 0
+            return True
+        if method == "Free":
+            h = R[rs1] & MASK32
+            if 0 < h < len(self.maps):
+                self.maps[h] = None
+                if self.active_map == h:
+                    self.active_map = 0
+            return True
+        if method == "Clear":
+            if m is not None:
+                m.clear()
+            return True
+        if method == "Count":
+            R[rd] = (len(m) if m is not None else 0) & MASK32
+            return True
+        if method == "Hash":
+            R[rd] = fnv1a(self._span_raw(vm, R[rs1]))
+            return True
+        # int-keyed
+        if method == "PutII":
+            if m is not None:
+                k = R[rs1] & MASK32
+                m[ikey(k)] = ("i", k, None, "i", R[rs2] & MASK32, None)
+            return True
+        if method == "GetII":
+            e = m.get(ikey(R[rs1])) if m is not None else None
+            R[rd] = (e[4] if (e and e[3] == "i") else 0) & MASK32
+            self.host_status = 0 if e else 1
+            return True
+        if method == "HasI":
+            R[rd] = 1 if (m is not None and ikey(R[rs1]) in m) else 0
+            return True
+        if method == "DelI":
+            if m is not None:
+                m.pop(ikey(R[rs1]), None)
+            return True
+        if method == "PutIS":
+            if m is not None:
+                k = R[rs1] & MASK32
+                m[ikey(k)] = ("i", k, None, "s", 0, self._span_raw(vm, R[rs2]))
+            return True
+        if method == "GetIS":
+            e = m.get(ikey(R[rs1])) if m is not None else None
+            if e and e[3] == "s":
+                R[rd] = self._new_span_bytes(vm, e[5]); self.host_status = 0
+            else:
+                R[rd] = self._new_span_bytes(vm, b""); self.host_status = 1
+            return True
+        if method == "PutNullI":
+            if m is not None:
+                k = R[rs1] & MASK32
+                m[ikey(k)] = ("i", k, None, "n", 0, None)
+            return True
+        if method == "IsNullI":
+            e = m.get(ikey(R[rs1])) if m is not None else None
+            R[rd] = 1 if (e and e[3] == "n") else 0
+            return True
+        # string-keyed
+        if method == "PutSI":
+            if m is not None:
+                kb = self._span_raw(vm, R[rs1])
+                m[skey(kb)] = ("s", 0, kb, "i", R[rs2] & MASK32, None)
+            return True
+        if method == "GetSI":
+            e = m.get(skey(self._span_raw(vm, R[rs1]))) if m is not None else None
+            R[rd] = (e[4] if (e and e[3] == "i") else 0) & MASK32
+            self.host_status = 0 if e else 1
+            return True
+        if method == "HasS":
+            R[rd] = 1 if (m is not None and skey(self._span_raw(vm, R[rs1])) in m) else 0
+            return True
+        if method == "DelS":
+            if m is not None:
+                m.pop(skey(self._span_raw(vm, R[rs1])), None)
+            return True
+        if method == "PutSS":
+            if m is not None:
+                kb = self._span_raw(vm, R[rs1])
+                m[skey(kb)] = ("s", 0, kb, "s", 0, self._span_raw(vm, R[rs2]))
+            return True
+        if method == "GetSS":
+            e = m.get(skey(self._span_raw(vm, R[rs1]))) if m is not None else None
+            if e and e[3] == "s":
+                R[rd] = self._new_span_bytes(vm, e[5]); self.host_status = 0
+            else:
+                R[rd] = self._new_span_bytes(vm, b""); self.host_status = 1
+            return True
+        if method == "PutNullS":
+            if m is not None:
+                kb = self._span_raw(vm, R[rs1])
+                m[skey(kb)] = ("s", 0, kb, "n", 0, None)
+            return True
+        if method == "IsNullS":
+            e = m.get(skey(self._span_raw(vm, R[rs1]))) if m is not None else None
+            R[rd] = 1 if (e and e[3] == "n") else 0
+            return True
+        # enumeration (insertion order)
+        if method in ("KeyAt", "KeySpanAt", "ValAt", "ValSpanAt", "ValIsSpan"):
+            vals = list(m.values()) if m is not None else []
+            i = R[rs1] & MASK32
+            e = vals[i] if 0 <= i < len(vals) else None
+            if method == "KeyAt":
+                R[rd] = (e[1] if (e and e[0] == "i") else 0) & MASK32
+            elif method == "KeySpanAt":
+                R[rd] = self._new_span_bytes(vm, e[2] if (e and e[0] == "s") else b"")
+            elif method == "ValAt":
+                R[rd] = (e[4] if (e and e[3] == "i") else 0) & MASK32
+            elif method == "ValSpanAt":
+                R[rd] = self._new_span_bytes(vm, e[5] if (e and e[3] == "s") else b"")
+            else:  # ValIsSpan
+                R[rd] = 1 if (e and e[3] == "s") else 0
+            return True
+        return False
 
     def _stringlib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
         R = vm.regs
