@@ -22,8 +22,8 @@ DEFAULT_SRC = os.path.join(ROOT, "..", "baremetaljstools", "src")
 MODULES = [
     "BareMetal.WorkflowPico.js",   # visual workflow -> English PicoScript
     "BareMetal.Report.js",         # templated layout engine (reports + forms)
-    "BareMetal.DragDrop.js",       # pointer drag & drop (FlowCanvas dependency)
-    "BareMetal.FlowCanvas.js",     # drag-and-drop nested flow designer
+    "BareMetal.DragDrop.js",       # pointer drag & drop (designer dependency)
+    "BareMetal.Workflow.js",       # workflow engine + christmas-tree Designer canvas
 ]
 
 HEADER = (

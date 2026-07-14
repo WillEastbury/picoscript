@@ -17,7 +17,7 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
   await page.click("button.tab:has-text('WebIDE')");
   await page.waitForTimeout(300);
 
-  // ---- Workflow surface (now the BareMetal.FlowCanvas drag-drop designer) ----
+  // ---- Workflow surface (now the BareMetal.Workflow.Designer christmas-tree canvas) ----
   const wf = await page.evaluate(() => {
     setLang('workflow');
     compileSrc(true);
@@ -35,7 +35,7 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
     wf.ifBranches === 2 && wf.chips > 5 && wf.eng;
   console.log('WEBIDE workflow compile [100]:', okWf, '|', JSON.stringify(wf));
 
-  // Designer edit via the FlowCanvas controller re-syncs & recompiles
+  // Designer edit via the Designer controller re-syncs & recompiles
   const wfAdd = await page.evaluate(() => {
     var before = wfParseSteps().length;
     FLOW.addNode('LOG', null, null, before);   // append a LOG box at root

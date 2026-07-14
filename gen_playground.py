@@ -1098,7 +1098,7 @@ def main():
     wf_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.WorkflowPico.js"), encoding="utf-8").read()
     layout_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.Report.js"), encoding="utf-8").read()
     dd_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.DragDrop.js"), encoding="utf-8").read()
-    flow_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.FlowCanvas.js"), encoding="utf-8").read()
+    flow_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.Workflow.js"), encoding="utf-8").read()
     ser_js = open(os.path.join(ROOT, "vm", "picoserializer.js"), encoding="utf-8").read()
     store_js = open(os.path.join(ROOT, "vm", "picostore.js"), encoding="utf-8").read()
     pcz_js = open(os.path.join(ROOT, "vm", "picocompress.js"), encoding="utf-8").read()
@@ -1955,9 +1955,9 @@ var WF_EXAMPLES={
   ]
 };
 function wfParseSteps(){ try{ var d=JSON.parse(getSrc()); if(Array.isArray(d)) return d; if(d&&Array.isArray(d.steps)) return d.steps; }catch(e){} return null; }
-// The rich designer is BareMetal.FlowCanvas (vendored): a drag-and-drop nested
-// flow canvas (boxes inside boxes for loops/choices). It owns #wfFlow and emits
-// the step list on every edit; we sync that to #src and recompile.
+// The rich designer is BareMetal.Workflow.Designer (vendored): a christmas-tree
+// flow-chart canvas (boxes with fan-out branches for loops/choices). It owns
+// #wfFlow and emits the step list on every edit; we sync that to #src.
 var FLOW=null, FLOW_OWNS=false;
 function wfPopulateExamples(){
   var sel=document.getElementById('wfExample'); if(!sel||sel.__done) return;
@@ -1981,8 +1981,8 @@ function wfUpdateEng(steps){
 }
 function wfEnsureFlow(){
   var host=document.getElementById('wfFlow');
-  if(!host||FLOW||typeof BareMetal==='undefined'||!BareMetal.FlowCanvas) return;
-  FLOW=BareMetal.FlowCanvas.create(host, { steps: wfParseSteps()||[], onChange: function(steps){
+  if(!host||FLOW||typeof BareMetal==='undefined'||!BareMetal.Workflow||!BareMetal.Workflow.Designer) return;
+  FLOW=BareMetal.Workflow.Designer.create(host, { steps: wfParseSteps()||[], onChange: function(steps){
     FLOW_OWNS=true; setSrc(JSON.stringify(steps,null,2)); FLOW_OWNS=false;
     wfUpdateEng(steps); try{ compileSrc(false); }catch(e){}
   }});

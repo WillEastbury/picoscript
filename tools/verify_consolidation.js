@@ -66,7 +66,7 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
     };
   });
   const okPgWf = JSON.stringify(pgwf.out) === '[100]' && pgwf.nodes >= 4 && pgwf.chips > 5 && pgwf.eng;
-  console.log('PLAYGROUND workflow (FlowCanvas) [100]:', okPgWf, '|', JSON.stringify(pgwf));
+  console.log('PLAYGROUND workflow (Designer) [100]:', okPgWf, '|', JSON.stringify(pgwf));
   const pgErrs = perrors.filter(e => !/favicon/i.test(e));
   console.log('PLAYGROUND loaded, errors:', pgErrs.length);
   if (pgErrs.length) console.log(pgErrs.slice(0, 6).join('\n'));
