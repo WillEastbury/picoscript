@@ -1668,7 +1668,7 @@ function wfUpdateEng(steps){
 function wfEnsureFlow(){
   var host=document.getElementById('wfFlow');
   if(!host||FLOW||typeof BareMetal==='undefined'||!BareMetal.Workflow||!BareMetal.Workflow.Designer) return;
-  FLOW=BareMetal.Workflow.Designer.create(host, { steps: wfParseSteps()||[], onChange: function(steps){
+  FLOW=BareMetal.Workflow.Designer.create(host, { steps: wfParseSteps()||[], namespaces: (typeof NSDATA!=='undefined'?NSDATA:null), onChange: function(steps){
     FLOW_OWNS=true; setSrc(JSON.stringify(steps,null,2)); FLOW_OWNS=false;
     wfUpdateEng(steps); try{ compileSrc(false); }catch(e){}
   }});
