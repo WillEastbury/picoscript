@@ -1549,6 +1549,7 @@ function wfCompileSrc(src){
 }
 
 // ---- language toggle -------------------------------------------------------
+var WF_LAST=null;   // last workflow JSON, so dialect excursions round-trip back
 function setLang(lang){
   var oldLang = CUR_LANG;
   CUR_LANG = lang;
@@ -1560,11 +1561,13 @@ function setLang(lang){
   // auto-translate editor content to new language
   var src = getSrc();
   if (lang==='workflow') {
-    // Workflow is a visual/JSON surface: seed a starter step list if needed.
-    if (!looksLikeWorkflowJson(src)) setSrc(WF_SNIPPET);
+    // Returning to the workflow surface: keep the JSON if it already is one;
+    // else restore the workflow we last translated away from; else seed one.
+    if (!looksLikeWorkflowJson(src)) setSrc((typeof WF_LAST==='string'&&WF_LAST)?WF_LAST:WF_SNIPPET);
   } else if (oldLang==='workflow') {
     // Design in workflow, then view as a text language: workflow -> English -> target.
     if (looksLikeWorkflowJson(src)) {
+      WF_LAST=src;   // remember the workflow so we can round-trip back to it
       try {
         var _eng = wfCompileSrc(src).source;
         var _out = (lang==='english') ? _eng

@@ -650,6 +650,7 @@ function showView(v){
   if(ft) ft.style.display=(v==='play')?'flex':'none';
 }
 var CUR_REF_SECTION=null;
+var WF_LAST=null;   // last workflow JSON, so dialect excursions round-trip back
 function setLang(lang){
   var oldLang=CUR_LANG;
   CUR_LANG=lang;
@@ -659,11 +660,15 @@ function setLang(lang){
   if(typeof getSrc==='function'&&typeof setSrc==='function'){
     var src=getSrc();
     if(lang==='workflow'){
-      // Workflow is a visual/JSON surface: seed a starter step list if needed.
-      if(typeof looksLikeWorkflowJson==='function'&&!looksLikeWorkflowJson(src)) setSrc(WF_SNIPPET);
+      // Returning to the workflow surface: keep the JSON if it already is one;
+      // else restore the workflow we last translated away from (round-trip);
+      // else seed a starter step list.
+      if(!(typeof looksLikeWorkflowJson==='function'&&looksLikeWorkflowJson(src)))
+        setSrc((typeof WF_LAST==='string'&&WF_LAST)?WF_LAST:WF_SNIPPET);
     } else if(oldLang==='workflow'){
       // Design in workflow, then view as text: workflow -> English -> target.
       if(typeof looksLikeWorkflowJson==='function'&&looksLikeWorkflowJson(src)){
+        WF_LAST=src;   // remember the workflow so we can round-trip back to it
         try{
           var _eng=wfCompileSrc(src).source;
           var _out=(lang==='english')?_eng:((typeof PicoCompile!=='undefined'&&PicoCompile.translate)?PicoCompile.translate(_eng,'english',lang):_eng);
