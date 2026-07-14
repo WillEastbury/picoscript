@@ -155,3 +155,22 @@ Pure byte/text/math transforms need no external binding. Hooks that touch outsid
 state are capability-gated: `Random.*`, `Crypto.RandomBytes`, `Crypto.Encrypt`,
 `Crypto.Decrypt`, `Storage.*`, `Req.*`, `Resp.*`, `DateTime.*`, `Locale.*`,
 device/stream/process/timer hooks, and similar host bindings.
+
+## Structured data: dictionaries & (de)serialization
+
+`Map` is a first-class dictionary primitive (int/string/hash keys; int/string/null
+values; insertion-order enumeration) available in every dialect and VM. Because the
+host-call ABI is 2 inputs + 1 result, `Map` uses an active-handle model (`Map.New` /
+`Map.Use` select the active map), so no dialect needs new grammar.
+
+To turn a string/bytes into a structured object, three deserializers build a `Map`:
+
+* **`Json.Parse(span)`** — a flat JSON object (scalars decoded; nested captured raw).
+* **`Binary.ParseCard` / `Binary.SerializeCard`** — the PicoBinarySerializer **PSC1**
+  card format (the picowal card wire form).
+* **`Binary.ParseEntity` / `SerializeEntity` / `SetKey` / `Verify`** — **BSO1**
+  (BareMetalJsTools `BareMetal.Binary`): schema-driven, little-endian, HMAC-SHA256
+  signed entities. The schema is supplied as an ordered `Map`.
+
+All three complement the existing `Json.*` writer + `Utf8Reader` scanner, and produce
+bit-identical `Map`s on the Python, JS and C VMs. Full spec: [MAP.md](MAP.md).

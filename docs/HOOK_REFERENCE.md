@@ -1,4 +1,4 @@
-# PicoScript Hook Reference (472 hooks, 65 namespaces)
+# PicoScript Hook Reference (533 hooks, 70 namespaces)
 
 Complete reference for all host hooks in the PicoScript 16-opcode ISA.
 Each hook is a deterministic primitive callable from any of the 7 language surfaces.
@@ -7,8 +7,8 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Metric | Value |
 |--------|-------|
-| Total hooks | 472 |
-| Namespaces | 65 |
+| Total hooks | 533 |
+| Namespaces | 70 |
 | Language surfaces | 7 (C, BASIC, Python, English, COBOL, Report, Functional) |
 | Execution paths | 5 (Python VM, JS VM, C VM, native C, native JS) |
 
@@ -854,3 +854,56 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | Status.Last() | 0x005E | |
 
 ---
+
+## Structured Data — Map, Parsing & Binary Serialization
+
+First-class dictionary (`Map`) plus string/bytes → structured `Map` parsers.
+Full design + semantics in [docs/MAP.md](MAP.md). Implemented identically on the
+Python, JS and C VMs (bit-identical output).
+
+### Map.* (27 hooks) — active-handle dictionary
+
+Keys: int / string / hash (FNV-1a). Values: int / string / null. Insertion-order
+enumeration. `New`/`Use` select the active map; every other op acts on it (so all
+ops fit the 2-arg host-call ABI — no compiler changes in any dialect).
+
+| Method | Code | Description |
+|--------|------|-------------|
+| Map.New() | 0x0320 | create empty map, set active -> handle |
+| Map.Use(h) | 0x033A | select the active map |
+| Map.Free(h) | 0x0321 | release a map |
+| Map.Clear() | 0x0322 | empty the active map |
+| Map.Count() | 0x0323 | entry count |
+| Map.Hash(span) | 0x0324 | FNV-1a 32-bit |
+| Map.PutII(k,v) / GetII(k) | 0x0325 / 0x0326 | int->int |
+| Map.HasI(k) / DelI(k) | 0x0327 / 0x0328 | int-key has / delete |
+| Map.PutIS(k,vSpan) / GetIS(k) | 0x0329 / 0x032A | int->string |
+| Map.PutNullI(k) / IsNullI(k) | 0x032B / 0x032C | int->null |
+| Map.PutSI(kSpan,v) / GetSI(kSpan) | 0x032D / 0x032E | string->int |
+| Map.HasS(kSpan) / DelS(kSpan) | 0x032F / 0x0330 | string-key has / delete |
+| Map.PutSS(kSpan,vSpan) / GetSS(kSpan) | 0x0331 / 0x0332 | string->string |
+| Map.PutNullS(kSpan) / IsNullS(kSpan) | 0x0333 / 0x0334 | string->null |
+| Map.KeyAt(i) / KeySpanAt(i) | 0x0335 / 0x0336 | enumerate keys |
+| Map.ValAt(i) / ValSpanAt(i) | 0x0337 / 0x0338 | enumerate values |
+| Map.ValIsSpan(i) | 0x0339 | value at index is a string |
+
+### Json.* / Binary.* (parsing & serialization)
+
+| Method | Code | Description |
+|--------|------|-------------|
+| Json.Parse(span) | 0x0340 | flat JSON object -> Map |
+| Binary.ParseCard(span) | 0x0341 | PicoBinarySerializer PSC1 card -> Map |
+| Binary.SerializeCard() | 0x0342 | active Map -> PSC1 card |
+| Binary.ParseEntity(blob,schema) | 0x0343 | BSO1 (BareMetal.Binary) entity -> Map |
+| Binary.SerializeEntity(data,schema) | 0x0344 | Map -> BSO1 entity (signed if key set) |
+| Binary.SetKey(span) | 0x0345 | BSO1 HMAC-SHA256 signing key |
+| Binary.Verify(blob) | 0x0346 | verify BSO1 HMAC signature -> 0\|1 |
+
+### Http transport (4 hooks) — used by the workflow WEB action
+
+| Method | Code | Description |
+|--------|------|-------------|
+| Http.Request(reqMap,body) | 0x0138 | send request (headers as a Map) -> response handle |
+| Http.RespStatus(resp) | 0x0139 | response status code |
+| Http.RespHeaders(resp) | 0x013A | response headers -> enumerable Map |
+| Http.RespBody(resp,outDesc) | 0x013B | response body span |
