@@ -75,7 +75,7 @@ Print Map.ValAt(0).              ' -> 42  (insertion order)
 | Canonical hook table (`picoscript_lang.py` → `pico_hooks.js`/`.h`) | ✅ |
 | JS reference VM (`vm/picovm.js`) | ✅ (`tests/test_map_hooks.js`) |
 | Python reference VM (`picoscript_vm.py`) | ✅ (`tests/test_map_hooks.py`) |
-| C VMs (`picoscript/vm`, `picoweb`, `pios`) | ⏳ |
+| C VMs (`picoscript/vm`, `picoweb`, `pios`) | ✅ (native C diff — bit-identical to JS/Python) |
 | C# workflow host + oracle (integer subset) | ⏳ |
 | `BareMetal.PicoScript` bundle | ⏳ |
 | WEB header dicts + round-trip | ⏳ (P5) |
