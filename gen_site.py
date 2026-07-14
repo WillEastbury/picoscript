@@ -288,7 +288,7 @@ PAGE = r"""<!DOCTYPE html>
   .file-badge.c { background:var(--c); } .file-badge.basic { background:var(--b); }
   .file-badge.python { background:var(--py); } .file-badge.english { background:var(--en); }
   .file-badge.k-card { background:#66e0cc; } .file-badge.k-source { background:#ffd866; }
-  .file-badge.k-static { background:#9aa0ad; } .file-badge.k-code { background:var(--accent); color:#fff; }
+  .file-badge.k-schema { background:#b0a0ff; } .file-badge.k-static { background:#9aa0ad; } .file-badge.k-code { background:var(--accent); color:#fff; }
   .file-ico { font-size:11px; width:14px; text-align:center; flex-shrink:0; }
   .file-folder { display:flex; align-items:center; gap:4px; padding:3px 5px; cursor:pointer; color:var(--muted); font-size:11.5px; font-weight:600; user-select:none; }
   .file-folder:hover { color:#e6e8ef; }
@@ -505,6 +505,7 @@ PAGE = r"""<!DOCTYPE html>
             <button class="ghost" onclick="psFilesRename()">Rename</button>
             <button class="ghost" onclick="psFilesDelete()">Delete</button>
             <button class="ghost" onclick="pkgExportOpen()" title="Export / deploy a card package (application)">Package</button>
+            <button class="ghost" onclick="schemaQuickNew()" title="Design a new typed pack/card schema">+ Schema</button>
           </div>
           <div class="file-list" id="fileList"></div>
           <div class="file-status" id="fileStatus"></div>
@@ -544,6 +545,13 @@ PAGE = r"""<!DOCTYPE html>
           <div class="wf-eng-h">derived English (compiles &amp; runs; IL / bytecode / output in the debugger below)</div>
           <pre class="wf-eng" id="rptEng"></pre>
         </div>
+        <div id="schemaDesigner" class="wf-designer" style="display:none">
+          <div class="wf-add">
+            <button class="ghost" onclick="schemaOpenJson()" title="View / edit the backing schema JSON">&#123; &#125; JSON</button>
+            <span class="muted" style="font-size:11px">design a typed field list for a pack/card schema &mdash; feeds Cards, Query, Report and Form once bound</span>
+          </div>
+          <div id="schemaFields"></div>
+        </div>
         <div class="wf-modal" id="pkgModal">
           <div class="wf-modal-box">
             <div class="wf-modal-head" id="pkgTitle">Card package<button class="ghost" onclick="pkgModalClose()">&#10005;</button></div>
@@ -563,6 +571,13 @@ PAGE = r"""<!DOCTYPE html>
             <div class="wf-modal-head">Report JSON (backing template)<button class="ghost" onclick="rptCloseJson()">&#10005;</button></div>
             <div class="wf-modal-body"><textarea id="rptJsonText" spellcheck="false"></textarea><div id="rptJsonErr" class="cerr"></div></div>
             <div class="wf-modal-foot"><button class="act" onclick="rptApplyJson()">Apply</button><button class="ghost" onclick="rptCloseJson()">Cancel</button></div>
+          </div>
+        </div>
+        <div class="wf-modal" id="schemaJsonModal">
+          <div class="wf-modal-box">
+            <div class="wf-modal-head">Schema JSON (backing field list)<button class="ghost" onclick="schemaCloseJson()">&#10005;</button></div>
+            <div class="wf-modal-body"><textarea id="schemaJsonText" spellcheck="false"></textarea><div id="schemaJsonErr" class="cerr"></div></div>
+            <div class="wf-modal-foot"><button class="act" onclick="schemaApplyJson()">Apply</button><button class="ghost" onclick="schemaCloseJson()">Cancel</button></div>
           </div>
         </div>
       </div>
@@ -965,6 +980,9 @@ function enterStaticMode(name,kind){
   if(bar) bar.style.display='none'; if(panels) panels.style.display='none';
   if(info){ info.style.display='block'; info.textContent='Editing '+name+' \u2014 a plain '+kind+' file (no dialect switching or diagnostics; Save writes it'+(kind==='card'?' and pushes it to picowal':'')+')'; }
   if(EDITOR){ try{ monaco.editor.setModelLanguage(EDITOR.getModel(),staticMonacoLang(name)); }catch(e){} }
+  // A schema file gets the visual Schema Designer instead of raw JSON text (the
+  // fields table is the surface; edit raw via its own { } JSON modal).
+  if(typeof schemaToggle==='function') schemaToggle(kind==='schema', name);
 }
 function exitStaticMode(){
   if(!STATIC_MODE) return;
@@ -977,6 +995,7 @@ function exitStaticMode(){
   if(cerr) cerr.style.display=''; if(bar) bar.style.display=''; if(panels) panels.style.display='';
   if(info) info.style.display='none';
   if(EDITOR){ try{ monaco.editor.setModelLanguage(EDITOR.getModel(),monacoLangId(document.getElementById('lang').value)); }catch(e){} }
+  if(typeof schemaToggle==='function') schemaToggle(false);
   if(typeof wfToggle==='function') wfToggle();
   if(typeof reportToggle==='function') reportToggle();
 }
@@ -1015,16 +1034,18 @@ function filesRead(){
   }catch(e){return {};}
 }
 // A file's kind is derived from its extension. code = a PicoScript program in any
-// dialect; card = a picowal data card (JSON of address->int); source = a schema /
-// read-only input shape; static = a served asset.
+// dialect; card = a picowal data card (JSON of address->int); schema = a typed
+// pack/card schema (fields with types, designed visually -- see Schema Designer);
+// source = a read-only input shape; static = a served asset.
 function fileKind(name){
   var n=String(name||'').toLowerCase();
+  if(/\.schema\.json$/.test(n)) return 'schema';
   if(/\.card\.json$/.test(n)) return 'card';
   if(/\.json$/.test(n)) return 'source';
   if(/\.(html|js|css|md|txt)$/.test(n)) return 'static';
   return 'code';
 }
-function fileIcon(kind){ return {folder:'\uD83D\uDCC1',card:'\uD83D\uDDC3',source:'\uD83D\uDD16',static:'\uD83D\uDCC4',code:'\u2039\u203A'}[kind]||'\uD83D\uDCC4'; }
+function fileIcon(kind){ return {folder:'\uD83D\uDCC1',card:'\uD83D\uDDC3',schema:'\uD83E\uDDE9',source:'\uD83D\uDD16',static:'\uD83D\uDCC4',code:'\u2039\u203A'}[kind]||'\uD83D\uDCC4'; }
 function fileBaseName(p){ var i=String(p).lastIndexOf('/'); return i<0?p:p.slice(i+1); }
 // A card file writes its {addr:int} map (or {cards:{...}}) into the live picowal
 // (WAL) card store so a running program/workflow can Storage.Load it.
@@ -1096,8 +1117,9 @@ function psFilesNew(name){
   if(!name) return null;
   if(files[name]&&typeof confirm==='function'&&!confirm('Replace "'+name+'"?')) return null;
   var kind=fileKind(name);
+  setSrc(kind==='schema'?JSON.stringify({fields:[]},null,2):'');
   if(kind==='code'){ if(typeof exitStaticMode==='function') exitStaticMode(); } else if(typeof enterStaticMode==='function') enterStaticMode(name,kind);
-  setSrc(''); files[name]={kind:kind,lang:kind==='code'?(document.getElementById('lang').value||'basic'):'',src:'',updated:Date.now()}; filesWrite(files); filesSetActive(name); filesRender(); filesStatus('New '+kind+' '+name); return name;
+  files[name]={kind:kind,lang:kind==='code'?(document.getElementById('lang').value||'basic'):'',src:getSrc(),updated:Date.now()}; filesWrite(files); filesSetActive(name); filesRender(); filesStatus('New '+kind+' '+name); return name;
 }
 function psFilesSave(name){
   var files=filesRead(); name=(name||ACTIVE_FILE||((typeof prompt==='function')?prompt('Save file as',filesUniqueName(files)):filesUniqueName(files))||'').trim();
@@ -1116,7 +1138,7 @@ function psFilesOpen(name){
   if(!name||!files[name]){filesStatus(name?'File not found: '+name:'Open cancelled',!!name);return null;}
   var kind=fileKind(name);
   if(kind==='code'){if(typeof exitStaticMode==='function')exitStaticMode(); document.getElementById('lang').value=files[name].lang||'basic'; if(typeof setLang==='function'){setLang(document.getElementById('lang').value);} else onLangChange(); setSrc(files[name].src); filesSetActive(name); filesRender(); filesStatus('Opened '+name); compileSrc(false);}
-  else {if(typeof enterStaticMode==='function')enterStaticMode(name,kind); setSrc(files[name].src); filesSetActive(name); filesRender(); filesStatus('Opened '+kind+' '+name+(kind==='card'?' (Save writes it to picowal)':''));}
+  else {setSrc(files[name].src); if(typeof enterStaticMode==='function')enterStaticMode(name,kind); filesSetActive(name); filesRender(); filesStatus('Opened '+kind+' '+name+(kind==='card'?' (Save writes it to picowal)':''));}
   return files[name];
 }
 function psFilesRename(oldName,newName){
@@ -1192,6 +1214,7 @@ var SAMPLE_APP={name:'orders-app',version:1,
     ],null,2)},
     'cards/config.card.json':{kind:'card',lang:'',src:JSON.stringify({cards:{'10':5,'11':2,'12':1}},null,2)},
     'schemas/request.json':{kind:'source',lang:'',src:JSON.stringify({method:'int',path:'string',body:'json'},null,2)},
+    'schemas/orders.schema.json':{kind:'schema',lang:'',src:JSON.stringify({fields:[{name:'qty',type:'int'},{name:'price',type:'int'},{name:'note',type:'str'}]},null,2)},
     'static/index.html':{kind:'static',lang:'',src:'<!doctype html>\n<title>Orders</title>\n<h1>Orders app</h1>\n'},
     'README.md':{kind:'static',lang:'',src:'# Orders app\n\nA sample PicoScript card package. Deploy, then POST /orders in the HTTP simulator.\n'}
   },
@@ -1723,6 +1746,87 @@ function rptApplyJson(){
   setSrc(t.value); RPT_LAST=t.value; rptCloseJson();
   try{ rptRenderDesigner(); }catch(_){}
   compileSrc(false);
+}
+
+// ---- schema designer (typed pack/card schemas) -------------------------------
+// A *.schema.json file is a typed field list -- {fields:[{name,type}]} -- for a
+// picowal pack/card. Same type vocabulary as the Playground's schema designer
+// (BareMetal.Schema / picowal wire types) so schemas are portable between them.
+// This is design-time data, not a runnable program: no dialect toggle/compile
+// applies (see enterStaticMode/schemaToggle); the fields table is the surface,
+// with a { } JSON modal for raw editing. Once bound (schema-bind-cards /
+// schema-bind-reportform), this feeds typed rendering into Cards, Query and the
+// Report/Form designer instead of guessing types from raw values.
+var SD_TYPES=['int','str','bool','uint8','int16','int32','uint16','uint32','utf8','latin1','blob'];
+function sdStrType(t){ return t==='str'||t==='utf8'||t==='latin1'||t==='blob'; }
+function looksLikeSchemaJson(src){
+  if(!src||!src.trim()) return false;
+  try{ var d=JSON.parse(src); return !!(d&&typeof d==='object'&&Array.isArray(d.fields)); }
+  catch(e){ return false; }
+}
+function schemaGetModel(){
+  try{ var d=JSON.parse(getSrc()); if(d&&Array.isArray(d.fields)) return d; }catch(e){}
+  return {fields:[]};
+}
+function schemaSetModel(d){ setSrc(JSON.stringify(d,null,2)); schemaRenderDesigner(); if(typeof filesRender==='function')filesRender(); }
+function schemaAddField(){
+  var nameEl=document.getElementById('schFName'), typeEl=document.getElementById('schFType');
+  var name=(nameEl?nameEl.value:'').trim();
+  if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)){ if(typeof alert==='function') alert('field name must be a simple identifier'); return; }
+  var type=typeEl?typeEl.value:'int';
+  var d=schemaGetModel();
+  d.fields=(d.fields||[]).filter(function(f){return f.name!==name;}).concat([{name:name,type:type}]);
+  schemaSetModel(d);
+  if(nameEl) nameEl.value='';
+}
+function schemaRemoveField(name){ var d=schemaGetModel(); d.fields=(d.fields||[]).filter(function(f){return f.name!==name;}); schemaSetModel(d); }
+function schemaSetFieldType(name,type){ var d=schemaGetModel(); var f=(d.fields||[]).filter(function(x){return x.name===name;})[0]; if(f){f.type=type; schemaSetModel(d);} }
+function schemaRenderDesigner(){
+  var host=document.getElementById('schemaFields'); if(!host) return;
+  var d=schemaGetModel(), fields=d.fields||[];
+  var html='<table class="wal" style="margin-bottom:8px"><thead><tr><th>field</th><th>type</th><th></th></tr></thead><tbody>';
+  if(!fields.length) html+='<tr><td colspan="3" style="color:var(--muted)">no fields yet</td></tr>';
+  fields.forEach(function(f){
+    html+='<tr><td>'+esc(f.name)+'</td><td><select onchange="schemaSetFieldType(\''+esc(f.name)+'\',this.value)">'+
+      SD_TYPES.map(function(t){return '<option'+(t===f.type?' selected':'')+'>'+t+'</option>';}).join('')+'</select></td>'+
+      '<td><button class="ghost" onclick="schemaRemoveField(\''+esc(f.name)+'\')" title="remove field">&times;</button></td></tr>';
+  });
+  html+='</tbody></table><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+
+    '<input id="schFName" placeholder="field name" style="width:130px" onkeydown="if(event.key===\'Enter\')schemaAddField();">'+
+    '<select id="schFType">'+SD_TYPES.map(function(t){return '<option>'+t+'</option>';}).join('')+'</select>'+
+    '<button class="ghost" onclick="schemaAddField()">+ field</button></div>';
+  host.innerHTML=html;
+}
+function schemaToggle(active,name){
+  var host=document.getElementById('schemaDesigner');
+  if(host) host.style.display=active?'block':'none';
+  if(!active){ schemaCloseJson(); return; }
+  var mon=document.getElementById('monaco'), src=document.getElementById('src');
+  if(mon) mon.style.display='none'; if(src) src.style.display='none';
+  try{ schemaRenderDesigner(); }catch(e){}
+}
+function schemaOpenJson(){
+  var m=document.getElementById('schemaJsonModal'), t=document.getElementById('schemaJsonText'), e=document.getElementById('schemaJsonErr');
+  if(!m||!t) return; if(e) e.textContent='';
+  t.value=getSrc(); m.classList.add('open'); t.focus();
+}
+function schemaCloseJson(){ var m=document.getElementById('schemaJsonModal'); if(m) m.classList.remove('open'); }
+function schemaApplyJson(){
+  var t=document.getElementById('schemaJsonText'), e=document.getElementById('schemaJsonErr');
+  if(!t) return;
+  try{ var d=JSON.parse(t.value); if(!d||!Array.isArray(d.fields)) throw new Error('expected {fields:[{name,type}]}'); }
+  catch(err){ if(e){ e.textContent='invalid JSON: '+String(err.message||err); e.style.color='#ff7b72'; } return; }
+  setSrc(t.value); schemaCloseJson();
+  try{ schemaRenderDesigner(); }catch(_){}
+  if(typeof filesRender==='function') filesRender();
+}
+// Create a new schemas/*.schema.json file and open it straight into the designer.
+function schemaQuickNew(){
+  var files=filesRead(), base='schemas/untitled', name=base+'.schema.json', n=2;
+  while(files[name]){ name=base+'-'+(n++)+'.schema.json'; }
+  files[name]={kind:'schema',lang:'',src:JSON.stringify({fields:[]},null,2),updated:Date.now()};
+  filesWrite(files); filesRender();
+  psFilesOpen(name);
 }
 
 // ---- report/form layout (stage 2 over the current program output) -----------
