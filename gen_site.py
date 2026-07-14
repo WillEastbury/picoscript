@@ -506,8 +506,6 @@ PAGE = r"""<!DOCTYPE html>
         <div id="cerr" class="cerr"></div>
         <div id="wfDesigner" class="wf-designer" style="display:none">
           <div class="wf-add">
-            <select id="wfExample"></select>
-            <button class="ghost" onclick="wfLoadExample()">Load example</button>
             <span class="muted" style="font-size:11px">drag boxes from the palette onto the canvas; grab &#9095; to move or nest a box; edit fields inline</span>
           </div>
           <div id="wfFlow"></div>
@@ -1286,9 +1284,25 @@ function layoutSave(){
 // Init
 buildGuideTree();showGuideCard(0);buildRefTree();buildNsRef();renderSyntaxRef();renderSamples();applyDbgLayout('guide');applyDbgLayout('play');
 (function(){var src=document.getElementById('doc-internals');var dst=document.getElementById('doc-internals-inline');if(src&&dst)dst.innerHTML=src.innerHTML;})();
-(function(){var sel=document.getElementById('example');DATA.forEach(function(d,i){var o=document.createElement('option');o.value=i;o.textContent=(i+1)+'. '+d.title;sel.appendChild(o);});})();
+(function(){var sel=document.getElementById('example');DATA.forEach(function(d,i){var o=document.createElement('option');o.value=String(i);o.textContent=(i+1)+'. '+d.title;sel.appendChild(o);});
+  // Workflow examples live in the same single dropdown (they round-trip through
+  // every dialect, so there's no need for a separate workflow selector).
+  var wkeys=(typeof WF_EXAMPLES==='object')?Object.keys(WF_EXAMPLES):[];
+  if(wkeys.length){var g=document.createElement('optgroup');g.label='Workflow';var base=DATA.length;
+    wkeys.forEach(function(name,j){var o=document.createElement('option');o.value='wf:'+name;o.textContent=(base+j+1)+'. '+name;g.appendChild(o);});
+    sel.appendChild(g);}
+})();
 function loadExample(){
-  var i=parseInt(document.getElementById('example').value,10)||0;var d=DATA[i];if(!d)return;
+  var raw=document.getElementById('example').value;
+  if(/^wf:/.test(raw)){
+    var name=raw.slice(3), ex=(typeof WF_EXAMPLES==='object')?WF_EXAMPLES[name]:null; if(!ex)return;
+    if(typeof setLang==='function'&&CUR_LANG!=='workflow')setLang('workflow');
+    setSrc(JSON.stringify(ex.map(function(s){return JSON.parse(JSON.stringify(s));}),null,2));
+    WF_LAST=getSrc();
+    if(typeof wfRenderDesigner==='function')try{wfRenderDesigner();}catch(e){}
+    compileSrc(false); return;
+  }
+  var i=parseInt(raw,10)||0;var d=DATA[i];if(!d)return;
   var cur=document.getElementById('lang').value;
   if(d[cur]){setSrc(d[cur].src);compileSrc(false);return;}
   // sample isn't available in the current dialect (e.g. Workflow): switch the
