@@ -540,6 +540,7 @@ PAGE = r"""<!DOCTYPE html>
             <div class="wf-modal-foot"><button class="act" onclick="pkgDeployFromModal()">Deploy &#9654;</button><button class="ghost" onclick="pkgModalClose()">Close</button></div>
           </div>
         </div>
+        <div class="wf-modal" id="wfJsonModal">
           <div class="wf-modal-box">
             <div class="wf-modal-head">Workflow JSON (backing step array)<button class="ghost" onclick="wfCloseJson()">&#10005;</button></div>
             <div class="wf-modal-body"><textarea id="wfJsonText" spellcheck="false"></textarea><div id="wfJsonErr" class="cerr"></div></div>
