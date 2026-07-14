@@ -16621,6 +16621,26 @@ function compressBound(inputLen) {
     return span;
   }
 
+  // ---- first-class string composition -----------------------------------------
+  // A `+` chain that contains any string literal is a COMPOSITION, not integer
+  // addition: string parts are written as bytes and numeric parts as decimal
+  // digits, via the byte-writer, then emitted. This makes `Print "total=" + total`
+  // produce `total=15` in every dialect (no manual Utf8Writer / escaped-JSON junk).
+  function exprHasStr(e) { if (!e) return false; if (e.t === "Str") return true; if (e.t === "Bin" && e.op === "+") return exprHasStr(e.lhs) || exprHasStr(e.rhs); return false; }
+  function isComposite(e) { return !!(e && e.t === "Bin" && e.op === "+" && exprHasStr(e)); }
+  function flattenPlus(e) { return (e && e.t === "Bin" && e.op === "+") ? flattenPlus(e.lhs).concat(flattenPlus(e.rhs)) : [e]; }
+  function emitComposedPrint(self, expr) {
+    var w = self.b.vreg();
+    self.b.host("Utf8Writer", "New", [], w);
+    flattenPlus(expr).forEach(function (part) {
+      if (part && part.t === "Str") self.b.host("Utf8Writer", "Span", [w, emitStrSpan(self, part.value)], null);
+      else { var pr = self.eval(part); self.b.host("Utf8Writer", "Int", [w, pr], null); }
+    });
+    var sp = self.b.vreg();
+    self.b.host("Utf8Writer", "ToSpan", [w], sp);
+    self.b.host("Io", "Write", [sp], null);
+  }
+
   function CLowerer() { this.b = new ILBuilder(); this.vars = {}; this.funcs = []; this.loop = []; this._strlitN = 0; this.userConstants = {}; }
   CLowerer.prototype = {
     varOf: function (name) { var k = name.toLowerCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
@@ -16882,7 +16902,7 @@ function compressBound(inputLen) {
     lowerCall: function (c, want) {
       var ns = c.ns, m = c.method;
       if (ns == null) {
-        if (m.toLowerCase() === "print") { if (c.args[0].t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, c.args[0].value)], null); return null; } var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
+        if (m.toLowerCase() === "print") { if (c.args[0].t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, c.args[0].value)], null); return null; } if (isComposite(c.args[0])) { emitComposedPrint(this, c.args[0]); return null; } var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
         var ak = m.toLowerCase();
         if (C_ALIASES[ak] && !this.funcs.some(function (f) { return f.name.toLowerCase() === ak; })) {
           return this.lowerCall({ t: "Call", ns: C_ALIASES[ak][0], method: C_ALIASES[ak][1], args: c.args }, want);
@@ -17430,7 +17450,7 @@ function compressBound(inputLen) {
       else if (s.t === "ForEach") this.lowerForeach(s);
       else if (s.t === "Switch") this.lowerSwitch(s);
       else if (s.t === "Dispatch") this.lowerDispatch(s);
-      else if (s.t === "Print") { if (s.value.t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, s.value.value)], null); } else { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); } }
+      else if (s.t === "Print") { if (s.value.t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, s.value.value)], null); } else if (isComposite(s.value)) { emitComposedPrint(this, s.value); } else { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); } }
       else if (s.t === "CallStmt") this.lowerCall(s.call, false);
       else if (s.t === "ServerMain") s.body.forEach(function (st) { self.stmt(st); });
       else throw new Error("BASIC: cannot lower " + s.t);
