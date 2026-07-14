@@ -2992,6 +2992,105 @@
   }
 
   // ── Cross-language translator ──────────────────────────────────────────
+  // ── AST -> Workflow steps (the "raise": makes Workflow a first-class dialect) ──
+  // Emits the same flat step model the visual designer / BareMetal.WorkflowPico use
+  // (SET/IF/ELSE/END/FOR/FOREACH/WHILE/LOG). Anything without a dedicated box is
+  // carried as a RAW step holding its English rendering, so any dialect -> workflow
+  // -> any dialect round-trips with full fidelity through the shared AST.
+  function astToWorkflow(prog) {
+    var parts = splitProgDefs(prog), steps = [];
+    parts.defs.forEach(function (f) {
+      // sub-definitions have no dedicated box; keep them verbatim (English) for fidelity
+      var pa = (f.params || []).length ? "(" + f.params.join(", ") + ")" : "";
+      var lines = ["Define " + (f.name || "") + pa + ":"];
+      (f.body || []).forEach(function (s) { lines.push(sE(s, 1)); });
+      lines.push("Stop.");
+      steps.push({ type: "RAW", code: lines.join("\n") });
+    });
+    wfEmitSeq(parts.body, steps);
+    return steps;
+  }
+  function wfExpr(e) { return exprStr(e, "c"); }               // C-like: WorkflowPico-compatible
+  function wfLitOrExpr(e) { return (e && e.t === "Num") ? (e.value | 0) : wfExpr(e || { t: "Num", value: 0 }); }
+  function wfRaw(s) { return sE(s, 0); }                        // English rendering (round-trips via WorkflowPico)
+  // Ternary (and other constructs WorkflowPico's expression translator can't lower)
+  // must ride through a RAW English statement to keep full round-trip fidelity.
+  function exprHasTernary(e) {
+    if (!e || typeof e !== "object") return false;
+    if (e.t === "Ternary") return true;
+    return ["lhs", "rhs", "cond", "then", "els", "operand", "value"].some(function (k) { return exprHasTernary(e[k]); }) ||
+      (Array.isArray(e.args) && e.args.some(exprHasTernary));
+  }
+  function wfEmitSeq(list, steps) { (list || []).forEach(function (s) { wfEmitStmt(s, steps); }); }
+  function wfEmitIf(arms, i, els, steps) {
+    steps.push({ type: "IF", condition: wfExpr(arms[i][0]) });
+    wfEmitSeq(arms[i][1], steps);
+    var hasMore = (i + 1 < arms.length);
+    var hasEls = els && (Array.isArray(els) ? els.length : true);
+    if (hasMore) { steps.push({ type: "ELSE" }); wfEmitIf(arms, i + 1, els, steps); }
+    else if (hasEls) { steps.push({ type: "ELSE" }); wfEmitSeq(Array.isArray(els) ? els : [els], steps); }
+    steps.push({ type: "END" });
+  }
+  function wfEmitStmt(s, steps) {
+    if (!s) return;
+    switch (s.t) {
+      case "Let": case "Assign": case "Decl": case "Dim": {
+        var v = (s.value != null) ? s.value : s.init;
+        if (exprHasTernary(v)) { steps.push({ type: "RAW", code: wfRaw(s) }); break; }
+        if (v && v.t === "Num") steps.push({ type: "SET", name: s.name, value: v.value | 0 });
+        else if (v && v.t === "Arr" && Array.isArray(v.items)) {
+          var allNum = v.items.every(function (x) { return x && x.t === "Num"; });
+          if (allNum) steps.push({ type: "SET", name: s.name, value: v.items.map(function (x) { return x.value | 0; }) });
+          else steps.push({ type: "SET", name: s.name, expr: wfExpr(v) });
+        } else if (v == null) steps.push({ type: "SET", name: s.name, value: 0 });
+        else steps.push({ type: "SET", name: s.name, expr: wfExpr(v) });
+        break;
+      }
+      case "IncDec": {
+        var nm = incDecName(s), d = incDecDelta(s);
+        steps.push({ type: "SET", name: nm, expr: nm + (d >= 0 ? " + " : " - ") + Math.abs(d) });
+        break;
+      }
+      case "If": wfEmitIf(s.arms || [[s.cond, s.then]], 0, s.els, steps); break;
+      case "While": steps.push({ type: "WHILE", condition: wfExpr(s.cond) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
+      case "DoLoop": case "DoWhile": {
+        var cond = s.botCond || s.cond || { t: "Num", value: 1 };
+        var until = !!(s.until || s.botUntil);
+        steps.push({ type: "DO" }); wfEmitSeq(s.body, steps);
+        steps.push({ type: "LOOP", until: until, condition: wfExpr(cond) }); break;
+      }
+      case "ForTo": steps.push({ type: "FOR", "var": s.v, from: wfLitOrExpr(s.start), to: wfLitOrExpr(s.end) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
+      case "ForEach": steps.push({ type: "FOREACH", "var": s.v, "in": wfExpr(s.count) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
+      case "For": {
+        var f = forLoopInfo(s);
+        if (f) { steps.push({ type: "FOR", "var": f.v, from: wfLitOrExpr(f.start), to: wfLitOrExpr(f.end) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); }
+        else steps.push({ type: "RAW", code: wfRaw(s) });
+        break;
+      }
+      case "Switch": case "Dispatch": {
+        steps.push({ type: s.t === "Dispatch" ? "DISPATCH" : "SWITCH", expr: wfExpr(s.expr) });
+        (s.cases || []).forEach(function (c) { steps.push({ type: "CASE", value: wfExpr(c[0]) }); wfEmitSeq(c[1], steps); });
+        var def = s.def || s.els; if (def && (Array.isArray(def) ? def.length : true)) { steps.push({ type: "DEFAULT" }); wfEmitSeq(Array.isArray(def) ? def : [def], steps); }
+        steps.push({ type: "END" }); break;
+      }
+      case "Print": steps.push(exprHasTernary(s.value) ? { type: "RAW", code: wfRaw(s) } : { type: "LOG", message: wfExpr(s.value) }); break;
+      case "Break": steps.push({ type: "BREAK" }); break;
+      case "Skip": case "Continue": steps.push({ type: "SKIP" }); break;
+      case "Return": steps.push(s.value ? { type: "RETURN", value: wfExpr(s.value) } : { type: "RETURN" }); break;
+      case "Goto": steps.push({ type: "GOTO", label: s.label }); break;
+      case "Label": steps.push({ type: "LABEL", name: s.name }); break;
+      case "Gosub": steps.push({ type: "GOSUB", name: s.name, args: (s.args || []).map(wfExpr) }); break;
+      case "ExprStmt":
+        if (s.expr && s.expr.t === "Call" && !s.expr.ns && s.expr.method === "print") { steps.push({ type: "LOG", message: wfExpr(s.expr.args[0]) }); break; }
+        if (s.expr && s.expr.t === "Call") { steps.push({ type: "CALLNS", call: exprStr(s.expr, "english") }); break; }
+        if (s.expr && s.expr.t === "IncDec") { wfEmitStmt(s.expr, steps); break; }
+        steps.push({ type: "RAW", code: wfRaw(s) }); break;
+      case "CallStmt": steps.push({ type: "CALLNS", call: exprStr(s.call, "english") }); break;
+      case "ServerMain": wfEmitSeq(s.body, steps); break;
+      default: steps.push({ type: "RAW", code: wfRaw(s) });
+    }
+  }
+
   function translate(src, fromLang, toLang) {
     if (fromLang === toLang) return src;
     var ast;
@@ -3016,6 +3115,7 @@
     if (toLang === "cobol") return astToCobol(ast);
     if (toLang === "report") return astToReport(ast);
     if (toLang === "functional") return astToFunctional(ast);
+    if (toLang === "workflow") return JSON.stringify(astToWorkflow(ast), null, 2);
     return src;
   }
 
@@ -3134,6 +3234,13 @@
       name = targetName(name, L);
       if (L === "c") return e.prefix ? (delta >= 0 ? "++" : "--") + name : name + (delta >= 0 ? "++" : "--");
       return name + (delta >= 0 ? " + " : " - ") + Math.abs(delta);
+    }
+    if (e.t === "Unary") {
+      var inner = exprStr(e.operand, L);
+      if (e.op === "!" || e.op === "NOT" || e.op === "not") return (L === "python" || L === "english" || L === "functional") ? "not " + inner : "!" + inner;
+      if (e.op === "-") return "-" + inner;
+      if (e.op === "+") return inner;
+      return e.op + inner;
     }
     return "?";
   }
@@ -3458,6 +3565,11 @@
       return { words: words, debug: dbg };
     },
     translate: translate,
+    // Raise any source (via its dialect parser) into the first-class Workflow step
+    // model. `toWorkflow(src, fromLang)` -> pretty JSON step array. Enables real
+    // X -> workflow round-trips and one shared sample set across all dialects.
+    toWorkflow: function (src, fromLang) { return translate(src, fromLang, "workflow"); },
+    astToWorkflow: astToWorkflow,
     symbolize: symbolize,
     offsetToLineCol: offsetToLineCol,
     sourceLineText: sourceLineText,

@@ -18834,6 +18834,105 @@ function compressBound(inputLen) {
   }
 
   // ── Cross-language translator ──────────────────────────────────────────
+  // ── AST -> Workflow steps (the "raise": makes Workflow a first-class dialect) ──
+  // Emits the same flat step model the visual designer / BareMetal.WorkflowPico use
+  // (SET/IF/ELSE/END/FOR/FOREACH/WHILE/LOG). Anything without a dedicated box is
+  // carried as a RAW step holding its English rendering, so any dialect -> workflow
+  // -> any dialect round-trips with full fidelity through the shared AST.
+  function astToWorkflow(prog) {
+    var parts = splitProgDefs(prog), steps = [];
+    parts.defs.forEach(function (f) {
+      // sub-definitions have no dedicated box; keep them verbatim (English) for fidelity
+      var pa = (f.params || []).length ? "(" + f.params.join(", ") + ")" : "";
+      var lines = ["Define " + (f.name || "") + pa + ":"];
+      (f.body || []).forEach(function (s) { lines.push(sE(s, 1)); });
+      lines.push("Stop.");
+      steps.push({ type: "RAW", code: lines.join("\n") });
+    });
+    wfEmitSeq(parts.body, steps);
+    return steps;
+  }
+  function wfExpr(e) { return exprStr(e, "c"); }               // C-like: WorkflowPico-compatible
+  function wfLitOrExpr(e) { return (e && e.t === "Num") ? (e.value | 0) : wfExpr(e || { t: "Num", value: 0 }); }
+  function wfRaw(s) { return sE(s, 0); }                        // English rendering (round-trips via WorkflowPico)
+  // Ternary (and other constructs WorkflowPico's expression translator can't lower)
+  // must ride through a RAW English statement to keep full round-trip fidelity.
+  function exprHasTernary(e) {
+    if (!e || typeof e !== "object") return false;
+    if (e.t === "Ternary") return true;
+    return ["lhs", "rhs", "cond", "then", "els", "operand", "value"].some(function (k) { return exprHasTernary(e[k]); }) ||
+      (Array.isArray(e.args) && e.args.some(exprHasTernary));
+  }
+  function wfEmitSeq(list, steps) { (list || []).forEach(function (s) { wfEmitStmt(s, steps); }); }
+  function wfEmitIf(arms, i, els, steps) {
+    steps.push({ type: "IF", condition: wfExpr(arms[i][0]) });
+    wfEmitSeq(arms[i][1], steps);
+    var hasMore = (i + 1 < arms.length);
+    var hasEls = els && (Array.isArray(els) ? els.length : true);
+    if (hasMore) { steps.push({ type: "ELSE" }); wfEmitIf(arms, i + 1, els, steps); }
+    else if (hasEls) { steps.push({ type: "ELSE" }); wfEmitSeq(Array.isArray(els) ? els : [els], steps); }
+    steps.push({ type: "END" });
+  }
+  function wfEmitStmt(s, steps) {
+    if (!s) return;
+    switch (s.t) {
+      case "Let": case "Assign": case "Decl": case "Dim": {
+        var v = (s.value != null) ? s.value : s.init;
+        if (exprHasTernary(v)) { steps.push({ type: "RAW", code: wfRaw(s) }); break; }
+        if (v && v.t === "Num") steps.push({ type: "SET", name: s.name, value: v.value | 0 });
+        else if (v && v.t === "Arr" && Array.isArray(v.items)) {
+          var allNum = v.items.every(function (x) { return x && x.t === "Num"; });
+          if (allNum) steps.push({ type: "SET", name: s.name, value: v.items.map(function (x) { return x.value | 0; }) });
+          else steps.push({ type: "SET", name: s.name, expr: wfExpr(v) });
+        } else if (v == null) steps.push({ type: "SET", name: s.name, value: 0 });
+        else steps.push({ type: "SET", name: s.name, expr: wfExpr(v) });
+        break;
+      }
+      case "IncDec": {
+        var nm = incDecName(s), d = incDecDelta(s);
+        steps.push({ type: "SET", name: nm, expr: nm + (d >= 0 ? " + " : " - ") + Math.abs(d) });
+        break;
+      }
+      case "If": wfEmitIf(s.arms || [[s.cond, s.then]], 0, s.els, steps); break;
+      case "While": steps.push({ type: "WHILE", condition: wfExpr(s.cond) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
+      case "DoLoop": case "DoWhile": {
+        var cond = s.botCond || s.cond || { t: "Num", value: 1 };
+        var until = !!(s.until || s.botUntil);
+        steps.push({ type: "DO" }); wfEmitSeq(s.body, steps);
+        steps.push({ type: "LOOP", until: until, condition: wfExpr(cond) }); break;
+      }
+      case "ForTo": steps.push({ type: "FOR", "var": s.v, from: wfLitOrExpr(s.start), to: wfLitOrExpr(s.end) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
+      case "ForEach": steps.push({ type: "FOREACH", "var": s.v, "in": wfExpr(s.count) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
+      case "For": {
+        var f = forLoopInfo(s);
+        if (f) { steps.push({ type: "FOR", "var": f.v, from: wfLitOrExpr(f.start), to: wfLitOrExpr(f.end) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); }
+        else steps.push({ type: "RAW", code: wfRaw(s) });
+        break;
+      }
+      case "Switch": case "Dispatch": {
+        steps.push({ type: s.t === "Dispatch" ? "DISPATCH" : "SWITCH", expr: wfExpr(s.expr) });
+        (s.cases || []).forEach(function (c) { steps.push({ type: "CASE", value: wfExpr(c[0]) }); wfEmitSeq(c[1], steps); });
+        var def = s.def || s.els; if (def && (Array.isArray(def) ? def.length : true)) { steps.push({ type: "DEFAULT" }); wfEmitSeq(Array.isArray(def) ? def : [def], steps); }
+        steps.push({ type: "END" }); break;
+      }
+      case "Print": steps.push(exprHasTernary(s.value) ? { type: "RAW", code: wfRaw(s) } : { type: "LOG", message: wfExpr(s.value) }); break;
+      case "Break": steps.push({ type: "BREAK" }); break;
+      case "Skip": case "Continue": steps.push({ type: "SKIP" }); break;
+      case "Return": steps.push(s.value ? { type: "RETURN", value: wfExpr(s.value) } : { type: "RETURN" }); break;
+      case "Goto": steps.push({ type: "GOTO", label: s.label }); break;
+      case "Label": steps.push({ type: "LABEL", name: s.name }); break;
+      case "Gosub": steps.push({ type: "GOSUB", name: s.name, args: (s.args || []).map(wfExpr) }); break;
+      case "ExprStmt":
+        if (s.expr && s.expr.t === "Call" && !s.expr.ns && s.expr.method === "print") { steps.push({ type: "LOG", message: wfExpr(s.expr.args[0]) }); break; }
+        if (s.expr && s.expr.t === "Call") { steps.push({ type: "CALLNS", call: exprStr(s.expr, "english") }); break; }
+        if (s.expr && s.expr.t === "IncDec") { wfEmitStmt(s.expr, steps); break; }
+        steps.push({ type: "RAW", code: wfRaw(s) }); break;
+      case "CallStmt": steps.push({ type: "CALLNS", call: exprStr(s.call, "english") }); break;
+      case "ServerMain": wfEmitSeq(s.body, steps); break;
+      default: steps.push({ type: "RAW", code: wfRaw(s) });
+    }
+  }
+
   function translate(src, fromLang, toLang) {
     if (fromLang === toLang) return src;
     var ast;
@@ -18858,6 +18957,7 @@ function compressBound(inputLen) {
     if (toLang === "cobol") return astToCobol(ast);
     if (toLang === "report") return astToReport(ast);
     if (toLang === "functional") return astToFunctional(ast);
+    if (toLang === "workflow") return JSON.stringify(astToWorkflow(ast), null, 2);
     return src;
   }
 
@@ -18976,6 +19076,13 @@ function compressBound(inputLen) {
       name = targetName(name, L);
       if (L === "c") return e.prefix ? (delta >= 0 ? "++" : "--") + name : name + (delta >= 0 ? "++" : "--");
       return name + (delta >= 0 ? " + " : " - ") + Math.abs(delta);
+    }
+    if (e.t === "Unary") {
+      var inner = exprStr(e.operand, L);
+      if (e.op === "!" || e.op === "NOT" || e.op === "not") return (L === "python" || L === "english" || L === "functional") ? "not " + inner : "!" + inner;
+      if (e.op === "-") return "-" + inner;
+      if (e.op === "+") return inner;
+      return e.op + inner;
     }
     return "?";
   }
@@ -19300,6 +19407,11 @@ function compressBound(inputLen) {
       return { words: words, debug: dbg };
     },
     translate: translate,
+    // Raise any source (via its dialect parser) into the first-class Workflow step
+    // model. `toWorkflow(src, fromLang)` -> pretty JSON step array. Enables real
+    // X -> workflow round-trips and one shared sample set across all dialects.
+    toWorkflow: function (src, fromLang) { return translate(src, fromLang, "workflow"); },
+    astToWorkflow: astToWorkflow,
     symbolize: symbolize,
     offsetToLineCol: offsetToLineCol,
     sourceLineText: sourceLineText,
@@ -19540,6 +19652,17 @@ BareMetal.WorkflowPico = (() => {
     if (term === 'ELSE') { pos.i++; ctx.warnings.push('ELSE without a matching IF; ignored'); }
   }
 
+  // Emit statements belonging to a SWITCH case, stopping (without consuming) at the
+  // next CASE / DEFAULT / END marker.
+  function emitCaseBody(steps, pos, indent, ctx) {
+    while (pos.i < steps.length) {
+      var t = String((steps[pos.i] || {}).type || '').toUpperCase();
+      if (t === 'CASE' || t === 'DEFAULT' || t === 'END') return;
+      var st = steps[pos.i]; pos.i++;
+      emitStep(st, t, steps, pos, indent, ctx);
+    }
+  }
+
   function emitStep(step, type, steps, pos, indent, ctx) {
     var out = ctx.out;
     var warnings = ctx.warnings;
@@ -19612,6 +19735,70 @@ BareMetal.WorkflowPico = (() => {
 
       case 'RESPOND':
         emitRespond(step, indent, ctx);
+        break;
+
+      case 'WHILE':
+        out.push(pad(indent) + 'While ' + translateExpr(step.condition || 'false') + ':');
+        closeLoop(steps, pos, indent, ctx);
+        break;
+
+      case 'DO': {
+        out.push(pad(indent) + 'Repeat:');
+        while (pos.i < steps.length && String((steps[pos.i] || {}).type || '').toUpperCase() !== 'LOOP') {
+          var dst = steps[pos.i]; pos.i++;
+          emitStep(dst, String(dst.type || '').toUpperCase(), steps, pos, indent + 1, ctx);
+        }
+        var loopStep = steps[pos.i]; if (loopStep) pos.i++;
+        var kw = (loopStep && loopStep.until) ? 'Until ' : 'While ';
+        out.push(pad(indent) + kw + translateExpr((loopStep && loopStep.condition) || 'true') + '.');
+        break;
+      }
+
+      case 'SWITCH':
+      case 'DISPATCH':
+        out.push(pad(indent) + 'Choose ' + translateExpr(step.expr == null ? '0' : step.expr) + ':');
+        while (pos.i < steps.length) {
+          var ct = String((steps[pos.i] || {}).type || '').toUpperCase();
+          if (ct === 'END') { pos.i++; break; }
+          if (ct === 'CASE') { var cv = steps[pos.i].value; pos.i++; out.push(pad(indent + 1) + 'When ' + translateExpr(cv == null ? '0' : cv) + ':'); emitCaseBody(steps, pos, indent + 2, ctx); }
+          else if (ct === 'DEFAULT') { pos.i++; out.push(pad(indent + 1) + 'Otherwise:'); emitCaseBody(steps, pos, indent + 2, ctx); }
+          else { pos.i++; warnings.push('unexpected ' + ct + ' inside SWITCH; ignored'); }
+        }
+        break;
+
+      case 'BREAK':
+        out.push(pad(indent) + 'Stop.');
+        break;
+
+      case 'SKIP':
+      case 'CONTINUE':
+        out.push(pad(indent) + 'Skip.');
+        break;
+
+      case 'RETURN':
+        out.push(pad(indent) + 'Return' + (step.value != null && step.value !== '' ? ' ' + translateExpr(step.value) : '') + '.');
+        break;
+
+      case 'GOTO':
+        out.push(pad(indent) + 'Go to ' + sanitizeId(step.label || 'L') + '.');
+        break;
+
+      case 'LABEL':
+        out.push(pad(indent) + 'Label ' + sanitizeId(step.name || 'L') + '.');
+        break;
+
+      case 'GOSUB':
+        out.push(pad(indent) + 'Call ' + sanitizeId(step.name || '') + '(' + (Array.isArray(step.args) ? step.args.map(function (a) { return translateExpr(a); }).join(', ') : '') + ').');
+        break;
+
+      case 'CALLNS':
+        // A generic namespace call (e.g. Net.Status(200)) carried verbatim in English.
+        out.push(pad(indent) + String(step.call || '').replace(/\.\s*$/, '') + '.');
+        break;
+
+      case 'RAW':
+        // Escape hatch: emit the carried English lines verbatim (full-fidelity round-trip).
+        String(step.code == null ? '' : step.code).split('\n').forEach(function (ln) { out.push(pad(indent) + ln); });
         break;
 
       case 'CALL':
@@ -20962,7 +21149,27 @@ BareMetal.Workflow.Designer = (function () {
       { key: 'contentType', label: '', placeholder: 'application/json', width: 130 },
       { key: 'body', label: 'body', placeholder: '{"ok":true}', width: 150 } ] },
     CALL: { label: 'Call', kind: 'atom', color: '#b0a0ff', fields: [
-      { key: 'workflow', label: '', placeholder: 'other', width: 140 } ] }
+      { key: 'workflow', label: '', placeholder: 'other', width: 140 } ] },
+    WHILE: { label: 'While', kind: 'block', color: '#ffd866', slots: [{ key: 'body', label: '' }],
+      fields: [{ key: 'condition', label: '', placeholder: 'n > 0', width: 180, suggest: 'condition' }] },
+    DO: { label: 'Do', kind: 'block', color: '#ffd866', slots: [{ key: 'body', label: '' }], fields: [] },
+    LOOP: { label: 'Loop', kind: 'atom', color: '#ffd866', fields: [
+      { key: 'until', label: 'until', kind: 'select', choices: [{ v: true, t: 'until' }, { v: false, t: 'while' }] },
+      { key: 'condition', label: '', placeholder: 'n >= 3', width: 160 } ] },
+    SWITCH: { label: 'Switch', kind: 'block', color: '#f0a3ff', slots: [{ key: 'body', label: '' }],
+      fields: [{ key: 'expr', label: '', placeholder: 'x', width: 120 }] },
+    DISPATCH: { label: 'Dispatch', kind: 'block', color: '#f0a3ff', slots: [{ key: 'body', label: '' }],
+      fields: [{ key: 'expr', label: '', placeholder: 'state', width: 120 }] },
+    CASE: { label: 'Case', kind: 'atom', color: '#f0a3ff', fields: [{ key: 'value', label: '', placeholder: '1', width: 80 }] },
+    DEFAULT: { label: 'Default', kind: 'atom', color: '#f0a3ff', fields: [] },
+    BREAK: { label: 'Break', kind: 'atom', color: '#ff9f7f', fields: [] },
+    SKIP: { label: 'Skip', kind: 'atom', color: '#ff9f7f', fields: [] },
+    RETURN: { label: 'Return', kind: 'atom', color: '#ff9f7f', fields: [{ key: 'value', label: '', placeholder: '(value)', width: 100 }] },
+    GOTO: { label: 'Goto', kind: 'atom', color: '#9aa0ad', fields: [{ key: 'label', label: '', placeholder: 'top', width: 100 }] },
+    LABEL: { label: 'Label', kind: 'atom', color: '#9aa0ad', fields: [{ key: 'name', label: '', placeholder: 'top', width: 100 }] },
+    GOSUB: { label: 'Gosub', kind: 'atom', color: '#b0a0ff', fields: [{ key: 'name', label: '', placeholder: 'sub', width: 120 }] },
+    CALLNS: { label: 'Invoke', kind: 'atom', color: '#a0d0ff', fields: [{ key: 'call', label: '', placeholder: 'Net.Status(200)', width: 220 }] },
+    RAW: { label: 'Code', kind: 'atom', color: '#8b93a7', fields: [{ key: 'code', label: '', placeholder: 'English statement', width: 300 }] }
   };
 
   // sensible defaults when a fresh box is created
@@ -20971,7 +21178,11 @@ BareMetal.Workflow.Designer = (function () {
     FOREACH: { 'var': 'item', 'in': 'data' }, FOREACHP: { 'var': 'item', 'in': 'data' }, LOG: { message: 'x' },
     WAIT: { ms: 100 }, RAISE: { event: 1, target: 0 }, ON: { event: 1 }, LOAD: { name: 'x', from: 'memory', key: 0 },
     SAVE: { name: 'x', to: 'memory', key: 0 }, WEB: { method: 'GET', url: '/api' }, CALL: { workflow: 'other' },
-    RESPOND: { status: 200, contentType: 'application/json', body: '{"ok":true}' }
+    RESPOND: { status: 200, contentType: 'application/json', body: '{"ok":true}' },
+    WHILE: { condition: 'n > 0' }, DO: {}, LOOP: { until: true, condition: 'n >= 3' },
+    SWITCH: { expr: 'x' }, DISPATCH: { expr: 'state' }, CASE: { value: 1 }, DEFAULT: {},
+    BREAK: {}, SKIP: {}, RETURN: {}, GOTO: { label: 'top' }, LABEL: { name: 'top' },
+    GOSUB: { name: 'sub' }, CALLNS: { call: 'Net.Status(200)' }, RAW: { code: 'Print 1.' }
   };
 
   var CSS = [
@@ -22073,11 +22284,14 @@ function setLang(lang){
   if(typeof getSrc==='function'&&typeof setSrc==='function'){
     var src=getSrc();
     if(lang==='workflow'){
-      // Returning to the workflow surface: keep the JSON if it already is one;
-      // else restore the workflow we last translated away from (round-trip);
-      // else seed a starter step list.
-      if(!(typeof looksLikeWorkflowJson==='function'&&looksLikeWorkflowJson(src)))
-        setSrc((typeof WF_LAST==='string'&&WF_LAST)?WF_LAST:WF_SNIPPET);
+      // Raise the current dialect source into first-class workflow steps through
+      // the shared AST (real X -> workflow round-trip). Keep the JSON if it already
+      // is one; else seed a starter list only when there's nothing to raise.
+      if(!(typeof looksLikeWorkflowJson==='function'&&looksLikeWorkflowJson(src))){
+        var raised=null;
+        try{ if(typeof PicoCompile!=='undefined'&&PicoCompile.toWorkflow&&oldLang&&oldLang!=='workflow'&&src&&src.trim()) raised=PicoCompile.toWorkflow(src,oldLang); }catch(e){}
+        setSrc((raised&&looksLikeWorkflowJson(raised))?raised:((typeof WF_LAST==='string'&&WF_LAST)?WF_LAST:WF_SNIPPET));
+      }
     } else if(oldLang==='workflow'){
       // Design in workflow, then view as text: workflow -> English -> target.
       if(typeof looksLikeWorkflowJson==='function'&&looksLikeWorkflowJson(src)){
@@ -22908,31 +23122,22 @@ function layoutSave(){
 buildGuideTree();showGuideCard(0);buildRefTree();buildNsRef();renderSyntaxRef();renderSamples();applyDbgLayout('guide');applyDbgLayout('play');
 (function(){var src=document.getElementById('doc-internals');var dst=document.getElementById('doc-internals-inline');if(src&&dst)dst.innerHTML=src.innerHTML;})();
 (function(){var sel=document.getElementById('example');DATA.forEach(function(d,i){var o=document.createElement('option');o.value=String(i);o.textContent=(i+1)+'. '+d.title;sel.appendChild(o);});
-  // Workflow examples live in the same single dropdown (they round-trip through
-  // every dialect, so there's no need for a separate workflow selector).
-  var wkeys=(typeof WF_EXAMPLES==='object')?Object.keys(WF_EXAMPLES):[];
-  if(wkeys.length){var g=document.createElement('optgroup');g.label='Workflow';var base=DATA.length;
-    wkeys.forEach(function(name,j){var o=document.createElement('option');o.value='wf:'+name;o.textContent=(base+j+1)+'. '+name;g.appendChild(o);});
-    sel.appendChild(g);}
 })();
+// One sample set for every language: load the sample in a dialect it ships in,
+// then present it in the CURRENT view -- including Workflow, which is raised from
+// the shared AST via PicoCompile.toWorkflow (full-fidelity round-trip).
 function loadExample(){
-  var raw=document.getElementById('example').value;
-  if(/^wf:/.test(raw)){
-    var name=raw.slice(3), ex=(typeof WF_EXAMPLES==='object')?WF_EXAMPLES[name]:null; if(!ex)return;
-    if(typeof setLang==='function'&&CUR_LANG!=='workflow')setLang('workflow');
-    setSrc(JSON.stringify(ex.map(function(s){return JSON.parse(JSON.stringify(s));}),null,2));
-    WF_LAST=getSrc();
-    if(typeof wfRenderDesigner==='function')try{wfRenderDesigner();}catch(e){}
-    compileSrc(false); return;
+  var i=parseInt(document.getElementById('example').value,10)||0;var d=DATA[i];if(!d)return;
+  var cur=CUR_LANG;
+  var native=d.basic?'basic':(d.c?'c':(d.python?'python':(d.english?'english':'basic')));
+  if(!d[native]){compileSrc(false);return;}
+  if(cur==='workflow'){
+    var wf=null; try{ if(typeof PicoCompile!=='undefined'&&PicoCompile.toWorkflow) wf=PicoCompile.toWorkflow(d[native].src,native); }catch(e){}
+    if(wf&&typeof looksLikeWorkflowJson==='function'&&looksLikeWorkflowJson(wf)){ setSrc(wf); WF_LAST=wf; if(typeof wfRenderDesigner==='function')try{wfRenderDesigner();}catch(e){} compileSrc(false); return; }
+    setLang(native); setSrc(d[native].src); compileSrc(false); return;
   }
-  var i=parseInt(raw,10)||0;var d=DATA[i];if(!d)return;
-  var cur=document.getElementById('lang').value;
   if(d[cur]){setSrc(d[cur].src);compileSrc(false);return;}
-  // sample isn't available in the current dialect (e.g. Workflow): switch the
-  // language to one the sample has, so the toggle/editor/compile all agree.
-  var lang=d.basic?'basic':(d.c?'c':(d.python?'python':(d.english?'english':cur)));
-  if(lang!==cur&&typeof setLang==='function')setLang(lang);
-  if(d[lang]){setSrc(d[lang].src);compileSrc(false);}
+  setLang(native); setSrc(d[native].src); compileSrc(false);
 }
 document.getElementById('example').onchange=loadExample;
 document.getElementById('lang').addEventListener('change',function(){onLangChange();});

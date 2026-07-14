@@ -692,11 +692,14 @@ function setLang(lang){
   if(typeof getSrc==='function'&&typeof setSrc==='function'){
     var src=getSrc();
     if(lang==='workflow'){
-      // Returning to the workflow surface: keep the JSON if it already is one;
-      // else restore the workflow we last translated away from (round-trip);
-      // else seed a starter step list.
-      if(!(typeof looksLikeWorkflowJson==='function'&&looksLikeWorkflowJson(src)))
-        setSrc((typeof WF_LAST==='string'&&WF_LAST)?WF_LAST:WF_SNIPPET);
+      // Raise the current dialect source into first-class workflow steps through
+      // the shared AST (real X -> workflow round-trip). Keep the JSON if it already
+      // is one; else seed a starter list only when there's nothing to raise.
+      if(!(typeof looksLikeWorkflowJson==='function'&&looksLikeWorkflowJson(src))){
+        var raised=null;
+        try{ if(typeof PicoCompile!=='undefined'&&PicoCompile.toWorkflow&&oldLang&&oldLang!=='workflow'&&src&&src.trim()) raised=PicoCompile.toWorkflow(src,oldLang); }catch(e){}
+        setSrc((raised&&looksLikeWorkflowJson(raised))?raised:((typeof WF_LAST==='string'&&WF_LAST)?WF_LAST:WF_SNIPPET));
+      }
     } else if(oldLang==='workflow'){
       // Design in workflow, then view as text: workflow -> English -> target.
       if(typeof looksLikeWorkflowJson==='function'&&looksLikeWorkflowJson(src)){
@@ -1527,31 +1530,22 @@ function layoutSave(){
 buildGuideTree();showGuideCard(0);buildRefTree();buildNsRef();renderSyntaxRef();renderSamples();applyDbgLayout('guide');applyDbgLayout('play');
 (function(){var src=document.getElementById('doc-internals');var dst=document.getElementById('doc-internals-inline');if(src&&dst)dst.innerHTML=src.innerHTML;})();
 (function(){var sel=document.getElementById('example');DATA.forEach(function(d,i){var o=document.createElement('option');o.value=String(i);o.textContent=(i+1)+'. '+d.title;sel.appendChild(o);});
-  // Workflow examples live in the same single dropdown (they round-trip through
-  // every dialect, so there's no need for a separate workflow selector).
-  var wkeys=(typeof WF_EXAMPLES==='object')?Object.keys(WF_EXAMPLES):[];
-  if(wkeys.length){var g=document.createElement('optgroup');g.label='Workflow';var base=DATA.length;
-    wkeys.forEach(function(name,j){var o=document.createElement('option');o.value='wf:'+name;o.textContent=(base+j+1)+'. '+name;g.appendChild(o);});
-    sel.appendChild(g);}
 })();
+// One sample set for every language: load the sample in a dialect it ships in,
+// then present it in the CURRENT view -- including Workflow, which is raised from
+// the shared AST via PicoCompile.toWorkflow (full-fidelity round-trip).
 function loadExample(){
-  var raw=document.getElementById('example').value;
-  if(/^wf:/.test(raw)){
-    var name=raw.slice(3), ex=(typeof WF_EXAMPLES==='object')?WF_EXAMPLES[name]:null; if(!ex)return;
-    if(typeof setLang==='function'&&CUR_LANG!=='workflow')setLang('workflow');
-    setSrc(JSON.stringify(ex.map(function(s){return JSON.parse(JSON.stringify(s));}),null,2));
-    WF_LAST=getSrc();
-    if(typeof wfRenderDesigner==='function')try{wfRenderDesigner();}catch(e){}
-    compileSrc(false); return;
+  var i=parseInt(document.getElementById('example').value,10)||0;var d=DATA[i];if(!d)return;
+  var cur=CUR_LANG;
+  var native=d.basic?'basic':(d.c?'c':(d.python?'python':(d.english?'english':'basic')));
+  if(!d[native]){compileSrc(false);return;}
+  if(cur==='workflow'){
+    var wf=null; try{ if(typeof PicoCompile!=='undefined'&&PicoCompile.toWorkflow) wf=PicoCompile.toWorkflow(d[native].src,native); }catch(e){}
+    if(wf&&typeof looksLikeWorkflowJson==='function'&&looksLikeWorkflowJson(wf)){ setSrc(wf); WF_LAST=wf; if(typeof wfRenderDesigner==='function')try{wfRenderDesigner();}catch(e){} compileSrc(false); return; }
+    setLang(native); setSrc(d[native].src); compileSrc(false); return;
   }
-  var i=parseInt(raw,10)||0;var d=DATA[i];if(!d)return;
-  var cur=document.getElementById('lang').value;
   if(d[cur]){setSrc(d[cur].src);compileSrc(false);return;}
-  // sample isn't available in the current dialect (e.g. Workflow): switch the
-  // language to one the sample has, so the toggle/editor/compile all agree.
-  var lang=d.basic?'basic':(d.c?'c':(d.python?'python':(d.english?'english':cur)));
-  if(lang!==cur&&typeof setLang==='function')setLang(lang);
-  if(d[lang]){setSrc(d[lang].src);compileSrc(false);}
+  setLang(native); setSrc(d[native].src); compileSrc(false);
 }
 document.getElementById('example').onchange=loadExample;
 document.getElementById('lang').addEventListener('change',function(){onLangChange();});

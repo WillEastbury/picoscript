@@ -93,6 +93,28 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
   const okWeb = web.hasMap && web.hasHeader && web.compiled;
   console.log('WEBIDE WEB -> Map + Http.Request:', okWeb, '|', JSON.stringify(web));
 
+  // ---- Workflow first-class round-trip fidelity (any dialect -> workflow -> run) ----
+  // Raise a control-flow program into workflow steps via the shared AST, lower it
+  // back through WorkflowPico -> English, and assert identical VM output.
+  const fidelity = await page.evaluate(() => {
+    function runWords(src, lang) { var r = PicoCompile.compileDebug(src, lang); var vm = new PicoVM({}); vm.run(r.words.map(function (w) { return w >>> 0; })); return vm.outputInts(); }
+    var cases = [
+      ['c', 'int sum=0; for(int i=1;i<=5;i=i+1){ sum=sum+i; } if(sum>=10){print(sum);}else{print(0);}'],
+      ['c', 'int n=3; while(n>0){ print(n); n=n-1; }'],
+      ['basic', 'x=2\nSWITCH x\n CASE 1\n  PRINT 10\n CASE 2\n  PRINT 20\n DEFAULT\n  PRINT 99\nENDSWITCH'],
+      ['c', 'int a=1; int b=0; if(a && !b){print(1);}else{print(0);}']
+    ];
+    return cases.map(function (c) {
+      var direct = runWords(c[1], c[0]);
+      var wf = PicoCompile.toWorkflow(c[1], c[0]);          // raise
+      var eng = wfCompileSrc(wf).source;                    // lower (WorkflowPico)
+      var via = runWords(eng, 'english');
+      return { lang: c[0], ok: JSON.stringify(direct) === JSON.stringify(via), direct: direct, via: via };
+    });
+  });
+  const okFidelity = fidelity.every(function (f) { return f.ok; });
+  console.log('WEBIDE workflow round-trip fidelity:', okFidelity, '|', JSON.stringify(fidelity));
+
   // ---- Report / Form ----
   const rep = await page.evaluate(() => {
     document.getElementById('lang').value = 'basic';
@@ -122,7 +144,7 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
   console.log('WEBIDE page errors (excl. monaco/cdn):', pageErrs.length);
   if (pageErrs.length) console.log(pageErrs.slice(0, 8).join('\n'));
 
-  const allOk = okLayout && okWf && okWfAdd && okWeb && okReport && okForm && pageErrs.length === 0;
+  const allOk = okLayout && okWf && okWfAdd && okWeb && okFidelity && okReport && okForm && pageErrs.length === 0;
   console.log(allOk ? '\nWEBIDE ALL VERIFIED OK' : '\nWEBIDE VERIFICATION FAILED');
   process.exit(allOk ? 0 : 1);
 })();
