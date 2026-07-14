@@ -76,9 +76,9 @@ Print Map.ValAt(0).              ' -> 42  (insertion order)
 | JS reference VM (`vm/picovm.js`) | ✅ (`tests/test_map_hooks.js`) |
 | Python reference VM (`picoscript_vm.py`) | ✅ (`tests/test_map_hooks.py`) |
 | C VMs (`picoscript/vm`, `picoweb`, `pios`) | ✅ (native C diff — bit-identical to JS/Python) |
-| C# workflow host + oracle (integer subset) | ⏳ |
-| `BareMetal.PicoScript` bundle | ⏳ |
-| WEB header dicts + round-trip | ⏳ (P5) |
+| C# workflow host + oracle (integer subset) | ✅ (`developercli/workflow` differential `map_int`) |
+| `BareMetal.PicoScript` bundle | ✅ (`BareMetalPicoScript.test.js`) |
+| WEB header dicts + round-trip | ✅ (WorkflowPico WEB → request Map + Http.Request; FlowCanvas headers editor) |
 
 ## WEB integration (P5)
 `Http.Request(method, urlSpan, reqHeadersMap, bodySpan) -> resp`,

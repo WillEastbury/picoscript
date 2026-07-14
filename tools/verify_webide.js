@@ -45,6 +45,22 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
   const okWfAdd = wfAdd.after === wfAdd.before + 1 && wfAdd.out.length === 2 && wfAdd.out[0] === 100;
   console.log('WEBIDE designer add-step re-syncs:', okWfAdd, '|', JSON.stringify(wfAdd));
 
+  // WEB step lowers to a request Map + Http.Request and compiles cleanly
+  const web = await page.evaluate(() => {
+    var steps = [{ type: 'WEB', method: 'POST', url: '/api/orders', headers: { Accept: 'application/json' }, result: 'resp' }];
+    setSrc(JSON.stringify(steps, null, 2));
+    wfRenderDesigner();
+    compileSrc(false);
+    var eng = document.getElementById('wfEng').textContent;
+    return {
+      hasMap: eng.indexOf('Map.New()') >= 0 && eng.indexOf('Http.Request(') >= 0,
+      hasHeader: eng.indexOf('Map.PutSS("Accept", "application/json")') >= 0,
+      compiled: (document.getElementById('cerr').textContent || '').indexOf('compiled') >= 0
+    };
+  });
+  const okWeb = web.hasMap && web.hasHeader && web.compiled;
+  console.log('WEBIDE WEB -> Map + Http.Request:', okWeb, '|', JSON.stringify(web));
+
   // ---- Report / Form ----
   const rep = await page.evaluate(() => {
     document.getElementById('lang').value = 'basic';
@@ -74,7 +90,7 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
   console.log('WEBIDE page errors (excl. monaco/cdn):', pageErrs.length);
   if (pageErrs.length) console.log(pageErrs.slice(0, 8).join('\n'));
 
-  const allOk = okWf && okWfAdd && okReport && okForm && pageErrs.length === 0;
+  const allOk = okWf && okWfAdd && okWeb && okReport && okForm && pageErrs.length === 0;
   console.log(allOk ? '\nWEBIDE ALL VERIFIED OK' : '\nWEBIDE VERIFICATION FAILED');
   process.exit(allOk ? 0 : 1);
 })();
