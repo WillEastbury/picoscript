@@ -3060,7 +3060,13 @@
         steps.push({ type: "LOOP", until: until, condition: wfExpr(cond) }); break;
       }
       case "ForTo": steps.push({ type: "FOR", "var": s.v, from: wfLitOrExpr(s.start), to: wfLitOrExpr(s.end) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
-      case "ForEach": steps.push({ type: "FOREACH", "var": s.v, "in": wfExpr(s.count) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
+      case "ForEach": {
+        // ForEach iterates 0..count-1; workflow expresses that as a FOR loop
+        // (WorkflowPico's FOREACH is for iterating array *values*, not a count).
+        var cnt = s.count;
+        var to = (cnt && cnt.t === "Num") ? ((cnt.value | 0) - 1) : wfExpr({ t: "Bin", op: "-", lhs: cnt || { t: "Num", value: 0 }, rhs: { t: "Num", value: 1 } });
+        steps.push({ type: "FOR", "var": s.v, from: 0, to: to }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
+      }
       case "For": {
         var f = forLoopInfo(s);
         if (f) { steps.push({ type: "FOR", "var": f.v, from: wfLitOrExpr(f.start), to: wfLitOrExpr(f.end) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); }
@@ -3073,7 +3079,14 @@
         var def = s.def || s.els; if (def && (Array.isArray(def) ? def.length : true)) { steps.push({ type: "DEFAULT" }); wfEmitSeq(Array.isArray(def) ? def : [def], steps); }
         steps.push({ type: "END" }); break;
       }
-      case "Print": steps.push(exprHasTernary(s.value) ? { type: "RAW", code: wfRaw(s) } : { type: "LOG", message: wfExpr(s.value) }); break;
+      case "Print": {
+        if (exprHasTernary(s.value)) { steps.push({ type: "RAW", code: wfRaw(s) }); break; }
+        var pv = s.value;
+        if (pv && pv.t === "Num") steps.push({ type: "LOG", message: pv.value | 0 });
+        else if (pv && pv.t === "Var") steps.push({ type: "LOG", message: pv.name });
+        else steps.push({ type: "LOG", message: "${" + wfExpr(pv) + "}" });   // expression -> printed by emitLog
+        break;
+      }
       case "Break": steps.push({ type: "BREAK" }); break;
       case "Skip": case "Continue": steps.push({ type: "SKIP" }); break;
       case "Return": steps.push(s.value ? { type: "RETURN", value: wfExpr(s.value) } : { type: "RETURN" }); break;
@@ -3392,7 +3405,8 @@
     if(s.t==="IncDec")return p+(incDecDelta(s)>=0?"Increase ":"Decrease ")+incDecName(s)+" by "+Math.abs(incDecDelta(s))+".";
     if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]],els=s.els;var o=p+"If "+exprStr(arms[0][0],"english")+":\n";arms[0][1].forEach(function(st){o+=sE(st,d+1)+"\n";});if(els){o+=p+"Otherwise:\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sE(st,d+1)+"\n";});}return o.trimEnd();}
     if(s.t==="While"){var o2=p+"While "+exprStr(s.cond,"english")+":\n";s.body.forEach(function(st){o2+=sE(st,d+1)+"\n";});return o2.trimEnd();}
-    if(s.t==="ForTo"||s.t==="ForEach"){var n=s.count||s.end,start=s.count?{t:"Num",value:0}:s.start;return p+"For each "+(s.v||"i")+" from "+exprStr(start,"english")+" to "+exprStr(n,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");}
+    if(s.t==="ForTo")return p+"For each "+(s.v||"i")+" from "+exprStr(s.start,"english")+" to "+exprStr(s.end,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");
+    if(s.t==="ForEach"){var cnt=s.count||{t:"Num",value:0};var endN=(cnt.t==="Num")?{t:"Num",value:(cnt.value|0)-1}:{t:"Bin",op:"-",lhs:cnt,rhs:{t:"Num",value:1}};return p+"For each "+(s.v||"i")+" from 0 to "+exprStr(endN,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");}
     if(s.t==="Return")return p+"Return"+(s.value?" "+exprStr(s.value,"english"):"")+".";
     if(s.t==="Break")return p+"Stop.";
     if(s.t==="Skip"||s.t==="Continue")return p+"Skip.";

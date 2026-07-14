@@ -161,6 +161,7 @@ def main():
     layout_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.Report.js"), encoding="utf-8").read()
     dd_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.DragDrop.js"), encoding="utf-8").read()
     flow_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.Workflow.js"), encoding="utf-8").read()
+    bus_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.PubSub.js"), encoding="utf-8").read()
 
     html = PAGE
     html = html.replace("/*__HOOKS__*/", hooks_js)
@@ -172,6 +173,7 @@ def main():
     html = html.replace("/*__LAYOUT__*/", layout_js)
     html = html.replace("/*__DD__*/", dd_js)
     html = html.replace("/*__FLOW__*/", flow_js)
+    html = html.replace("/*__BUS__*/", bus_js)
     html = html.replace("/*__SER__*/", ser_js)
     html = html.replace("/*__STORE__*/", store_js)
     html = html.replace("/*__DATA__*/", json.dumps(gallery))
@@ -556,6 +558,8 @@ PAGE = r"""<!DOCTYPE html>
       <button class="dbg-pin" data-pin="pdbg-cards" onclick="togglePinnedPanel('play','pdbg-cards')" title="Pin Cards">📌</button>
       <button onclick="pToggleDbg(this,'pdbg-output')">Output</button>
       <button class="dbg-pin" data-pin="pdbg-output" onclick="togglePinnedPanel('play','pdbg-output')" title="Pin Output">📌</button>
+      <button onclick="pToggleDbg(this,'pdbg-events')">Events</button>
+      <button class="dbg-pin" data-pin="pdbg-events" onclick="togglePinnedPanel('play','pdbg-events')" title="Pin Events">📌</button>
       <select class="dbg-size" id="playDbgSize" onchange="setDbgSize('play',this.value)"><option value="shallow">Shallow</option><option value="normal" selected>Normal</option><option value="deep">Deep</option><option value="dynamic">Dynamic</option></select>
       <button style="margin-left:auto" onclick="pCollapseDbg()">&#9660;</button>
     </div>
@@ -567,6 +571,7 @@ PAGE = r"""<!DOCTYPE html>
       </div><div class="state vm-state"></div></div>
       <div class="dbg-panel" id="pdbg-cards"><table class="wal"><tbody id="walbody"></tbody></table><button class="ghost" style="margin-top:6px" onclick="walClear()">Clear</button><div class="state vm-state"></div></div>
       <div class="dbg-panel" id="pdbg-output"><div class="out" id="out"></div><div class="state vm-state"></div></div>
+      <div class="dbg-panel" id="pdbg-events"><div style="display:flex;gap:6px;align-items:center;margin-bottom:4px"><span class="muted" style="font-size:11px">Activity bus &mdash; compile / load / save / run / deploy / workflow RAISE all publish here (BareMetal.PubSub; the same RAISE/ON events)</span><button class="ghost" style="margin-left:auto" onclick="busClear()">Clear</button></div><table class="wal"><thead><tr><th style="width:70px">t (ms)</th><th style="width:150px">event</th><th>detail</th></tr></thead><tbody id="eventsbody"></tbody></table></div>
     </div>
   </div>
   <!-- Flyout triggers -->
@@ -658,6 +663,7 @@ PAGE = r"""<!DOCTYPE html>
 <script>/*__WF__*/</script>
 <script>/*__DD__*/</script>
 <script>/*__FLOW__*/</script>
+<script>/*__BUS__*/</script>
 <script>/*__LAYOUT__*/</script>
 <script>/*__SER__*/</script>
 <script>/*__STORE__*/</script>
@@ -671,6 +677,31 @@ var CUR_LANG='c';
 var CUR_GUIDE_CARD=0;
 
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// ---- Activity event bus (the Showcase "events" concept, in the main IDE) ------
+// One BareMetal.PubSub bus; every lifecycle action (compile / sample load / file
+// save / run / deploy / HTTP request / workflow RAISE) publishes to it, and the
+// Events debugger tab shows the live activity log. This is the same RAISE/ON idea
+// the workflow dialect exposes -- everything is wired with events.
+var BUS=(typeof BareMetal!=='undefined'&&BareMetal.PubSub)?BareMetal.PubSub:null;
+var BUS_LOG=[], BUS_T0=(typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();
+function busNow(){var n=(typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();return Math.max(0,Math.round(n-BUS_T0));}
+function busEmit(topic,detail){ if(BUS){try{BUS.emit(topic,detail||{});}catch(e){}} else { busRecord(topic,detail); } }
+function busRecord(topic,detail){
+  BUS_LOG.push({t:busNow(),topic:topic,detail:detail});
+  if(BUS_LOG.length>300) BUS_LOG.shift();
+  busRender();
+}
+function busRender(){
+  var tb=document.getElementById('eventsbody'); if(!tb) return;
+  if(!BUS_LOG.length){tb.innerHTML='<tr><td colspan="3" style="color:var(--muted)">(no activity yet &mdash; compile, load a sample, save, run, or deploy)</td></tr>';return;}
+  tb.innerHTML=BUS_LOG.slice(-120).reverse().map(function(e){
+    var det=''; try{det=(e.detail&&typeof e.detail==='object')?JSON.stringify(e.detail):String(e.detail==null?'':e.detail);}catch(_){det='';}
+    return '<tr><td>'+e.t+'</td><td><b>'+esc(String(e.topic))+'</b></td><td>'+esc(det.slice(0,160))+'</td></tr>';
+  }).join('');
+}
+function busClear(){BUS_LOG=[];busRender();}
+if(BUS){ try{ BUS.on('**',function(detail,meta){ busRecord((meta&&(meta.topic||meta.event))||'event', detail); }); }catch(e){} }
 
 function showView(v){
   document.querySelectorAll('.view').forEach(function(e){e.classList.remove('active');});
@@ -997,6 +1028,7 @@ function psFilesSave(name){
   files[name]={kind:kind,lang:kind==='code'?(document.getElementById('lang').value||'basic'):'',src:getSrc(),updated:Date.now()}; filesWrite(files); filesSetActive(name); filesRender();
   if(kind==='card'){var n=cardToWal(name);filesStatus(n>=0?('Saved '+name+' \u2192 '+n+' picowal cards'):('Saved '+name+' (invalid card JSON)'),n<0);}
   else filesStatus('Saved '+name);
+  busEmit('file.save',{name:name,kind:kind});
   return name;
 }
 function psFilesSaveAs(name){return psFilesSave(name||((typeof prompt==='function')?prompt('Save file as',ACTIVE_FILE||filesUniqueName(filesRead())):''));}
@@ -1059,6 +1091,7 @@ function deployPackage(pkg,opts){
   var nc=0; Object.keys(files).forEach(function(n){if(fileKind(n)==='card'){var k=cardToWal(n);if(k>0)nc+=k;}});
   filesRender();
   filesStatus('Deployed '+Object.keys(pkg.files).length+' files, '+nc+' picowal cards, '+((pkg.routes||[]).length)+' routes');
+  busEmit('deploy',{files:Object.keys(pkg.files).length,cards:nc,routes:(pkg.routes||[]).length});
   return true;
 }
 function pkgExportOpen(){var m=document.getElementById('pkgModal'),t=document.getElementById('pkgText');if(!m||!t)return;t.value=JSON.stringify(exportPackage(),null,2);m.classList.add('open');document.getElementById('pkgTitle').textContent='Card package (copy to export, or paste + Deploy)';t.focus();}
@@ -1094,12 +1127,12 @@ function compileSrc(run){
     try{var wf=wfCompileSrc(src);src=wf.source;lang='english';WF_LINE_STEPS=wf.lineSteps||null;}
     catch(e){err.textContent='workflow: '+String(e.message||e);err.style.color='#ff7b72';return;}
   } else { WF_LINE_STEPS=null; }
-  try{var r=PicoCompile.compileDebug(src,lang);DBG.words=r.words.map(function(w){return w>>>0;});DBG.disasm=DBG.words.map(jsDisasm);DBG.vars=r.vars||{};DBG.debug=r.debug||{};DBG.src=src;rebuildDebugMaps();err.textContent='compiled '+DBG.words.length+' words';err.style.color='#7ee787';dbgReset();if(run)dbgRun();if(typeof renderLayout==='function')try{renderLayout();}catch(e){}}
-  catch(e){err.textContent=String(e.message||e);err.style.color='#ff7b72';}
+  try{var r=PicoCompile.compileDebug(src,lang);DBG.words=r.words.map(function(w){return w>>>0;});DBG.disasm=DBG.words.map(jsDisasm);DBG.vars=r.vars||{};DBG.debug=r.debug||{};DBG.src=src;rebuildDebugMaps();err.textContent='compiled '+DBG.words.length+' words';err.style.color='#7ee787';busEmit('compile.ok',{lang:CUR_LANG,words:DBG.words.length});dbgReset();if(run)dbgRun();if(typeof renderLayout==='function')try{renderLayout();}catch(e){}}
+  catch(e){err.textContent=String(e.message||e);err.style.color='#ff7b72';busEmit('compile.error',{lang:CUR_LANG,message:String(e.message||e)});}
 }
 function dbgReset(){DBG.vm=new PicoVM({cards:walBackend()});DBG.vm.load(DBG.words);render();renderWal();updateSourceDecorations();}
 function dbgStep(){if(DBG.vm){DBG.vm.step();render();renderWal();}}
-function dbgRun(){if(!DBG.vm)dbgReset();var g=0;while(DBG.vm.step()&&g++<200000){if(pcHasBreakpoint(DBG.vm.pc))break;}render();renderWal();}
+function dbgRun(){if(!DBG.vm)dbgReset();var g=0;while(DBG.vm.step()&&g++<200000){if(pcHasBreakpoint(DBG.vm.pc))break;}render();renderWal();busEmit('run',{steps:DBG.vm.steps,halted:DBG.vm.halted,status:DBG.vm.httpStatus});}
 function render(){
   var vm=DBG.vm;if(!vm)return;
   document.getElementById('listing').innerHTML=DBG.disasm.map(function(t,idx){var rec=DBG.debug&&DBG.debug[idx],lc=rec?PicoCompile.offsetToLineCol(DBG.src,rec[0]):[0,0],sym=lc[0]?('  ; L'+lc[0]+':'+lc[1]+' '+PicoCompile.sourceLineText(DBG.src,rec[0]).trim()):'';return '<div class="row'+(idx===vm.pc?' pc':'')+(pcHasBreakpoint(idx)?' bp':'')+'" onclick="toggleBp('+idx+')" title="click to toggle PC breakpoint">'+String(idx).padStart(3,' ')+'  '+esc(t+sym)+'</div>';}).join('');
@@ -1191,7 +1224,7 @@ function writeDescriptor(wal,req){
 }
 function toCompilable(){var lang=document.getElementById('lang').value,src=getSrc();if(lang==='workflow'){var wf=wfCompileSrc(src);return{src:wf.source,lang:'english'};}return{src:src,lang:lang};}
 function fileCompilable(f){if(!f)return null;if(f.lang==='workflow'){var wf=wfCompileSrc(f.src);return{src:wf.source,lang:'english'};}return{src:f.src,lang:f.lang||'basic'};}
-function sendRequest(){var text=document.getElementById('reqbox').value,isHex=document.getElementById('reqmode').value==='hex';var req=parseRequest(text,isHex),wal=walBackend();writeDescriptor(wal,req);var routed=matchRoute(req.method,req.path),cl;try{cl=routed?fileCompilable(filesRead()[routed.file]):toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('respout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderResponse(vm,req);if(routed){var el=document.getElementById('respout');el.textContent='\u2192 routed to '+routed.file+'\n'+el.textContent;}renderWal();}
+function sendRequest(){var text=document.getElementById('reqbox').value,isHex=document.getElementById('reqmode').value==='hex';var req=parseRequest(text,isHex),wal=walBackend();writeDescriptor(wal,req);var routed=matchRoute(req.method,req.path),cl;try{cl=routed?fileCompilable(filesRead()[routed.file]):toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('respout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderResponse(vm,req);if(routed){var el=document.getElementById('respout');el.textContent='\u2192 routed to '+routed.file+'\n'+el.textContent;}renderWal();busEmit('http.request',{method:req.method,path:req.path,status:vm.httpStatus,route:routed?routed.file:null});}
 function sendTcp(){var text=document.getElementById('tcpbox').value;var req=parseRequest(text,true),wal=walBackend();writeDescriptor(wal,req);var cl;try{cl=toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('tcpout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderTcpResponse(vm,req);renderWal();}
 function responseBodyText(vm){return (typeof vm.outputDisplayText==='function')?vm.outputDisplayText():vm.outputText();}
 function renderResponse(vm,req){var reasons={200:'OK',201:'Created',400:'Bad Request',404:'Not Found',500:'Error'};var el=document.getElementById('respout');el.style.color='#7ee787';var body=vm.outputInts();if(vm.httpStatus<0){el.style.color='#ffd866';el.textContent='(no Net.Status)\noutput: ['+body.join(', ')+']';return;}var L=[];L.push('HTTP/1.1 '+vm.httpStatus+' '+(reasons[vm.httpStatus]||''));L.push('Content-Type: '+(vm.httpType||'application/octet-stream'));L.push('X-Steps: '+vm.steps);L.push('');var _bt=responseBodyText(vm),_bp=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_bt);L.push(_bp&&_bt?_bt:JSON.stringify(body));el.textContent=L.join('\n');}
@@ -1537,6 +1570,7 @@ buildGuideTree();showGuideCard(0);buildRefTree();buildNsRef();renderSyntaxRef();
 function loadExample(){
   var i=parseInt(document.getElementById('example').value,10)||0;var d=DATA[i];if(!d)return;
   var cur=CUR_LANG;
+  busEmit('sample.load',{title:d.title,view:cur});
   var native=d.basic?'basic':(d.c?'c':(d.python?'python':(d.english?'english':'basic')));
   if(!d[native]){compileSrc(false);return;}
   if(cur==='workflow'){
@@ -1552,7 +1586,7 @@ document.getElementById('lang').addEventListener('change',function(){onLangChang
 document.getElementById('src').addEventListener('input',function(){filesRender();if(CUR_LANG==='workflow'){try{wfRenderDesigner();}catch(e){}}});
 document.getElementById('lang').value='basic';
 document.getElementById('src').value=RESPONDER;
-initMonaco();compileSrc(false);loadSample();renderWal();renderLayout();
+initMonaco();compileSrc(false);loadSample();renderWal();renderLayout();busRender();
 (function(){var ls=filesSafeLocalStorage(),active='';try{active=ls?ls.getItem(PS_ACTIVE_FILE_KEY)||'':'';}catch(e){} if(active&&filesRead()[active]) psFilesOpen(active); else filesRender();})();
 document.getElementById('flyoutTriggers').style.display='none';
 </script>

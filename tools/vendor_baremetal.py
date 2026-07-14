@@ -24,6 +24,7 @@ MODULES = [
     "BareMetal.Report.js",         # templated layout engine (reports + forms)
     "BareMetal.DragDrop.js",       # pointer drag & drop (designer dependency)
     "BareMetal.Workflow.js",       # workflow engine + christmas-tree Designer canvas
+    "BareMetal.PubSub.js",         # event bus (activity / RAISE-ON wiring)
 ]
 
 HEADER = (

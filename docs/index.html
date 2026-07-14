@@ -10459,6 +10459,8 @@ lowering convention or host contract.</p>
       <button class="dbg-pin" data-pin="pdbg-cards" onclick="togglePinnedPanel('play','pdbg-cards')" title="Pin Cards">📌</button>
       <button onclick="pToggleDbg(this,'pdbg-output')">Output</button>
       <button class="dbg-pin" data-pin="pdbg-output" onclick="togglePinnedPanel('play','pdbg-output')" title="Pin Output">📌</button>
+      <button onclick="pToggleDbg(this,'pdbg-events')">Events</button>
+      <button class="dbg-pin" data-pin="pdbg-events" onclick="togglePinnedPanel('play','pdbg-events')" title="Pin Events">📌</button>
       <select class="dbg-size" id="playDbgSize" onchange="setDbgSize('play',this.value)"><option value="shallow">Shallow</option><option value="normal" selected>Normal</option><option value="deep">Deep</option><option value="dynamic">Dynamic</option></select>
       <button style="margin-left:auto" onclick="pCollapseDbg()">&#9660;</button>
     </div>
@@ -10470,6 +10472,7 @@ lowering convention or host contract.</p>
       </div><div class="state vm-state"></div></div>
       <div class="dbg-panel" id="pdbg-cards"><table class="wal"><tbody id="walbody"></tbody></table><button class="ghost" style="margin-top:6px" onclick="walClear()">Clear</button><div class="state vm-state"></div></div>
       <div class="dbg-panel" id="pdbg-output"><div class="out" id="out"></div><div class="state vm-state"></div></div>
+      <div class="dbg-panel" id="pdbg-events"><div style="display:flex;gap:6px;align-items:center;margin-bottom:4px"><span class="muted" style="font-size:11px">Activity bus &mdash; compile / load / save / run / deploy / workflow RAISE all publish here (BareMetal.PubSub; the same RAISE/ON events)</span><button class="ghost" style="margin-left:auto" onclick="busClear()">Clear</button></div><table class="wal"><thead><tr><th style="width:70px">t (ms)</th><th style="width:150px">event</th><th>detail</th></tr></thead><tbody id="eventsbody"></tbody></table></div>
     </div>
   </div>
   <!-- Flyout triggers -->
@@ -18902,7 +18905,13 @@ function compressBound(inputLen) {
         steps.push({ type: "LOOP", until: until, condition: wfExpr(cond) }); break;
       }
       case "ForTo": steps.push({ type: "FOR", "var": s.v, from: wfLitOrExpr(s.start), to: wfLitOrExpr(s.end) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
-      case "ForEach": steps.push({ type: "FOREACH", "var": s.v, "in": wfExpr(s.count) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
+      case "ForEach": {
+        // ForEach iterates 0..count-1; workflow expresses that as a FOR loop
+        // (WorkflowPico's FOREACH is for iterating array *values*, not a count).
+        var cnt = s.count;
+        var to = (cnt && cnt.t === "Num") ? ((cnt.value | 0) - 1) : wfExpr({ t: "Bin", op: "-", lhs: cnt || { t: "Num", value: 0 }, rhs: { t: "Num", value: 1 } });
+        steps.push({ type: "FOR", "var": s.v, from: 0, to: to }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
+      }
       case "For": {
         var f = forLoopInfo(s);
         if (f) { steps.push({ type: "FOR", "var": f.v, from: wfLitOrExpr(f.start), to: wfLitOrExpr(f.end) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); }
@@ -18915,7 +18924,14 @@ function compressBound(inputLen) {
         var def = s.def || s.els; if (def && (Array.isArray(def) ? def.length : true)) { steps.push({ type: "DEFAULT" }); wfEmitSeq(Array.isArray(def) ? def : [def], steps); }
         steps.push({ type: "END" }); break;
       }
-      case "Print": steps.push(exprHasTernary(s.value) ? { type: "RAW", code: wfRaw(s) } : { type: "LOG", message: wfExpr(s.value) }); break;
+      case "Print": {
+        if (exprHasTernary(s.value)) { steps.push({ type: "RAW", code: wfRaw(s) }); break; }
+        var pv = s.value;
+        if (pv && pv.t === "Num") steps.push({ type: "LOG", message: pv.value | 0 });
+        else if (pv && pv.t === "Var") steps.push({ type: "LOG", message: pv.name });
+        else steps.push({ type: "LOG", message: "${" + wfExpr(pv) + "}" });   // expression -> printed by emitLog
+        break;
+      }
       case "Break": steps.push({ type: "BREAK" }); break;
       case "Skip": case "Continue": steps.push({ type: "SKIP" }); break;
       case "Return": steps.push(s.value ? { type: "RETURN", value: wfExpr(s.value) } : { type: "RETURN" }); break;
@@ -19234,7 +19250,8 @@ function compressBound(inputLen) {
     if(s.t==="IncDec")return p+(incDecDelta(s)>=0?"Increase ":"Decrease ")+incDecName(s)+" by "+Math.abs(incDecDelta(s))+".";
     if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]],els=s.els;var o=p+"If "+exprStr(arms[0][0],"english")+":\n";arms[0][1].forEach(function(st){o+=sE(st,d+1)+"\n";});if(els){o+=p+"Otherwise:\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sE(st,d+1)+"\n";});}return o.trimEnd();}
     if(s.t==="While"){var o2=p+"While "+exprStr(s.cond,"english")+":\n";s.body.forEach(function(st){o2+=sE(st,d+1)+"\n";});return o2.trimEnd();}
-    if(s.t==="ForTo"||s.t==="ForEach"){var n=s.count||s.end,start=s.count?{t:"Num",value:0}:s.start;return p+"For each "+(s.v||"i")+" from "+exprStr(start,"english")+" to "+exprStr(n,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");}
+    if(s.t==="ForTo")return p+"For each "+(s.v||"i")+" from "+exprStr(s.start,"english")+" to "+exprStr(s.end,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");
+    if(s.t==="ForEach"){var cnt=s.count||{t:"Num",value:0};var endN=(cnt.t==="Num")?{t:"Num",value:(cnt.value|0)-1}:{t:"Bin",op:"-",lhs:cnt,rhs:{t:"Num",value:1}};return p+"For each "+(s.v||"i")+" from 0 to "+exprStr(endN,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");}
     if(s.t==="Return")return p+"Return"+(s.value?" "+exprStr(s.value,"english"):"")+".";
     if(s.t==="Break")return p+"Stop.";
     if(s.t==="Skip"||s.t==="Continue")return p+"Skip.";
@@ -21618,6 +21635,272 @@ if (typeof module !== 'undefined' && module.exports) module.exports = BareMetal.
 </script>
 <script>// VENDORED from BareMetalJsTools (single source of truth). Do not edit here;
 // edit upstream in baremetaljstools/src and re-run tools/vendor_baremetal.py.
+// Upstream: BareMetal.PubSub.js
+var BareMetal = (typeof BareMetal !== 'undefined') ? BareMetal : {};
+BareMetal.PubSub = (function(){
+  'use strict';
+
+  function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+  function copy(a, b) {
+    var out = {}, k;
+    for (k in (a || {})) if (own(a, k)) out[k] = a[k];
+    for (k in (b || {})) if (own(b, k)) out[k] = b[k];
+    return out;
+  }
+  function splitTopic(topic) { return String(topic == null ? '' : topic).split('.'); }
+  function hasWildcard(topic) { return typeof topic === 'string' && topic.indexOf('*') > -1; }
+  function matchParts(pattern, topic, pi, ti) {
+    var i;
+    if (pi === pattern.length) return ti === topic.length;
+    if (pattern[pi] === '**') {
+      if (pi === pattern.length - 1) return true;
+      for (i = ti; i <= topic.length; i++) if (matchParts(pattern, topic, pi + 1, i)) return true;
+      return false;
+    }
+    if (ti === topic.length) return false;
+    if (pattern[pi] === '*' || pattern[pi] === topic[ti]) return matchParts(pattern, topic, pi + 1, ti + 1);
+    return false;
+  }
+  function matches(pattern, topic) {
+    if (pattern === topic) return true;
+    if (!hasWildcard(pattern) || typeof topic !== 'string') return false;
+    return matchParts(splitTopic(pattern), splitTopic(topic), 0, 0);
+  }
+  function makeMeta(topic, opts) {
+    return {
+      topic: topic,
+      timestamp: Date.now(),
+      source: opts && own(opts, 'source') ? opts.source : null
+    };
+  }
+  function createBus() {
+    var subscriptions = {};
+    var stickyValues = new Map();
+    var middlewares = [];
+    var requestHandlers = {};
+    var api;
+
+    function tidy(topic) {
+      if (subscriptions[topic] && !subscriptions[topic].length) delete subscriptions[topic];
+    }
+    function removeEntry(topic, entry) {
+      var list = subscriptions[topic], i;
+      if (!list) return;
+      for (i = list.length - 1; i >= 0; i--) if (list[i] === entry) list.splice(i, 1);
+      tidy(topic);
+    }
+    function dispatch(entry, data, meta, isAsync) {
+      function call() {
+        try { entry.handler(data, meta); } catch (_) {}
+      }
+      if (entry.once) removeEntry(entry.topic, entry);
+      if (isAsync) setTimeout(call, 0);
+      else call();
+    }
+    function subscribe(topic, handler, opts, skipSticky) {
+      var entry;
+      if (typeof handler !== 'function') return function() {};
+      entry = { topic: topic, handler: handler, ns: opts && opts.ns || null, once: !!(opts && opts.once) };
+      (subscriptions[topic] = subscriptions[topic] || []).push(entry);
+      if (!skipSticky && stickyValues.has(topic)) {
+        try { handler(stickyValues.get(topic).data, stickyValues.get(topic).meta); } catch (_) {}
+        if (entry.once) removeEntry(topic, entry);
+      }
+      return function() { removeEntry(topic, entry); };
+    }
+    function getMatches(topic) {
+      var out = [];
+      var key, list, i;
+      list = subscriptions[topic];
+      if (list) for (i = 0; i < list.length; i++) out.push(list[i]);
+      for (key in subscriptions) if (own(subscriptions, key) && key !== topic && hasWildcard(key) && matches(key, topic)) {
+        list = subscriptions[key];
+        for (i = 0; i < list.length; i++) out.push(list[i]);
+      }
+      return out;
+    }
+    function runHandlers(topic, data, opts) {
+      var list = getMatches(topic);
+      var meta = makeMeta(topic, opts);
+      var isAsync = !!(opts && opts.async);
+      var i;
+      for (i = 0; i < list.length; i++) dispatch(list[i], data, meta, isAsync);
+    }
+    function runMiddlewares(topic, data, done, fail) {
+      var list = [];
+      var i;
+      function step(index) {
+        if (index >= list.length) return done();
+        try { list[index](topic, data, function() { step(index + 1); }); }
+        catch (err) { if (fail) fail(err); }
+      }
+      for (i = 0; i < middlewares.length; i++) if (!middlewares[i].pattern || matches(middlewares[i].pattern, topic)) list.push(middlewares[i].fn);
+      step(0);
+    }
+    function on(topic, handler, opts) { return subscribe(topic, handler, opts, false); }
+    function once(topic, handler, opts) { return subscribe(topic, handler, copy(opts, { once: true }), false); }
+    function off(topic, handler) {
+      var list = subscriptions[topic], i;
+      if (!list) return api;
+      if (!handler) {
+        delete subscriptions[topic];
+        return api;
+      }
+      for (i = list.length - 1; i >= 0; i--) if (list[i].handler === handler) list.splice(i, 1);
+      tidy(topic);
+      return api;
+    }
+    function offAll(topic) {
+      if (own(subscriptions, topic)) delete subscriptions[topic];
+      return api;
+    }
+    function offNs(ns) {
+      var key, list, i;
+      for (key in subscriptions) if (own(subscriptions, key)) {
+        list = subscriptions[key];
+        for (i = list.length - 1; i >= 0; i--) if (list[i].ns === ns) list.splice(i, 1);
+        tidy(key);
+      }
+      return api;
+    }
+    function emit(topic, data, opts) {
+      runMiddlewares(topic, data, function() { runHandlers(topic, data, opts || {}); });
+      return api;
+    }
+    function sticky(topic, data, opts) {
+      stickyValues.set(topic, { data: data, meta: makeMeta(topic, opts) });
+      return emit(topic, data, opts);
+    }
+    function handle(topic, handler) {
+      if (typeof handler !== 'function') return function() {};
+      requestHandlers[topic] = handler;
+      return function() {
+        if (requestHandlers[topic] === handler) delete requestHandlers[topic];
+      };
+    }
+    function request(topic, data) {
+      return new Promise(function(resolve, reject) {
+        runMiddlewares(topic, data, function() {
+          var handler = requestHandlers[topic];
+          if (typeof handler !== 'function') return reject(new Error('No handler for ' + topic));
+          try { Promise.resolve(handler(data, makeMeta(topic, { source: 'request' }))).then(resolve, reject); }
+          catch (err) { reject(err); }
+        }, reject);
+      });
+    }
+    function use(pattern, fn) {
+      var entry;
+      if (typeof pattern === 'function') {
+        fn = pattern;
+        pattern = null;
+      }
+      if (typeof fn !== 'function') return function() {};
+      entry = { pattern: pattern, fn: fn };
+      middlewares.push(entry);
+      return function() {
+        var i;
+        for (i = middlewares.length - 1; i >= 0; i--) if (middlewares[i] === entry) middlewares.splice(i, 1);
+      };
+    }
+    function channel(topic, opts) {
+      var cfg = opts || {};
+      var replay = cfg.replay > 0 ? cfg.replay : 0;
+      var validate = typeof cfg.validate === 'function' ? cfg.validate : null;
+      var buffer = [];
+      var unsubs = [];
+      var dead = false;
+      function push(data, meta) {
+        if (!replay) return;
+        buffer.push({ data: data, meta: meta });
+        if (buffer.length > replay) buffer.shift();
+      }
+      return {
+        emit: function(data, emitOpts) {
+          var meta;
+          if (dead) return false;
+          if (validate && !validate(data)) return false;
+          meta = makeMeta(topic, emitOpts);
+          push(data, meta);
+          emit(topic, data, emitOpts);
+          return true;
+        },
+        subscribe: function(fn, subOpts) {
+          var i, unsub;
+          if (typeof fn !== 'function') return function() {};
+          for (i = 0; i < buffer.length; i++) {
+            try { fn(buffer[i].data, buffer[i].meta); } catch (_) {}
+          }
+          if (dead) return function() {};
+          unsub = subscribe(topic, fn, subOpts, true);
+          unsubs.push(unsub);
+          return function() {
+            var i;
+            for (i = unsubs.length - 1; i >= 0; i--) if (unsubs[i] === unsub) unsubs.splice(i, 1);
+            unsub();
+          };
+        },
+        history: function() {
+          var out = [], i;
+          for (i = 0; i < buffer.length; i++) out.push(buffer[i].data);
+          return out;
+        },
+        last: function() { return buffer.length ? buffer[buffer.length - 1].data : null; },
+        destroy: function() {
+          var list = unsubs.slice();
+          var i;
+          dead = true;
+          unsubs = [];
+          buffer = [];
+          for (i = 0; i < list.length; i++) list[i]();
+        }
+      };
+    }
+    function topics() {
+      var out = [], key;
+      for (key in subscriptions) if (own(subscriptions, key) && subscriptions[key].length) out.push(key);
+      return out;
+    }
+    function subscribers(topic) {
+      var total = 0, key;
+      for (key in subscriptions) if (own(subscriptions, key) && (key === topic || (hasWildcard(key) && matches(key, topic)))) total += subscriptions[key].length;
+      return total;
+    }
+    function has(topic) { return subscribers(topic) > 0; }
+    function clear() {
+      subscriptions = {};
+      stickyValues = new Map();
+      middlewares = [];
+      requestHandlers = {};
+      return api;
+    }
+
+    api = {
+      on: on,
+      emit: emit,
+      once: once,
+      off: off,
+      offAll: offAll,
+      offNs: offNs,
+      clear: clear,
+      sticky: sticky,
+      channel: channel,
+      handle: handle,
+      request: request,
+      use: use,
+      create: createBus,
+      topics: topics,
+      subscribers: subscribers,
+      has: has
+    };
+    return api;
+  }
+
+  return createBus();
+})();
+if(typeof module!=='undefined') module.exports = BareMetal.PubSub;
+</script>
+<script>// VENDORED from BareMetalJsTools (single source of truth). Do not edit here;
+// edit upstream in baremetaljstools/src and re-run tools/vendor_baremetal.py.
 // Upstream: BareMetal.Report.js
 // BareMetal.Report.js — report & form builder for the BareMetal suite.
 //
@@ -22264,6 +22547,31 @@ var CUR_GUIDE_CARD=0;
 
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
+// ---- Activity event bus (the Showcase "events" concept, in the main IDE) ------
+// One BareMetal.PubSub bus; every lifecycle action (compile / sample load / file
+// save / run / deploy / HTTP request / workflow RAISE) publishes to it, and the
+// Events debugger tab shows the live activity log. This is the same RAISE/ON idea
+// the workflow dialect exposes -- everything is wired with events.
+var BUS=(typeof BareMetal!=='undefined'&&BareMetal.PubSub)?BareMetal.PubSub:null;
+var BUS_LOG=[], BUS_T0=(typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();
+function busNow(){var n=(typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();return Math.max(0,Math.round(n-BUS_T0));}
+function busEmit(topic,detail){ if(BUS){try{BUS.emit(topic,detail||{});}catch(e){}} else { busRecord(topic,detail); } }
+function busRecord(topic,detail){
+  BUS_LOG.push({t:busNow(),topic:topic,detail:detail});
+  if(BUS_LOG.length>300) BUS_LOG.shift();
+  busRender();
+}
+function busRender(){
+  var tb=document.getElementById('eventsbody'); if(!tb) return;
+  if(!BUS_LOG.length){tb.innerHTML='<tr><td colspan="3" style="color:var(--muted)">(no activity yet &mdash; compile, load a sample, save, run, or deploy)</td></tr>';return;}
+  tb.innerHTML=BUS_LOG.slice(-120).reverse().map(function(e){
+    var det=''; try{det=(e.detail&&typeof e.detail==='object')?JSON.stringify(e.detail):String(e.detail==null?'':e.detail);}catch(_){det='';}
+    return '<tr><td>'+e.t+'</td><td><b>'+esc(String(e.topic))+'</b></td><td>'+esc(det.slice(0,160))+'</td></tr>';
+  }).join('');
+}
+function busClear(){BUS_LOG=[];busRender();}
+if(BUS){ try{ BUS.on('**',function(detail,meta){ busRecord((meta&&(meta.topic||meta.event))||'event', detail); }); }catch(e){} }
+
 function showView(v){
   document.querySelectorAll('.view').forEach(function(e){e.classList.remove('active');});
   document.getElementById('view-'+v).classList.add('active');
@@ -22589,6 +22897,7 @@ function psFilesSave(name){
   files[name]={kind:kind,lang:kind==='code'?(document.getElementById('lang').value||'basic'):'',src:getSrc(),updated:Date.now()}; filesWrite(files); filesSetActive(name); filesRender();
   if(kind==='card'){var n=cardToWal(name);filesStatus(n>=0?('Saved '+name+' \u2192 '+n+' picowal cards'):('Saved '+name+' (invalid card JSON)'),n<0);}
   else filesStatus('Saved '+name);
+  busEmit('file.save',{name:name,kind:kind});
   return name;
 }
 function psFilesSaveAs(name){return psFilesSave(name||((typeof prompt==='function')?prompt('Save file as',ACTIVE_FILE||filesUniqueName(filesRead())):''));}
@@ -22651,6 +22960,7 @@ function deployPackage(pkg,opts){
   var nc=0; Object.keys(files).forEach(function(n){if(fileKind(n)==='card'){var k=cardToWal(n);if(k>0)nc+=k;}});
   filesRender();
   filesStatus('Deployed '+Object.keys(pkg.files).length+' files, '+nc+' picowal cards, '+((pkg.routes||[]).length)+' routes');
+  busEmit('deploy',{files:Object.keys(pkg.files).length,cards:nc,routes:(pkg.routes||[]).length});
   return true;
 }
 function pkgExportOpen(){var m=document.getElementById('pkgModal'),t=document.getElementById('pkgText');if(!m||!t)return;t.value=JSON.stringify(exportPackage(),null,2);m.classList.add('open');document.getElementById('pkgTitle').textContent='Card package (copy to export, or paste + Deploy)';t.focus();}
@@ -22686,12 +22996,12 @@ function compileSrc(run){
     try{var wf=wfCompileSrc(src);src=wf.source;lang='english';WF_LINE_STEPS=wf.lineSteps||null;}
     catch(e){err.textContent='workflow: '+String(e.message||e);err.style.color='#ff7b72';return;}
   } else { WF_LINE_STEPS=null; }
-  try{var r=PicoCompile.compileDebug(src,lang);DBG.words=r.words.map(function(w){return w>>>0;});DBG.disasm=DBG.words.map(jsDisasm);DBG.vars=r.vars||{};DBG.debug=r.debug||{};DBG.src=src;rebuildDebugMaps();err.textContent='compiled '+DBG.words.length+' words';err.style.color='#7ee787';dbgReset();if(run)dbgRun();if(typeof renderLayout==='function')try{renderLayout();}catch(e){}}
-  catch(e){err.textContent=String(e.message||e);err.style.color='#ff7b72';}
+  try{var r=PicoCompile.compileDebug(src,lang);DBG.words=r.words.map(function(w){return w>>>0;});DBG.disasm=DBG.words.map(jsDisasm);DBG.vars=r.vars||{};DBG.debug=r.debug||{};DBG.src=src;rebuildDebugMaps();err.textContent='compiled '+DBG.words.length+' words';err.style.color='#7ee787';busEmit('compile.ok',{lang:CUR_LANG,words:DBG.words.length});dbgReset();if(run)dbgRun();if(typeof renderLayout==='function')try{renderLayout();}catch(e){}}
+  catch(e){err.textContent=String(e.message||e);err.style.color='#ff7b72';busEmit('compile.error',{lang:CUR_LANG,message:String(e.message||e)});}
 }
 function dbgReset(){DBG.vm=new PicoVM({cards:walBackend()});DBG.vm.load(DBG.words);render();renderWal();updateSourceDecorations();}
 function dbgStep(){if(DBG.vm){DBG.vm.step();render();renderWal();}}
-function dbgRun(){if(!DBG.vm)dbgReset();var g=0;while(DBG.vm.step()&&g++<200000){if(pcHasBreakpoint(DBG.vm.pc))break;}render();renderWal();}
+function dbgRun(){if(!DBG.vm)dbgReset();var g=0;while(DBG.vm.step()&&g++<200000){if(pcHasBreakpoint(DBG.vm.pc))break;}render();renderWal();busEmit('run',{steps:DBG.vm.steps,halted:DBG.vm.halted,status:DBG.vm.httpStatus});}
 function render(){
   var vm=DBG.vm;if(!vm)return;
   document.getElementById('listing').innerHTML=DBG.disasm.map(function(t,idx){var rec=DBG.debug&&DBG.debug[idx],lc=rec?PicoCompile.offsetToLineCol(DBG.src,rec[0]):[0,0],sym=lc[0]?('  ; L'+lc[0]+':'+lc[1]+' '+PicoCompile.sourceLineText(DBG.src,rec[0]).trim()):'';return '<div class="row'+(idx===vm.pc?' pc':'')+(pcHasBreakpoint(idx)?' bp':'')+'" onclick="toggleBp('+idx+')" title="click to toggle PC breakpoint">'+String(idx).padStart(3,' ')+'  '+esc(t+sym)+'</div>';}).join('');
@@ -22783,7 +23093,7 @@ function writeDescriptor(wal,req){
 }
 function toCompilable(){var lang=document.getElementById('lang').value,src=getSrc();if(lang==='workflow'){var wf=wfCompileSrc(src);return{src:wf.source,lang:'english'};}return{src:src,lang:lang};}
 function fileCompilable(f){if(!f)return null;if(f.lang==='workflow'){var wf=wfCompileSrc(f.src);return{src:wf.source,lang:'english'};}return{src:f.src,lang:f.lang||'basic'};}
-function sendRequest(){var text=document.getElementById('reqbox').value,isHex=document.getElementById('reqmode').value==='hex';var req=parseRequest(text,isHex),wal=walBackend();writeDescriptor(wal,req);var routed=matchRoute(req.method,req.path),cl;try{cl=routed?fileCompilable(filesRead()[routed.file]):toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('respout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderResponse(vm,req);if(routed){var el=document.getElementById('respout');el.textContent='\u2192 routed to '+routed.file+'\n'+el.textContent;}renderWal();}
+function sendRequest(){var text=document.getElementById('reqbox').value,isHex=document.getElementById('reqmode').value==='hex';var req=parseRequest(text,isHex),wal=walBackend();writeDescriptor(wal,req);var routed=matchRoute(req.method,req.path),cl;try{cl=routed?fileCompilable(filesRead()[routed.file]):toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('respout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderResponse(vm,req);if(routed){var el=document.getElementById('respout');el.textContent='\u2192 routed to '+routed.file+'\n'+el.textContent;}renderWal();busEmit('http.request',{method:req.method,path:req.path,status:vm.httpStatus,route:routed?routed.file:null});}
 function sendTcp(){var text=document.getElementById('tcpbox').value;var req=parseRequest(text,true),wal=walBackend();writeDescriptor(wal,req);var cl;try{cl=toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('tcpout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderTcpResponse(vm,req);renderWal();}
 function responseBodyText(vm){return (typeof vm.outputDisplayText==='function')?vm.outputDisplayText():vm.outputText();}
 function renderResponse(vm,req){var reasons={200:'OK',201:'Created',400:'Bad Request',404:'Not Found',500:'Error'};var el=document.getElementById('respout');el.style.color='#7ee787';var body=vm.outputInts();if(vm.httpStatus<0){el.style.color='#ffd866';el.textContent='(no Net.Status)\noutput: ['+body.join(', ')+']';return;}var L=[];L.push('HTTP/1.1 '+vm.httpStatus+' '+(reasons[vm.httpStatus]||''));L.push('Content-Type: '+(vm.httpType||'application/octet-stream'));L.push('X-Steps: '+vm.steps);L.push('');var _bt=responseBodyText(vm),_bp=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_bt);L.push(_bp&&_bt?_bt:JSON.stringify(body));el.textContent=L.join('\n');}
@@ -23129,6 +23439,7 @@ buildGuideTree();showGuideCard(0);buildRefTree();buildNsRef();renderSyntaxRef();
 function loadExample(){
   var i=parseInt(document.getElementById('example').value,10)||0;var d=DATA[i];if(!d)return;
   var cur=CUR_LANG;
+  busEmit('sample.load',{title:d.title,view:cur});
   var native=d.basic?'basic':(d.c?'c':(d.python?'python':(d.english?'english':'basic')));
   if(!d[native]){compileSrc(false);return;}
   if(cur==='workflow'){
@@ -23144,7 +23455,7 @@ document.getElementById('lang').addEventListener('change',function(){onLangChang
 document.getElementById('src').addEventListener('input',function(){filesRender();if(CUR_LANG==='workflow'){try{wfRenderDesigner();}catch(e){}}});
 document.getElementById('lang').value='basic';
 document.getElementById('src').value=RESPONDER;
-initMonaco();compileSrc(false);loadSample();renderWal();renderLayout();
+initMonaco();compileSrc(false);loadSample();renderWal();renderLayout();busRender();
 (function(){var ls=filesSafeLocalStorage(),active='';try{active=ls?ls.getItem(PS_ACTIVE_FILE_KEY)||'':'';}catch(e){} if(active&&filesRead()[active]) psFilesOpen(active); else filesRender();})();
 document.getElementById('flyoutTriggers').style.display='none';
 </script>
