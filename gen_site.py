@@ -286,6 +286,12 @@ PAGE = r"""<!DOCTYPE html>
   .file-badge { font-size:9px; font-weight:700; border-radius:8px; padding:1px 5px; color:#0f1117; }
   .file-badge.c { background:var(--c); } .file-badge.basic { background:var(--b); }
   .file-badge.python { background:var(--py); } .file-badge.english { background:var(--en); }
+  .file-badge.k-card { background:#66e0cc; } .file-badge.k-source { background:#ffd866; }
+  .file-badge.k-static { background:#9aa0ad; } .file-badge.k-code { background:var(--accent); color:#fff; }
+  .file-ico { font-size:11px; width:14px; text-align:center; flex-shrink:0; }
+  .file-folder { display:flex; align-items:center; gap:4px; padding:3px 5px; cursor:pointer; color:var(--muted); font-size:11.5px; font-weight:600; user-select:none; }
+  .file-folder:hover { color:#e6e8ef; }
+  .file-fold-caret { width:10px; text-align:center; }
   .file-meta { color:var(--muted); font-size:10px; margin-top:3px; }
   .file-empty,.file-status { color:var(--muted); font-size:11px; line-height:1.4; }
   .cerr { font-family:monospace; font-size:11px; min-height:14px; }
@@ -493,6 +499,7 @@ PAGE = r"""<!DOCTYPE html>
             <button class="ghost" onclick="psFilesSaveAs()">Save as</button>
             <button class="ghost" onclick="psFilesRename()">Rename</button>
             <button class="ghost" onclick="psFilesDelete()">Delete</button>
+            <button class="ghost" onclick="pkgExportOpen()" title="Export / deploy a card package (application)">Package</button>
           </div>
           <div class="file-list" id="fileList"></div>
           <div class="file-status" id="fileStatus"></div>
@@ -522,7 +529,13 @@ PAGE = r"""<!DOCTYPE html>
           <pre class="wf-eng" id="wfEng"></pre>
           <div class="wf-warn" id="wfWarn"></div>
         </div>
-        <div class="wf-modal" id="wfJsonModal">
+        <div class="wf-modal" id="pkgModal">
+          <div class="wf-modal-box">
+            <div class="wf-modal-head" id="pkgTitle">Card package<button class="ghost" onclick="pkgModalClose()">&#10005;</button></div>
+            <div class="wf-modal-body"><textarea id="pkgText" spellcheck="false"></textarea><div id="pkgErr" class="cerr"></div></div>
+            <div class="wf-modal-foot"><button class="act" onclick="pkgDeployFromModal()">Deploy &#9654;</button><button class="ghost" onclick="pkgModalClose()">Close</button></div>
+          </div>
+        </div>
           <div class="wf-modal-box">
             <div class="wf-modal-head">Workflow JSON (backing step array)<button class="ghost" onclick="wfCloseJson()">&#10005;</button></div>
             <div class="wf-modal-body"><textarea id="wfJsonText" spellcheck="false"></textarea><div id="wfJsonErr" class="cerr"></div></div>
@@ -876,12 +889,38 @@ function filesRead(){
     if(!parsed||typeof parsed!=='object'||Array.isArray(parsed)) return {};
     Object.keys(parsed).forEach(function(name){
       var f=parsed[name]||{};
-      if(typeof name==='string'&&name.trim()&&typeof f.src==='string'&&['c','basic','python','english'].indexOf(f.lang)>=0){
-        out[name]={lang:f.lang,src:f.src,updated:Number(f.updated)||0};
+      if(typeof name==='string'&&name.trim()&&typeof f.src==='string'){
+        var kind=f.kind||fileKind(name);
+        var lang=(['c','basic','python','english','workflow'].indexOf(f.lang)>=0)?f.lang:'';
+        out[name]={kind:kind,lang:lang,src:f.src,updated:Number(f.updated)||0};
       }
     });
     return out;
   }catch(e){return {};}
+}
+// A file's kind is derived from its extension. code = a PicoScript program in any
+// dialect; card = a picowal data card (JSON of address->int); source = a schema /
+// read-only input shape; static = a served asset.
+function fileKind(name){
+  var n=String(name||'').toLowerCase();
+  if(/\.card\.json$/.test(n)) return 'card';
+  if(/\.json$/.test(n)) return 'source';
+  if(/\.(html|js|css|md|txt)$/.test(n)) return 'static';
+  return 'code';
+}
+function fileIcon(kind){ return {folder:'\uD83D\uDCC1',card:'\uD83D\uDDC3',source:'\uD83D\uDD16',static:'\uD83D\uDCC4',code:'\u2039\u203A'}[kind]||'\uD83D\uDCC4'; }
+function fileBaseName(p){ var i=String(p).lastIndexOf('/'); return i<0?p:p.slice(i+1); }
+// A card file writes its {addr:int} map (or {cards:{...}}) into the live picowal
+// (WAL) card store so a running program/workflow can Storage.Load it.
+function cardToWal(name){
+  var files=filesRead(), f=files[name]; if(!f||fileKind(name)!=='card') return 0;
+  var obj; try{obj=JSON.parse(f.src);}catch(e){return -1;}
+  var map=(obj&&obj.cards&&typeof obj.cards==='object')?obj.cards:obj;
+  if(!map||typeof map!=='object') return 0;
+  var be=walBackend(), n=0;
+  Object.keys(map).forEach(function(k){var a=parseInt(k,10);var v=map[k];if(!isNaN(a)&&typeof v==='number'){be.set(a,v|0);n++;}});
+  if(typeof renderWal==='function') try{renderWal();}catch(e){}
+  return n;
 }
 function filesWrite(files){var ls=filesSafeLocalStorage(); if(!ls) return; try{ls.setItem(PS_FILES_KEY,JSON.stringify(files));}catch(e){}}
 function filesSetActive(name){ACTIVE_FILE=name||'';var ls=filesSafeLocalStorage();if(!ls)return;try{if(ACTIVE_FILE)ls.setItem(PS_ACTIVE_FILE_KEY,ACTIVE_FILE);else ls.removeItem(PS_ACTIVE_FILE_KEY);}catch(e){}}
@@ -895,41 +934,72 @@ function filesUniqueName(files){
 function filesIsDirty(){
   if(!ACTIVE_FILE) return false;
   var f=filesRead()[ACTIVE_FILE]; if(!f) return false;
-  return f.src!==getSrc()||f.lang!==document.getElementById('lang').value;
+  return f.src!==getSrc()||(fileKind(ACTIVE_FILE)==='code'&&f.lang!==document.getElementById('lang').value);
 }
+// Render the flat path-keyed file map as a collapsible folder tree with per-kind
+// icons/badges. Folder names contain '/'; a collapsed-folder set is remembered.
+var FILES_COLLAPSED={};
 function filesRender(){
   var list=document.getElementById('fileList'); if(!list) return;
-  var files=filesRead(), names=Object.keys(files).sort(function(a,b){return (files[b].updated||0)-(files[a].updated||0)||a.localeCompare(b);});
-  if(!names.length){list.innerHTML='<div class="file-empty">No saved files yet.</div>';return;}
+  var files=filesRead(), names=Object.keys(files);
+  if(!names.length){list.innerHTML='<div class="file-empty">No saved files yet. <a href="#" onclick="seedSampleApp();return false;">Load sample app</a></div>';return;}
   var dirty=filesIsDirty();
-  list.innerHTML=names.map(function(name){
-    var f=files[name], isActive=name===ACTIVE_FILE, dot=isActive&&dirty?'*':'';
-    var when=f.updated?new Date(f.updated).toLocaleString():'';
+  // build nested tree
+  var root={dirs:{},files:[]};
+  names.sort().forEach(function(name){
+    var parts=name.split('/'), node=root, acc='';
+    for(var i=0;i<parts.length-1;i++){acc+=(acc?'/':'')+parts[i];if(!node.dirs[parts[i]])node.dirs[parts[i]]={dirs:{},files:[],path:acc};node=node.dirs[parts[i]];}
+    node.files.push(name);
+  });
+  function fileRow(name){
+    var f=files[name], isActive=name===ACTIVE_FILE, dot=isActive&&dirty?'*':'', kind=fileKind(name);
+    var badge=kind==='code'?(f.lang||'code'):kind;
     return '<div class="file-item'+(isActive?' active':'')+'" data-name="'+filesEscAttr(name)+'">'+
-      '<div class="file-row"><span class="file-dirty">'+dot+'</span><span class="file-name">'+esc(name)+'</span><span class="file-badge '+f.lang+'">'+f.lang+'</span></div>'+
-      '<div class="file-meta">'+(when?esc(when):'saved')+'</div></div>';
-  }).join('');
+      '<div class="file-row"><span class="file-dirty">'+dot+'</span><span class="file-ico">'+fileIcon(kind)+'</span>'+
+      '<span class="file-name">'+esc(fileBaseName(name))+'</span><span class="file-badge k-'+kind+' '+esc(f.lang||'')+'">'+esc(badge)+'</span></div></div>';
+  }
+  function renderNode(node,depth){
+    var html='';
+    Object.keys(node.dirs).sort().forEach(function(d){
+      var sub=node.dirs[d], collapsed=!!FILES_COLLAPSED[sub.path];
+      html+='<div class="file-folder" data-path="'+filesEscAttr(sub.path)+'" style="padding-left:'+(depth*10)+'px">'+
+        '<span class="file-fold-caret">'+(collapsed?'\u25B8':'\u25BE')+'</span><span class="file-ico">'+fileIcon('folder')+'</span> '+esc(d)+'</div>';
+      if(!collapsed) html+='<div style="padding-left:'+((depth+1)*10)+'px">'+renderNode(sub,depth+1)+'</div>';
+    });
+    node.files.forEach(function(name){ html+='<div style="padding-left:'+(depth*10)+'px">'+fileRow(name)+'</div>'; });
+    return html;
+  }
+  list.innerHTML=renderNode(root,0);
+  list.querySelectorAll('.file-folder').forEach(function(el){el.onclick=function(){var p=el.getAttribute('data-path');FILES_COLLAPSED[p]=!FILES_COLLAPSED[p];filesRender();};});
   list.querySelectorAll('.file-item').forEach(function(el){el.onclick=function(){psFilesOpen(el.getAttribute('data-name'));};});
 }
 function filesToggle(){var el=document.getElementById('fileSidebar');if(!el)return;el.classList.toggle('collapsed');var b=el.querySelector('.file-head button');if(b)b.innerHTML=el.classList.contains('collapsed')?'&#9654;':'&#9664;';}
 function psFilesList(){return filesRead();}
 function psFilesNew(name){
-  var files=filesRead(); name=(name||((typeof prompt==='function')?prompt('New file name',filesUniqueName(files)):filesUniqueName(files))||'').trim();
+  var files=filesRead(); name=(name||((typeof prompt==='function')?prompt('New file name (folders via /, e.g. routes/orders.psc)',filesUniqueName(files)):filesUniqueName(files))||'').trim();
   if(!name) return null;
   if(files[name]&&typeof confirm==='function'&&!confirm('Replace "'+name+'"?')) return null;
-  setSrc(''); files[name]={lang:document.getElementById('lang').value||'basic',src:'',updated:Date.now()}; filesWrite(files); filesSetActive(name); filesRender(); filesStatus('New file '+name); return name;
+  var kind=fileKind(name);
+  setSrc(''); files[name]={kind:kind,lang:kind==='code'?(document.getElementById('lang').value||'basic'):'',src:'',updated:Date.now()}; filesWrite(files); filesSetActive(name); filesRender(); filesStatus('New '+kind+' '+name); return name;
 }
 function psFilesSave(name){
   var files=filesRead(); name=(name||ACTIVE_FILE||((typeof prompt==='function')?prompt('Save file as',filesUniqueName(files)):filesUniqueName(files))||'').trim();
   if(!name) return null;
-  files[name]={lang:document.getElementById('lang').value||'basic',src:getSrc(),updated:Date.now()}; filesWrite(files); filesSetActive(name); filesRender(); filesStatus('Saved '+name); return name;
+  var kind=fileKind(name);
+  files[name]={kind:kind,lang:kind==='code'?(document.getElementById('lang').value||'basic'):'',src:getSrc(),updated:Date.now()}; filesWrite(files); filesSetActive(name); filesRender();
+  if(kind==='card'){var n=cardToWal(name);filesStatus(n>=0?('Saved '+name+' \u2192 '+n+' picowal cards'):('Saved '+name+' (invalid card JSON)'),n<0);}
+  else filesStatus('Saved '+name);
+  return name;
 }
 function psFilesSaveAs(name){return psFilesSave(name||((typeof prompt==='function')?prompt('Save file as',ACTIVE_FILE||filesUniqueName(filesRead())):''));}
 function psFilesOpen(name){
   var files=filesRead(), names=Object.keys(files).sort();
   name=(name||((typeof prompt==='function')?prompt('Open file',ACTIVE_FILE||names[0]||''):'')||'').trim();
   if(!name||!files[name]){filesStatus(name?'File not found: '+name:'Open cancelled',!!name);return null;}
-  document.getElementById('lang').value=files[name].lang; onLangChange(); setSrc(files[name].src); filesSetActive(name); filesRender(); filesStatus('Opened '+name); compileSrc(false); return files[name];
+  var kind=fileKind(name);
+  if(kind==='code'){document.getElementById('lang').value=files[name].lang||'basic'; if(typeof setLang==='function'){setLang(document.getElementById('lang').value);} else onLangChange(); setSrc(files[name].src); filesSetActive(name); filesRender(); filesStatus('Opened '+name); compileSrc(false);}
+  else {setSrc(files[name].src); filesSetActive(name); filesRender(); filesStatus('Opened '+kind+' '+name+(kind==='card'?' (Save writes it to picowal)':''));}
+  return files[name];
 }
 function psFilesRename(oldName,newName){
   var files=filesRead(); oldName=(oldName||ACTIVE_FILE||'').trim(); if(!oldName||!files[oldName]){filesStatus('No active file to rename',true);return null;}
@@ -942,6 +1012,72 @@ function psFilesDelete(name,skipConfirm){
   if(!skipConfirm&&typeof confirm==='function'&&!confirm('Delete "'+name+'"?')) return false;
   delete files[name]; filesWrite(files); if(ACTIVE_FILE===name)filesSetActive(''); filesRender(); filesStatus('Deleted '+name); return true;
 }
+
+// ---- routes + card packages (deploy a tree into the running service) ---------
+// A route binds an inbound (method,path) to a code file; the HTTP simulator runs
+// that file's program to serve the request. Routes live alongside files so a
+// package can carry them.
+var PS_ROUTES_KEY='picoscript.routes.v1';
+function routesRead(){var ls=filesSafeLocalStorage();if(!ls)return [];try{var r=JSON.parse(ls.getItem(PS_ROUTES_KEY)||'[]');return Array.isArray(r)?r:[];}catch(e){return [];}}
+function routesWrite(rs){var ls=filesSafeLocalStorage();if(!ls)return;try{ls.setItem(PS_ROUTES_KEY,JSON.stringify(rs||[]));}catch(e){}}
+function matchRoute(methodCode,path){
+  var rs=routesRead();
+  for(var i=0;i<rs.length;i++){var r=rs[i];
+    var rm=(r.method==null||r.method==='*')?null:methodCodeName(r.method);
+    var mOk=(rm==null)||(rm===methodCode);
+    var pOk=(r.path==null||r.path==='*'||r.path===path);
+    if(mOk&&pOk&&r.file&&filesRead()[r.file]) return r;
+  }
+  return null;
+}
+function methodCodeName(m){ if(typeof m==='number')return m; return (typeof methodCode==='function')?methodCode(String(m)):0; }
+// Bundle the whole tree (code + data cards + sources + static) plus routes into a
+// single portable card package (an application).
+function exportPackage(){
+  var files=filesRead(), pkg={name:'picoapp',version:1,files:{},routes:routesRead()};
+  Object.keys(files).forEach(function(n){pkg.files[n]={kind:fileKind(n),lang:files[n].lang||'',src:files[n].src};});
+  return pkg;
+}
+// Load a package into the running service: import its files into the tree, write
+// every data card into the live picowal store, and register its routes so the
+// HTTP simulator serves them.
+function deployPackage(pkg,opts){
+  opts=opts||{};
+  if(!pkg||typeof pkg!=='object'||!pkg.files){filesStatus('invalid package',true);return false;}
+  var files=opts.merge?filesRead():{};
+  Object.keys(pkg.files).forEach(function(n){var f=pkg.files[n]||{};if(typeof f.src==='string')files[n]={kind:f.kind||fileKind(n),lang:f.lang||'',src:f.src,updated:Date.now()};});
+  filesWrite(files);
+  if(Array.isArray(pkg.routes)) routesWrite(pkg.routes);
+  var nc=0; Object.keys(files).forEach(function(n){if(fileKind(n)==='card'){var k=cardToWal(n);if(k>0)nc+=k;}});
+  filesRender();
+  filesStatus('Deployed '+Object.keys(pkg.files).length+' files, '+nc+' picowal cards, '+((pkg.routes||[]).length)+' routes');
+  return true;
+}
+function pkgExportOpen(){var m=document.getElementById('pkgModal'),t=document.getElementById('pkgText');if(!m||!t)return;t.value=JSON.stringify(exportPackage(),null,2);m.classList.add('open');document.getElementById('pkgTitle').textContent='Card package (copy to export, or paste + Deploy)';t.focus();}
+function pkgModalClose(){var m=document.getElementById('pkgModal');if(m)m.classList.remove('open');}
+function pkgDeployFromModal(){var t=document.getElementById('pkgText'),e=document.getElementById('pkgErr');if(!t)return;var pkg;try{pkg=JSON.parse(t.value);}catch(err){if(e){e.textContent='invalid JSON: '+String(err.message||err);e.style.color='#ff7b72';}return;}if(deployPackage(pkg,{merge:false}))pkgModalClose();}
+function seedSampleApp(){ deployPackage(SAMPLE_APP,{merge:true}); var f=filesRead(); if(f['routes/orders.psc']) psFilesOpen('routes/orders.psc'); }
+// A tiny sample application: a workflow route that branches on method, a picowal
+// data card, a request schema, a static asset, and a route binding -- enough to
+// demonstrate deploy -> the HTTP simulator serving it.
+var SAMPLE_APP={name:'orders-app',version:1,
+  files:{
+    'routes/orders.psc':{kind:'code',lang:'workflow',src:JSON.stringify([
+      {type:'LOAD',name:'method',from:'request',field:'method'},
+      {type:'LOAD',name:'len',from:'request',field:'length'},
+      {type:'IF',condition:'method is 2'},
+      {type:'RESPOND',status:201,contentType:'application/json',body:'{"created":true}'},
+      {type:'ELSE'},
+      {type:'RESPOND',status:200,contentType:'application/json',body:'{"ok":true}'},
+      {type:'END'}
+    ],null,2)},
+    'cards/config.card.json':{kind:'card',lang:'',src:JSON.stringify({cards:{'10':5,'11':2,'12':1}},null,2)},
+    'schemas/request.json':{kind:'source',lang:'',src:JSON.stringify({method:'int',path:'string',body:'json'},null,2)},
+    'static/index.html':{kind:'static',lang:'',src:'<!doctype html>\n<title>Orders</title>\n<h1>Orders app</h1>\n'},
+    'README.md':{kind:'static',lang:'',src:'# Orders app\n\nA sample PicoScript card package. Deploy, then POST /orders in the HTTP simulator.\n'}
+  },
+  routes:[{method:'POST',path:'/orders',file:'routes/orders.psc'},{method:'GET',path:'/orders',file:'routes/orders.psc'}]
+};
 
 function compileSrc(run){
   var lang=document.getElementById('lang').value,src=getSrc(),err=document.getElementById('cerr');
@@ -1045,7 +1181,8 @@ function writeDescriptor(wal,req){
   writeBytes(wal,10,req.queryBytes,10); writeBytes(wal,20,req.bodyBytes,12);
 }
 function toCompilable(){var lang=document.getElementById('lang').value,src=getSrc();if(lang==='workflow'){var wf=wfCompileSrc(src);return{src:wf.source,lang:'english'};}return{src:src,lang:lang};}
-function sendRequest(){var text=document.getElementById('reqbox').value,isHex=document.getElementById('reqmode').value==='hex';var req=parseRequest(text,isHex),wal=walBackend();writeDescriptor(wal,req);var cl;try{cl=toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('respout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderResponse(vm,req);renderWal();}
+function fileCompilable(f){if(!f)return null;if(f.lang==='workflow'){var wf=wfCompileSrc(f.src);return{src:wf.source,lang:'english'};}return{src:f.src,lang:f.lang||'basic'};}
+function sendRequest(){var text=document.getElementById('reqbox').value,isHex=document.getElementById('reqmode').value==='hex';var req=parseRequest(text,isHex),wal=walBackend();writeDescriptor(wal,req);var routed=matchRoute(req.method,req.path),cl;try{cl=routed?fileCompilable(filesRead()[routed.file]):toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('respout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderResponse(vm,req);if(routed){var el=document.getElementById('respout');el.textContent='\u2192 routed to '+routed.file+'\n'+el.textContent;}renderWal();}
 function sendTcp(){var text=document.getElementById('tcpbox').value;var req=parseRequest(text,true),wal=walBackend();writeDescriptor(wal,req);var cl;try{cl=toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('tcpout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderTcpResponse(vm,req);renderWal();}
 function responseBodyText(vm){return (typeof vm.outputDisplayText==='function')?vm.outputDisplayText():vm.outputText();}
 function renderResponse(vm,req){var reasons={200:'OK',201:'Created',400:'Bad Request',404:'Not Found',500:'Error'};var el=document.getElementById('respout');el.style.color='#7ee787';var body=vm.outputInts();if(vm.httpStatus<0){el.style.color='#ffd866';el.textContent='(no Net.Status)\noutput: ['+body.join(', ')+']';return;}var L=[];L.push('HTTP/1.1 '+vm.httpStatus+' '+(reasons[vm.httpStatus]||''));L.push('Content-Type: '+(vm.httpType||'application/octet-stream'));L.push('X-Steps: '+vm.steps);L.push('');var _bt=responseBodyText(vm),_bp=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_bt);L.push(_bp&&_bt?_bt:JSON.stringify(body));el.textContent=L.join('\n');}
