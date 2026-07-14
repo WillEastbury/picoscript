@@ -270,10 +270,11 @@ NAMESPACE_MAP = {
         "EndArray": OP_NOOP, "Key": OP_NOOP, "Str": OP_NOOP, "Int": OP_NOOP,
         "Bool": OP_NOOP, "Null": OP_NOOP, "Raw": OP_NOOP, "Parse": OP_NOOP,
     },
-    # Binary: PicoBinarySerializer (PSC1) card <-> Map. Complements the Json.*
-    # writer + Utf8Reader scanner with structured (de)serialization. See docs/MAP.md.
+    # Binary: PicoBinarySerializer (PSC1) card <-> Map, plus schema-driven BSO1
+    # (BareMetalJsTools BareMetal.Binary) entity <-> Map for BMJS interop. See docs/MAP.md.
     "Binary": {
         "ParseCard": OP_NOOP, "SerializeCard": OP_NOOP,
+        "ParseEntity": OP_NOOP, "SerializeEntity": OP_NOOP, "SetKey": OP_NOOP, "Verify": OP_NOOP,
     },
     "Xml": {
         "Open": OP_NOOP, "AttrName": OP_NOOP, "AttrValue": OP_NOOP,
@@ -949,6 +950,13 @@ HOST_HOOK_CODES = {
     ("Json", "Parse"):           0x0340,   # Parse(jsonSpan) -> mapHandle (flat object)
     ("Binary", "ParseCard"):     0x0341,   # ParseCard(psc1Span) -> mapHandle
     ("Binary", "SerializeCard"): 0x0342,   # SerializeCard() -> span (active map -> PSC1)
+    # BSO1 (BareMetal.Binary): schema-driven, little-endian, HMAC-SHA256 signed.
+    # Schema is an ordered Map (field name -> wireType code; +256 = nullable). 64-bit
+    # and float values are stored as their raw LE bytes (string) in the Map.
+    ("Binary", "ParseEntity"):     0x0343, # ParseEntity(blobSpan, schemaMap) -> mapHandle
+    ("Binary", "SerializeEntity"): 0x0344, # SerializeEntity(dataMap, schemaMap) -> blobSpan
+    ("Binary", "SetKey"):          0x0345, # SetKey(keySpan)  (HMAC-SHA256 signing key; empty = unsigned)
+    ("Binary", "Verify"):          0x0346, # Verify(blobSpan) -> 0|1  (HMAC check with the set key)
     ("Sampling", "ArgMax"):      0x0240,
     ("Sampling", "TopK"):        0x0241,
     ("Sampling", "Temperature"): 0x0242,

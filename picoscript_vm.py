@@ -908,6 +908,133 @@ def _psc1_serialize(entries):
     return out
 
 
+# ---- BSO1 (BareMetal.Binary): schema-driven, little-endian, HMAC-SHA256 signed.
+# Wire-compatible with BareMetalJsTools/src/BareMetal.Binary.js. See docs/MAP.md.
+_BSO1_SZ = {1: 1, 2: 1, 3: 1, 4: 2, 5: 2, 6: 4, 7: 4, 8: 8, 9: 8, 10: 4, 11: 8, 12: 16, 13: 2, 14: 0, 15: 16, 16: 9, 17: 4, 18: 8, 19: 10, 20: 8, 21: 16, 22: 4}
+_BSO1_INT = {1: "u", 2: "u", 3: "s", 4: "s", 5: "u", 6: "s", 7: "u", 13: "u", 17: "s", 22: "s"}
+
+
+def _le_int(b, pos, size, signed):
+    v = 0
+    for i in range(size):
+        v += (b[pos + i] if 0 <= pos + i < len(b) else 0) << (8 * i)
+    if signed:
+        lim = 1 << (size * 8 - 1)
+        if v >= lim:
+            v -= lim << 1
+    return v
+
+
+def _bso1_schema(map_obj):
+    members = []
+    version = 1
+    if map_obj:
+        for e in map_obj.values():
+            nm = bytes(e[2])
+            if nm and nm[0] == 58:  # ':' pseudo-field
+                if nm == b":version" and e[3] == "i":
+                    version = e[4]
+                continue
+            code = e[4] if e[3] == "i" else 0
+            members.append((nm, code & 0xFF, (code & 0x100) != 0))
+    return members, version
+
+
+def _bso1_read(b, members, put_si, put_ss, put_ns):
+    pos = 45
+    if pos >= len(b):
+        return
+    present = b[pos]
+    pos += 1
+    if present == 0:
+        return
+    for (name, wt, nullable) in members:
+        if nullable:
+            f = b[pos] if pos < len(b) else 0
+            pos += 1
+            if f == 0:
+                put_ns(name)
+                continue
+        if wt == 14:  # String
+            ln = _le_int(b, pos, 4, True)
+            pos += 4
+            if ln < 0:
+                put_ns(name)
+            else:
+                put_ss(name, bytes(b[pos:pos + ln]))
+                pos += ln
+        elif wt in _BSO1_INT:
+            sz = _BSO1_SZ[wt]
+            put_si(name, _le_int(b, pos, sz, _BSO1_INT[wt] == "s"))
+            pos += sz
+        else:
+            sz = _BSO1_SZ[wt]
+            put_ss(name, bytes(b[pos:pos + sz]))
+            pos += sz
+
+
+def _bso1_write(data_map, members, version, hmac_key):
+    out = bytearray()
+
+    def w32(v):
+        out.append(v & 255)
+        out.append((v >> 8) & 255)
+        out.append((v >> 16) & 255)
+        out.append((v >> 24) & 255)
+
+    w32(0x314F5342)
+    w32(3)
+    w32(version & MASK32)
+    out.append(0)
+    out.extend(b"\x00" * 32)
+    out.append(1)
+    for (name, wt, nullable) in members:
+        e = data_map.get(("s", bytes(name))) if data_map else None
+        is_null = (e is None) or (e[3] == "n")
+        if nullable:
+            if is_null:
+                out.append(0)
+                continue
+            out.append(1)
+        if wt == 14:
+            if is_null:
+                w32((-1) & MASK32)
+            else:
+                sb = e[5] if (e and e[3] == "s") else b""
+                w32(len(sb))
+                out.extend(sb)
+        elif wt in _BSO1_INT:
+            sz = _BSO1_SZ[wt]
+            val = e[4] if (e and e[3] == "i") else 0
+            for k in range(sz):
+                out.append((val >> (8 * k)) & 255)
+        else:
+            sz = _BSO1_SZ[wt]
+            rb = e[5] if (e and e[3] == "s") else b""
+            for k in range(sz):
+                out.append(rb[k] if k < len(rb) else 0)
+    if hmac_key:
+        import hashlib
+        import hmac as _hmac
+        parts = bytes(out[0:13]) + bytes(out[45:])
+        sig = _hmac.new(bytes(hmac_key), parts, hashlib.sha256).digest()
+        out[13:45] = sig
+    return bytes(out)
+
+
+def _bso1_verify(b, key):
+    if not key or len(b) < 45:
+        return 0
+    import hashlib
+    import hmac as _hmac
+    parts = bytes(b[0:13]) + bytes(b[45:])
+    sig = _hmac.new(bytes(key), parts, hashlib.sha256).digest()
+    for i in range(32):
+        if (b[13 + i] if 13 + i < len(b) else 0) != sig[i]:
+            return 0
+    return 1
+
+
 class HostApi:
     """Default host-hook implementation.
 
@@ -1066,8 +1193,8 @@ class HostApi:
         if ns == "Map":
             if self._map_hook(vm, method, rd, rs1, rs2):
                 return
-        # Parsers: Json.Parse / Binary.ParseCard|SerializeCard -> Map.
-        if (ns == "Json" and method == "Parse") or (ns == "Binary" and method in ("ParseCard", "SerializeCard")):
+        # Parsers: Json.Parse / Binary.* (PSC1 card + BSO1 entity) -> Map.
+        if (ns == "Json" and method == "Parse") or ns == "Binary":
             if self._parse_hook(vm, ns, method, rd, rs1, rs2):
                 return
         # Built-in defaults for a few common hooks.
@@ -1535,6 +1662,38 @@ class HostApi:
             self.active_map = len(self.maps) - 1
             return self.active_map
 
+        if ns == "Binary" and method == "SetKey":
+            kb = self._span_raw(vm, R[rs1])
+            self.bso1_key = bytes(kb) if kb else None
+            return True
+        if ns == "Binary" and method == "ParseEntity":
+            blob = self._span_raw(vm, R[rs1])
+            sm = self.maps[R[rs2]] if 0 <= R[rs2] < len(self.maps) else None
+            members, _ver = _bso1_schema(sm)
+            h = new_map()
+            m = self.maps[h]
+
+            def bput_si(kb, v):
+                m[("s", bytes(kb))] = ("s", 0, bytes(kb), "i", v & MASK32, None)
+
+            def bput_ss(kb, vb):
+                m[("s", bytes(kb))] = ("s", 0, bytes(kb), "s", 0, bytes(vb))
+
+            def bput_ns(kb):
+                m[("s", bytes(kb))] = ("s", 0, bytes(kb), "n", 0, None)
+
+            _bso1_read(blob, members, bput_si, bput_ss, bput_ns)
+            R[rd] = h
+            return True
+        if ns == "Binary" and method == "SerializeEntity":
+            dm = self.maps[R[rs1]] if 0 <= R[rs1] < len(self.maps) else None
+            sm = self.maps[R[rs2]] if 0 <= R[rs2] < len(self.maps) else None
+            members, ver = _bso1_schema(sm)
+            R[rd] = self._new_span_bytes(vm, _bso1_write(dm, members, ver, getattr(self, "bso1_key", None)))
+            return True
+        if ns == "Binary" and method == "Verify":
+            R[rd] = _bso1_verify(self._span_raw(vm, R[rs1]), getattr(self, "bso1_key", None))
+            return True
         if ns == "Json" or (ns == "Binary" and method == "ParseCard"):
             b = self._span_raw(vm, R[rs1])
             h = new_map()

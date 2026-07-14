@@ -78,6 +78,10 @@ turn a string/bytes into a structured `Map` (the "structured object"):
 | `Json.Parse(span)` | jsonSpan | mapHandle | flat JSON object → Map (also sets active) |
 | `Binary.ParseCard(span)` | psc1Span | mapHandle | PicoBinarySerializer PSC1 card → Map |
 | `Binary.SerializeCard()` | – | span | active Map → PSC1 card (keys sorted) |
+| `Binary.ParseEntity(blob, schema)` | blobSpan, schemaMap | mapHandle | BSO1 (BareMetal.Binary) entity → Map |
+| `Binary.SerializeEntity(data, schema)` | dataMap, schemaMap | blobSpan | Map → BSO1 entity (signed if a key is set) |
+| `Binary.SetKey(span)` | keySpan | – | HMAC-SHA256 signing key (empty = unsigned) |
+| `Binary.Verify(blob)` | blobSpan | 0\|1 | HMAC check with the set key |
 
 `Json.Parse` decodes scalar values — string (`PutSS`), integer number (`PutSI`,
 floats truncated), `true`/`false` (`PutSI` 1/0), `null` (`PutNullS`) — and captures
@@ -90,6 +94,32 @@ parsed Map is bit-identical everywhere.
 Set cfg to Json.Parse("{\"qty\":42,\"name\":\"abc\",\"ok\":true}").
 Print Map.GetSI("qty").       ' -> 42
 Print Map.GetSI("ok").        ' -> 1
+```
+
+### BSO1 (BareMetal.Binary) — schema-driven, signed
+BSO1 is the BareMetalJsTools entity format: little-endian, fixed-layout per a
+**schema**, and HMAC-SHA256 **signed**. The schema is supplied as an **ordered Map**
+(field name → wireType code; add `256` to the code to mark a field nullable; an
+optional `:version` pseudo-field sets the header schema version). Reading produces a
+result Map of field name → value; writing takes a data Map + schema Map and signs
+with the key set via `Binary.SetKey`. 64-bit / float / temporal wireTypes are stored
+as their **raw little-endian bytes** (a string value) — lossless; the program decodes
+further if needed. The reader/writer are byte-compatible with
+`BareMetalJsTools/src/BareMetal.Binary.js` (verified incl. the HMAC signature).
+
+wireType codes: `1 Bool, 2 Byte, 3 SByte, 4 Int16, 5 UInt16, 6 Int32, 7 UInt32,
+8 Int64, 9 UInt64, 10 Float32, 11 Float64, 12 Decimal, 13 Char, 14 String, 15 Guid,
+16 DateTime, 17 DateOnly, 18 TimeOnly, 19 DateTimeOffset, 20 TimeSpan, 21 Identifier,
+22 Enum`.
+
+```
+Binary.SetKey("my-hmac-key").
+Set schema to Map.New(). Map.PutSI("Qty", 6). Map.PutSI("Sku", 14).   ' Int32, String
+Set data to Map.New(). Map.PutSI("Qty", 42). Map.PutSS("Sku", "ABC").
+Set blob to Binary.SerializeEntity(data, schema).
+Print Binary.Verify(blob).                    ' -> 1
+Set row to Binary.ParseEntity(blob, schema).
+Print Map.GetSI("Qty").                       ' -> 42
 ```
 
 ## Implementation status

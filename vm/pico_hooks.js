@@ -549,6 +549,10 @@
       0x340: "Json.Parse",
       0x341: "Binary.ParseCard",
       0x342: "Binary.SerializeCard",
+      0x343: "Binary.ParseEntity",
+      0x344: "Binary.SerializeEntity",
+      0x345: "Binary.SetKey",
+      0x346: "Binary.Verify",
     }
   };
   function _canonConstant(name) {
