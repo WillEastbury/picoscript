@@ -160,6 +160,8 @@
     this.bitlinearRows = 0; this.bitlinearCols = 0;
     this.arenaTop = 0x8000;             // bump pointer for Span.Materialize copies
     this.spans = [null];                // span table; handle = index (1-based)
+    this.maps = [null];                 // Map.* registry; handle = index (1-based)
+    this.activeMap = 0;                 // Map.* active-handle (see docs/MAP.md)
     this.pc = 0;
     this.curPc = 0;
     this.steps = 0;
@@ -389,6 +391,8 @@
       return;
     }
     if (name === "Arena.Reset") { this.arenaTop = 0x8000; this.spans = [null]; return; }
+    // ---- Map.* first-class dictionary (active-handle model; see docs/MAP.md) ---
+    if (name.indexOf("Map.") === 0) { if (this._mapHook(name.slice(4), rd, rs1, rs2)) return; }
     // ---- EL0-facing PIOS request/response hooks ---------------------------
     if (name.indexOf("Req.") === 0) {
       if (this._req(name.slice(4), rd, rs1, rs2)) return;
@@ -582,6 +586,49 @@
     for (var i = 0; i < bytes.length; i++) this.mem[dst + i] = bytes[i] & 255;
     this.spans.push({ ptr: dst, len: bytes.length });
     return this.spans.length - 1;
+  };
+  PicoVM.prototype._mapHook = function (method, rd, rs1, rs2) {
+    // Active-handle dictionary primitive. Keys int/string; values int/string/null.
+    // Insertion-order enumeration. See docs/MAP.md. FNV-1a: offset 0x811c9dc5,
+    // prime 0x01000193, 32-bit (identical across all VM implementations).
+    var R = this.regs, self = this;
+    if (!this.maps) { this.maps = [null]; this.activeMap = 0; }
+    function fnv1a(bytes) { var h = 0x811c9dc5 >>> 0; for (var i = 0; i < bytes.length; i++) { h ^= bytes[i] & 0xFF; h = Math.imul(h, 0x01000193) >>> 0; } return h | 0; }
+    function cur() { return self.maps[self.activeMap] || null; }
+    function ikey(k) { return 'i' + ((k | 0) >>> 0); }
+    function skey(b) { return 's' + _keystr(b); }
+    function vals(m) { return m ? Array.from(m.values()) : []; }
+    var m = cur();
+    switch (method) {
+      case "New": { this.maps.push(new Map()); this.activeMap = this.maps.length - 1; R[rd] = this.activeMap; return true; }
+      case "Use": { var h = R[rs1] | 0; this.activeMap = (h > 0 && h < this.maps.length && this.maps[h]) ? h : 0; return true; }
+      case "Free": { var hf = R[rs1] | 0; if (hf > 0 && hf < this.maps.length) { this.maps[hf] = null; if (this.activeMap === hf) this.activeMap = 0; } return true; }
+      case "Clear": { if (m) m.clear(); return true; }
+      case "Count": { R[rd] = m ? m.size : 0; return true; }
+      case "Hash": { R[rd] = fnv1a(this._spanBytes(R[rs1])); return true; }
+      case "PutII": { if (m) { var k = R[rs1] | 0; m.set(ikey(k), { kk: 'i', ki: k, kb: null, vk: 'i', vi: R[rs2] | 0, vb: null }); } return true; }
+      case "GetII": { var e = m ? m.get(ikey(R[rs1])) : null; R[rd] = (e && e.vk === 'i') ? e.vi : 0; this.hostStatus = e ? 0 : 1; return true; }
+      case "HasI": { R[rd] = (m && m.has(ikey(R[rs1]))) ? 1 : 0; return true; }
+      case "DelI": { if (m) m.delete(ikey(R[rs1])); return true; }
+      case "PutIS": { if (m) { var k5 = R[rs1] | 0; m.set(ikey(k5), { kk: 'i', ki: k5, kb: null, vk: 's', vi: 0, vb: this._spanBytes(R[rs2]) }); } return true; }
+      case "GetIS": { var e6 = m ? m.get(ikey(R[rs1])) : null; if (e6 && e6.vk === 's') { R[rd] = this._newSpanBytes(e6.vb); this.hostStatus = 0; } else { R[rd] = this._newSpanBytes([]); this.hostStatus = 1; } return true; }
+      case "PutNullI": { if (m) { var k7 = R[rs1] | 0; m.set(ikey(k7), { kk: 'i', ki: k7, kb: null, vk: 'n', vi: 0, vb: null }); } return true; }
+      case "IsNullI": { var e8 = m ? m.get(ikey(R[rs1])) : null; R[rd] = (e8 && e8.vk === 'n') ? 1 : 0; return true; }
+      case "PutSI": { if (m) { var kb = this._spanBytes(R[rs1]); m.set(skey(kb), { kk: 's', ki: 0, kb: kb, vk: 'i', vi: R[rs2] | 0, vb: null }); } return true; }
+      case "GetSI": { var ea = m ? m.get(skey(this._spanBytes(R[rs1]))) : null; R[rd] = (ea && ea.vk === 'i') ? ea.vi : 0; this.hostStatus = ea ? 0 : 1; return true; }
+      case "HasS": { R[rd] = (m && m.has(skey(this._spanBytes(R[rs1])))) ? 1 : 0; return true; }
+      case "DelS": { if (m) m.delete(skey(this._spanBytes(R[rs1]))); return true; }
+      case "PutSS": { if (m) { var kbd = this._spanBytes(R[rs1]); m.set(skey(kbd), { kk: 's', ki: 0, kb: kbd, vk: 's', vi: 0, vb: this._spanBytes(R[rs2]) }); } return true; }
+      case "GetSS": { var ee = m ? m.get(skey(this._spanBytes(R[rs1]))) : null; if (ee && ee.vk === 's') { R[rd] = this._newSpanBytes(ee.vb); this.hostStatus = 0; } else { R[rd] = this._newSpanBytes([]); this.hostStatus = 1; } return true; }
+      case "PutNullS": { if (m) { var kbf = this._spanBytes(R[rs1]); m.set(skey(kbf), { kk: 's', ki: 0, kb: kbf, vk: 'n', vi: 0, vb: null }); } return true; }
+      case "IsNullS": { var eg = m ? m.get(skey(this._spanBytes(R[rs1]))) : null; R[rd] = (eg && eg.vk === 'n') ? 1 : 0; return true; }
+      case "KeyAt": { var eh = vals(m)[R[rs1] | 0]; R[rd] = eh ? (eh.kk === 'i' ? eh.ki : 0) : 0; return true; }
+      case "KeySpanAt": { var ei = vals(m)[R[rs1] | 0]; R[rd] = this._newSpanBytes(ei && ei.kk === 's' ? ei.kb : []); return true; }
+      case "ValAt": { var ej = vals(m)[R[rs1] | 0]; R[rd] = ej && ej.vk === 'i' ? ej.vi : 0; return true; }
+      case "ValSpanAt": { var ek = vals(m)[R[rs1] | 0]; R[rd] = this._newSpanBytes(ek && ek.vk === 's' ? ek.vb : []); return true; }
+      case "ValIsSpan": { var el = vals(m)[R[rs1] | 0]; R[rd] = el && el.vk === 's' ? 1 : 0; return true; }
+    }
+    return false;
   };
   PicoVM.prototype._stringlib = function (method, rd, rs1, rs2) {
     var a = this._spanBytes(this.regs[rs1]);

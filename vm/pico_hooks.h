@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0x1F813E24
+#define PV_HOOK_TABLE_VERSION 0x4E7A1F72
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -271,6 +271,10 @@
 #define PV_HOOK_HTTP_PARSEFORM                   0x135
 #define PV_HOOK_HTTP_PARSEJSON                   0x136
 #define PV_HOOK_HTTP_ENCODEJSON                  0x137
+#define PV_HOOK_HTTP_REQUEST                     0x138
+#define PV_HOOK_HTTP_RESPSTATUS                  0x139
+#define PV_HOOK_HTTP_RESPHEADERS                 0x13A
+#define PV_HOOK_HTTP_RESPBODY                    0x13B
 #define PV_HOOK_HTML_CREATENODE                  0x140
 #define PV_HOOK_HTML_ADDCHILDNODE                0x141
 #define PV_HOOK_HTML_REMOVECHILDNODE             0x142
@@ -509,5 +513,32 @@
 #define PV_HOOK_ENCODING_UTF7DECODE              0x319
 #define PV_HOOK_ENCODING_HEXENCODE               0x31A
 #define PV_HOOK_ENCODING_HEXDECODE               0x31B
+#define PV_HOOK_MAP_NEW                          0x320
+#define PV_HOOK_MAP_FREE                         0x321
+#define PV_HOOK_MAP_CLEAR                        0x322
+#define PV_HOOK_MAP_COUNT                        0x323
+#define PV_HOOK_MAP_HASH                         0x324
+#define PV_HOOK_MAP_PUTII                        0x325
+#define PV_HOOK_MAP_GETII                        0x326
+#define PV_HOOK_MAP_HASI                         0x327
+#define PV_HOOK_MAP_DELI                         0x328
+#define PV_HOOK_MAP_PUTIS                        0x329
+#define PV_HOOK_MAP_GETIS                        0x32A
+#define PV_HOOK_MAP_PUTNULLI                     0x32B
+#define PV_HOOK_MAP_ISNULLI                      0x32C
+#define PV_HOOK_MAP_PUTSI                        0x32D
+#define PV_HOOK_MAP_GETSI                        0x32E
+#define PV_HOOK_MAP_HASS                         0x32F
+#define PV_HOOK_MAP_DELS                         0x330
+#define PV_HOOK_MAP_PUTSS                        0x331
+#define PV_HOOK_MAP_GETSS                        0x332
+#define PV_HOOK_MAP_PUTNULLS                     0x333
+#define PV_HOOK_MAP_ISNULLS                      0x334
+#define PV_HOOK_MAP_KEYAT                        0x335
+#define PV_HOOK_MAP_KEYSPANAT                    0x336
+#define PV_HOOK_MAP_VALAT                        0x337
+#define PV_HOOK_MAP_VALSPANAT                    0x338
+#define PV_HOOK_MAP_VALISSPAN                    0x339
+#define PV_HOOK_MAP_USE                          0x33A
 
 #endif

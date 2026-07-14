@@ -631,6 +631,10 @@ NAMESPACE_MAP = {
         "ParseForm":        OP_NOOP,
         "ParseJson":        OP_NOOP,
         "EncodeJson":       OP_NOOP,
+        "Request":          OP_NOOP,
+        "RespStatus":       OP_NOOP,
+        "RespHeaders":      OP_NOOP,
+        "RespBody":         OP_NOOP,
     },
     "Html": {
         "CreateNode":       OP_NOOP,
@@ -643,6 +647,38 @@ NAMESPACE_MAP = {
         "Decode":           OP_NOOP,
         "Serialize":        OP_NOOP,
         "QuerySelector":    OP_NOOP,
+    },
+    # Map: first-class host-managed dictionary (int handle). Keys: int / string
+    # (byte span) / hash (FNV-1a of a span). Values: int / string (v1). Nullable;
+    # enumeration is insertion order. See docs/MAP.md.
+    "Map": {
+        "New":          OP_NOOP,
+        "Use":          OP_NOOP,
+        "Free":         OP_NOOP,
+        "Clear":        OP_NOOP,
+        "Count":        OP_NOOP,
+        "Hash":         OP_NOOP,
+        "PutII":        OP_NOOP,
+        "GetII":        OP_NOOP,
+        "HasI":         OP_NOOP,
+        "DelI":         OP_NOOP,
+        "PutIS":        OP_NOOP,
+        "GetIS":        OP_NOOP,
+        "PutNullI":     OP_NOOP,
+        "IsNullI":      OP_NOOP,
+        "PutSI":        OP_NOOP,
+        "GetSI":        OP_NOOP,
+        "HasS":         OP_NOOP,
+        "DelS":         OP_NOOP,
+        "PutSS":        OP_NOOP,
+        "GetSS":        OP_NOOP,
+        "PutNullS":     OP_NOOP,
+        "IsNullS":      OP_NOOP,
+        "KeyAt":        OP_NOOP,
+        "KeySpanAt":    OP_NOOP,
+        "ValAt":        OP_NOOP,
+        "ValSpanAt":    OP_NOOP,
+        "ValIsSpan":    OP_NOOP,
     },
 }
 
@@ -870,6 +906,39 @@ HOST_HOOK_CODES = {
     ("Kv", "WriteVH"):           0x0239,
     ("Kv", "ReadKH"):            0x023A,
     ("Kv", "ReadVH"):            0x023B,
+    # Map: first-class dictionary primitive (0x0320-0x033A). Host-managed handle.
+    # ABI note: the host-call convention is 2 inputs (rs1,rs2) + 1 result (rd), so
+    # Map uses an ACTIVE-HANDLE model: New()/Use(h) select the active map and every
+    # other op acts on it (keeping all ops <=2 args => no compiler changes, all
+    # dialects lower Map.X(...) through the generic host-call path). Keys int/string/
+    # hash; values int/string (v1). Nullable; insertion-order enumeration. See docs/MAP.md.
+    ("Map", "New"):              0x0320,   # New() -> handle   (also sets active)
+    ("Map", "Free"):             0x0321,   # Free(h)
+    ("Map", "Clear"):            0x0322,   # Clear()           (active map)
+    ("Map", "Count"):            0x0323,   # Count() -> n
+    ("Map", "Hash"):             0x0324,   # Hash(span) -> int (FNV-1a 32-bit)
+    ("Map", "PutII"):            0x0325,   # PutII(k, v)
+    ("Map", "GetII"):            0x0326,   # GetII(k) -> v (0 if absent)
+    ("Map", "HasI"):             0x0327,   # HasI(k) -> 0|1
+    ("Map", "DelI"):             0x0328,   # DelI(k)
+    ("Map", "PutIS"):            0x0329,   # PutIS(k, vSpan)
+    ("Map", "GetIS"):            0x032A,   # GetIS(k) -> span
+    ("Map", "PutNullI"):         0x032B,   # PutNullI(k)
+    ("Map", "IsNullI"):          0x032C,   # IsNullI(k) -> 0|1
+    ("Map", "PutSI"):            0x032D,   # PutSI(kSpan, v)
+    ("Map", "GetSI"):            0x032E,   # GetSI(kSpan) -> v
+    ("Map", "HasS"):             0x032F,   # HasS(kSpan) -> 0|1
+    ("Map", "DelS"):             0x0330,   # DelS(kSpan)
+    ("Map", "PutSS"):            0x0331,   # PutSS(kSpan, vSpan)
+    ("Map", "GetSS"):            0x0332,   # GetSS(kSpan) -> span
+    ("Map", "PutNullS"):         0x0333,   # PutNullS(kSpan)
+    ("Map", "IsNullS"):          0x0334,   # IsNullS(kSpan) -> 0|1
+    ("Map", "KeyAt"):            0x0335,   # KeyAt(i) -> int key
+    ("Map", "KeySpanAt"):        0x0336,   # KeySpanAt(i) -> key span
+    ("Map", "ValAt"):            0x0337,   # ValAt(i) -> int value
+    ("Map", "ValSpanAt"):        0x0338,   # ValSpanAt(i) -> value span
+    ("Map", "ValIsSpan"):        0x0339,   # ValIsSpan(i) -> 0|1
+    ("Map", "Use"):              0x033A,   # Use(h)  (select active map)
     ("Sampling", "ArgMax"):      0x0240,
     ("Sampling", "TopK"):        0x0241,
     ("Sampling", "Temperature"): 0x0242,
@@ -1158,6 +1227,12 @@ HOST_HOOK_CODES = {
     ("Http", "ParseForm"):      0x0135,
     ("Http", "ParseJson"):      0x0136,
     ("Http", "EncodeJson"):     0x0137,
+    # Http transport (0x0138-0x013B): request + response accessors. Request/response
+    # headers are Map handles (Map<string,string>).
+    ("Http", "Request"):        0x0138,   # Request(method, urlSpan, reqHeadersMap, bodySpan) -> respHandle
+    ("Http", "RespStatus"):     0x0139,   # RespStatus(resp) -> int
+    ("Http", "RespHeaders"):    0x013A,   # RespHeaders(resp) -> mapHandle (enumerable)
+    ("Http", "RespBody"):       0x013B,   # RespBody(resp, outDesc) -> span
     # Html library (0x0140-0x0149)
     ("Html", "CreateNode"):     0x0140,
     ("Html", "AddChildNode"):   0x0141,
