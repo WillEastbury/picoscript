@@ -57,11 +57,16 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
   const pgwf = await pg.evaluate(() => {
     setLang('workflow');
     compileSrc(true);
-    var host = document.getElementById('wfDesigner');
-    return { out: DBG.vm.outputInts(), eng: host.innerHTML.indexOf('wf-eng') >= 0 };
+    var host = document.getElementById('wfFlow');
+    return {
+      out: DBG.vm.outputInts(),
+      nodes: host ? host.querySelectorAll('.fc-node').length : 0,
+      chips: host ? host.querySelectorAll('.fc-palette .fc-chip').length : 0,
+      eng: document.getElementById('wfEng').textContent.indexOf('For each') >= 0
+    };
   });
-  const okPgWf = JSON.stringify(pgwf.out) === '[100]' && pgwf.eng;
-  console.log('PLAYGROUND workflow compile [100]:', okPgWf, '|', JSON.stringify(pgwf));
+  const okPgWf = JSON.stringify(pgwf.out) === '[100]' && pgwf.nodes >= 4 && pgwf.chips > 5 && pgwf.eng;
+  console.log('PLAYGROUND workflow (FlowCanvas) [100]:', okPgWf, '|', JSON.stringify(pgwf));
   const pgErrs = perrors.filter(e => !/favicon/i.test(e));
   console.log('PLAYGROUND loaded, errors:', pgErrs.length);
   if (pgErrs.length) console.log(pgErrs.slice(0, 6).join('\n'));

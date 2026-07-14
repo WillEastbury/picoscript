@@ -17,31 +17,32 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
   await page.click("button.tab:has-text('WebIDE')");
   await page.waitForTimeout(300);
 
-  // ---- Workflow surface ----
+  // ---- Workflow surface (now the BareMetal.FlowCanvas drag-drop designer) ----
   const wf = await page.evaluate(() => {
     setLang('workflow');
     compileSrc(true);
-    var host = document.getElementById('wfDesigner');
+    var host = document.getElementById('wfFlow');
     return {
       out: DBG.vm.outputInts(),
-      visible: host.style.display,
-      hasRows: host.innerHTML.indexOf('wf-row') >= 0,
-      hasEng: host.innerHTML.indexOf('wf-eng') >= 0
+      visible: document.getElementById('wfDesigner').style.display,
+      nodes: host.querySelectorAll('.fc-node').length,
+      ifBranches: host.querySelectorAll('.fc-node[data-type="IF"] .fc-branch').length,
+      chips: host.querySelectorAll('.fc-palette .fc-chip').length,
+      eng: document.getElementById('wfEng').textContent.indexOf('For each') >= 0
     };
   });
-  const okWf = JSON.stringify(wf.out) === '[100]' && wf.visible === 'block' && wf.hasRows && wf.hasEng;
+  const okWf = JSON.stringify(wf.out) === '[100]' && wf.visible === 'block' && wf.nodes >= 4 &&
+    wf.ifBranches === 2 && wf.chips > 5 && wf.eng;
   console.log('WEBIDE workflow compile [100]:', okWf, '|', JSON.stringify(wf));
 
-  // Designer edit -> add a step re-syncs & recompiles
+  // Designer edit via the FlowCanvas controller re-syncs & recompiles
   const wfAdd = await page.evaluate(() => {
-    var steps = wfParseSteps();
-    var before = steps.length;
-    steps.push({ type: 'LOG', message: 'sum' });
-    wfWriteSteps(steps);
+    var before = wfParseSteps().length;
+    FLOW.addNode('LOG', null, null, before);   // append a LOG box at root
     compileSrc(true);
     return { before: before, after: wfParseSteps().length, out: DBG.vm.outputInts() };
   });
-  const okWfAdd = wfAdd.after === wfAdd.before + 1 && JSON.stringify(wfAdd.out) === '[100,100]';
+  const okWfAdd = wfAdd.after === wfAdd.before + 1 && wfAdd.out.length === 2 && wfAdd.out[0] === 100;
   console.log('WEBIDE designer add-step re-syncs:', okWfAdd, '|', JSON.stringify(wfAdd));
 
   // ---- Report / Form ----

@@ -8586,7 +8586,17 @@ lowering convention or host contract.</p>
           <button class="ghost" onclick="dbgReset()">Reset</button>
         </div>
         <div id="cerr" class="cerr"></div>
-        <div id="wfDesigner" class="wf-designer" style="display:none"></div>
+        <div id="wfDesigner" class="wf-designer" style="display:none">
+          <div class="wf-add">
+            <select id="wfExample"></select>
+            <button class="ghost" onclick="wfLoadExample()">Load example</button>
+            <span class="muted" style="font-size:11px">drag boxes from the palette onto the canvas; grab &#9095; to move or nest a box; edit fields inline</span>
+          </div>
+          <div id="wfFlow"></div>
+          <div class="wf-eng-h">derived English (compiles &amp; runs; IL / bytecode / output in the debugger below)</div>
+          <pre class="wf-eng" id="wfEng"></pre>
+          <div class="wf-warn" id="wfWarn"></div>
+        </div>
       </div>
     </div>
     <div class="dbg-bar" id="playDbgBar">
@@ -17698,6 +17708,869 @@ if (typeof module !== 'undefined' && module.exports) module.exports = BareMetal.
 </script>
 <script>// VENDORED from BareMetalJsTools (single source of truth). Do not edit here;
 // edit upstream in baremetaljstools/src and re-run tools/vendor_baremetal.py.
+// Upstream: BareMetal.DragDrop.js
+var window = typeof globalThis !== 'undefined' ? (globalThis.window || globalThis) : this;
+window.BareMetal = window.BareMetal || {};
+var BareMetal = window.BareMetal;
+BareMetal.DragDrop = (function () {
+  'use strict';
+
+  var g = typeof globalThis !== 'undefined' ? globalThis : window;
+  var ds = [];
+
+  function noop() {}
+
+  function call(fn, a, b, c, d) {
+    try {
+      return typeof fn === 'function' ? fn(a, b, c, d) : undefined;
+    } catch (_) {}
+  }
+
+  function doc() {
+    return g.document || null;
+  }
+
+  function arr(v) {
+    return Array.prototype.slice.call(v || []);
+  }
+
+  function emit(el, type, detail) {
+    if (!el || !el.dispatchEvent || typeof g.CustomEvent !== 'function') return;
+    try {
+      el.dispatchEvent(new g.CustomEvent(type, { bubbles: true, detail: detail || {} }));
+    } catch (_) {}
+  }
+
+  function list(el, sel) {
+    var out;
+    if (!el) return [];
+    if (!sel || sel === '>*') out = arr(el.children);
+    else {
+      try {
+        out = arr(el.querySelectorAll(sel));
+      } catch (_) {
+        out = arr(el.children);
+      }
+    }
+    return out.filter(function (n) {
+      return n && n.getAttribute && n.getAttribute('data-bm-placeholder') !== '1';
+    });
+  }
+
+  function own(container, sel, target) {
+    var a = list(container, sel);
+    var i;
+    target = target && target.nodeType === 1 ? target : target && target.parentElement;
+    for (i = 0; i < a.length; i++) {
+      if (a[i] === target || (a[i].contains && a[i].contains(target))) return a[i];
+    }
+    return null;
+  }
+
+  function allow(rule, data) {
+    if (!rule) return true;
+    if (typeof rule === 'function') return !!call(rule, data);
+    if (typeof rule === 'string') return !!data && (data.type === rule || data.kind === rule || data === rule);
+    return true;
+  }
+
+  function payload(el, opts, e) {
+    if (typeof opts.data === 'function') return call(opts.data, el, e);
+    if (opts.data !== undefined) return opts.data;
+    return {
+      type: el && el.getAttribute ? el.getAttribute('data-type') || '' : '',
+      id: el && el.id || '',
+      text: String(el && el.textContent || '').trim()
+    };
+  }
+
+  function ghost(el, cls) {
+    var r;
+    var n;
+    var b = doc() && doc().body;
+    if (!el || !el.cloneNode || !b) return null;
+    r = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 0, height: 0 };
+    n = el.cloneNode(true);
+    if (cls && n.classList) n.classList.add(cls);
+    n.style.position = 'fixed';
+    n.style.left = '0';
+    n.style.top = '0';
+    n.style.margin = '0';
+    n.style.width = r.width + 'px';
+    n.style.height = r.height + 'px';
+    n.style.pointerEvents = 'none';
+    n.style.zIndex = '2147483647';
+    n.style.opacity = '0.9';
+    b.appendChild(n);
+    return n;
+  }
+
+  function moveGhost(n, e) {
+    if (!n || !e) return;
+    n.style.transform = 'translate(' + (e.clientX + 12) + 'px,' + (e.clientY + 12) + 'px)';
+  }
+
+  function setOver(entry, on) {
+    if (!entry || !entry.el || !entry.o || !entry.o.overClass || !entry.el.classList) return;
+    entry.el.classList[on ? 'add' : 'remove'](entry.o.overClass);
+  }
+
+  function findDrop(x, y, data) {
+    var n = doc() && doc().elementFromPoint ? doc().elementFromPoint(x, y) : null;
+    var i;
+    while (n) {
+      for (i = 0; i < ds.length; i++) {
+        if ((ds[i].el === n || (ds[i].el.contains && ds[i].el.contains(n))) && allow(ds[i].o.accept, data)) return ds[i];
+      }
+      n = n.parentElement;
+    }
+    return null;
+  }
+
+  function key(el, i) {
+    return el && (el.id || (el.getAttribute && (el.getAttribute('data-id') || el.getAttribute('data-key')))) || String(i);
+  }
+
+  /**
+   * Makes an element draggable.
+   * @param {Element} el
+   * @param {Object} [opts]
+   * @returns {{destroy: Function}}
+   */
+  function draggable(el, opts) {
+    var st = null;
+    opts = opts || {};
+    if (!el || !el.addEventListener) return { destroy: noop };
+
+    function end(e, cancel) {
+      var x = st;
+      if (!x) return;
+      st = null;
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', cancelUp);
+      try {
+        if (el.releasePointerCapture) el.releasePointerCapture(x.pid);
+      } catch (_) {}
+      if (opts.dragClass && el.classList) el.classList.remove(opts.dragClass);
+      if (x.drop) {
+        setOver(x.drop, false);
+        if (!cancel) {
+          call(x.drop.o.onDrop, x.data, el, x.drop.el, e);
+          emit(x.drop.el, 'bm:drop', { data: x.data, source: el, target: x.drop.el });
+        }
+      }
+      if (x.ghost && x.ghost.remove) x.ghost.remove();
+      emit(el, 'bm:dragend', { data: x.data, source: el, target: x.drop && x.drop.el || null, cancelled: !!cancel });
+      call(opts.onEnd, x.data, el, x.drop && x.drop.el || null, e);
+    }
+
+    function move(e) {
+      var next;
+      if (!st || !e) return;
+      moveGhost(st.ghost, e);
+      next = findDrop(e.clientX, e.clientY, st.data);
+      if (next === st.drop) return;
+      if (st.drop) {
+        setOver(st.drop, false);
+        call(st.drop.o.onLeave, st.data, el, st.drop.el, e);
+      }
+      st.drop = next;
+      if (st.drop) {
+        setOver(st.drop, true);
+        call(st.drop.o.onOver, st.data, el, st.drop.el, e);
+      }
+    }
+
+    function up(e) {
+      end(e, false);
+    }
+
+    function cancelUp(e) {
+      end(e, true);
+    }
+
+    function down(e) {
+      var h;
+      if (!e || st || (e.button > 0 && e.pointerType !== 'touch')) return;
+      if (opts.handle) {
+        h = e.target && e.target.closest ? e.target.closest(opts.handle) : null;
+        if (!h || !el.contains(h)) return;
+      }
+      st = {
+        pid: e.pointerId,
+        data: payload(el, opts, e),
+        ghost: ghost(el, opts.ghostClass),
+        drop: null
+      };
+      if (opts.dragClass && el.classList) el.classList.add(opts.dragClass);
+      moveGhost(st.ghost, e);
+      try {
+        if (el.setPointerCapture) el.setPointerCapture(st.pid);
+      } catch (_) {}
+      el.addEventListener('pointermove', move);
+      el.addEventListener('pointerup', up);
+      el.addEventListener('pointercancel', cancelUp);
+      emit(el, 'bm:dragstart', { data: st.data, source: el });
+      call(opts.onStart, st.data, el, e);
+      if (e.preventDefault) e.preventDefault();
+    }
+
+    el.addEventListener('pointerdown', down);
+    return {
+      destroy: function () {
+        el.removeEventListener('pointerdown', down);
+        end(null, true);
+      }
+    };
+  }
+
+  /**
+   * Registers an element as a drop target.
+   * @param {Element} el
+   * @param {Object} [opts]
+   * @returns {{destroy: Function}}
+   */
+  function droppable(el, opts) {
+    var entry;
+    opts = opts || {};
+    if (!el) return { destroy: noop };
+    entry = { el: el, o: opts };
+    ds.push(entry);
+    return {
+      destroy: function () {
+        ds = ds.filter(function (x) { return x !== entry; });
+        setOver(entry, false);
+      }
+    };
+  }
+
+  /**
+   * Makes a container sortable by pointer drag.
+   * @param {Element} container
+   * @param {Object} [opts]
+   * @returns {{destroy: Function, getOrder: Function}}
+   */
+  function sortable(container, opts) {
+    var st = null;
+    opts = opts || {};
+    if (!container || !container.addEventListener) return { destroy: noop, getOrder: function () { return []; } };
+
+    function getOrder() {
+      return list(container, opts.items).map(key);
+    }
+
+    function pickTarget(t) {
+      var h;
+      if (opts.handle) {
+        h = t && t.closest ? t.closest(opts.handle) : null;
+        if (!h || !container.contains(h)) return null;
+        return own(container, opts.items, h);
+      }
+      return own(container, opts.items, t);
+    }
+
+    function finish(e, cancel) {
+      var moved;
+      var order;
+      if (!st) return;
+      st.item.removeEventListener('pointermove', move);
+      st.item.removeEventListener('pointerup', up);
+      st.item.removeEventListener('pointercancel', cancelUp);
+      try {
+        if (st.item.releasePointerCapture) st.item.releasePointerCapture(st.pid);
+      } catch (_) {}
+      if (st.ghost && st.ghost.remove) st.ghost.remove();
+      if (!cancel && st.placeholder && st.placeholder.parentNode) st.placeholder.parentNode.insertBefore(st.item, st.placeholder);
+      if (st.placeholder && st.placeholder.remove) st.placeholder.remove();
+      st.item.style.display = st.display;
+      moved = JSON.stringify(st.start) !== JSON.stringify(getOrder());
+      order = getOrder();
+      emit(st.item, 'bm:dragend', { item: st.item, order: order, cancelled: !!cancel });
+      if (moved && !cancel) {
+        emit(container, 'bm:reorder', { item: st.item, order: order });
+        call(opts.onReorder, order, st.item, e);
+      }
+      st = null;
+    }
+
+    function move(e) {
+      var hit;
+      var r;
+      var cr;
+      var before;
+      if (!st || !e) return;
+      moveGhost(st.ghost, e);
+      hit = own(container, opts.items, doc() && doc().elementFromPoint ? doc().elementFromPoint(e.clientX, e.clientY) : null);
+      if (hit && hit !== st.item) {
+        r = hit.getBoundingClientRect();
+        before = (opts.direction === 'horizontal' ? e.clientX < r.left + r.width / 2 : e.clientY < r.top + r.height / 2);
+        container.insertBefore(st.placeholder, before ? hit : hit.nextSibling);
+      } else if (st.placeholder && container.getBoundingClientRect) {
+        cr = container.getBoundingClientRect();
+        if (e.clientX >= cr.left && e.clientX <= cr.right && e.clientY >= cr.top && e.clientY <= cr.bottom) container.appendChild(st.placeholder);
+      }
+    }
+
+    function up(e) {
+      finish(e, false);
+    }
+
+    function cancelUp(e) {
+      finish(e, true);
+    }
+
+    function down(e) {
+      var item = pickTarget(e && e.target);
+      var ph;
+      if (!e || st || !item || !container.contains(item)) return;
+      ph = (doc() && doc().createElement(item.tagName || 'div')) || null;
+      if (!ph) return;
+      ph.setAttribute('data-bm-placeholder', '1');
+      ph.setAttribute('aria-hidden', 'true');
+      ph.style.visibility = 'hidden';
+      ph.style.width = (item.offsetWidth || 0) + 'px';
+      ph.style.height = (item.offsetHeight || 0) + 'px';
+      ph.style.boxSizing = 'border-box';
+      st = {
+        pid: e.pointerId,
+        item: item,
+        placeholder: ph,
+        ghost: ghost(item, opts.ghostClass),
+        display: item.style.display,
+        start: getOrder()
+      };
+      item.style.display = 'none';
+      container.insertBefore(ph, item.nextSibling);
+      moveGhost(st.ghost, e);
+      try {
+        if (item.setPointerCapture) item.setPointerCapture(st.pid);
+      } catch (_) {}
+      item.addEventListener('pointermove', move);
+      item.addEventListener('pointerup', up);
+      item.addEventListener('pointercancel', cancelUp);
+      emit(item, 'bm:dragstart', { item: item, order: st.start });
+      if (e.preventDefault) e.preventDefault();
+    }
+
+    container.addEventListener('pointerdown', down);
+    return {
+      destroy: function () {
+        container.removeEventListener('pointerdown', down);
+        finish(null, true);
+      },
+      getOrder: getOrder
+    };
+  }
+
+  return {
+    draggable: draggable,
+    droppable: droppable,
+    sortable: sortable
+  };
+})();
+
+if (typeof module !== 'undefined' && module.exports) module.exports = BareMetal.DragDrop;
+</script>
+<script>// VENDORED from BareMetalJsTools (single source of truth). Do not edit here;
+// edit upstream in baremetaljstools/src and re-run tools/vendor_baremetal.py.
+// Upstream: BareMetal.FlowCanvas.js
+// BareMetal.FlowCanvas.js — a component-based, drag-and-drop nested flow canvas.
+//
+// Renders a *flat step list* (the BareMetal.Workflow / WorkflowPico model:
+// SET / IF..ELSE..END / FOR..END / FOREACH..END / ON..END / LOG / WAIT / RAISE /
+// LOAD / SAVE / WEB / CALL) as a tree of slick boxes with flow connectors between
+// them and drop-zones *inside* block boxes, so code lives visually inside loops
+// and choices. Think Scratch, minus the jigsaw — every atomic statement is a box,
+// block statements are boxes that contain boxes.
+//
+// Drag-and-drop is powered by BareMetal.DragDrop (draggable + droppable). Nested
+// drop-zones are registered innermost-first so the deepest zone under the pointer
+// wins (BareMetal.DragDrop.findDrop returns the first-registered matching zone).
+//
+// Standalone: injects its own CSS once, zero third-party deps. The step model is
+// identical to BareMetal.WorkflowPico, so `canvas.getSteps()` compiles directly.
+//
+//   var fc = BareMetal.FlowCanvas.create(hostEl, {
+//     steps: [ {type:'SET',name:'sum',value:0}, ... ],
+//     onChange: function (steps) { ... }        // fired on every edit
+//   });
+//   fc.getSteps();  fc.setSteps(steps);  fc.destroy();
+//
+var BareMetal = (typeof BareMetal !== 'undefined') ? BareMetal : {};
+BareMetal.FlowCanvas = (function () {
+  'use strict';
+
+  var VERSION = '1.0.0';
+  var CSS_ID = 'bm-flowcanvas-css';
+  var seq = 0;
+  function uid() { seq += 1; return 'n' + seq + '_' + Math.floor(Math.random() * 1e6); }
+  function up(s) { return String(s == null ? '' : s).toUpperCase(); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function dd() { return (typeof BareMetal !== 'undefined' && BareMetal.DragDrop) ? BareMetal.DragDrop : null; }
+
+  // ── type schema ─────────────────────────────────────────────────────────────
+  // Each descriptor: { label, kind:'atom'|'block', color, slots:[{key,label}],
+  //   fields:[{key,label,placeholder,kind:'text'|'num'|'select',choices,get,set}] }
+  var MEM = [{ v: 'memory', t: 'memory' }, { v: 'scratch', t: 'scratch' }, { v: 'field', t: 'field' }];
+  var METHODS = [{ v: 'GET' }, { v: 'POST' }, { v: 'PUT' }, { v: 'DELETE' }, { v: 'PATCH' }];
+
+  function setValueField() {
+    return {
+      key: 'value', label: 'value / expr', placeholder: '0 or sum + item', width: 150,
+      get: function (p) { return ('expr' in p) ? p.expr : (p.value === undefined ? '' : JSON.stringify(p.value)); },
+      set: function (p, raw) {
+        var t = String(raw == null ? '' : raw).trim();
+        var parsed, ok = false;
+        try { parsed = JSON.parse(t); ok = (typeof parsed === 'number' || Array.isArray(parsed)); } catch (e) { ok = false; }
+        if (ok) { p.value = parsed; delete p.expr; } else { p.expr = t; delete p.value; }
+      }
+    };
+  }
+
+  var WORKFLOW_TYPES = {
+    SET: { label: 'Set', kind: 'atom', color: '#79c0ff', fields: [
+      { key: 'name', label: '', placeholder: 'name', width: 90 }, setValueField() ] },
+    IF: { label: 'If', kind: 'block', color: '#f0a3ff',
+      slots: [{ key: 'then', label: 'then' }, { key: 'else', label: 'else' }],
+      fields: [{ key: 'condition', label: '', placeholder: 'sum >= 50', width: 200 }] },
+    FOR: { label: 'For', kind: 'block', color: '#ffd866', slots: [{ key: 'body', label: '' }], fields: [
+      { key: 'var', label: '', placeholder: 'i', width: 50 },
+      { key: 'from', label: 'from', placeholder: '1', width: 60, kind: 'num' },
+      { key: 'to', label: 'to', placeholder: '5', width: 60, kind: 'num' } ] },
+    FOREACH: { label: 'For each', kind: 'block', color: '#ffd866', slots: [{ key: 'body', label: '' }], fields: [
+      { key: 'var', label: '', placeholder: 'item', width: 70 },
+      { key: 'in', label: 'in', placeholder: 'data', width: 90 } ] },
+    FOREACHP: { label: 'For each (parallel)', kind: 'block', color: '#ffd866', slots: [{ key: 'body', label: '' }], fields: [
+      { key: 'var', label: '', placeholder: 'item', width: 70 },
+      { key: 'in', label: 'in', placeholder: 'data', width: 90 } ] },
+    LOG: { label: 'Log', kind: 'atom', color: '#7ee787', fields: [
+      { key: 'message', label: '', placeholder: 'sum', width: 180 } ] },
+    WAIT: { label: 'Wait', kind: 'atom', color: '#9aa0ad', fields: [
+      { key: 'ms', label: '', placeholder: '100', width: 70, kind: 'num' }, { key: '_ms', label: 'ms', kind: 'static' } ] },
+    RAISE: { label: 'Raise', kind: 'atom', color: '#ff9f7f', fields: [
+      { key: 'event', label: 'event', placeholder: '1', width: 60, kind: 'num' },
+      { key: 'target', label: '→', placeholder: '0', width: 60, kind: 'num' } ] },
+    ON: { label: 'On event', kind: 'block', color: '#ff9f7f', slots: [{ key: 'body', label: '' }], fields: [
+      { key: 'event', label: '', placeholder: '1', width: 60, kind: 'num' } ] },
+    LOAD: { label: 'Load', kind: 'atom', color: '#66e0cc', fields: [
+      { key: 'name', label: '', placeholder: 'x', width: 70 },
+      { key: 'from', label: 'from', kind: 'select', choices: MEM },
+      { key: 'key', label: 'key', placeholder: '0', width: 60, kind: 'num' } ] },
+    SAVE: { label: 'Save', kind: 'atom', color: '#66e0cc', fields: [
+      { key: 'name', label: '', placeholder: 'x', width: 70 },
+      { key: 'to', label: 'to', kind: 'select', choices: MEM },
+      { key: 'key', label: 'key', placeholder: '0', width: 60, kind: 'num' } ] },
+    WEB: { label: 'Web', kind: 'atom', color: '#a0d0ff', fields: [
+      { key: 'method', label: '', kind: 'select', choices: METHODS },
+      { key: 'url', label: '', placeholder: '/api', width: 160 } ] },
+    CALL: { label: 'Call', kind: 'atom', color: '#b0a0ff', fields: [
+      { key: 'workflow', label: '', placeholder: 'other', width: 140 } ] }
+  };
+
+  // sensible defaults when a fresh box is created
+  var DEFAULTS = {
+    SET: { name: 'x', value: 0 }, IF: { condition: 'x >= 1' }, FOR: { 'var': 'i', from: 1, to: 5 },
+    FOREACH: { 'var': 'item', 'in': 'data' }, FOREACHP: { 'var': 'item', 'in': 'data' }, LOG: { message: 'x' },
+    WAIT: { ms: 100 }, RAISE: { event: 1, target: 0 }, ON: { event: 1 }, LOAD: { name: 'x', from: 'memory', key: 0 },
+    SAVE: { name: 'x', to: 'memory', key: 0 }, WEB: { method: 'GET', url: '/api' }, CALL: { workflow: 'other' }
+  };
+
+  var CSS = [
+    '.fc-wrap{--fc-line:#3a4152;--fc-bg:#0c0e14;--fc-panel:#161a24;--fc-muted:#8b93a7;--fc-accent:#667eea;color:#e6e8ef;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}',
+    '.fc-palette{display:flex;flex-wrap:wrap;gap:5px;padding:6px;margin-bottom:8px;background:var(--fc-panel);border:1px solid var(--fc-line);border-radius:8px;}',
+    '.fc-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;background:#1d2230;border:1px solid var(--fc-line);color:#cdd3e0;font-size:11.5px;font-weight:600;cursor:grab;user-select:none;transition:transform .08s,border-color .12s;}',
+    '.fc-chip:hover{border-color:var(--c,#667eea);transform:translateY(-1px);}',
+    '.fc-chip .fc-dot{width:8px;height:8px;border-radius:50%;background:var(--c,#667eea);}',
+    '.fc-canvas{background:var(--fc-bg);border:1px solid var(--fc-line);border-radius:10px;padding:12px;min-height:80px;}',
+    '.fc-seq{display:flex;flex-direction:column;gap:0;min-height:22px;border-radius:8px;transition:background .12s,box-shadow .12s;}',
+    '.fc-seq.fc-empty{min-height:34px;border:1px dashed var(--fc-line);border-radius:8px;position:relative;}',
+    '.fc-seq.fc-empty::after{content:"drop a box here";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--fc-muted);font-size:11px;font-style:italic;pointer-events:none;}',
+    '.fc-seq.fc-drop-over{background:rgba(102,126,234,.14);box-shadow:inset 0 0 0 1px var(--fc-accent);}',
+    '.fc-node{position:relative;background:var(--fc-panel);border:1px solid var(--fc-line);border-left:3px solid var(--fc-accent);border-radius:8px;margin:0;box-shadow:0 1px 2px rgba(0,0,0,.25);}',
+    '.fc-node+.fc-node{margin-top:20px;}',
+    '.fc-node+.fc-node::before{content:"";position:absolute;left:50%;top:-20px;width:2px;height:14px;background:linear-gradient(var(--fc-line),var(--fc-accent));transform:translateX(-50%);}',
+    '.fc-node+.fc-node::after{content:"";position:absolute;left:50%;top:-8px;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid var(--fc-accent);transform:translateX(-50%);}',
+    '.fc-node.fc-dragging{opacity:.4;}',
+    '.fc-ghost{border-radius:8px;box-shadow:0 8px 22px rgba(0,0,0,.5);transform:rotate(-1deg);}',
+    '.fc-head{display:flex;align-items:center;gap:7px;padding:6px 8px;flex-wrap:wrap;}',
+    '.fc-grip{cursor:grab;color:var(--fc-muted);font-size:14px;line-height:1;user-select:none;touch-action:none;}',
+    '.fc-grip:active{cursor:grabbing;}',
+    '.fc-type{font-weight:700;font-size:11px;letter-spacing:.02em;color:var(--fc-accent);text-transform:uppercase;white-space:nowrap;}',
+    '.fc-fields{display:flex;align-items:center;gap:5px;flex-wrap:wrap;flex:1 1 auto;}',
+    '.fc-flabel{color:var(--fc-muted);font-size:11px;}',
+    '.fc-static{color:var(--fc-muted);font-size:11px;}',
+    '.fc-fields input,.fc-fields select{background:#0c0e14;border:1px solid var(--fc-line);border-radius:5px;color:#e6e8ef;font:12px/1.2 "SF Mono",Consolas,monospace;padding:3px 6px;min-width:36px;}',
+    '.fc-fields input:focus,.fc-fields select:focus{outline:none;border-color:var(--fc-accent);}',
+    '.fc-acts{display:flex;gap:2px;margin-left:auto;}',
+    '.fc-acts button{background:none;border:1px solid transparent;border-radius:5px;color:var(--fc-muted);cursor:pointer;font-size:12px;padding:2px 6px;line-height:1;}',
+    '.fc-acts button:hover{border-color:var(--fc-line);color:#e6e8ef;background:#1d2230;}',
+    '.fc-slots{padding:0 8px 8px 8px;display:flex;flex-direction:column;gap:6px;}',
+    '.fc-branch{border-left:2px solid var(--fc-accent);border-radius:0 0 0 6px;padding:2px 0 2px 12px;margin-left:6px;}',
+    '.fc-branch-label{color:var(--fc-accent);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin:2px 0 4px;opacity:.85;}',
+    '.fc-addchild{align-self:flex-start;background:none;border:1px dashed var(--fc-line);border-radius:6px;color:var(--fc-muted);cursor:pointer;font-size:11px;padding:2px 8px;margin-top:4px;}',
+    '.fc-addchild:hover{border-color:var(--fc-accent);color:#e6e8ef;}',
+    '.fc-empty-root{color:var(--fc-muted);font-size:12px;font-style:italic;text-align:center;padding:14px;}'
+  ].join('');
+
+  function injectCss(docObj) {
+    if (!docObj || !docObj.head || docObj.getElementById(CSS_ID)) return;
+    var st = docObj.createElement('style');
+    st.id = CSS_ID; st.textContent = CSS;
+    docObj.head.appendChild(st);
+  }
+
+  // ── model: flat step list <-> tree of nodes ─────────────────────────────────
+  function typeDesc(types, t) { return types[up(t)] || null; }
+  function isBlock(types, t) { var d = typeDesc(types, t); return !!(d && d.kind === 'block'); }
+  function slotKeys(types, t) {
+    var d = typeDesc(types, t);
+    if (!d || d.kind !== 'block') return [];
+    return (d.slots || [{ key: 'body', label: '' }]).map(function (s) { return s.key; });
+  }
+
+  function makeNode(types, t, props) {
+    var type = up(t);
+    var node = { id: uid(), type: type, props: {}, slots: {} };
+    var src = props || (DEFAULTS[type] ? JSON.parse(JSON.stringify(DEFAULTS[type])) : {});
+    Object.keys(src).forEach(function (k) { if (k !== 'type') node.props[k] = src[k]; });
+    slotKeys(types, type).forEach(function (k) { node.slots[k] = []; });
+    return node;
+  }
+
+  function parseTree(types, steps) {
+    var i = 0;
+    steps = Array.isArray(steps) ? steps : [];
+    function cur() { return steps[i] || { type: '' }; }
+    function parseSeq() {
+      var nodes = [];
+      while (i < steps.length) {
+        var t = up(cur().type);
+        if (t === 'END' || t === 'ELSE') return nodes;
+        var raw = steps[i]; i += 1;
+        var node = { id: uid(), type: t, props: {}, slots: {} };
+        Object.keys(raw).forEach(function (k) { if (k !== 'type') node.props[k] = raw[k]; });
+        if (isBlock(types, t)) {
+          if (t === 'IF') {
+            node.slots.then = parseSeq();
+            node.slots['else'] = [];
+            if (up(cur().type) === 'ELSE') { i += 1; node.slots['else'] = parseSeq(); }
+            if (up(cur().type) === 'END') i += 1;
+          } else {
+            node.slots.body = parseSeq();
+            if (up(cur().type) === 'END') i += 1;
+          }
+        }
+        nodes.push(node);
+      }
+      return nodes;
+    }
+    return parseSeq();
+  }
+
+  function serialize(types, nodes) {
+    var out = [];
+    (nodes || []).forEach(function (n) {
+      var step = { type: n.type };
+      Object.keys(n.props).forEach(function (k) { step[k] = n.props[k]; });
+      out.push(step);
+      if (isBlock(types, n.type)) {
+        if (n.type === 'IF') {
+          out = out.concat(serialize(types, n.slots.then || []));
+          if ((n.slots['else'] || []).length) { out.push({ type: 'ELSE' }); out = out.concat(serialize(types, n.slots['else'])); }
+          out.push({ type: 'END' });
+        } else {
+          out = out.concat(serialize(types, n.slots.body || []));
+          out.push({ type: 'END' });
+        }
+      }
+    });
+    return out;
+  }
+
+  // ── controller ──────────────────────────────────────────────────────────────
+  function create(host, opts) {
+    opts = opts || {};
+    var docObj = (host && host.ownerDocument) || (typeof document !== 'undefined' ? document : null);
+    var types = opts.types || WORKFLOW_TYPES;
+    var paletteList = opts.palette || Object.keys(types);
+    var roots = parseTree(types, opts.steps || []);
+    var handles = [];
+    if (docObj) injectCss(docObj);
+    if (host) { host.classList.add('fc-wrap'); }
+
+    function emit() {
+      var steps = serialize(types, roots);
+      if (typeof opts.onChange === 'function') opts.onChange(steps);
+      if (host && host.dispatchEvent && typeof CustomEvent !== 'undefined') {
+        host.dispatchEvent(new CustomEvent('bm:flow-change', { detail: { steps: steps }, bubbles: true }));
+      }
+    }
+
+    // tree ops (also the drag/keyboard fallback API)
+    function findNode(id, list, parent, slot) {
+      list = list || roots;
+      for (var i = 0; i < list.length; i++) {
+        var n = list[i];
+        if (n.id === id) return { node: n, list: list, index: i };
+        var keys = Object.keys(n.slots);
+        for (var k = 0; k < keys.length; k++) {
+          var hit = findNode(id, n.slots[keys[k]]);
+          if (hit) return hit;
+        }
+      }
+      return null;
+    }
+    function detach(id) {
+      var hit = findNode(id);
+      if (!hit) return null;
+      return hit.list.splice(hit.index, 1)[0];
+    }
+    function slotArray(ownerId, slot) {
+      if (!ownerId) return roots;
+      var hit = findNode(ownerId);
+      if (!hit) return null;
+      if (!hit.node.slots[slot]) hit.node.slots[slot] = [];
+      return hit.node.slots[slot];
+    }
+    function isWithin(dragId, ownerId) {
+      if (!ownerId) return false;
+      if (dragId === ownerId) return true;
+      var hit = findNode(dragId);
+      if (!hit) return false;
+      return !!findNode(ownerId, [hit.node]);
+    }
+
+    function addNode(type, ownerId, slot, index) {
+      var arr = slotArray(ownerId || null, slot);
+      if (!arr) return null;
+      var node = makeNode(types, type);
+      if (index == null || index > arr.length) index = arr.length;
+      arr.splice(index, 0, node);
+      render(); emit();
+      return node.id;
+    }
+    function removeNode(id) {
+      if (detach(id)) { render(); emit(); }
+    }
+    function moveNode(id, ownerId, slot, index) {
+      if (isWithin(id, ownerId)) return false;    // can't nest a block into itself
+      var node = detach(id);
+      if (!node) return false;
+      var arr = slotArray(ownerId || null, slot);
+      if (!arr) { return false; }
+      if (index == null || index > arr.length) index = arr.length;
+      arr.splice(index, 0, node);
+      render(); emit();
+      return true;
+    }
+
+    // ── rendering ─────────────────────────────────────────────────────────────
+    function fieldEl(node, f) {
+      var d = docObj.createElement('span');
+      d.style.display = 'inline-flex'; d.style.alignItems = 'center'; d.style.gap = '3px';
+      if (f.kind === 'static') { d.className = 'fc-static'; d.textContent = f.key === '_ms' ? 'ms' : (f.label || ''); return d; }
+      if (f.label) { var lb = docObj.createElement('span'); lb.className = 'fc-flabel'; lb.textContent = f.label; d.appendChild(lb); }
+      var val = f.get ? f.get(node.props) : (node.props[f.key] === undefined ? '' : node.props[f.key]);
+      var input;
+      if (f.kind === 'select') {
+        input = docObj.createElement('select');
+        (f.choices || []).forEach(function (c) {
+          var o = docObj.createElement('option'); o.value = c.v; o.textContent = c.t || c.v;
+          if (String(c.v) === String(val)) o.selected = true;
+          input.appendChild(o);
+        });
+      } else {
+        input = docObj.createElement('input');
+        input.type = 'text';
+        input.value = val;
+        if (f.placeholder) input.placeholder = f.placeholder;
+        if (f.width) input.style.width = f.width + 'px';
+      }
+      function apply() {
+        var raw = input.value;
+        if (f.set) f.set(node.props, raw);
+        else if (f.kind === 'num') { var num = Number(raw); node.props[f.key] = (raw !== '' && !isNaN(num)) ? num : raw; }
+        else node.props[f.key] = raw;
+        emit();
+      }
+      input.addEventListener('change', apply);
+      input.addEventListener('input', function () { if (f.kind !== 'select') apply(); });
+      // keep pointerdown on inputs from bubbling to a drag start
+      input.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+      d.appendChild(input);
+      return d;
+    }
+
+    function nodeEl(node) {
+      var desc = typeDesc(types, node.type) || { label: node.type, color: '#667eea', fields: [] };
+      var el = docObj.createElement('div');
+      el.className = 'fc-node';
+      el.setAttribute('data-id', node.id);
+      el.setAttribute('data-type', node.type);
+      el.style.setProperty('--fc-accent', desc.color || '#667eea');
+
+      var head = docObj.createElement('div'); head.className = 'fc-head';
+      var grip = docObj.createElement('span'); grip.className = 'fc-grip'; grip.textContent = '\u2807'; grip.title = 'drag to move';
+      var ty = docObj.createElement('span'); ty.className = 'fc-type'; ty.textContent = desc.label || node.type;
+      var fields = docObj.createElement('span'); fields.className = 'fc-fields';
+      (desc.fields || []).forEach(function (f) { fields.appendChild(fieldEl(node, f)); });
+      var acts = docObj.createElement('span'); acts.className = 'fc-acts';
+      var del = docObj.createElement('button'); del.textContent = '\u2715'; del.title = 'delete';
+      del.addEventListener('click', function (e) { e.preventDefault(); removeNode(node.id); });
+      acts.appendChild(del);
+      head.appendChild(grip); head.appendChild(ty); head.appendChild(fields); head.appendChild(acts);
+      el.appendChild(head);
+
+      if (isBlock(types, node.type)) {
+        var slots = docObj.createElement('div'); slots.className = 'fc-slots';
+        var slotDefs = (desc.slots || [{ key: 'body', label: '' }]);
+        slotDefs.forEach(function (sd) {
+          var branch = docObj.createElement('div'); branch.className = 'fc-branch';
+          if (sd.label) { var bl = docObj.createElement('div'); bl.className = 'fc-branch-label'; bl.textContent = sd.label; branch.appendChild(bl); }
+          branch.appendChild(seqEl(node.slots[sd.key] || [], node.id, sd.key));
+          var addc = docObj.createElement('button'); addc.className = 'fc-addchild'; addc.textContent = '+ box';
+          addc.addEventListener('click', function (e) { e.preventDefault(); addNode('SET', node.id, sd.key); });
+          branch.appendChild(addc);
+          slots.appendChild(branch);
+        });
+        el.appendChild(slots);
+      }
+      el.__grip = grip;
+      return el;
+    }
+
+    function seqEl(list, ownerId, slot) {
+      var s = docObj.createElement('div');
+      s.className = 'fc-seq' + (list.length ? '' : ' fc-empty');
+      if (ownerId) { s.setAttribute('data-owner', ownerId); s.setAttribute('data-slot', slot); }
+      else s.setAttribute('data-root', '1');
+      list.forEach(function (n) { s.appendChild(nodeEl(n)); });
+      return s;
+    }
+
+    function clearHandles() { handles.forEach(function (h) { try { h.destroy(); } catch (e) {} }); handles = []; }
+
+    function seqNodeEls(seqEl2, exceptId) {
+      return Array.prototype.filter.call(seqEl2.children, function (c) {
+        return c.classList && c.classList.contains('fc-node') && c.getAttribute('data-id') !== exceptId;
+      });
+    }
+    function dropIndex(seqEl2, y, exceptId) {
+      var kids = seqNodeEls(seqEl2, exceptId);
+      for (var i = 0; i < kids.length; i++) {
+        var r = kids[i].getBoundingClientRect();
+        if (y < r.top + r.height / 2) return i;
+      }
+      return kids.length;
+    }
+
+    function wireDnD() {
+      var D = dd();
+      if (!D || !host) return;
+      // droppables: register innermost-first so nested zones win in findDrop
+      var seqs = Array.prototype.slice.call(host.querySelectorAll('.fc-seq'));
+      seqs.reverse().forEach(function (sEl) {
+        var ownerId = sEl.getAttribute('data-owner') || null;
+        var slot = sEl.getAttribute('data-slot') || null;
+        handles.push(D.droppable(sEl, {
+          overClass: 'fc-drop-over',
+          accept: function (data) {
+            if (!data) return false;
+            if (data.newType) return true;
+            return !isWithin(data.id, ownerId);
+          },
+          onDrop: function (data, source, target, e) {
+            var y = (e && e.clientY != null) ? e.clientY : 0;
+            if (data && data.newType) {
+              addNode(data.newType, ownerId, slot, dropIndex(sEl, y, null));
+            } else if (data && data.id) {
+              moveNode(data.id, ownerId, slot, dropIndex(sEl, y, data.id));
+            }
+          }
+        }));
+      });
+      // draggables: node grips
+      Array.prototype.slice.call(host.querySelectorAll('.fc-node')).forEach(function (nEl) {
+        handles.push(D.draggable(nEl, {
+          handle: '.fc-grip', ghostClass: 'fc-ghost', dragClass: 'fc-dragging',
+          data: function () { return { id: nEl.getAttribute('data-id') }; }
+        }));
+      });
+      // palette chips create new boxes
+      if (host.__palette) {
+        Array.prototype.slice.call(host.__palette.querySelectorAll('.fc-chip')).forEach(function (chip) {
+          handles.push(D.draggable(chip, {
+            ghostClass: 'fc-ghost',
+            data: { newType: chip.getAttribute('data-type') }
+          }));
+        });
+      }
+    }
+
+    function renderPalette() {
+      var pal = docObj.createElement('div'); pal.className = 'fc-palette';
+      paletteList.forEach(function (t) {
+        var desc = typeDesc(types, t) || { label: t, color: '#667eea' };
+        var chip = docObj.createElement('span'); chip.className = 'fc-chip';
+        chip.setAttribute('data-type', up(t));
+        chip.style.setProperty('--c', desc.color || '#667eea');
+        var dot = docObj.createElement('span'); dot.className = 'fc-dot';
+        chip.appendChild(dot);
+        chip.appendChild(docObj.createTextNode(desc.label || t));
+        chip.title = 'drag onto the canvas, or click to append';
+        chip.addEventListener('click', function () { addNode(up(t), null, null, roots.length); });
+        pal.appendChild(chip);
+      });
+      return pal;
+    }
+
+    function render() {
+      if (!host) return;
+      clearHandles();
+      host.innerHTML = '';
+      var pal = renderPalette();
+      host.appendChild(pal); host.__palette = pal;
+      var canvas = docObj.createElement('div'); canvas.className = 'fc-canvas';
+      if (!roots.length) {
+        var empty = docObj.createElement('div'); empty.className = 'fc-empty-root';
+        empty.textContent = 'Empty flow — drag a box from the palette, or click one to add it.';
+        canvas.appendChild(empty);
+        var rootSeq0 = seqEl([], null, null);
+        canvas.appendChild(rootSeq0);
+      } else {
+        canvas.appendChild(seqEl(roots, null, null));
+      }
+      host.appendChild(canvas);
+      wireDnD();
+    }
+
+    function setSteps(steps) { roots = parseTree(types, steps || []); render(); }
+    function getSteps() { return serialize(types, roots); }
+    function destroy() { clearHandles(); if (host) host.innerHTML = ''; }
+
+    render();
+    return {
+      element: host, getSteps: getSteps, setSteps: setSteps, render: render, destroy: destroy,
+      addNode: addNode, removeNode: removeNode, moveNode: moveNode
+    };
+  }
+
+  return {
+    VERSION: VERSION,
+    create: create,
+    mount: create,
+    parseTree: function (steps, types) { return parseTree(types || WORKFLOW_TYPES, steps); },
+    serialize: function (nodes, types) { return serialize(types || WORKFLOW_TYPES, nodes); },
+    WORKFLOW_TYPES: WORKFLOW_TYPES
+  };
+})();
+if (typeof module !== 'undefined' && module.exports) module.exports = BareMetal.FlowCanvas;
+</script>
+<script>// VENDORED from BareMetalJsTools (single source of truth). Do not edit here;
+// edit upstream in baremetaljstools/src and re-run tools/vendor_baremetal.py.
 // Upstream: BareMetal.Report.js
 // BareMetal.Report.js — report & form builder for the BareMetal suite.
 //
@@ -18842,7 +19715,6 @@ function wfCompileSrc(src){
   if(!steps) throw new Error('workflow: expected a JSON step array');
   return BareMetal.WorkflowPico.compile(steps);
 }
-var WF_TYPES=['SET','IF','ELSE','END','FOR','FOREACH','FOREACHP','LOG','WAIT','RAISE','ON','LOAD','SAVE','WEB','CALL'];
 var WF_EXAMPLES={
   'Array sum':[
     {type:'SET',name:'data',value:[10,20,30,40]},
@@ -18878,82 +19750,52 @@ var WF_EXAMPLES={
     {type:'LOG',message:'total'}
   ]
 };
-function wfTemplate(type){
-  switch(type){
-    case 'SET': return {type:'SET',name:'x',value:0};
-    case 'IF': return {type:'IF',condition:'x >= 1'};
-    case 'ELSE': return {type:'ELSE'};
-    case 'END': return {type:'END'};
-    case 'FOR': return {type:'FOR','var':'i',from:1,to:5};
-    case 'FOREACH': return {type:'FOREACH','var':'item','in':'data'};
-    case 'FOREACHP': return {type:'FOREACHP','var':'item','in':'data'};
-    case 'LOG': return {type:'LOG',message:'x'};
-    case 'WAIT': return {type:'WAIT',ms:100};
-    case 'RAISE': return {type:'RAISE',event:1,target:0};
-    case 'ON': return {type:'ON',event:1};
-    case 'LOAD': return {type:'LOAD',name:'x',from:'memory',key:0};
-    case 'SAVE': return {type:'SAVE',name:'x',to:'memory',key:0};
-    case 'WEB': return {type:'WEB',method:'GET',url:'/api'};
-    case 'CALL': return {type:'CALL',workflow:'other'};
-    default: return {type:type};
-  }
-}
-function wfSummary(s){
-  var t=(s.type||'').toUpperCase();
-  try{
-    if(t==='SET') return s.name+' = '+(('expr' in s)?s.expr:JSON.stringify(s.value));
-    if(t==='IF') return s.condition||'';
-    if(t==='FOR') return s['var']+' = '+s.from+'..'+s.to+(s.step!=null?' by '+s.step:'');
-    if(t==='FOREACH'||t==='FOREACHP') return s['var']+' in '+JSON.stringify(s['in']);
-    if(t==='LOG') return String(s.message==null?'':s.message);
-    if(t==='LOAD') return s.name+' <- '+s.from+(s.key!=null?' ['+s.key+']':'');
-    if(t==='SAVE') return s.name+' -> '+s.to+(s.key!=null?' ['+s.key+']':'');
-    if(t==='WAIT') return (s.ms||0)+'ms';
-    if(t==='RAISE'||t==='EMIT') return 'event '+(s.event==null?'':s.event)+(s.target!=null?' -> '+s.target:'');
-    if(t==='ON'||t==='SUBSCRIBE') return 'on event '+(s.event==null?'':s.event);
-    if(t==='WEB') return (s.method||'GET')+' '+(s.url||'');
-    if(t==='CALL') return s.workflow||'';
-  }catch(e){}
-  return '';
-}
 function wfParseSteps(){ try{ var d=JSON.parse(getSrc()); if(Array.isArray(d)) return d; if(d&&Array.isArray(d.steps)) return d.steps; }catch(e){} return null; }
-function wfWriteSteps(steps){ setSrc(JSON.stringify(steps,null,2)); wfRenderDesigner(); compileSrc(false); }
-function wfAddStep(){ var sel=document.getElementById('wfAddType'); if(!sel) return; var steps=wfParseSteps()||[]; steps.push(wfTemplate(sel.value)); wfWriteSteps(steps); }
-function wfDelStep(i){ var steps=wfParseSteps(); if(!steps) return; steps.splice(i,1); wfWriteSteps(steps); }
-function wfMove(i,d){ var steps=wfParseSteps(); if(!steps) return; var j=i+d; if(j<0||j>=steps.length) return; var tmp=steps[i]; steps[i]=steps[j]; steps[j]=tmp; wfWriteSteps(steps); }
-function wfEditStep(i){ var steps=wfParseSteps(); if(!steps) return; var v=prompt('Edit step JSON',JSON.stringify(steps[i])); if(v==null) return; var parsed; try{ parsed=JSON.parse(v); }catch(e){ alert('Invalid JSON: '+e.message); return; } steps[i]=parsed; wfWriteSteps(steps); }
-function wfLoadExample(){ var sel=document.getElementById('wfExample'); if(!sel||!sel.value) return; var ex=WF_EXAMPLES[sel.value]; if(!ex) return; wfWriteSteps(ex.map(function(s){return JSON.parse(JSON.stringify(s));})); }
-function wfRenderDesigner(){
-  var host=document.getElementById('wfDesigner'); if(!host) return;
-  var add='<div class="wf-add"><select id="wfAddType">'+WF_TYPES.map(function(t){return '<option>'+t+'</option>';}).join('')+'</select>'+
-    '<button class="ghost" onclick="wfAddStep()">+ Add step</button>'+
-    '<select id="wfExample"><option value="">example\u2026</option>'+Object.keys(WF_EXAMPLES).map(function(n){return '<option>'+esc(n)+'</option>';}).join('')+'</select>'+
-    '<button class="ghost" onclick="wfLoadExample()">Load</button>'+
-    '<span class="muted" style="font-size:11px">visual designer &mdash; edits sync to the JSON above &amp; recompile</span></div>';
-  var steps=wfParseSteps();
-  if(!steps){ host.innerHTML=add+'<div class="muted" style="font-size:12px;padding:4px">(editor text is not a JSON step array &mdash; edit the JSON or add a step)</div>'; return; }
-  var indent=0, rows='';
-  for(var i=0;i<steps.length;i++){ var s=steps[i]||{}, t=(s.type||'?').toUpperCase();
-    if(t==='ELSE'||t==='END') indent=Math.max(0,indent-1);
-    rows+='<div class="wf-row" style="margin-left:'+(indent*18)+'px">'+
-      '<span class="wf-badge">'+esc(t)+'</span>'+
-      '<span class="wf-sum">'+esc(wfSummary(s))+'</span>'+
-      '<span class="wf-acts">'+
-        '<button class="ghost" onclick="wfMove('+i+',-1)" title="move up">&#8593;</button>'+
-        '<button class="ghost" onclick="wfMove('+i+',1)" title="move down">&#8595;</button>'+
-        '<button class="ghost" onclick="wfEditStep('+i+')" title="edit JSON">&#9998;</button>'+
-        '<button class="ghost" onclick="wfDelStep('+i+')" title="delete">&#10005;</button>'+
-      '</span></div>';
-    if(t==='IF'||t==='FOR'||t==='FOREACH'||t==='FOREACHP'||t==='ON'||t==='ELSE') indent++;
-  }
-  var eng='';
+// The rich designer is BareMetal.FlowCanvas (vendored): a drag-and-drop nested
+// flow canvas (boxes inside boxes for loops/choices). It owns #wfFlow and emits
+// the step list on every edit; we sync that to the editor and recompile.
+var FLOW=null, FLOW_OWNS=false;
+function wfPopulateExamples(){
+  var sel=document.getElementById('wfExample'); if(!sel||sel.__done) return;
+  sel.innerHTML='<option value="">example\u2026</option>'+Object.keys(WF_EXAMPLES).map(function(n){return '<option>'+esc(n)+'</option>';}).join('');
+  sel.__done=true;
+}
+function wfLoadExample(){
+  var sel=document.getElementById('wfExample'); if(!sel||!sel.value) return;
+  var ex=WF_EXAMPLES[sel.value]; if(!ex) return;
+  setSrc(JSON.stringify(ex.map(function(s){return JSON.parse(JSON.stringify(s));}),null,2));
+  wfRenderDesigner(); compileSrc(false);
+}
+function wfUpdateEng(steps){
+  var engEl=document.getElementById('wfEng'), warnEl=document.getElementById('wfWarn');
+  if(!engEl) return;
   try{
-    var wf=wfCompileSrc(getSrc());
-    var warn=(wf.warnings&&wf.warnings.length)?('<div class="wf-warn">'+wf.warnings.map(function(w){return '&#9888; '+esc(w);}).join('<br>')+'</div>'):'';
-    eng='<div class="wf-eng-h">derived English (compiles &amp; runs; IL / bytecode / output in the debugger below)</div>'+
-        '<pre class="wf-eng">'+esc(wf.source)+'</pre>'+warn;
-  }catch(e){ eng='<div class="wf-warn">&#9888; '+esc(String(e.message||e))+'</div>'; }
-  host.innerHTML=add+rows+eng;
+    var wf=BareMetal.WorkflowPico.compile(steps);
+    engEl.textContent=wf.source;
+    if(warnEl) warnEl.innerHTML=(wf.warnings&&wf.warnings.length)?wf.warnings.map(function(w){return '&#9888; '+esc(w);}).join('<br>'):'';
+  }catch(e){ engEl.textContent=''; if(warnEl) warnEl.textContent='&#9888; '+String(e.message||e); }
+}
+function wfEnsureFlow(){
+  var host=document.getElementById('wfFlow');
+  if(!host||FLOW||typeof BareMetal==='undefined'||!BareMetal.FlowCanvas) return;
+  FLOW=BareMetal.FlowCanvas.create(host, { steps: wfParseSteps()||[], onChange: function(steps){
+    FLOW_OWNS=true; setSrc(JSON.stringify(steps,null,2)); FLOW_OWNS=false;
+    wfUpdateEng(steps); try{ compileSrc(false); }catch(e){}
+  }});
+}
+function wfRenderDesigner(){
+  var host=document.getElementById('wfFlow'); if(!host) return;
+  wfPopulateExamples();
+  var steps=wfParseSteps();
+  if(!steps){
+    if(FLOW){ FLOW.destroy(); FLOW=null; }
+    host.innerHTML='<div class="muted" style="font-size:12px;padding:4px">(editor text is not a JSON step array &mdash; fix the JSON, load an example, or add a box)</div>';
+    var e=document.getElementById('wfEng'); if(e) e.textContent='';
+    return;
+  }
+  wfEnsureFlow();
+  if(FLOW&&!FLOW_OWNS) FLOW.setSteps(steps);
+  wfUpdateEng(steps);
 }
 function wfToggle(){
   var on=(CUR_LANG==='workflow');

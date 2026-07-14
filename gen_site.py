@@ -159,6 +159,8 @@ def main():
     # picoscript vendors them into vm/vendor/ (see tools/vendor_baremetal.py).
     wf_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.WorkflowPico.js"), encoding="utf-8").read()
     layout_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.Report.js"), encoding="utf-8").read()
+    dd_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.DragDrop.js"), encoding="utf-8").read()
+    flow_js = open(os.path.join(ROOT, "vm", "vendor", "BareMetal.FlowCanvas.js"), encoding="utf-8").read()
 
     html = PAGE
     html = html.replace("/*__HOOKS__*/", hooks_js)
@@ -168,6 +170,8 @@ def main():
     html = html.replace("/*__PICOC__*/", picoc_js)
     html = html.replace("/*__WF__*/", wf_js)
     html = html.replace("/*__LAYOUT__*/", layout_js)
+    html = html.replace("/*__DD__*/", dd_js)
+    html = html.replace("/*__FLOW__*/", flow_js)
     html = html.replace("/*__SER__*/", ser_js)
     html = html.replace("/*__STORE__*/", store_js)
     html = html.replace("/*__DATA__*/", json.dumps(gallery))
@@ -500,7 +504,17 @@ PAGE = r"""<!DOCTYPE html>
           <button class="ghost" onclick="dbgReset()">Reset</button>
         </div>
         <div id="cerr" class="cerr"></div>
-        <div id="wfDesigner" class="wf-designer" style="display:none"></div>
+        <div id="wfDesigner" class="wf-designer" style="display:none">
+          <div class="wf-add">
+            <select id="wfExample"></select>
+            <button class="ghost" onclick="wfLoadExample()">Load example</button>
+            <span class="muted" style="font-size:11px">drag boxes from the palette onto the canvas; grab &#9095; to move or nest a box; edit fields inline</span>
+          </div>
+          <div id="wfFlow"></div>
+          <div class="wf-eng-h">derived English (compiles &amp; runs; IL / bytecode / output in the debugger below)</div>
+          <pre class="wf-eng" id="wfEng"></pre>
+          <div class="wf-warn" id="wfWarn"></div>
+        </div>
       </div>
     </div>
     <div class="dbg-bar" id="playDbgBar">
@@ -610,6 +624,8 @@ PAGE = r"""<!DOCTYPE html>
 <script>/*__VM__*/</script>
 <script>/*__PICOC__*/</script>
 <script>/*__WF__*/</script>
+<script>/*__DD__*/</script>
+<script>/*__FLOW__*/</script>
 <script>/*__LAYOUT__*/</script>
 <script>/*__SER__*/</script>
 <script>/*__STORE__*/</script>
@@ -1122,7 +1138,6 @@ function wfCompileSrc(src){
   if(!steps) throw new Error('workflow: expected a JSON step array');
   return BareMetal.WorkflowPico.compile(steps);
 }
-var WF_TYPES=['SET','IF','ELSE','END','FOR','FOREACH','FOREACHP','LOG','WAIT','RAISE','ON','LOAD','SAVE','WEB','CALL'];
 var WF_EXAMPLES={
   'Array sum':[
     {type:'SET',name:'data',value:[10,20,30,40]},
@@ -1158,82 +1173,52 @@ var WF_EXAMPLES={
     {type:'LOG',message:'total'}
   ]
 };
-function wfTemplate(type){
-  switch(type){
-    case 'SET': return {type:'SET',name:'x',value:0};
-    case 'IF': return {type:'IF',condition:'x >= 1'};
-    case 'ELSE': return {type:'ELSE'};
-    case 'END': return {type:'END'};
-    case 'FOR': return {type:'FOR','var':'i',from:1,to:5};
-    case 'FOREACH': return {type:'FOREACH','var':'item','in':'data'};
-    case 'FOREACHP': return {type:'FOREACHP','var':'item','in':'data'};
-    case 'LOG': return {type:'LOG',message:'x'};
-    case 'WAIT': return {type:'WAIT',ms:100};
-    case 'RAISE': return {type:'RAISE',event:1,target:0};
-    case 'ON': return {type:'ON',event:1};
-    case 'LOAD': return {type:'LOAD',name:'x',from:'memory',key:0};
-    case 'SAVE': return {type:'SAVE',name:'x',to:'memory',key:0};
-    case 'WEB': return {type:'WEB',method:'GET',url:'/api'};
-    case 'CALL': return {type:'CALL',workflow:'other'};
-    default: return {type:type};
-  }
-}
-function wfSummary(s){
-  var t=(s.type||'').toUpperCase();
-  try{
-    if(t==='SET') return s.name+' = '+(('expr' in s)?s.expr:JSON.stringify(s.value));
-    if(t==='IF') return s.condition||'';
-    if(t==='FOR') return s['var']+' = '+s.from+'..'+s.to+(s.step!=null?' by '+s.step:'');
-    if(t==='FOREACH'||t==='FOREACHP') return s['var']+' in '+JSON.stringify(s['in']);
-    if(t==='LOG') return String(s.message==null?'':s.message);
-    if(t==='LOAD') return s.name+' <- '+s.from+(s.key!=null?' ['+s.key+']':'');
-    if(t==='SAVE') return s.name+' -> '+s.to+(s.key!=null?' ['+s.key+']':'');
-    if(t==='WAIT') return (s.ms||0)+'ms';
-    if(t==='RAISE'||t==='EMIT') return 'event '+(s.event==null?'':s.event)+(s.target!=null?' -> '+s.target:'');
-    if(t==='ON'||t==='SUBSCRIBE') return 'on event '+(s.event==null?'':s.event);
-    if(t==='WEB') return (s.method||'GET')+' '+(s.url||'');
-    if(t==='CALL') return s.workflow||'';
-  }catch(e){}
-  return '';
-}
 function wfParseSteps(){ try{ var d=JSON.parse(getSrc()); if(Array.isArray(d)) return d; if(d&&Array.isArray(d.steps)) return d.steps; }catch(e){} return null; }
-function wfWriteSteps(steps){ setSrc(JSON.stringify(steps,null,2)); wfRenderDesigner(); compileSrc(false); }
-function wfAddStep(){ var sel=document.getElementById('wfAddType'); if(!sel) return; var steps=wfParseSteps()||[]; steps.push(wfTemplate(sel.value)); wfWriteSteps(steps); }
-function wfDelStep(i){ var steps=wfParseSteps(); if(!steps) return; steps.splice(i,1); wfWriteSteps(steps); }
-function wfMove(i,d){ var steps=wfParseSteps(); if(!steps) return; var j=i+d; if(j<0||j>=steps.length) return; var tmp=steps[i]; steps[i]=steps[j]; steps[j]=tmp; wfWriteSteps(steps); }
-function wfEditStep(i){ var steps=wfParseSteps(); if(!steps) return; var v=prompt('Edit step JSON',JSON.stringify(steps[i])); if(v==null) return; var parsed; try{ parsed=JSON.parse(v); }catch(e){ alert('Invalid JSON: '+e.message); return; } steps[i]=parsed; wfWriteSteps(steps); }
-function wfLoadExample(){ var sel=document.getElementById('wfExample'); if(!sel||!sel.value) return; var ex=WF_EXAMPLES[sel.value]; if(!ex) return; wfWriteSteps(ex.map(function(s){return JSON.parse(JSON.stringify(s));})); }
-function wfRenderDesigner(){
-  var host=document.getElementById('wfDesigner'); if(!host) return;
-  var add='<div class="wf-add"><select id="wfAddType">'+WF_TYPES.map(function(t){return '<option>'+t+'</option>';}).join('')+'</select>'+
-    '<button class="ghost" onclick="wfAddStep()">+ Add step</button>'+
-    '<select id="wfExample"><option value="">example\u2026</option>'+Object.keys(WF_EXAMPLES).map(function(n){return '<option>'+esc(n)+'</option>';}).join('')+'</select>'+
-    '<button class="ghost" onclick="wfLoadExample()">Load</button>'+
-    '<span class="muted" style="font-size:11px">visual designer &mdash; edits sync to the JSON above &amp; recompile</span></div>';
-  var steps=wfParseSteps();
-  if(!steps){ host.innerHTML=add+'<div class="muted" style="font-size:12px;padding:4px">(editor text is not a JSON step array &mdash; edit the JSON or add a step)</div>'; return; }
-  var indent=0, rows='';
-  for(var i=0;i<steps.length;i++){ var s=steps[i]||{}, t=(s.type||'?').toUpperCase();
-    if(t==='ELSE'||t==='END') indent=Math.max(0,indent-1);
-    rows+='<div class="wf-row" style="margin-left:'+(indent*18)+'px">'+
-      '<span class="wf-badge">'+esc(t)+'</span>'+
-      '<span class="wf-sum">'+esc(wfSummary(s))+'</span>'+
-      '<span class="wf-acts">'+
-        '<button class="ghost" onclick="wfMove('+i+',-1)" title="move up">&#8593;</button>'+
-        '<button class="ghost" onclick="wfMove('+i+',1)" title="move down">&#8595;</button>'+
-        '<button class="ghost" onclick="wfEditStep('+i+')" title="edit JSON">&#9998;</button>'+
-        '<button class="ghost" onclick="wfDelStep('+i+')" title="delete">&#10005;</button>'+
-      '</span></div>';
-    if(t==='IF'||t==='FOR'||t==='FOREACH'||t==='FOREACHP'||t==='ON'||t==='ELSE') indent++;
-  }
-  var eng='';
+// The rich designer is BareMetal.FlowCanvas (vendored): a drag-and-drop nested
+// flow canvas (boxes inside boxes for loops/choices). It owns #wfFlow and emits
+// the step list on every edit; we sync that to the editor and recompile.
+var FLOW=null, FLOW_OWNS=false;
+function wfPopulateExamples(){
+  var sel=document.getElementById('wfExample'); if(!sel||sel.__done) return;
+  sel.innerHTML='<option value="">example\u2026</option>'+Object.keys(WF_EXAMPLES).map(function(n){return '<option>'+esc(n)+'</option>';}).join('');
+  sel.__done=true;
+}
+function wfLoadExample(){
+  var sel=document.getElementById('wfExample'); if(!sel||!sel.value) return;
+  var ex=WF_EXAMPLES[sel.value]; if(!ex) return;
+  setSrc(JSON.stringify(ex.map(function(s){return JSON.parse(JSON.stringify(s));}),null,2));
+  wfRenderDesigner(); compileSrc(false);
+}
+function wfUpdateEng(steps){
+  var engEl=document.getElementById('wfEng'), warnEl=document.getElementById('wfWarn');
+  if(!engEl) return;
   try{
-    var wf=wfCompileSrc(getSrc());
-    var warn=(wf.warnings&&wf.warnings.length)?('<div class="wf-warn">'+wf.warnings.map(function(w){return '&#9888; '+esc(w);}).join('<br>')+'</div>'):'';
-    eng='<div class="wf-eng-h">derived English (compiles &amp; runs; IL / bytecode / output in the debugger below)</div>'+
-        '<pre class="wf-eng">'+esc(wf.source)+'</pre>'+warn;
-  }catch(e){ eng='<div class="wf-warn">&#9888; '+esc(String(e.message||e))+'</div>'; }
-  host.innerHTML=add+rows+eng;
+    var wf=BareMetal.WorkflowPico.compile(steps);
+    engEl.textContent=wf.source;
+    if(warnEl) warnEl.innerHTML=(wf.warnings&&wf.warnings.length)?wf.warnings.map(function(w){return '&#9888; '+esc(w);}).join('<br>'):'';
+  }catch(e){ engEl.textContent=''; if(warnEl) warnEl.textContent='&#9888; '+String(e.message||e); }
+}
+function wfEnsureFlow(){
+  var host=document.getElementById('wfFlow');
+  if(!host||FLOW||typeof BareMetal==='undefined'||!BareMetal.FlowCanvas) return;
+  FLOW=BareMetal.FlowCanvas.create(host, { steps: wfParseSteps()||[], onChange: function(steps){
+    FLOW_OWNS=true; setSrc(JSON.stringify(steps,null,2)); FLOW_OWNS=false;
+    wfUpdateEng(steps); try{ compileSrc(false); }catch(e){}
+  }});
+}
+function wfRenderDesigner(){
+  var host=document.getElementById('wfFlow'); if(!host) return;
+  wfPopulateExamples();
+  var steps=wfParseSteps();
+  if(!steps){
+    if(FLOW){ FLOW.destroy(); FLOW=null; }
+    host.innerHTML='<div class="muted" style="font-size:12px;padding:4px">(editor text is not a JSON step array &mdash; fix the JSON, load an example, or add a box)</div>';
+    var e=document.getElementById('wfEng'); if(e) e.textContent='';
+    return;
+  }
+  wfEnsureFlow();
+  if(FLOW&&!FLOW_OWNS) FLOW.setSteps(steps);
+  wfUpdateEng(steps);
 }
 function wfToggle(){
   var on=(CUR_LANG==='workflow');
