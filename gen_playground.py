@@ -1943,6 +1943,15 @@ var WF_EXAMPLES={
     {type:'ELSE'},
     {type:'RESPOND',status:500,body:'error'},
     {type:'END'}
+  ],
+  'Route by method':[
+    {type:'LOAD',name:'method',from:'request',field:'method'},
+    {type:'LOAD',name:'len',from:'request',field:'length'},
+    {type:'IF',condition:'method is 2'},
+    {type:'RESPOND',status:201,contentType:'application/json',body:'{"created":true}'},
+    {type:'ELSE'},
+    {type:'RESPOND',status:200,contentType:'application/json',body:'{"ok":true}'},
+    {type:'END'}
   ]
 };
 function wfParseSteps(){ try{ var d=JSON.parse(getSrc()); if(Array.isArray(d)) return d; if(d&&Array.isArray(d.steps)) return d.steps; }catch(e){} return null; }

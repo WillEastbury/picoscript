@@ -9503,9 +9503,27 @@ BareMetal.WorkflowPico = (() => {
 
   // LOAD name from <source>. `variable` clones another context value (a plain
   // assignment, array-aware); `memory`/`scratch` read a Memory/Context cell.
+  // Inbound HTTP request descriptor fields, as written by the kernel / WebIDE
+  // HTTP simulator into the low PicoWAL cards (0,0,K). Reading them lets a served
+  // workflow branch on method/length/body before it RESPONDs. See docs/MAP.md and
+  // the "HTTP responder" showcase.
+  var REQ_FIELDS = { length: 0, method: 1, bodylen: 2, sum: 3, pathlen: 4, querylen: 5 };
   function emitLoad(step, indent, ctx) {
     var name = sanitizeId(step.name);
     var from = String(step.from || '').toLowerCase();
+    if (from === 'request') {
+      var fld = String(step.field || step.key || 'method').toLowerCase();
+      var k = own(REQ_FIELDS, fld) ? REQ_FIELDS[fld] : null;
+      if (k == null) {
+        ctx.out.push(pad(indent) + '# LOAD ' + (step.name || '') + ' <- request.' + fld + ' (unknown field)');
+        ctx.warnings.push('LOAD from request: unknown field ' + JSON.stringify(fld) + ' (use method/length/bodylen/pathlen/querylen/sum)');
+        return;
+      }
+      ctx.out.push(pad(indent) + 'Set ' + name + ' to 0.');
+      ctx.out.push(pad(indent) + 'Storage.Load(0, 0, ' + k + ', ' + name + ').');
+      delete ctx.arrays[name];
+      return;
+    }
     if (from === 'variable') {
       var srcRaw = step.key || step.var || step.source || '';
       var srcId = sanitizeId(String(srcRaw).trim());
@@ -10118,7 +10136,8 @@ BareMetal.FlowCanvas = (function () {
   // ── type schema ─────────────────────────────────────────────────────────────
   // Each descriptor: { label, kind:'atom'|'block', color, slots:[{key,label}],
   //   fields:[{key,label,placeholder,kind:'text'|'num'|'select',choices,get,set}] }
-  var MEM = [{ v: 'memory', t: 'memory' }, { v: 'scratch', t: 'scratch' }, { v: 'field', t: 'field' }];
+  var MEM = [{ v: 'memory', t: 'memory' }, { v: 'scratch', t: 'scratch' }, { v: 'field', t: 'field' }, { v: 'request', t: 'request' }];
+  var REQFIELDS = [{ v: 'method' }, { v: 'length' }, { v: 'bodylen' }, { v: 'pathlen' }, { v: 'querylen' }, { v: 'sum' }];
   var METHODS = [{ v: 'GET' }, { v: 'POST' }, { v: 'PUT' }, { v: 'DELETE' }, { v: 'PATCH' }];
 
   function setValueField() {
@@ -10162,6 +10181,7 @@ BareMetal.FlowCanvas = (function () {
     LOAD: { label: 'Load', kind: 'atom', color: '#66e0cc', fields: [
       { key: 'name', label: '', placeholder: 'x', width: 70 },
       { key: 'from', label: 'from', kind: 'select', choices: MEM },
+      { key: 'field', label: 'req', kind: 'select', choices: REQFIELDS },
       { key: 'key', label: 'key', placeholder: '0', width: 60, kind: 'num' } ] },
     SAVE: { label: 'Save', kind: 'atom', color: '#66e0cc', fields: [
       { key: 'name', label: '', placeholder: 'x', width: 70 },
@@ -11667,6 +11687,15 @@ var WF_EXAMPLES={
     {type:'RESPOND',status:200,contentType:'application/json',body:'{"ok":true,"from":"workflow"}'},
     {type:'ELSE'},
     {type:'RESPOND',status:500,body:'error'},
+    {type:'END'}
+  ],
+  'Route by method':[
+    {type:'LOAD',name:'method',from:'request',field:'method'},
+    {type:'LOAD',name:'len',from:'request',field:'length'},
+    {type:'IF',condition:'method is 2'},
+    {type:'RESPOND',status:201,contentType:'application/json',body:'{"created":true}'},
+    {type:'ELSE'},
+    {type:'RESPOND',status:200,contentType:'application/json',body:'{"ok":true}'},
     {type:'END'}
   ]
 };
