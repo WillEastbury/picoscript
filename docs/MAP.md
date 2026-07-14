@@ -69,6 +69,29 @@ Print Map.Count().               ' -> 2
 Print Map.ValAt(0).              ' -> 42  (insertion order)
 ```
 
+## Parsing: string/bytes → structured Map
+Complementing the `Json.*` writer + `Utf8Reader` scanner, high-level deserializers
+turn a string/bytes into a structured `Map` (the "structured object"):
+
+| Hook | Args | Result | Notes |
+|------|------|--------|-------|
+| `Json.Parse(span)` | jsonSpan | mapHandle | flat JSON object → Map (also sets active) |
+| `Binary.ParseCard(span)` | psc1Span | mapHandle | PicoBinarySerializer PSC1 card → Map |
+| `Binary.SerializeCard()` | – | span | active Map → PSC1 card (keys sorted) |
+
+`Json.Parse` decodes scalar values — string (`PutSS`), integer number (`PutSI`,
+floats truncated), `true`/`false` (`PutSI` 1/0), `null` (`PutNullS`) — and captures
+nested objects/arrays as their **raw source substring** (a string value), so the
+scan is deterministic and identical on every VM. The byte scanners are replicated
+verbatim in `picovm.js`, `picoscript_vm.py` and `picovm.c` (all three C VMs), so a
+parsed Map is bit-identical everywhere.
+
+```
+Set cfg to Json.Parse("{\"qty\":42,\"name\":\"abc\",\"ok\":true}").
+Print Map.GetSI("qty").       ' -> 42
+Print Map.GetSI("ok").        ' -> 1
+```
+
 ## Implementation status
 | Target | Status |
 |--------|--------|

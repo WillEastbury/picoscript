@@ -546,6 +546,9 @@
       0x338: "Map.ValSpanAt",
       0x339: "Map.ValIsSpan",
       0x33A: "Map.Use",
+      0x340: "Json.Parse",
+      0x341: "Binary.ParseCard",
+      0x342: "Binary.SerializeCard",
     }
   };
   function _canonConstant(name) {

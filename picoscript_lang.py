@@ -268,7 +268,12 @@ NAMESPACE_MAP = {
     "Json": {
         "BeginObject": OP_NOOP, "EndObject": OP_NOOP, "BeginArray": OP_NOOP,
         "EndArray": OP_NOOP, "Key": OP_NOOP, "Str": OP_NOOP, "Int": OP_NOOP,
-        "Bool": OP_NOOP, "Null": OP_NOOP, "Raw": OP_NOOP,
+        "Bool": OP_NOOP, "Null": OP_NOOP, "Raw": OP_NOOP, "Parse": OP_NOOP,
+    },
+    # Binary: PicoBinarySerializer (PSC1) card <-> Map. Complements the Json.*
+    # writer + Utf8Reader scanner with structured (de)serialization. See docs/MAP.md.
+    "Binary": {
+        "ParseCard": OP_NOOP, "SerializeCard": OP_NOOP,
     },
     "Xml": {
         "Open": OP_NOOP, "AttrName": OP_NOOP, "AttrValue": OP_NOOP,
@@ -939,6 +944,11 @@ HOST_HOOK_CODES = {
     ("Map", "ValSpanAt"):        0x0338,   # ValSpanAt(i) -> value span
     ("Map", "ValIsSpan"):        0x0339,   # ValIsSpan(i) -> 0|1
     ("Map", "Use"):              0x033A,   # Use(h)  (select active map)
+    # Parsing: string/bytes -> structured Map (docs/MAP.md). Complements the Json.*
+    # writer + Utf8Reader scanner with high-level deserialization.
+    ("Json", "Parse"):           0x0340,   # Parse(jsonSpan) -> mapHandle (flat object)
+    ("Binary", "ParseCard"):     0x0341,   # ParseCard(psc1Span) -> mapHandle
+    ("Binary", "SerializeCard"): 0x0342,   # SerializeCard() -> span (active map -> PSC1)
     ("Sampling", "ArgMax"):      0x0240,
     ("Sampling", "TopK"):        0x0241,
     ("Sampling", "Temperature"): 0x0242,

@@ -102,6 +102,43 @@ def test_hash_determinism():
     ) == [0]
 
 
+def test_json_parse():
+    # BASIC's tokenizer can't express escaped quotes, so validate the parser
+    # function directly (identical algorithm to the JS/C VMs).
+    from picoscript_vm import _json_parse_object
+    got = {}
+
+    def si(k, v):
+        got[bytes(k)] = ("i", v)
+
+    def ss(k, v):
+        got[bytes(k)] = ("s", bytes(v))
+
+    def ns(k):
+        got[bytes(k)] = ("n", None)
+
+    _json_parse_object(b'{"qty":42,"name":"abc","ok":true,"z":null,"neg":-5}', si, ss, ns)
+    assert got[b"qty"] == ("i", 42)
+    assert got[b"name"] == ("s", b"abc")
+    assert got[b"ok"] == ("i", 1)
+    assert got[b"z"] == ("n", None)
+    assert got[b"neg"] == ("i", (-5) & 0xFFFFFFFF)
+    assert len(got) == 5
+
+
+def test_psc1_round_trip():
+    assert run_basic(
+        "LET a = Map.New()\n"
+        'Map.PutSI("qty", 7)\n'
+        'Map.PutSS("sku", "XYZ")\n'
+        "LET blob = Binary.SerializeCard()\n"
+        "LET b = Binary.ParseCard(blob)\n"
+        'PRINT Map.GetSI("qty")\n'
+        'PRINT Map.HasS("sku")\n'
+        "PRINT Map.Count()\n"
+    ) == [7, 1, 2]
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

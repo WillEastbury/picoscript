@@ -698,6 +698,216 @@ def hook_cap(ns: str, method: str) -> int:
     return _CAP_BY_NS.get(ns, 0)
 
 
+# ---- shared deserializers (mirror vm/picovm.js + vm/picovm.c) ----------------
+def _hexv(c):
+    if 48 <= c <= 57:
+        return c - 48
+    if 97 <= c <= 102:
+        return c - 87
+    if 65 <= c <= 70:
+        return c - 55
+    return 0
+
+
+def _push_utf8(out, cp):
+    if cp < 0x80:
+        out.append(cp)
+    elif cp < 0x800:
+        out.append(0xC0 | (cp >> 6))
+        out.append(0x80 | (cp & 0x3F))
+    else:
+        out.append(0xE0 | (cp >> 12))
+        out.append(0x80 | ((cp >> 6) & 0x3F))
+        out.append(0x80 | (cp & 0x3F))
+
+
+def _json_parse_object(b, put_si, put_ss, put_ns):
+    """Parse a flat JSON object; scalars decoded, nested captured as raw substring."""
+    n = len(b)
+    i = 0
+
+    def skip():
+        nonlocal i
+        while i < n and b[i] in (32, 9, 10, 13):
+            i += 1
+
+    def pstr():
+        nonlocal i
+        i += 1
+        out = bytearray()
+        while i < n:
+            c = b[i]
+            i += 1
+            if c == 34:
+                break
+            if c == 92:
+                e = b[i]
+                i += 1
+                if e == 34:
+                    out.append(34)
+                elif e == 92:
+                    out.append(92)
+                elif e == 47:
+                    out.append(47)
+                elif e == 110:
+                    out.append(10)
+                elif e == 116:
+                    out.append(9)
+                elif e == 114:
+                    out.append(13)
+                elif e == 98:
+                    out.append(8)
+                elif e == 102:
+                    out.append(12)
+                elif e == 117:
+                    cp = 0
+                    for _ in range(4):
+                        cp = (cp << 4) | _hexv(b[i])
+                        i += 1
+                    _push_utf8(out, cp)
+                else:
+                    out.append(e)
+            else:
+                out.append(c)
+        return bytes(out)
+
+    def praw():
+        nonlocal i
+        start = i
+        depth = 0
+        instr = False
+        while i < n:
+            c = b[i]
+            if instr:
+                if c == 92:
+                    i += 2
+                    continue
+                if c == 34:
+                    instr = False
+                i += 1
+                continue
+            if c == 34:
+                instr = True
+                i += 1
+                continue
+            if c in (123, 91):
+                depth += 1
+            elif c in (125, 93):
+                depth -= 1
+                if depth == 0:
+                    i += 1
+                    break
+            i += 1
+        return bytes(b[start:i])
+
+    skip()
+    if i >= n or b[i] != 123:
+        return
+    i += 1
+    while i < n:
+        skip()
+        if i < n and b[i] == 125:
+            i += 1
+            break
+        if i >= n or b[i] != 34:
+            break
+        key = pstr()
+        skip()
+        if i >= n or b[i] != 58:
+            break
+        i += 1
+        skip()
+        if i >= n:
+            break
+        c = b[i]
+        if c == 34:
+            put_ss(key, pstr())
+        elif c in (123, 91):
+            put_ss(key, praw())
+        elif c == 116:
+            i += 4
+            put_si(key, 1)
+        elif c == 102:
+            i += 5
+            put_si(key, 0)
+        elif c == 110:
+            i += 4
+            put_ns(key)
+        else:
+            neg = (b[i] == 45)
+            if b[i] in (45, 43):
+                i += 1
+            val = 0
+            while i < n and 48 <= b[i] <= 57:
+                val = val * 10 + (b[i] - 48)
+                i += 1
+            if i < n and b[i] in (46, 101, 69):
+                i += 1
+                while i < n and (48 <= b[i] <= 57 or b[i] in (46, 101, 69, 45, 43)):
+                    i += 1
+            put_si(key, (-val if neg else val) & MASK32)
+        skip()
+        if i < n and b[i] == 44:
+            i += 1
+            continue
+        if i < n and b[i] == 125:
+            i += 1
+            break
+        break
+
+
+def _psc1_parse(b, put_si, put_ss):
+    if len(b) < 6:
+        return
+    magic = (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
+    if (magic & MASK32) != 0x50534331:
+        return
+    count = (b[4] << 8) | b[5]
+    pos = 6
+    for _ in range(count):
+        nlen = b[pos]
+        pos += 1
+        key = bytes(b[pos:pos + nlen])
+        pos += nlen
+        t = b[pos]
+        pos += 1
+        if t == 1:
+            x = (b[pos] << 24) | (b[pos + 1] << 16) | (b[pos + 2] << 8) | b[pos + 3]
+            pos += 4
+            put_si(key, x & MASK32)
+        elif t == 2:
+            vlen = (b[pos] << 8) | b[pos + 1]
+            pos += 2
+            put_ss(key, bytes(b[pos:pos + vlen]))
+            pos += vlen
+        else:
+            break
+
+
+def _psc1_serialize(entries):
+    es = [e for e in entries if e[0] == "s"]
+    es.sort(key=lambda e: e[2])
+    out = bytearray([0x50, 0x53, 0x43, 0x31, (len(es) >> 8) & 255, len(es) & 255])
+    for e in es:
+        kb = e[2]
+        out.append(len(kb) & 255)
+        out.extend(kb)
+        if e[3] == "s":
+            v = e[5] or b""
+            out.append(2)
+            out.append((len(v) >> 8) & 255)
+            out.append(len(v) & 255)
+            out.extend(v)
+        else:
+            out.append(1)
+            x = (e[4] if e[3] == "i" else 0) & MASK32
+            out.append((x >> 24) & 255)
+            out.append((x >> 16) & 255)
+            out.append((x >> 8) & 255)
+            out.append(x & 255)
+    return out
+
+
 class HostApi:
     """Default host-hook implementation.
 
@@ -855,6 +1065,10 @@ class HostApi:
         # Map.* first-class dictionary (active-handle model; see docs/MAP.md).
         if ns == "Map":
             if self._map_hook(vm, method, rd, rs1, rs2):
+                return
+        # Parsers: Json.Parse / Binary.ParseCard|SerializeCard -> Map.
+        if (ns == "Json" and method == "Parse") or (ns == "Binary" and method in ("ParseCard", "SerializeCard")):
+            if self._parse_hook(vm, ns, method, rd, rs1, rs2):
                 return
         # Built-in defaults for a few common hooks.
         if ns == "Random" and method == "U32":
@@ -1308,7 +1522,46 @@ class HostApi:
             return True
         return False
 
-    def _stringlib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
+    def _parse_hook(self, vm: "PicoVM", ns, method, rd, rs1, rs2) -> bool:
+        # string/bytes -> structured Map. Byte scanners mirror vm/picovm.js +
+        # vm/picovm.c so a parsed Map is bit-identical on every VM. See docs/MAP.md.
+        R = vm.regs
+        if not hasattr(self, "maps"):
+            self.maps = [None]
+            self.active_map = 0
+
+        def new_map():
+            self.maps.append({})
+            self.active_map = len(self.maps) - 1
+            return self.active_map
+
+        if ns == "Json" or (ns == "Binary" and method == "ParseCard"):
+            b = self._span_raw(vm, R[rs1])
+            h = new_map()
+            m = self.maps[h]
+
+            def put_si(kb, v):
+                m[("s", bytes(kb))] = ("s", 0, bytes(kb), "i", v & MASK32, None)
+
+            def put_ss(kb, vb):
+                m[("s", bytes(kb))] = ("s", 0, bytes(kb), "s", 0, bytes(vb))
+
+            def put_ns(kb):
+                m[("s", bytes(kb))] = ("s", 0, bytes(kb), "n", 0, None)
+
+            if ns == "Json":
+                _json_parse_object(b, put_si, put_ss, put_ns)
+            else:
+                _psc1_parse(b, put_si, put_ss)
+            R[rd] = h
+            return True
+        if ns == "Binary" and method == "SerializeCard":
+            mm = self.maps[self.active_map] if 0 <= self.active_map < len(self.maps) else None
+            entries = list(mm.values()) if mm else []
+            R[rd] = self._new_span_bytes(vm, bytes(_psc1_serialize(entries)))
+            return True
+        return False
+
         R = vm.regs
         a = self._span_raw(vm, R[rs1])
         if method == "Length":

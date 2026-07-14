@@ -97,5 +97,27 @@ eq('hash determinism', runEnglish(
   'Print x minus y.\n'
 ), [0]);
 
+// Json.Parse: string -> structured Map (scalars decoded)
+eq('json parse', runEnglish(
+  'Set m to Json.Parse("{\\"qty\\":42,\\"name\\":\\"abc\\",\\"ok\\":true,\\"z\\":null}").\n' +
+  'Print Map.GetSI("qty").\n' +
+  'Print Map.GetSI("ok").\n' +
+  'Print Map.HasS("name").\n' +
+  'Print Map.IsNullS("z").\n' +
+  'Print Map.Count().\n'
+), [42, 1, 1, 1, 4]);
+
+// Binary PSC1 serialize -> parse round-trip
+eq('psc1 round-trip', runEnglish(
+  'Set a to Map.New().\n' +
+  'Map.PutSI("qty", 7).\n' +
+  'Map.PutSS("sku", "XYZ").\n' +
+  'Set blob to Binary.SerializeCard().\n' +
+  'Set b to Binary.ParseCard(blob).\n' +
+  'Print Map.GetSI("qty").\n' +
+  'Print Map.HasS("sku").\n' +
+  'Print Map.Count().\n'
+), [7, 1, 2]);
+
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' PASSED' : fail + ' FAILED, ' + pass + ' passed'));
 process.exit(fail === 0 ? 0 : 1);
