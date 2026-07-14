@@ -163,6 +163,14 @@
   .ref-section.active { display:block; }
   .wf-designer { margin:6px 0; border:1px solid #2c313f; border-radius:6px; padding:6px; background:#0c0e14; }
   .wf-designer .wf-add { display:flex; gap:6px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
+  .wf-modal { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:200; display:none; align-items:center; justify-content:center; }
+  .wf-modal.open { display:flex; }
+  .wf-modal-box { background:var(--panel); border:1px solid #2c313f; border-radius:10px; width:min(680px,92vw); max-height:82vh; display:flex; flex-direction:column; overflow:hidden; }
+  .wf-modal-head { display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid #2c313f; font-weight:700; }
+  .wf-modal-head button { margin-left:auto; }
+  .wf-modal-body { padding:12px; overflow:auto; }
+  .wf-modal-body textarea { width:100%; min-height:340px; box-sizing:border-box; background:#0c0e14; border:1px solid #2c313f; border-radius:6px; color:#e6e8ef; font:12px/1.4 monospace; padding:8px; }
+  .wf-modal-foot { display:flex; gap:8px; padding:10px 14px; border-top:1px solid #2c313f; }
   .wf-row { display:flex; gap:8px; align-items:center; padding:3px 6px; margin:3px 0; border:1px solid #2c313f;
     border-radius:6px; background:#11141c; }
   .wf-badge { min-width:70px; font-weight:700; font-size:11px; color:var(--accent); }
@@ -10409,12 +10417,20 @@ lowering convention or host contract.</p>
         <div id="cerr" class="cerr"></div>
         <div id="wfDesigner" class="wf-designer" style="display:none">
           <div class="wf-add">
+            <button class="ghost" onclick="wfOpenJson()" title="View / edit the backing workflow JSON">&#123; &#125; JSON</button>
             <span class="muted" style="font-size:11px">drag boxes from the palette onto the canvas; grab &#9095; to move or nest a box; edit fields inline</span>
           </div>
           <div id="wfFlow"></div>
           <div class="wf-eng-h">derived English (compiles &amp; runs; IL / bytecode / output in the debugger below)</div>
           <pre class="wf-eng" id="wfEng"></pre>
           <div class="wf-warn" id="wfWarn"></div>
+        </div>
+        <div class="wf-modal" id="wfJsonModal">
+          <div class="wf-modal-box">
+            <div class="wf-modal-head">Workflow JSON (backing step array)<button class="ghost" onclick="wfCloseJson()">&#10005;</button></div>
+            <div class="wf-modal-body"><textarea id="wfJsonText" spellcheck="false"></textarea><div id="wfJsonErr" class="cerr"></div></div>
+            <div class="wf-modal-foot"><button class="act" onclick="wfApplyJson()">Apply</button><button class="ghost" onclick="wfCloseJson()">Cancel</button></div>
+          </div>
         </div>
       </div>
     </div>
@@ -22390,7 +22406,9 @@ function parseRequest(text,isHex){
     var idx=text.indexOf('\r\n\r\n'),sep=4;if(idx<0){idx=text.indexOf('\n\n');sep=2;}
     if(idx>=0){body=text.slice(idx+sep);bodyLen=body.length;if(bodyLen<0)bodyLen=0;}
   }
+  var pathOnly=path; var qmark=pathOnly.indexOf('?'); if(qmark>=0)pathOnly=pathOnly.slice(0,qmark);
   return{bytes:bytes,length:bytes.length,method:method,bodyLen:bodyLen,sum:sum,pathLen:pathLen,
+         path:pathOnly,pathRaw:path,
          pathBytes:bytesOf(path),queryBytes:bytesOf(query),bodyBytes:bytesOf(body)};
 }
 function writeBytes(wal,base,arr,max){var n=Math.min(arr.length,max);for(var i=0;i<n;i++)wal.set(base+i,arr[i]);return n;}
@@ -22620,7 +22638,30 @@ function wfToggle(){
   var on=(CUR_LANG==='workflow');
   var host=document.getElementById('wfDesigner');
   if(host) host.style.display=on?'block':'none';
+  // In workflow mode the christmas-tree designer is the main surface: hide the
+  // backing-JSON editor (it stays the source of truth; view/edit it via the
+  // { } JSON modal) so the designer window gets the space.
+  var mon=document.getElementById('monaco'), src=document.getElementById('src');
+  if(on){ if(mon)mon.style.display='none'; if(src)src.style.display='none'; }
+  else if(EDITOR){ if(mon)mon.style.display='block'; if(src)src.style.display='none'; }
+  else { if(mon)mon.style.display='none'; if(src)src.style.display='block'; }
+  if(!on) wfCloseJson();
   if(on){ try{ wfRenderDesigner(); }catch(e){} }
+}
+function wfOpenJson(){
+  var m=document.getElementById('wfJsonModal'), t=document.getElementById('wfJsonText'), e=document.getElementById('wfJsonErr');
+  if(!m||!t) return; if(e) e.textContent='';
+  t.value=getSrc(); m.classList.add('open'); t.focus();
+}
+function wfCloseJson(){ var m=document.getElementById('wfJsonModal'); if(m) m.classList.remove('open'); }
+function wfApplyJson(){
+  var t=document.getElementById('wfJsonText'), e=document.getElementById('wfJsonErr');
+  if(!t) return;
+  try{ var d=JSON.parse(t.value); if(!Array.isArray(d)&&!(d&&Array.isArray(d.steps))) throw new Error('expected a JSON step array'); }
+  catch(err){ if(e){ e.textContent='invalid JSON: '+String(err.message||err); e.style.color='#ff7b72'; } return; }
+  setSrc(t.value); WF_LAST=t.value; wfCloseJson();
+  try{ wfRenderDesigner(); }catch(_){}
+  compileSrc(false);
 }
 
 // ---- report/form layout (stage 2 over the current program output) -----------
