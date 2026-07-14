@@ -1023,8 +1023,9 @@ function writeDescriptor(wal,req){
   /* Low-card mirrors for simple Storage.Load examples (old 5-bit card address form). */
   writeBytes(wal,10,req.queryBytes,10); writeBytes(wal,20,req.bodyBytes,12);
 }
-function sendRequest(){var text=document.getElementById('reqbox').value,isHex=document.getElementById('reqmode').value==='hex';var req=parseRequest(text,isHex),wal=walBackend();writeDescriptor(wal,req);var lang=document.getElementById('lang').value,src=getSrc();try{var r=PicoCompile.compile(src,lang);}catch(e){document.getElementById('respout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderResponse(vm,req);renderWal();}
-function sendTcp(){var text=document.getElementById('tcpbox').value;var req=parseRequest(text,true),wal=walBackend();writeDescriptor(wal,req);var lang=document.getElementById('lang').value,src=getSrc();try{var r=PicoCompile.compile(src,lang);}catch(e){document.getElementById('tcpout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderTcpResponse(vm,req);renderWal();}
+function toCompilable(){var lang=document.getElementById('lang').value,src=getSrc();if(lang==='workflow'){var wf=wfCompileSrc(src);return{src:wf.source,lang:'english'};}return{src:src,lang:lang};}
+function sendRequest(){var text=document.getElementById('reqbox').value,isHex=document.getElementById('reqmode').value==='hex';var req=parseRequest(text,isHex),wal=walBackend();writeDescriptor(wal,req);var cl;try{cl=toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('respout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderResponse(vm,req);renderWal();}
+function sendTcp(){var text=document.getElementById('tcpbox').value;var req=parseRequest(text,true),wal=walBackend();writeDescriptor(wal,req);var cl;try{cl=toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('tcpout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderTcpResponse(vm,req);renderWal();}
 function responseBodyText(vm){return (typeof vm.outputDisplayText==='function')?vm.outputDisplayText():vm.outputText();}
 function renderResponse(vm,req){var reasons={200:'OK',201:'Created',400:'Bad Request',404:'Not Found',500:'Error'};var el=document.getElementById('respout');el.style.color='#7ee787';var body=vm.outputInts();if(vm.httpStatus<0){el.style.color='#ffd866';el.textContent='(no Net.Status)\noutput: ['+body.join(', ')+']';return;}var L=[];L.push('HTTP/1.1 '+vm.httpStatus+' '+(reasons[vm.httpStatus]||''));L.push('Content-Type: '+(vm.httpType||'application/octet-stream'));L.push('X-Steps: '+vm.steps);L.push('');var _bt=responseBodyText(vm),_bp=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_bt);L.push(_bp&&_bt?_bt:JSON.stringify(body));el.textContent=L.join('\n');}
 function renderTcpResponse(vm,req){var el=document.getElementById('tcpout');el.style.color='#7ee787';var txt=responseBodyText(vm),printable=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(txt),body=vm.outputInts();el.textContent=(vm.httpStatus>=0?('status '+vm.httpStatus+'\n'):'')+(printable&&txt?txt:('output: ['+body.join(', ')+']'));}
@@ -1171,6 +1172,14 @@ var WF_EXAMPLES={
     {type:'SAVE',name:'total',to:'scratch',key:4000},
     {type:'END'},
     {type:'LOG',message:'total'}
+  ],
+  'Serve HTTP':[
+    {type:'SET',name:'ok',value:1},
+    {type:'IF',condition:'ok is 1'},
+    {type:'RESPOND',status:200,contentType:'application/json',body:'{"ok":true,"from":"workflow"}'},
+    {type:'ELSE'},
+    {type:'RESPOND',status:500,body:'error'},
+    {type:'END'}
   ]
 };
 function wfParseSteps(){ try{ var d=JSON.parse(getSrc()); if(Array.isArray(d)) return d; if(d&&Array.isArray(d.steps)) return d.steps; }catch(e){} return null; }
@@ -1264,7 +1273,16 @@ function layoutSave(){
 buildGuideTree();showGuideCard(0);buildRefTree();buildNsRef();renderSyntaxRef();renderSamples();applyDbgLayout('guide');applyDbgLayout('play');
 (function(){var src=document.getElementById('doc-internals');var dst=document.getElementById('doc-internals-inline');if(src&&dst)dst.innerHTML=src.innerHTML;})();
 (function(){var sel=document.getElementById('example');DATA.forEach(function(d,i){var o=document.createElement('option');o.value=i;o.textContent=(i+1)+'. '+d.title;sel.appendChild(o);});})();
-function loadExample(){var i=parseInt(document.getElementById('example').value,10)||0;var lang=document.getElementById('lang').value;var d=DATA[i];if(!d[lang])lang='basic';setSrc(d[lang].src);compileSrc(false);}
+function loadExample(){
+  var i=parseInt(document.getElementById('example').value,10)||0;var d=DATA[i];if(!d)return;
+  var cur=document.getElementById('lang').value;
+  if(d[cur]){setSrc(d[cur].src);compileSrc(false);return;}
+  // sample isn't available in the current dialect (e.g. Workflow): switch the
+  // language to one the sample has, so the toggle/editor/compile all agree.
+  var lang=d.basic?'basic':(d.c?'c':(d.python?'python':(d.english?'english':cur)));
+  if(lang!==cur&&typeof setLang==='function')setLang(lang);
+  if(d[lang]){setSrc(d[lang].src);compileSrc(false);}
+}
 document.getElementById('example').onchange=loadExample;
 document.getElementById('lang').addEventListener('change',function(){onLangChange();});
 document.getElementById('src').addEventListener('input',function(){filesRender();if(CUR_LANG==='workflow'){try{wfRenderDesigner();}catch(e){}}});

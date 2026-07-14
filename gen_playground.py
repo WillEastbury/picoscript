@@ -1932,6 +1932,14 @@ var WF_EXAMPLES={
     {type:'SAVE',name:'total',to:'scratch',key:4000},
     {type:'END'},
     {type:'LOG',message:'total'}
+  ],
+  'Serve HTTP':[
+    {type:'SET',name:'ok',value:1},
+    {type:'IF',condition:'ok is 1'},
+    {type:'RESPOND',status:200,contentType:'application/json',body:'{"ok":true,"from":"workflow"}'},
+    {type:'ELSE'},
+    {type:'RESPOND',status:500,body:'error'},
+    {type:'END'}
   ]
 };
 function wfParseSteps(){ try{ var d=JSON.parse(getSrc()); if(Array.isArray(d)) return d; if(d&&Array.isArray(d.steps)) return d.steps; }catch(e){} return null; }

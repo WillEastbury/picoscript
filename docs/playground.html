@@ -910,6 +910,13 @@
       0x338: "Map.ValSpanAt",
       0x339: "Map.ValIsSpan",
       0x33A: "Map.Use",
+      0x340: "Json.Parse",
+      0x341: "Binary.ParseCard",
+      0x342: "Binary.SerializeCard",
+      0x343: "Binary.ParseEntity",
+      0x344: "Binary.SerializeEntity",
+      0x345: "Binary.SetKey",
+      0x346: "Binary.Verify",
     }
   };
   function _canonConstant(name) {
@@ -2860,6 +2867,8 @@ function compressBound(inputLen) {
     if (name === "Arena.Reset") { this.arenaTop = 0x8000; this.spans = [null]; return; }
     // ---- Map.* first-class dictionary (active-handle model; see docs/MAP.md) ---
     if (name.indexOf("Map.") === 0) { if (this._mapHook(name.slice(4), rd, rs1, rs2)) return; }
+    // ---- parsers: Json.Parse / Binary.ParseCard|SerializeCard -> Map -----------
+    if (name === "Json.Parse" || name.indexOf("Binary.") === 0) { if (this._parseHook(name, rd, rs1, rs2)) return; }
     // ---- EL0-facing PIOS request/response hooks ---------------------------
     if (name.indexOf("Req.") === 0) {
       if (this._req(name.slice(4), rd, rs1, rs2)) return;
@@ -3041,6 +3050,176 @@ function compressBound(inputLen) {
   function _ws(c) { return c === 32 || c === 9 || c === 10 || c === 13; }
   function _keystr(arr) { var s = ""; for (var i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]); return s; }
 
+  // ---- shared deserializers: string/bytes -> Map entries (see docs/MAP.md) -----
+  // Byte-array parsers replicated identically in picovm.py + picovm.c so a parsed
+  // Map is bit-identical on every VM. Values are pushed via the caller's put*
+  // callbacks (which write into the active Map entry structure).
+  function _hexv(c) { if (c >= 48 && c <= 57) return c - 48; if (c >= 97 && c <= 102) return c - 87; if (c >= 65 && c <= 70) return c - 55; return 0; }
+  function _pushUtf8(out, cp) {
+    if (cp < 0x80) out.push(cp);
+    else if (cp < 0x800) { out.push(0xC0 | (cp >> 6), 0x80 | (cp & 0x3F)); }
+    else { out.push(0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)); }
+  }
+  function _cmpBytes(a, b) { var n = Math.min(a.length, b.length), i; for (i = 0; i < n; i++) { if (a[i] !== b[i]) return a[i] - b[i]; } return a.length - b.length; }
+  // Parse a flat JSON object. Scalar values are decoded (string/int/bool/null);
+  // nested object/array values are captured as their raw source substring (a
+  // string value), so the scan is deterministic and identical across VMs.
+  function _jsonParseObject(b, putSI, putSS, putNS) {
+    var i = 0, n = b.length;
+    function skip() { while (i < n && _ws(b[i])) i++; }
+    function pstr() {
+      i++; var out = [];
+      while (i < n) {
+        var c = b[i++];
+        if (c === 34) break;
+        if (c === 92) {
+          var e = b[i++];
+          if (e === 34) out.push(34); else if (e === 92) out.push(92); else if (e === 47) out.push(47);
+          else if (e === 110) out.push(10); else if (e === 116) out.push(9); else if (e === 114) out.push(13);
+          else if (e === 98) out.push(8); else if (e === 102) out.push(12);
+          else if (e === 117) { var cp = 0, k; for (k = 0; k < 4; k++) cp = (cp << 4) | _hexv(b[i++]); _pushUtf8(out, cp); }
+          else out.push(e);
+        } else out.push(c);
+      }
+      return out;
+    }
+    function praw() {
+      var start = i, depth = 0, instr = false;
+      while (i < n) {
+        var c = b[i];
+        if (instr) { if (c === 92) { i += 2; continue; } if (c === 34) instr = false; i++; continue; }
+        if (c === 34) { instr = true; i++; continue; }
+        if (c === 123 || c === 91) depth++;
+        else if (c === 125 || c === 93) { depth--; if (depth === 0) { i++; break; } }
+        i++;
+      }
+      return b.slice(start, i);
+    }
+    skip(); if (b[i] !== 123) return; i++;
+    while (i < n) {
+      skip(); if (b[i] === 125) { i++; break; }
+      if (b[i] !== 34) break;
+      var key = pstr(); skip(); if (b[i] !== 58) break; i++; skip();
+      var c = b[i];
+      if (c === 34) putSS(key, pstr());
+      else if (c === 123 || c === 91) putSS(key, praw());
+      else if (c === 116) { i += 4; putSI(key, 1); }
+      else if (c === 102) { i += 5; putSI(key, 0); }
+      else if (c === 110) { i += 4; putNS(key); }
+      else {
+        var neg = (b[i] === 45); if (b[i] === 45 || b[i] === 43) i++;
+        var val = 0;
+        while (i < n && b[i] >= 48 && b[i] <= 57) { val = val * 10 + (b[i] - 48); i++; }
+        if (i < n && (b[i] === 46 || b[i] === 101 || b[i] === 69)) { i++; while (i < n && ((b[i] >= 48 && b[i] <= 57) || b[i] === 46 || b[i] === 101 || b[i] === 69 || b[i] === 45 || b[i] === 43)) i++; }
+        putSI(key, (neg ? -val : val) | 0);
+      }
+      skip(); if (b[i] === 44) { i++; continue; } if (b[i] === 125) { i++; break; } break;
+    }
+  }
+  // Parse a PicoBinarySerializer PSC1 card (magic 0x50534331): [magic][u16 count]
+  // then per field [u8 nameLen][name][u8 type: 1=int(4 BE), 2=str(u16 len + bytes)].
+  function _psc1Parse(b, putSI, putSS) {
+    if (b.length < 6) return;
+    var magic = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
+    if (magic !== 0x50534331) return;
+    var count = (b[4] << 8) | b[5], pos = 6, k;
+    for (k = 0; k < count; k++) {
+      var nlen = b[pos++]; var key = b.slice(pos, pos + nlen); pos += nlen;
+      var t = b[pos++];
+      if (t === 1) { var x = ((b[pos] << 24) | (b[pos + 1] << 16) | (b[pos + 2] << 8) | b[pos + 3]) | 0; pos += 4; putSI(key, x); }
+      else if (t === 2) { var vlen = (b[pos] << 8) | b[pos + 1]; pos += 2; putSS(key, b.slice(pos, pos + vlen)); pos += vlen; }
+      else break;
+    }
+  }
+  // Serialize an ordered [{kb,vk,vi,vb}] entry list to a PSC1 card (keys sorted by
+  // UTF-8 bytes, matching picoserializer). Null values serialize as int 0.
+  function _psc1Serialize(entries) {
+    var es = entries.filter(function (e) { return e.kk === 's'; }).slice();
+    es.sort(function (a, b) { return _cmpBytes(a.kb, b.kb); });
+    var out = [0x50, 0x53, 0x43, 0x31, (es.length >> 8) & 255, es.length & 255];
+    es.forEach(function (e) {
+      out.push(e.kb.length & 255); for (var i = 0; i < e.kb.length; i++) out.push(e.kb[i] & 255);
+      if (e.vk === 's') { out.push(2); var v = e.vb || []; out.push((v.length >> 8) & 255, v.length & 255); for (var j = 0; j < v.length; j++) out.push(v[j] & 255); }
+      else { out.push(1); var x = (e.vk === 'i' ? e.vi : 0) | 0; out.push((x >> 24) & 255, (x >> 16) & 255, (x >> 8) & 255, x & 255); }
+    });
+    return out;
+  }
+  // ---- BSO1 (BareMetal.Binary): schema-driven, little-endian, HMAC-SHA256 signed.
+  // HDR: MAGIC(i32) VERSION(i32) schemaVer(i32) byte(0) + 32-byte sig = 45 bytes,
+  // then a presence byte, then fields in schema order. 64-bit/float/temporal values
+  // are stored as their raw LE bytes (string) in the Map. Wire-compatible with
+  // BareMetalJsTools/src/BareMetal.Binary.js. See docs/MAP.md.
+  var BSO1_HDR = 45, BSO1_SIG_AT = 13;
+  var BSO1_SZ = { 1: 1, 2: 1, 3: 1, 4: 2, 5: 2, 6: 4, 7: 4, 8: 8, 9: 8, 10: 4, 11: 8, 12: 16, 13: 2, 14: 0, 15: 16, 16: 9, 17: 4, 18: 8, 19: 10, 20: 8, 21: 16, 22: 4 };
+  var BSO1_INT = { 1: 'u', 2: 'u', 3: 's', 4: 's', 5: 'u', 6: 's', 7: 'u', 13: 'u', 17: 's', 22: 's' };
+  function _leInt(b, pos, size, signed) {
+    var v = 0, i; for (i = 0; i < size; i++) v += (b[pos + i] || 0) * Math.pow(256, i);
+    if (signed) { var lim = Math.pow(2, size * 8 - 1); if (v >= lim) v -= lim * 2; }
+    return v | 0;
+  }
+  function _bso1Schema(mapObj) {
+    var members = [], version = 1;
+    if (mapObj) mapObj.forEach(function (e) {
+      var nm = e.kb;
+      if (nm.length && nm[0] === 58) { if (_keystr(nm) === ':version' && e.vk === 'i') version = e.vi; return; }
+      var code = (e.vk === 'i') ? e.vi : 0;
+      members.push({ name: nm, wt: code & 255, nullable: (code & 256) !== 0 });
+    });
+    return { members: members, version: version };
+  }
+  function _bso1Read(b, sch, putSI, putSS, putNS) {
+    var pos = BSO1_HDR, i;
+    if (pos >= b.length) return;
+    if (b[pos++] === 0) return;   // null object
+    for (i = 0; i < sch.members.length; i++) {
+      var m = sch.members[i], wt = m.wt;
+      if (m.nullable) { if ((b[pos++] || 0) === 0) { putNS(m.name); continue; } }
+      if (wt === 14) {
+        var len = _leInt(b, pos, 4, true); pos += 4;
+        if (len < 0) putNS(m.name);
+        else { putSS(m.name, b.slice(pos, pos + len)); pos += len; }
+      } else if (BSO1_INT[wt]) {
+        var sz = BSO1_SZ[wt]; putSI(m.name, _leInt(b, pos, sz, BSO1_INT[wt] === 's')); pos += sz;
+      } else {
+        var sz2 = BSO1_SZ[wt]; putSS(m.name, b.slice(pos, pos + sz2)); pos += sz2;
+      }
+    }
+  }
+  function _bso1Write(dataMap, sch, hmacKey) {
+    var out = [], i, k;
+    function wI32(v) { out.push(v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255); }
+    wI32(0x314F5342); wI32(3); wI32(sch.version | 0); out.push(0);
+    for (i = 0; i < 32; i++) out.push(0);
+    out.push(1);
+    for (i = 0; i < sch.members.length; i++) {
+      var m = sch.members[i], wt = m.wt;
+      var e = dataMap ? dataMap.get('s' + _keystr(m.name)) : null;
+      var isNull = !e || e.vk === 'n';
+      if (m.nullable) { if (isNull) { out.push(0); continue; } out.push(1); }
+      if (wt === 14) {
+        if (isNull) wI32(-1);
+        else { var sb = (e && e.vk === 's') ? e.vb : []; wI32(sb.length); for (k = 0; k < sb.length; k++) out.push(sb[k] & 255); }
+      } else if (BSO1_INT[wt]) {
+        var sz = BSO1_SZ[wt], val = (e && e.vk === 'i') ? e.vi : 0; for (k = 0; k < sz; k++) out.push((val >> (8 * k)) & 255);
+      } else {
+        var sz2 = BSO1_SZ[wt], rb = (e && e.vk === 's') ? e.vb : []; for (k = 0; k < sz2; k++) out.push((k < rb.length ? rb[k] : 0) & 255);
+      }
+    }
+    if (hmacKey && hmacKey.length) {
+      var parts = out.slice(0, BSO1_SIG_AT).concat(out.slice(BSO1_HDR));
+      var sig = _hmacSha256(hmacKey, parts);
+      for (k = 0; k < 32; k++) out[BSO1_SIG_AT + k] = sig[k];
+    }
+    return out;
+  }
+  function _bso1Verify(b, key) {
+    if (!key || !key.length || b.length < BSO1_HDR) return 0;
+    var parts = b.slice(0, BSO1_SIG_AT).concat(b.slice(BSO1_HDR));
+    var sig = _hmacSha256(key, parts), i;
+    for (i = 0; i < 32; i++) if ((b[BSO1_SIG_AT + i] || 0) !== (sig[i] || 0)) return 0;
+    return 1;
+  }
+
   PicoVM.prototype._spanBytes = function (h) {
     if (h <= 0 || h >= this.spans.length || !this.spans[h]) return [];
     var s = this.spans[h], out = new Array(s.len);
@@ -3094,6 +3273,42 @@ function compressBound(inputLen) {
       case "ValAt": { var ej = vals(m)[R[rs1] | 0]; R[rd] = ej && ej.vk === 'i' ? ej.vi : 0; return true; }
       case "ValSpanAt": { var ek = vals(m)[R[rs1] | 0]; R[rd] = this._newSpanBytes(ek && ek.vk === 's' ? ek.vb : []); return true; }
       case "ValIsSpan": { var el = vals(m)[R[rs1] | 0]; R[rd] = el && el.vk === 's' ? 1 : 0; return true; }
+    }
+    return false;
+  };
+  PicoVM.prototype._parseHook = function (name, rd, rs1, rs2) {
+    var R = this.regs, self = this;
+    if (!this.maps) { this.maps = [null]; this.activeMap = 0; }
+    function newMap() { self.maps.push(new Map()); self.activeMap = self.maps.length - 1; return self.activeMap; }
+    if (name === "Json.Parse" || name === "Binary.ParseCard") {
+      var bytes = this._spanBytes(R[rs1]);
+      var h = newMap(), m = this.maps[h];
+      var putSI = function (kb, v) { m.set('s' + _keystr(kb), { kk: 's', ki: 0, kb: kb, vk: 'i', vi: v | 0, vb: null }); };
+      var putSS = function (kb, vb) { m.set('s' + _keystr(kb), { kk: 's', ki: 0, kb: kb, vk: 's', vi: 0, vb: vb }); };
+      var putNS = function (kb) { m.set('s' + _keystr(kb), { kk: 's', ki: 0, kb: kb, vk: 'n', vi: 0, vb: null }); };
+      if (name === "Json.Parse") _jsonParseObject(bytes, putSI, putSS, putNS);
+      else _psc1Parse(bytes, putSI, putSS);
+      R[rd] = h; return true;
+    }
+    if (name === "Binary.SetKey") { var kb = this._spanBytes(R[rs1]); this.bso1Key = kb.length ? kb : null; return true; }
+    if (name === "Binary.ParseEntity") {
+      var blob = this._spanBytes(R[rs1]), sch = _bso1Schema(this.maps[R[rs2]]);
+      var hh = newMap(), mm = this.maps[hh];
+      var pSI = function (kb2, v) { mm.set('s' + _keystr(kb2), { kk: 's', ki: 0, kb: kb2, vk: 'i', vi: v | 0, vb: null }); };
+      var pSS = function (kb2, vb) { mm.set('s' + _keystr(kb2), { kk: 's', ki: 0, kb: kb2, vk: 's', vi: 0, vb: vb }); };
+      var pNS = function (kb2) { mm.set('s' + _keystr(kb2), { kk: 's', ki: 0, kb: kb2, vk: 'n', vi: 0, vb: null }); };
+      _bso1Read(blob, sch, pSI, pSS, pNS);
+      R[rd] = hh; return true;
+    }
+    if (name === "Binary.SerializeEntity") {
+      var dm = this.maps[R[rs1]], sch2 = _bso1Schema(this.maps[R[rs2]]);
+      R[rd] = this._newSpanBytes(_bso1Write(dm, sch2, this.bso1Key || null)); return true;
+    }
+    if (name === "Binary.Verify") { R[rd] = _bso1Verify(this._spanBytes(R[rs1]), this.bso1Key || null); return true; }
+    if (name === "Binary.SerializeCard") {
+      var mm = this.maps[this.activeMap];
+      var entries = mm ? Array.from(mm.values()) : [];
+      R[rd] = this._newSpanBytes(_psc1Serialize(entries)); return true;
     }
     return false;
   };
@@ -9199,6 +9414,10 @@ BareMetal.WorkflowPico = (() => {
         emitWeb(step, indent, ctx);
         break;
 
+      case 'RESPOND':
+        emitRespond(step, indent, ctx);
+        break;
+
       case 'CALL':
         out.push(pad(indent) + '# CALL ' + (step.workflow || ''));
         warnings.push('CALL: nested workflow ' + JSON.stringify(step.workflow || '') + ' must be compiled separately and is not linked');
@@ -9353,6 +9572,23 @@ BareMetal.WorkflowPico = (() => {
     if (step.result) out.push(p + 'Set ' + sanitizeId(step.result) + ' to ' + call + '.');
     else out.push(p + call + '.');
     ctx.warnings.push('WEB: Http.Request runs on a transport-capable host; the integer VM builds the request Map but does not perform network I/O');
+  }
+
+  // RESPOND: emit an HTTP response (Net.Status + optional Net.Type + body). This
+  // is what makes a workflow *serve* HTTP -- the kernel (or the WebIDE HTTP
+  // simulator) renders Net.* output as the response. body may be a string
+  // (text/JSON), a number, or {var:'x'} to print a variable's value.
+  function emitRespond(step, indent, ctx) {
+    var out = ctx.out, p = pad(indent);
+    var status = (step.status == null) ? 200 : step.status;
+    out.push(p + 'Net.Status(' + emitOperand(status, ctx.warnings, 'RESPOND status') + ').');
+    if (step.contentType) out.push(p + 'Net.Type(' + strLit(step.contentType) + ').');
+    if (step.body != null && step.body !== '') {
+      if (typeof step.body === 'number') out.push(p + 'Print ' + numLit(step.body) + '.');
+      else out.push(p + 'Print ' + strLit(step.body) + '.');
+    } else if (step.bodyVar) {
+      out.push(p + 'Print ' + sanitizeId(step.bodyVar) + '.');
+    }
   }
 
   function emitLog(step, indent, ctx) {
@@ -9942,6 +10178,10 @@ BareMetal.FlowCanvas = (function () {
           try { var o = JSON.parse(t); if (o && typeof o === 'object' && !Array.isArray(o)) p.headers = o; } catch (e) {}
         } },
       { key: 'result', label: '\u2192', placeholder: 'resp', width: 70 } ] },
+    RESPOND: { label: 'Respond', kind: 'atom', color: '#7ee787', fields: [
+      { key: 'status', label: '', placeholder: '200', width: 55, kind: 'num' },
+      { key: 'contentType', label: '', placeholder: 'application/json', width: 130 },
+      { key: 'body', label: 'body', placeholder: '{"ok":true}', width: 150 } ] },
     CALL: { label: 'Call', kind: 'atom', color: '#b0a0ff', fields: [
       { key: 'workflow', label: '', placeholder: 'other', width: 140 } ] }
   };
@@ -9951,7 +10191,8 @@ BareMetal.FlowCanvas = (function () {
     SET: { name: 'x', value: 0 }, IF: { condition: 'x >= 1' }, FOR: { 'var': 'i', from: 1, to: 5 },
     FOREACH: { 'var': 'item', 'in': 'data' }, FOREACHP: { 'var': 'item', 'in': 'data' }, LOG: { message: 'x' },
     WAIT: { ms: 100 }, RAISE: { event: 1, target: 0 }, ON: { event: 1 }, LOAD: { name: 'x', from: 'memory', key: 0 },
-    SAVE: { name: 'x', to: 'memory', key: 0 }, WEB: { method: 'GET', url: '/api' }, CALL: { workflow: 'other' }
+    SAVE: { name: 'x', to: 'memory', key: 0 }, WEB: { method: 'GET', url: '/api' }, CALL: { workflow: 'other' },
+    RESPOND: { status: 200, contentType: 'application/json', body: '{"ok":true}' }
   };
 
   var CSS = [
@@ -11416,6 +11657,14 @@ var WF_EXAMPLES={
     {type:'SAVE',name:'total',to:'scratch',key:4000},
     {type:'END'},
     {type:'LOG',message:'total'}
+  ],
+  'Serve HTTP':[
+    {type:'SET',name:'ok',value:1},
+    {type:'IF',condition:'ok is 1'},
+    {type:'RESPOND',status:200,contentType:'application/json',body:'{"ok":true,"from":"workflow"}'},
+    {type:'ELSE'},
+    {type:'RESPOND',status:500,body:'error'},
+    {type:'END'}
   ]
 };
 function wfParseSteps(){ try{ var d=JSON.parse(getSrc()); if(Array.isArray(d)) return d; if(d&&Array.isArray(d.steps)) return d.steps; }catch(e){} return null; }
