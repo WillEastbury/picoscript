@@ -648,18 +648,21 @@ PAGE = r"""<!DOCTYPE html>
       </div>
       <div class="tool-tab" id="tool-cards">
         <h3>Cards (PicoStore)</h3>
-        <input id="packname" value="orders" style="width:100%;margin-bottom:6px" placeholder="pack name">
+        <input id="packname" value="orders" style="width:100%;margin-bottom:6px" placeholder="pack name" oninput="cardRender();queryRenderChips();">
+        <div id="cardSchemaInfo" style="font-size:11px;margin-bottom:6px"></div>
+        <div id="cardTypedForm" style="display:none;gap:6px;flex-wrap:wrap;margin-bottom:6px"></div>
         <textarea id="cardjson" style="height:50px" spellcheck="false">{"qty": 42, "sku": "ABC", "status": 1}</textarea>
         <div style="display:flex;gap:6px;margin:6px 0"><button class="act" onclick="cardCreate()">Create</button><button class="ghost" onclick="cardSeed()">Seed</button><button class="ghost" onclick="cardClear()">Clear</button></div>
         <div id="cardmsg" class="cerr"></div>
         <div class="respbox" id="serout" style="min-height:24px;font-size:10px">&hellip;</div>
-        <div style="flex:1;overflow:auto;margin-top:6px"><table class="wal"><tbody id="cardlist"></tbody></table></div>
+        <div style="flex:1;overflow:auto;margin-top:6px"><table class="wal"><thead><tr id="cardHead"><th>id</th><th>record</th><th></th></tr></thead><tbody id="cardlist"></tbody></table></div>
       </div>
       <div class="tool-tab" id="tool-query">
         <h3>Query</h3>
+        <div id="queryFieldChips" style="margin-bottom:6px"></div>
         <input id="querybox" value="qty > 40 AND status = 1" style="width:100%;margin-bottom:6px">
         <button class="act" onclick="cardQuery()">Run &#9654;</button>
-        <div style="flex:1;overflow:auto;margin-top:8px"><table class="wal"><thead><tr><th>id</th><th>record</th></tr></thead><tbody id="qresults"></tbody></table></div>
+        <div style="flex:1;overflow:auto;margin-top:8px"><table class="wal"><thead><tr id="qHead"><th>id</th><th>record</th></tr></thead><tbody id="qresults"></tbody></table></div>
       </div>
       <div class="tool-tab" id="tool-spans">
         <h3>Spans &amp; Memory</h3>
@@ -1281,13 +1284,100 @@ function cardBackend(){return{get:function(k){return localStorage.getItem(CARD_P
 var STORE=new PicoStore.PicoStore(cardBackend());
 function curPack(){return(document.getElementById('packname').value||'orders').trim();}
 function cardMsg(m,err){var e=document.getElementById('cardmsg');e.textContent=m||'';e.style.color=err?'var(--err)':'var(--muted)';}
-function rowsHtml(entries,withDel){if(!entries.length)return'<tr><td colspan="'+(withDel?3:2)+'" style="color:var(--muted)">(none)</td></tr>';return entries.map(function(e){var id=e[0],rec=e[1];var del=withDel?'<td><button class="ghost" style="padding:1px 7px" onclick="cardDelete('+id+')">&times;</button></td>':'';return'<tr><td>'+id+'</td><td>'+esc(JSON.stringify(rec))+'</td>'+del+'</tr>';}).join('');}
-function cardRender(){document.getElementById('cardlist').innerHTML=rowsHtml(STORE.all(curPack()),true);}
+// ---- schema binding (Cards/Query become type-aware once a pack is bound) ----
+// A pack named "orders" binds to schemas/orders.schema.json by convention (the
+// same naming the sample app + Schema Designer use). When bound, Cards shows a
+// typed quick-add form + typed columns instead of raw JSON, and Query offers the
+// field names as clickable chips (a light "intellisense" for query authoring).
+function schemaForPack(pack){
+  var files=(typeof filesRead==='function')?filesRead():{};
+  var f=files['schemas/'+pack+'.schema.json'];
+  if(!f) return null;
+  try{ var d=JSON.parse(f.src); return (d&&Array.isArray(d.fields)&&d.fields.length)?d.fields:null; }catch(e){ return null; }
+}
+function rowsHtml(entries,withDel,fields){
+  var cols=(fields&&fields.length)?(1+fields.length+(withDel?1:0)):(withDel?3:2);
+  if(!entries.length)return'<tr><td colspan="'+cols+'" style="color:var(--muted)">(none)</td></tr>';
+  return entries.map(function(e){
+    var id=e[0],rec=e[1]||{};
+    var body;
+    if(fields&&fields.length) body=fields.map(function(f){var v=rec[f.name];return '<td>'+esc(v===undefined?'':String(v))+'</td>';}).join('');
+    else body='<td>'+esc(JSON.stringify(rec))+'</td>';
+    var del=withDel?'<td><button class="ghost" style="padding:1px 7px" onclick="cardDelete('+id+')">&times;</button></td>':'';
+    return'<tr><td>'+id+'</td>'+body+del+'</tr>';
+  }).join('');
+}
+function cardRenderSchemaInfo(){
+  var pack=curPack(), fields=schemaForPack(pack);
+  var info=document.getElementById('cardSchemaInfo'), form=document.getElementById('cardTypedForm'),
+    jsonBox=document.getElementById('cardjson'), head=document.getElementById('cardHead');
+  if(!info) return;
+  if(fields){
+    info.innerHTML='bound to <b>schemas/'+esc(pack)+'.schema.json</b> ('+fields.length+' field'+(fields.length===1?'':'s')+')';
+    info.style.color='var(--accent)';
+    if(jsonBox) jsonBox.style.display='none';
+    if(form){
+      form.style.display='flex';
+      form.innerHTML=fields.map(function(f){
+        var isStr=sdStrType(f.type);
+        return '<span style="display:inline-flex;flex-direction:column;gap:2px"><label class="muted" style="font-size:10px">'+esc(f.name)+' <span style="opacity:.6">'+esc(f.type)+'</span></label>'+
+          '<input id="cf_'+esc(f.name)+'" '+(isStr?'':'type="number"')+' style="width:90px" placeholder="'+esc(f.name)+'"></span>';
+      }).join('')+'<button class="act" style="align-self:flex-end" onclick="cardCreateTyped()">Create</button>';
+    }
+    if(head) head.innerHTML='<th>id</th>'+fields.map(function(f){return '<th>'+esc(f.name)+'</th>';}).join('')+'<th></th>';
+  } else {
+    info.innerHTML='unbound (free-form JSON) &mdash; add <b>schemas/'+esc(pack)+'.schema.json</b> to type this pack';
+    info.style.color='var(--muted)';
+    if(jsonBox) jsonBox.style.display='block';
+    if(form){ form.style.display='none'; form.innerHTML=''; }
+    if(head) head.innerHTML='<th>id</th><th>record</th><th></th>';
+  }
+}
+function queryRenderHead(){
+  var head=document.getElementById('qHead'), fields=schemaForPack(curPack());
+  if(!head) return;
+  head.innerHTML=fields?('<th>id</th>'+fields.map(function(f){return '<th>'+esc(f.name)+'</th>';}).join('')):'<th>id</th><th>record</th>';
+}
+function cardRender(){
+  cardRenderSchemaInfo();
+  var fields=schemaForPack(curPack());
+  document.getElementById('cardlist').innerHTML=rowsHtml(STORE.all(curPack()),true,fields);
+}
 function cardCreate(){var pack=curPack(),rec;try{rec=JSON.parse(document.getElementById('cardjson').value);}catch(e){cardMsg('JSON: '+e.message,true);return;}try{var id=STORE.create(pack,rec);var hex=STORE.cardBytesHex(pack,id);document.getElementById('serout').textContent=hex;cardMsg('#'+id+' created',false);cardRender();}catch(e){cardMsg(e.message,true);}}
+// Build a record from the typed quick-add form (schema-bound packs only).
+function cardCreateTyped(){
+  var pack=curPack(), fields=schemaForPack(pack);
+  if(!fields){ cardMsg('pack is not schema-bound',true); return; }
+  var rec={};
+  fields.forEach(function(f){
+    var el=document.getElementById('cf_'+f.name); if(!el) return;
+    rec[f.name]=sdStrType(f.type)?el.value:(parseInt(el.value,10)||0);
+  });
+  try{ var id=STORE.create(pack,rec); var hex=STORE.cardBytesHex(pack,id); document.getElementById('serout').textContent=hex; cardMsg('#'+id+' created',false); cardRender(); }
+  catch(e){ cardMsg(e.message,true); }
+}
 function cardSeed(){var pack=curPack();[{qty:42,sku:"ABC",status:1},{qty:7,sku:"XYZ",status:0},{qty:99,sku:"ABC",status:1},{qty:55,sku:"QRS",status:2}].forEach(function(r){STORE.create(pack,r);});cardMsg('Seeded 4',false);cardRender();}
 function cardClear(){var pack=curPack();STORE.all(pack).forEach(function(e){STORE.delete(pack,e[0]);});STORE.b.remove(pack+":ids");STORE.b.remove(pack+":next");document.getElementById('qresults').innerHTML='';cardMsg('Cleared',false);cardRender();}
 function cardDelete(id){STORE.delete(curPack(),id);cardRender();}
-function cardQuery(){var pack=curPack(),q=document.getElementById('querybox').value;try{var res=STORE.query(pack,q);document.getElementById('qresults').innerHTML=rowsHtml(res,false);cardMsg(res.length+' match'+(res.length===1?'':'es'),false);}catch(e){cardMsg(e.message,true);}}
+function cardQuery(){
+  var pack=curPack(),q=document.getElementById('querybox').value,fields=schemaForPack(pack);
+  queryRenderHead(); queryRenderChips();
+  try{var res=STORE.query(pack,q);document.getElementById('qresults').innerHTML=rowsHtml(res,false,fields);cardMsg(res.length+' match'+(res.length===1?'':'es'),false);}catch(e){cardMsg(e.message,true);}
+}
+// Query field chips: when the pack is schema-bound, list its field names as
+// clickable chips that insert into the query box (lightweight intellisense).
+function queryRenderChips(){
+  var host=document.getElementById('queryFieldChips'); if(!host) return;
+  var fields=schemaForPack(curPack());
+  if(!fields){ host.innerHTML=''; return; }
+  host.innerHTML='<span class="muted" style="font-size:10px;margin-right:4px">fields:</span>'+fields.map(function(f){
+    return '<button class="ghost" style="padding:1px 7px;font-size:10px" onclick="queryInsertField(\''+esc(f.name)+'\')">'+esc(f.name)+'</button>';
+  }).join(' ');
+}
+function queryInsertField(name){
+  var el=document.getElementById('querybox'); if(!el) return;
+  var v=el.value||''; el.value=(v&&!/\s$/.test(v))?(v+' '+name):(v+name); el.focus();
+}
 
 // HTTP/TCP
 function methodCode(m){return({GET:1,POST:2,PUT:3,DELETE:4,HEAD:5,PATCH:6,OPTIONS:7})[(m||'').toUpperCase()]||0;}
@@ -1345,6 +1435,7 @@ function selectToolTab(tab){
   document.querySelectorAll('.tool-tab').forEach(function(p){p.classList.toggle('active',p.id==='tool-'+TOOL_TAB);});
   document.querySelectorAll('.tool-tabs button').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-tool')===TOOL_TAB);});
   if(TOOL_TAB==='cards'||TOOL_TAB==='query')try{cardRender();}catch(e){}
+  if(TOOL_TAB==='query')try{queryRenderHead();queryRenderChips();}catch(e){}
   if(TOOL_TAB==='report')try{renderLayout();}catch(e){}
 }
 function openToolPanel(tab){
