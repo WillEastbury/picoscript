@@ -369,6 +369,10 @@ PAGE = r"""<!DOCTYPE html>
   .wf-modal-body { padding:12px; overflow:auto; }
   .wf-modal-body textarea { width:100%; min-height:340px; box-sizing:border-box; background:#0c0e14; border:1px solid #2c313f; border-radius:6px; color:#e6e8ef; font:12px/1.4 monospace; padding:8px; }
   .wf-modal-foot { display:flex; gap:8px; padding:10px 14px; border-top:1px solid #2c313f; }
+  #wfFlow .fc-node.wf-active > .fc-head, #wfFlow .fc-node.wf-active:not(.fc-block) { box-shadow:0 0 0 2px #ffd866, 0 0 14px rgba(255,216,102,.55) !important; border-radius:8px; }
+  #wfFlow .fc-node .fc-type { cursor:pointer; }
+  #wfFlow .fc-node .fc-type::before { content:'\25CB'; color:#5a6072; margin-right:5px; font-size:9px; vertical-align:middle; }
+  #wfFlow .fc-node.wf-bp .fc-type::before { content:'\25CF'; color:#ff5c5c; }
   .wf-row { display:flex; gap:8px; align-items:center; padding:3px 6px; margin:3px 0; border:1px solid #2c313f;
     border-radius:6px; background:#11141c; }
   .wf-badge { min-width:70px; font-weight:700; font-size:11px; color:var(--accent); }
@@ -1083,9 +1087,9 @@ function compileSrc(run){
   var lang=document.getElementById('lang').value,src=getSrc(),err=document.getElementById('cerr');
   if(lang==='workflow'){
     if(typeof looksLikeWorkflowJson!=='function'||!looksLikeWorkflowJson(src)){err.textContent='workflow: editor is not a JSON step array';err.style.color='#ff7b72';return;}
-    try{var wf=wfCompileSrc(src);src=wf.source;lang='english';}
+    try{var wf=wfCompileSrc(src);src=wf.source;lang='english';WF_LINE_STEPS=wf.lineSteps||null;}
     catch(e){err.textContent='workflow: '+String(e.message||e);err.style.color='#ff7b72';return;}
-  }
+  } else { WF_LINE_STEPS=null; }
   try{var r=PicoCompile.compileDebug(src,lang);DBG.words=r.words.map(function(w){return w>>>0;});DBG.disasm=DBG.words.map(jsDisasm);DBG.vars=r.vars||{};DBG.debug=r.debug||{};DBG.src=src;rebuildDebugMaps();err.textContent='compiled '+DBG.words.length+' words';err.style.color='#7ee787';dbgReset();if(run)dbgRun();if(typeof renderLayout==='function')try{renderLayout();}catch(e){}}
   catch(e){err.textContent=String(e.message||e);err.style.color='#ff7b72';}
 }
@@ -1103,6 +1107,7 @@ function render(){
   var _txt=vm.outputText(),_pr=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_txt);
   document.getElementById('out').textContent='output: ['+vm.outputInts().join(', ')+']'+(_pr&&_txt?'\ntext: '+JSON.stringify(_txt):'');
   updateSourceDecorations();
+  if(CUR_LANG==='workflow'){ try{ wfHighlightActive(); wfRenderBreakpoints(); }catch(e){} }
 }
 function jsDisasm(w){
   var names=["NOOP","LOAD","SAVE","PIPE","ADD","SUB","MUL","DIV","INC","JUMP","BRANCH","CALL","RETURN","WAIT","RAISE","DSP"];
@@ -1297,6 +1302,59 @@ function wfCompileSrc(src){
   if(!steps) throw new Error('workflow: expected a JSON step array');
   return BareMetal.WorkflowPico.compile(steps);
 }
+// ---- designer step/trace highlight + box breakpoints ------------------------
+// The derived-English line the VM is executing maps back to a workflow step via
+// WorkflowPico's lineSteps; steps map to designer boxes because .fc-node elements
+// render in document (= flat step) order, excluding ELSE/END markers.
+var WF_LINE_STEPS=null, WF_FLOW_WIRED=false;
+function wfCurSteps(){ return (FLOW&&FLOW.getSteps?FLOW.getSteps():wfParseSteps())||[]; }
+function wfBoxForStep(si){
+  if(si==null) return null;
+  var steps=wfCurSteps(), ord=-1;
+  for(var i=0;i<=si&&i<steps.length;i++){var t=String(steps[i].type||'').toUpperCase();if(t!=='ELSE'&&t!=='END')ord++;}
+  if(ord<0) return null;
+  return document.querySelectorAll('#wfFlow .fc-node')[ord]||null;
+}
+function wfStepForBox(box){
+  var nodes=Array.prototype.slice.call(document.querySelectorAll('#wfFlow .fc-node'));
+  var ord=nodes.indexOf(box); if(ord<0) return null;
+  var steps=wfCurSteps(), c=-1;
+  for(var i=0;i<steps.length;i++){var t=String(steps[i].type||'').toUpperCase();if(t!=='ELSE'&&t!=='END'){c++;if(c===ord)return i;}}
+  return null;
+}
+function wfFirstLineForStep(si){ if(!WF_LINE_STEPS||si==null)return 0; for(var L=0;L<WF_LINE_STEPS.length;L++){if(WF_LINE_STEPS[L]===si)return L+1;} return 0; }
+function wfHighlightActive(){
+  var host=document.getElementById('wfFlow'); if(!host) return;
+  host.querySelectorAll('.fc-node.wf-active').forEach(function(n){n.classList.remove('wf-active');});
+  if(CUR_LANG!=='workflow'||!DBG.vm||DBG.vm.halted||!WF_LINE_STEPS) return;
+  var line=DBG.pcLines[DBG.vm.pc]; if(!line) return;
+  var box=wfBoxForStep(WF_LINE_STEPS[line-1]);
+  if(box){ box.classList.add('wf-active'); try{box.scrollIntoView({block:'nearest'});}catch(e){} }
+}
+function wfRenderBreakpoints(){
+  var host=document.getElementById('wfFlow'); if(!host||CUR_LANG!=='workflow') return;
+  host.querySelectorAll('.fc-node').forEach(function(box){
+    var si=wfStepForBox(box), ln=wfFirstLineForStep(si);
+    box.classList.toggle('wf-bp', !!(ln&&DBG.sourceBps&&DBG.sourceBps[ln]));
+  });
+}
+function wfToggleBoxBp(box){
+  var si=wfStepForBox(box); if(si==null) return;
+  var ln=wfFirstLineForStep(si);
+  if(!ln){ filesStatus&&filesStatus('compile the workflow first to set a breakpoint',true); return; }
+  if(typeof toggleSourceBreakpoint==='function') toggleSourceBreakpoint(ln);
+  else { DBG.sourceBps[ln]=!DBG.sourceBps[ln]; if(!DBG.sourceBps[ln])delete DBG.sourceBps[ln]; }
+  wfRenderBreakpoints();
+}
+function wfWireFlowClicks(){
+  if(WF_FLOW_WIRED) return; var host=document.getElementById('wfFlow'); if(!host) return;
+  // Click a box's type label (e.g. "IF"/"RESPOND") to toggle a breakpoint on it.
+  host.addEventListener('click', function(e){
+    var lbl=e.target&&e.target.closest?e.target.closest('.fc-type'):null; if(!lbl)return;
+    var box=lbl.closest('.fc-node'); if(box){ e.preventDefault(); e.stopPropagation(); wfToggleBoxBp(box); }
+  }, true);
+  WF_FLOW_WIRED=true;
+}
 var WF_EXAMPLES={
   'Array sum':[
     {type:'SET',name:'data',value:[10,20,30,40]},
@@ -1381,6 +1439,7 @@ function wfEnsureFlow(){
     FLOW_OWNS=true; setSrc(JSON.stringify(steps,null,2)); FLOW_OWNS=false;
     wfUpdateEng(steps); try{ compileSrc(false); }catch(e){}
   }});
+  wfWireFlowClicks();
 }
 function wfRenderDesigner(){
   var host=document.getElementById('wfFlow'); if(!host) return;
@@ -1395,6 +1454,7 @@ function wfRenderDesigner(){
   wfEnsureFlow();
   if(FLOW&&!FLOW_OWNS) FLOW.setSteps(steps);
   wfUpdateEng(steps);
+  try{ wfHighlightActive(); wfRenderBreakpoints(); }catch(e){}
 }
 function wfToggle(){
   var on=(CUR_LANG==='workflow');
