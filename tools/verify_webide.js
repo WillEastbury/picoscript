@@ -7,6 +7,7 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   const errors = [];
   const page = await browser.newPage();
+  await page.setViewportSize({ width: 1400, height: 900 }); // deterministic geometry for layout checks
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push('console.error: ' + m.text()); });
 
@@ -16,6 +17,37 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
   // Switch to the WebIDE view via the real tab button
   await page.click("button.tab:has-text('WebIDE')");
   await page.waitForTimeout(300);
+
+  // ---- Layout / DOM-structure integrity (catches unbalanced <div> regressions) ----
+  // A dropped/extra tag can close .ide-editor early, collapsing the editor column
+  // and floating the debugger. Assert the editor column has real width, Monaco
+  // rendered, the overlay modals are hidden and correctly nested, and the debugger
+  // bar spans the width.
+  const layout = await page.evaluate(() => {
+    function r(sel) { var e = document.querySelector(sel); if (!e) return null; var b = e.getBoundingClientRect(); return { w: Math.round(b.width), h: Math.round(b.height) }; }
+    var editor = document.querySelector('.ide-editor');
+    var childIds = editor ? Array.from(editor.children).map(function (c) { return c.id || c.className; }) : [];
+    return {
+      ideEditor: r('.ide-editor'),
+      monaco: r('#monaco'),
+      controls: r('.controls'),
+      dbgBar: r('#playDbgBar'),
+      // overlay modals must be present, hidden by default, and nested inside .ide-editor
+      pkgHidden: getComputedStyle(document.getElementById('pkgModal')).display === 'none',
+      jsonHidden: getComputedStyle(document.getElementById('wfJsonModal')).display === 'none',
+      pkgNested: !!(editor && editor.contains(document.getElementById('pkgModal'))),
+      jsonNested: !!(editor && editor.contains(document.getElementById('wfJsonModal'))),
+      hasWfDesigner: !!(editor && editor.contains(document.getElementById('wfDesigner'))),
+      childIds: childIds
+    };
+  });
+  const okLayout = layout.ideEditor && layout.ideEditor.w >= 500 &&
+    layout.monaco && layout.monaco.w >= 400 && layout.monaco.h >= 80 &&
+    layout.controls && layout.controls.w >= 400 &&
+    layout.dbgBar && layout.dbgBar.w >= 1000 &&
+    layout.pkgHidden && layout.jsonHidden &&
+    layout.pkgNested && layout.jsonNested && layout.hasWfDesigner;
+  console.log('WEBIDE layout integrity:', okLayout, '|', JSON.stringify(layout));
 
   // ---- Workflow surface (now the BareMetal.Workflow.Designer christmas-tree canvas) ----
   const wf = await page.evaluate(() => {
@@ -90,7 +122,7 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
   console.log('WEBIDE page errors (excl. monaco/cdn):', pageErrs.length);
   if (pageErrs.length) console.log(pageErrs.slice(0, 8).join('\n'));
 
-  const allOk = okWf && okWfAdd && okWeb && okReport && okForm && pageErrs.length === 0;
+  const allOk = okLayout && okWf && okWfAdd && okWeb && okReport && okForm && pageErrs.length === 0;
   console.log(allOk ? '\nWEBIDE ALL VERIFIED OK' : '\nWEBIDE VERIFICATION FAILED');
   process.exit(allOk ? 0 : 1);
 })();
