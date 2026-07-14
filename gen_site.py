@@ -1400,13 +1400,16 @@ function wfToggle(){
   var on=(CUR_LANG==='workflow');
   var host=document.getElementById('wfDesigner');
   if(host) host.style.display=on?'block':'none';
-  // In workflow mode the christmas-tree designer is the main surface: hide the
-  // backing-JSON editor (it stays the source of truth; view/edit it via the
-  // { } JSON modal) so the designer window gets the space.
+  // In workflow mode the christmas-tree designer is the main surface, so the
+  // backing-JSON editor is hidden -- BUT only when the JSON is valid (the designer
+  // can render it). If the text isn't a step array yet, keep the editor visible so
+  // the user can always see/fix it (never a blank editor area). The { } JSON modal
+  // is available regardless.
   var mon=document.getElementById('monaco'), src=document.getElementById('src');
-  if(on){ if(mon)mon.style.display='none'; if(src)src.style.display='none'; }
-  else if(EDITOR){ if(mon)mon.style.display='block'; if(src)src.style.display='none'; }
-  else { if(mon)mon.style.display='none'; if(src)src.style.display='block'; }
+  var validWf=on&&(typeof looksLikeWorkflowJson==='function')&&looksLikeWorkflowJson(getSrc());
+  function showEditor(){ if(EDITOR){ if(mon)mon.style.display='block'; if(src)src.style.display='none'; try{EDITOR.layout();}catch(e){} } else { if(mon)mon.style.display='none'; if(src)src.style.display='block'; } }
+  if(on&&validWf){ if(mon)mon.style.display='none'; if(src)src.style.display='none'; }
+  else showEditor();
   if(!on) wfCloseJson();
   if(on){ try{ wfRenderDesigner(); }catch(e){} }
 }

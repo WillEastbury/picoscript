@@ -19512,8 +19512,13 @@ BareMetal.WorkflowPico = (() => {
       var type = String(step.type || '').toUpperCase();
       if (type === 'END') { pos.i++; return 'END'; }
       if (type === 'ELSE') return 'ELSE';
+      var si = pos.i;                    // flat index of this step (maps back to a designer box)
+      var startLine = ctx.out.length;
       pos.i++;
       emitStep(step, type, steps, pos, indent, ctx);
+      // Tag every line this step produced with its index; nested children were
+      // tagged first during recursion, so only the block's own lines fill here.
+      for (var L = startLine; L < ctx.out.length; L++) { if (ctx.lineStep[L] == null) ctx.lineStep[L] = si; }
     }
     return 'EOF';
   }
@@ -19827,6 +19832,7 @@ BareMetal.WorkflowPico = (() => {
     var steps = resolveSteps(stepsOrName);
     var ctx = {
       out: [],
+      lineStep: [],   // lineStep[outputLineIndex] = flat step index that produced it
       warnings: [],
       arrays: {},
       memNext: opts.arrayBase || DEFAULT_ARRAY_BASE,
@@ -19840,7 +19846,7 @@ BareMetal.WorkflowPico = (() => {
       else if (term === 'END') { ctx.warnings.push('END without a matching block; ignored'); }
       else break;
     }
-    return { source: ctx.out.join('\n') + '\n', warnings: ctx.warnings };
+    return { source: ctx.out.join('\n') + '\n', warnings: ctx.warnings, lineSteps: ctx.lineStep };
   }
 
   // ── PicoScript integration ──────────────────────────────────────────────────
@@ -22775,13 +22781,16 @@ function wfToggle(){
   var on=(CUR_LANG==='workflow');
   var host=document.getElementById('wfDesigner');
   if(host) host.style.display=on?'block':'none';
-  // In workflow mode the christmas-tree designer is the main surface: hide the
-  // backing-JSON editor (it stays the source of truth; view/edit it via the
-  // { } JSON modal) so the designer window gets the space.
+  // In workflow mode the christmas-tree designer is the main surface, so the
+  // backing-JSON editor is hidden -- BUT only when the JSON is valid (the designer
+  // can render it). If the text isn't a step array yet, keep the editor visible so
+  // the user can always see/fix it (never a blank editor area). The { } JSON modal
+  // is available regardless.
   var mon=document.getElementById('monaco'), src=document.getElementById('src');
-  if(on){ if(mon)mon.style.display='none'; if(src)src.style.display='none'; }
-  else if(EDITOR){ if(mon)mon.style.display='block'; if(src)src.style.display='none'; }
-  else { if(mon)mon.style.display='none'; if(src)src.style.display='block'; }
+  var validWf=on&&(typeof looksLikeWorkflowJson==='function')&&looksLikeWorkflowJson(getSrc());
+  function showEditor(){ if(EDITOR){ if(mon)mon.style.display='block'; if(src)src.style.display='none'; try{EDITOR.layout();}catch(e){} } else { if(mon)mon.style.display='none'; if(src)src.style.display='block'; } }
+  if(on&&validWf){ if(mon)mon.style.display='none'; if(src)src.style.display='none'; }
+  else showEditor();
   if(!on) wfCloseJson();
   if(on){ try{ wfRenderDesigner(); }catch(e){} }
 }
