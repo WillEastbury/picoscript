@@ -10452,6 +10452,7 @@ lowering convention or host contract.</p>
         <div id="schemaDesigner" class="wf-designer" style="display:none">
           <div class="wf-add">
             <button class="ghost" onclick="schemaOpenJson()" title="View / edit the backing schema JSON">&#123; &#125; JSON</button>
+            <button class="ghost" onclick="schemaPushLive()" title="PUT this schema to the configured live server">Push to live server</button>
             <span class="muted" style="font-size:11px">design a typed field list for a pack/card schema &mdash; feeds Cards, Query, Report and Form once bound</span>
           </div>
           <div id="schemaFields"></div>
@@ -10580,6 +10581,10 @@ lowering convention or host contract.</p>
       </div>
       <div class="tool-tab" id="tool-cards">
         <h3>Cards (PicoStore)</h3>
+        <div id="liveServerBar" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;font-size:11px">
+          <span id="liveServerStatus" class="muted">offline (localStorage simulator)</span>
+          <button class="ghost" style="padding:1px 7px" onclick="liveServerPrompt()">Set live server&hellip;</button>
+        </div>
         <input id="packname" value="orders" style="width:100%;margin-bottom:6px" placeholder="pack name" oninput="cardRender();queryRenderChips();">
         <div id="cardSchemaInfo" style="font-size:11px;margin-bottom:6px"></div>
         <div id="cardTypedForm" style="display:none;gap:6px;flex-wrap:wrap;margin-bottom:6px"></div>
@@ -10591,6 +10596,7 @@ lowering convention or host contract.</p>
       </div>
       <div class="tool-tab" id="tool-query">
         <h3>Query</h3>
+        <div id="liveServerStatus2" class="muted" style="font-size:11px;margin-bottom:6px">offline (localStorage simulator)</div>
         <div id="queryFieldChips" style="margin-bottom:6px"></div>
         <input id="querybox" value="qty > 40 AND status = 1" style="width:100%;margin-bottom:6px">
         <button class="act" onclick="cardQuery()">Run &#9654;</button>
@@ -23370,6 +23376,45 @@ function cardBackend(){return{get:function(k){return localStorage.getItem(CARD_P
 var STORE=new PicoStore.PicoStore(cardBackend());
 function curPack(){return(document.getElementById('packname').value||'orders').trim();}
 function cardMsg(m,err){var e=document.getElementById('cardmsg');e.textContent=m||'';e.style.color=err?'var(--err)':'var(--muted)';}
+
+// ---- live server (deploy target): point Cards/Query/Schema at a real running
+// host/picowal app_server (or compatible picoweb /wal/*-shaped API) instead of
+// the localStorage simulator above. Off by default -- the simulator keeps
+// working unchanged when no live server URL is configured (see
+// webide-deploy-native-host: keep_local_sim=true). The native engine only
+// understands numeric pack ids (0..4095), so a pack NAME (as typed into
+// #packname / used by schemas/<pack>.schema.json) is deterministically hashed
+// to a numeric id via FNV-1a -- same hash primitive already used elsewhere in
+// this codebase (Map.Hash) -- reserving 0/1/2 (picoweb's users/registry/schema
+// convention) so a name never collides with those.
+var LIVE_SERVER_KEY='picoscript.liveserver.url';
+function liveServerUrl(){ try{ return (localStorage.getItem(LIVE_SERVER_KEY)||'').trim(); }catch(e){ return ''; } }
+function liveServerSet(url){
+  try{ if(url) localStorage.setItem(LIVE_SERVER_KEY,url); else localStorage.removeItem(LIVE_SERVER_KEY); }catch(e){}
+  liveServerRenderStatus();
+}
+function liveServerRenderStatus(){
+  var url=liveServerUrl();
+  ['liveServerStatus','liveServerStatus2'].forEach(function(id){
+    var el=document.getElementById(id); if(!el) return;
+    el.textContent=url?('live: '+url):'offline (localStorage simulator)';
+    el.style.color=url?'var(--accent)':'var(--muted)';
+  });
+}
+function liveServerPrompt(){
+  var cur=liveServerUrl();
+  if(typeof prompt!=='function'){ return; }
+  var url=prompt('Live server base URL (e.g. http://localhost:8090) -- blank to use the offline simulator',cur);
+  if(url===null) return;
+  liveServerSet(url.trim());
+}
+function packNameToId(name){
+  var h=0x811c9dc5>>>0;
+  for(var i=0;i<name.length;i++){ h^=name.charCodeAt(i)&0xFF; h=Math.imul(h,0x01000193)>>>0; }
+  return 3+(h%1000); // avoid 0=users,1=pack registry,2=schema store (picoweb/host-picowal convention)
+}
+function liveFetch(path,opts){ return fetch(liveServerUrl()+path,opts); }
+
 // ---- schema binding (Cards/Query become type-aware once a pack is bound) ----
 // A pack named "orders" binds to schemas/orders.schema.json by convention (the
 // same naming the sample app + Schema Designer use). When bound, Cards shows a
@@ -23427,9 +23472,29 @@ function queryRenderHead(){
 function cardRender(){
   cardRenderSchemaInfo();
   var fields=schemaForPack(curPack());
-  document.getElementById('cardlist').innerHTML=rowsHtml(STORE.all(curPack()),true,fields);
+  var url=liveServerUrl();
+  if(!url){ document.getElementById('cardlist').innerHTML=rowsHtml(STORE.all(curPack()),true,fields); return; }
+  var pid=packNameToId(curPack());
+  liveFetch('/list/'+pid).then(function(r){return r.json();}).then(function(d){
+    var entries=(d.records||[]).map(function(rr){return [rr.record,rr.data];});
+    document.getElementById('cardlist').innerHTML=rowsHtml(entries,true,fields);
+  }).catch(function(e){ cardMsg('live list failed: '+e.message,true); });
 }
-function cardCreate(){var pack=curPack(),rec;try{rec=JSON.parse(document.getElementById('cardjson').value);}catch(e){cardMsg('JSON: '+e.message,true);return;}try{var id=STORE.create(pack,rec);var hex=STORE.cardBytesHex(pack,id);document.getElementById('serout').textContent=hex;cardMsg('#'+id+' created',false);cardRender();}catch(e){cardMsg(e.message,true);}}
+function cardCreate(){
+  var pack=curPack(),rec;
+  try{rec=JSON.parse(document.getElementById('cardjson').value);}catch(e){cardMsg('JSON: '+e.message,true);return;}
+  var url=liveServerUrl();
+  if(!url){
+    try{var id=STORE.create(pack,rec);var hex=STORE.cardBytesHex(pack,id);document.getElementById('serout').textContent=hex;cardMsg('#'+id+' created',false);cardRender();}catch(e){cardMsg(e.message,true);}
+    return;
+  }
+  var pid=packNameToId(pack);
+  liveFetch('/'+pid,{method:'POST',body:JSON.stringify(rec)}).then(function(r){
+    if(!r.ok) return r.json().then(function(d){throw new Error(d.error||('HTTP '+r.status));});
+    return r.json();
+  }).then(function(d){ document.getElementById('serout').textContent='(live)'; cardMsg('#'+d.record+' created (live)',false); cardRender(); })
+    .catch(function(e){ cardMsg(e.message,true); });
+}
 // Build a record from the typed quick-add form (schema-bound packs only).
 function cardCreateTyped(){
   var pack=curPack(), fields=schemaForPack(pack);
@@ -23439,16 +23504,72 @@ function cardCreateTyped(){
     var el=document.getElementById('cf_'+f.name); if(!el) return;
     rec[f.name]=sdStrType(f.type)?el.value:(parseInt(el.value,10)||0);
   });
-  try{ var id=STORE.create(pack,rec); var hex=STORE.cardBytesHex(pack,id); document.getElementById('serout').textContent=hex; cardMsg('#'+id+' created',false); cardRender(); }
-  catch(e){ cardMsg(e.message,true); }
+  var url=liveServerUrl();
+  if(!url){
+    try{ var id=STORE.create(pack,rec); var hex=STORE.cardBytesHex(pack,id); document.getElementById('serout').textContent=hex; cardMsg('#'+id+' created',false); cardRender(); }
+    catch(e){ cardMsg(e.message,true); }
+    return;
+  }
+  var pid=packNameToId(pack);
+  liveFetch('/'+pid,{method:'POST',body:JSON.stringify(rec)}).then(function(r){
+    if(!r.ok) return r.json().then(function(d){throw new Error(d.error||('HTTP '+r.status));});
+    return r.json();
+  }).then(function(d){ document.getElementById('serout').textContent='(live)'; cardMsg('#'+d.record+' created (live)',false); cardRender(); })
+    .catch(function(e){ cardMsg(e.message,true); });
 }
-function cardSeed(){var pack=curPack();[{qty:42,sku:"ABC",status:1},{qty:7,sku:"XYZ",status:0},{qty:99,sku:"ABC",status:1},{qty:55,sku:"QRS",status:2}].forEach(function(r){STORE.create(pack,r);});cardMsg('Seeded 4',false);cardRender();}
-function cardClear(){var pack=curPack();STORE.all(pack).forEach(function(e){STORE.delete(pack,e[0]);});STORE.b.remove(pack+":ids");STORE.b.remove(pack+":next");document.getElementById('qresults').innerHTML='';cardMsg('Cleared',false);cardRender();}
-function cardDelete(id){STORE.delete(curPack(),id);cardRender();}
+function cardSeed(){
+  var pack=curPack(), seed=[{qty:42,sku:"ABC",status:1},{qty:7,sku:"XYZ",status:0},{qty:99,sku:"ABC",status:1},{qty:55,sku:"QRS",status:2}];
+  var url=liveServerUrl();
+  if(!url){ seed.forEach(function(r){STORE.create(pack,r);}); cardMsg('Seeded 4',false); cardRender(); return; }
+  var pid=packNameToId(pack);
+  Promise.all(seed.map(function(r){ return liveFetch('/'+pid,{method:'POST',body:JSON.stringify(r)}); }))
+    .then(function(){ cardMsg('Seeded 4 (live)',false); cardRender(); })
+    .catch(function(e){ cardMsg('live seed failed: '+e.message,true); });
+}
+function cardClear(){
+  var pack=curPack();
+  var url=liveServerUrl();
+  if(!url){
+    STORE.all(pack).forEach(function(e){STORE.delete(pack,e[0]);});
+    STORE.b.remove(pack+":ids");STORE.b.remove(pack+":next");
+    document.getElementById('qresults').innerHTML='';cardMsg('Cleared',false);cardRender();
+    return;
+  }
+  var pid=packNameToId(pack);
+  liveFetch('/list/'+pid).then(function(r){return r.json();}).then(function(d){
+    var ids=(d.records||[]).map(function(rr){return rr.record;});
+    return Promise.all(ids.map(function(id){ return liveFetch('/'+pid+'/'+id,{method:'DELETE'}); }));
+  }).then(function(){ document.getElementById('qresults').innerHTML=''; cardMsg('Cleared (live)',false); cardRender(); })
+    .catch(function(e){ cardMsg('live clear failed: '+e.message,true); });
+}
+function cardDelete(id){
+  var pack=curPack();
+  var url=liveServerUrl();
+  if(!url){ STORE.delete(pack,id); cardRender(); return; }
+  var pid=packNameToId(pack);
+  liveFetch('/'+pid+'/'+id,{method:'DELETE'}).then(function(){ cardRender(); }).catch(function(e){ cardMsg('live delete failed: '+e.message,true); });
+}
 function cardQuery(){
   var pack=curPack(),q=document.getElementById('querybox').value,fields=schemaForPack(pack);
   queryRenderHead(); queryRenderChips();
-  try{var res=STORE.query(pack,q);document.getElementById('qresults').innerHTML=rowsHtml(res,false,fields);cardMsg(res.length+' match'+(res.length===1?'':'es'),false);}catch(e){cardMsg(e.message,true);}
+  var url=liveServerUrl();
+  if(!url){
+    try{var res=STORE.query(pack,q);document.getElementById('qresults').innerHTML=rowsHtml(res,false,fields);cardMsg(res.length+' match'+(res.length===1?'':'es'),false);}catch(e){cardMsg(e.message,true);}
+    return;
+  }
+  // Live mode fetches the full list and applies the SAME query DSL client-side
+  // (PicoStore.compileQuery) rather than reimplementing AND/OR/comparisons
+  // server-side -- the native engine's own Storage.QueryCard only understands
+  // a single field=value filter (see host-picowal-report-joins), so this keeps
+  // full query-language parity between live and offline modes.
+  var pid=packNameToId(pack);
+  liveFetch('/list/'+pid).then(function(r){return r.json();}).then(function(d){
+    var entries=(d.records||[]).map(function(rr){return [rr.record,rr.data];});
+    var pred=PicoStore.compileQuery(q);
+    var res=entries.filter(function(e){ return pred(e[1]); });
+    document.getElementById('qresults').innerHTML=rowsHtml(res,false,fields);
+    cardMsg(res.length+' match'+(res.length===1?'':'es')+' (live)',false);
+  }).catch(function(e){ cardMsg(e.message,true); });
 }
 // Query field chips: when the pack is schema-bound, list its field names as
 // clickable chips that insert into the query box (lightweight intellisense).
@@ -24057,6 +24178,22 @@ function schemaQuickNew(){
   filesWrite(files); filesRender();
   psFilesOpen(name);
 }
+// PUT the active schema file to the configured live server, so Cards/Query's
+// live-mode validation (Storage.SetSchemaForPack, see host/picowal/
+// storage_file.c) has the same schema the WebIDE Schema Designer is showing.
+// The native engine natively understands this {fields:[{name,type}]} shape
+// directly (schema_format=extend-picoweb decision) -- no translation needed.
+function schemaPushLive(){
+  var url=liveServerUrl();
+  if(!url){ if(typeof alert==='function') alert('No live server configured -- set one from the Cards panel first.'); return; }
+  var m=/^schemas\/(.+)\.schema\.json$/.exec(ACTIVE_FILE||'');
+  if(!m){ if(typeof alert==='function') alert('Save this as schemas/<pack>.schema.json first.'); return; }
+  var pid=packNameToId(m[1]);
+  liveFetch('/schema/'+pid,{method:'PUT',body:getSrc()}).then(function(r){
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    if(typeof filesStatus==='function') filesStatus('Pushed schema for "'+m[1]+'" to live server (pack '+pid+')');
+  }).catch(function(e){ if(typeof filesStatus==='function') filesStatus('Push failed: '+e.message,true); });
+}
 
 // ---- event schema designer (fixed-schema program exits / event handlers) ----
 // A *.event.json file is {mode:'sync'|'async', fields:[{name,type}], returns}.
@@ -24329,7 +24466,7 @@ document.getElementById('lang').addEventListener('change',function(){onLangChang
 document.getElementById('src').addEventListener('input',function(){filesRender();if(CUR_LANG==='workflow'){try{wfRenderDesigner();}catch(e){}}});
 document.getElementById('lang').value='basic';
 document.getElementById('src').value=RESPONDER;
-initMonaco();compileSrc(false);loadSample();renderWal();renderLayout();busRender();
+initMonaco();compileSrc(false);loadSample();renderWal();renderLayout();busRender();liveServerRenderStatus();
 (function(){var ls=filesSafeLocalStorage(),active='';try{active=ls?ls.getItem(PS_ACTIVE_FILE_KEY)||'':'';}catch(e){} if(active&&filesRead()[active]) psFilesOpen(active); else filesRender();})();
 document.getElementById('flyoutTriggers').style.display='none';
 </script>
