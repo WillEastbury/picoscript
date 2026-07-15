@@ -10562,6 +10562,7 @@ lowering convention or host contract.</p>
     <button onclick="openToolPanel('query')">Query</button>
     <button onclick="openToolPanel('spans')">Spans</button>
     <button onclick="openToolPanel('report')">Report</button>
+    <button onclick="openToolPanel('routes')">Routes</button>
   </div>
   <div class="flyout-overlay" id="flyoutOverlay" onclick="closeToolPanel(false)"></div>
   <div class="tool-panel" id="toolPanel">
@@ -10573,6 +10574,7 @@ lowering convention or host contract.</p>
         <button data-tool="query" onclick="selectToolTab('query')">Query</button>
         <button data-tool="spans" onclick="selectToolTab('spans')">Spans</button>
         <button data-tool="report" onclick="selectToolTab('report')">Report/Form</button>
+        <button data-tool="routes" onclick="selectToolTab('routes')">Routes</button>
       </div>
       <div class="tool-actions">
         <button id="toolPin" onclick="toggleToolPin()" title="Pin tools panel" aria-label="Pin tools panel">📌</button>
@@ -10642,6 +10644,19 @@ lowering convention or host contract.</p>
         <div class="layout-preview" id="layoutPreview"></div>
         <div style="display:flex;gap:6px;margin:6px 0"><button class="ghost" onclick="layoutSave()">Save form &#128190;</button><span class="muted" id="layoutSaveMsg" style="font-size:11px"></span></div>
         <pre class="layout-text" id="layoutText"></pre>
+      </div>
+      <div class="tool-tab" id="tool-routes">
+        <h3>Program Exits (routes)</h3>
+        <p style="color:var(--muted);font-size:12px;line-height:1.5">Bind a method+path to a runnable <b>program exit</b>: a workflow/code file (compiled &amp; run through the HTTP Simulator's Send action, same as today), a live <b>Query</b> against a pack, or a pack <b>List</b>. Routes are also what a deployed card Package carries (see Package export).</p>
+        <table class="wal" style="margin-bottom:8px"><thead><tr><th>method</th><th>path</th><th>type</th><th>target</th><th></th></tr></thead><tbody id="routesBody"></tbody></table>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+          <select id="routeMethod"><option>*</option><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option></select>
+          <input id="routePath" placeholder="/orders" style="width:110px">
+          <select id="routeType" onchange="routesRenderTargetInputs()"><option value="code">code/workflow file</option><option value="query">Query (pack)</option><option value="list">List (pack)</option></select>
+          <span id="routeTargetInputs"></span>
+          <button class="ghost" onclick="routeAdd()">+ route</button>
+        </div>
+        <div id="routesMsg" class="cerr"></div>
       </div>
     </div>
   </div>
@@ -23337,17 +23352,86 @@ function psFilesDelete(name,skipConfirm){
 var PS_ROUTES_KEY='picoscript.routes.v1';
 function routesRead(){var ls=filesSafeLocalStorage();if(!ls)return [];try{var r=JSON.parse(ls.getItem(PS_ROUTES_KEY)||'[]');return Array.isArray(r)?r:[];}catch(e){return [];}}
 function routesWrite(rs){var ls=filesSafeLocalStorage();if(!ls)return;try{ls.setItem(PS_ROUTES_KEY,JSON.stringify(rs||[]));}catch(e){}}
+// A route's `type` distinguishes what runs it as a "program exit":
+//  'code'  (default, backward compatible with pre-existing {method,path,file}
+//           routes carried by deploy packages) -- runs a code/workflow file
+//           through the existing compile+VM path, same as sendRequest always did.
+//  'query' -- runs a live Query against `pack` (offline STORE or, in principle,
+//           the same dual-mode as Cards/Query -- see routeRunQuery) and returns
+//           JSON rows directly, no VM/compile involved.
+//  'list'  -- returns the full pack listing as JSON, mirroring picoweb's
+//           GET /wal/list/{pack} convention.
 function matchRoute(methodCode,path){
   var rs=routesRead();
   for(var i=0;i<rs.length;i++){var r=rs[i];
     var rm=(r.method==null||r.method==='*')?null:methodCodeName(r.method);
     var mOk=(rm==null)||(rm===methodCode);
     var pOk=(r.path==null||r.path==='*'||r.path===path);
-    if(mOk&&pOk&&r.file&&filesRead()[r.file]) return r;
+    if(!mOk||!pOk) continue;
+    var type=r.type||'code';
+    if(type==='code'&&r.file&&filesRead()[r.file]) return r;
+    if((type==='query'||type==='list')&&r.pack) return r;
   }
   return null;
 }
 function methodCodeName(m){ if(typeof m==='number')return m; return (typeof methodCode==='function')?methodCode(String(m)):0; }
+
+// ---- Program Exits designer (visual UI over the routes data layer above) ----
+// routesRead/routesWrite/matchRoute already existed (consumed by sendRequest
+// and by exportPackage/import for deploy packages) but had no visual editor --
+// a route could only be created by hand-authoring a package JSON. This adds
+// the missing UI, plus the 'query'/'list' route types (see sendRequestDataRoute)
+// so a Query or a pack listing can be bound to a method+path directly, not
+// just a code/workflow file.
+function routableFiles(){
+  var files=filesRead();
+  return Object.keys(files).filter(function(n){return fileKind(n)==='code';}).sort();
+}
+function routesRenderTargetInputs(){
+  var typeEl=document.getElementById('routeType'), host=document.getElementById('routeTargetInputs');
+  if(!typeEl||!host) return;
+  var type=typeEl.value;
+  if(type==='code'){
+    var files=routableFiles();
+    host.innerHTML='<select id="routeFile">'+(files.length?files.map(function(f){return '<option>'+esc(f)+'</option>';}).join(''):'<option value="">(no code files)</option>')+'</select>';
+  } else if(type==='list'){
+    host.innerHTML='<input id="routePack" placeholder="pack name" style="width:100px">';
+  } else {
+    host.innerHTML='<input id="routePack" placeholder="pack name" style="width:100px"> <input id="routeQuery" placeholder="qty &gt; 40 (optional)" style="width:150px">';
+  }
+}
+function routesMsg(m,err){ var e=document.getElementById('routesMsg'); if(!e) return; e.textContent=m||''; e.style.color=err?'#ff7b72':'var(--muted)'; }
+function routeAdd(){
+  var method=document.getElementById('routeMethod').value, path=(document.getElementById('routePath').value||'').trim(), type=document.getElementById('routeType').value;
+  if(!path){ routesMsg('path is required',true); return; }
+  var route={method:method,path:path,type:type};
+  if(type==='code'){
+    var fEl=document.getElementById('routeFile');
+    if(!fEl||!fEl.value){ routesMsg('no code file selected (create one first)',true); return; }
+    route.file=fEl.value;
+  } else {
+    var pEl=document.getElementById('routePack'), pack=(pEl?pEl.value:'').trim();
+    if(!pack){ routesMsg('pack name is required',true); return; }
+    route.pack=pack;
+    if(type==='query'){ var qEl=document.getElementById('routeQuery'); route.query=(qEl?qEl.value:'').trim(); }
+  }
+  var rs=routesRead(); rs.push(route); routesWrite(rs);
+  routesMsg((route.method||'*')+' '+route.path+' added');
+  routesRender();
+}
+function routeRemove(idx){ var rs=routesRead(); rs.splice(idx,1); routesWrite(rs); routesRender(); }
+function routesRender(){
+  var host=document.getElementById('routesBody'); if(!host) return;
+  var rs=routesRead();
+  if(!rs.length) host.innerHTML='<tr><td colspan="5" style="color:var(--muted)">no routes yet -- program exits are opt-in</td></tr>';
+  else host.innerHTML=rs.map(function(r,i){
+    var type=r.type||'code';
+    var target=(type==='code')?esc(r.file||''):('pack: '+esc(r.pack||'')+((type==='query'&&r.query)?(', query: '+esc(r.query)):''));
+    return '<tr><td>'+esc(r.method||'*')+'</td><td>'+esc(r.path||'*')+'</td><td>'+esc(type)+'</td><td>'+target+'</td>'+
+      '<td><button class="ghost" onclick="routeRemove('+i+')" title="remove">&times;</button></td></tr>';
+  }).join('');
+  routesRenderTargetInputs();
+}
 // Bundle the whole tree (code + data cards + sources + static) plus routes into a
 // single portable card package (an application).
 function exportPackage(){
@@ -23728,7 +23812,42 @@ function writeDescriptor(wal,req){
 }
 function toCompilable(){var lang=document.getElementById('lang').value,src=getSrc();if(lang==='workflow'){var wf=wfCompileSrc(src);return{src:wf.source,lang:'english'};}if(lang==='report'){var rr=rptCompileSrc(src);return{src:rr.source,lang:'english'};}return{src:src,lang:lang};}
 function fileCompilable(f){if(!f)return null;if(f.lang==='workflow'){var wf=wfCompileSrc(f.src);return{src:wf.source,lang:'english'};}return{src:f.src,lang:f.lang||'basic'};}
-function sendRequest(){var text=document.getElementById('reqbox').value,isHex=document.getElementById('reqmode').value==='hex';var req=parseRequest(text,isHex),wal=walBackend();writeDescriptor(wal,req);var routed=matchRoute(req.method,req.path),cl;try{cl=routed?fileCompilable(filesRead()[routed.file]):toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('respout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderResponse(vm,req);if(routed){var el=document.getElementById('respout');el.textContent='\u2192 routed to '+routed.file+'\n'+el.textContent;}renderWal();busEmit('http.request',{method:req.method,path:req.path,status:vm.httpStatus,route:routed?routed.file:null});}
+function sendRequest(){
+  var text=document.getElementById('reqbox').value,isHex=document.getElementById('reqmode').value==='hex';
+  var req=parseRequest(text,isHex),wal=walBackend();writeDescriptor(wal,req);
+  var routed=matchRoute(req.method,req.path);
+  if(routed&&(routed.type==='query'||routed.type==='list')){ sendRequestDataRoute(routed,req); return; }
+  var cl;
+  try{cl=routed?fileCompilable(filesRead()[routed.file]):toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('respout').textContent='compile error: '+(e.message||e);return;}
+  var vm=new PicoVM({cards:wal});vm.run(r.words);renderResponse(vm,req);
+  if(routed){var el=document.getElementById('respout');el.textContent='\u2192 routed to '+routed.file+'\n'+el.textContent;}
+  renderWal();busEmit('http.request',{method:req.method,path:req.path,status:vm.httpStatus,route:routed?routed.file:null});
+}
+// 'query'/'list' program exits don't run through the compile+VM path at all --
+// they're a thin JSON wrapper directly over PicoStore (the same engine backing
+// the Cards/Query tool), matching picoweb's own /wal/query and /wal/list
+// conventions. Kept synchronous/offline-only here (the HTTP Simulator is a
+// design-time tool; a deployed program exit against a live server is the
+// native engine's own /query/{pack} and /list/{pack} routes, see
+// host/picowal/app_router.eng).
+function sendRequestDataRoute(routed,req){
+  var pack=routed.pack, fields=schemaForPack(pack), el=document.getElementById('respout'), body, label;
+  try{
+    if(routed.type==='list'){
+      var entries=STORE.all(pack);
+      body=JSON.stringify({pack:pack,records:entries.map(function(e){return {record:e[0],data:e[1]};}),count:entries.length});
+      label='List('+pack+')';
+    } else {
+      var res=STORE.query(pack,routed.query||'');
+      body=JSON.stringify({pack:pack,count:res.length,rows:res.map(function(e){var rec={id:e[0]};for(var k in e[1])rec[k]=e[1][k];return rec;})});
+      label='Query('+pack+', '+JSON.stringify(routed.query||'')+')';
+    }
+  }catch(e){ el.textContent='route error: '+e.message; el.style.color='#ff7b72'; return; }
+  el.style.color='#7ee787';
+  el.textContent='\u2192 routed to '+label+'\nHTTP/1.1 200 OK\nContent-Type: application/json\n\n'+body;
+  renderWal();
+  busEmit('http.request',{method:req.method,path:req.path,status:200,route:routed.type+':'+pack});
+}
 function sendTcp(){var text=document.getElementById('tcpbox').value;var req=parseRequest(text,true),wal=walBackend();writeDescriptor(wal,req);var cl;try{cl=toCompilable();var r=PicoCompile.compile(cl.src,cl.lang);}catch(e){document.getElementById('tcpout').textContent='compile error: '+(e.message||e);return;}var vm=new PicoVM({cards:wal});vm.run(r.words);renderTcpResponse(vm,req);renderWal();}
 function responseBodyText(vm){return (typeof vm.outputDisplayText==='function')?vm.outputDisplayText():vm.outputText();}
 function renderResponse(vm,req){var reasons={200:'OK',201:'Created',400:'Bad Request',404:'Not Found',500:'Error'};var el=document.getElementById('respout');el.style.color='#7ee787';var body=vm.outputInts();if(vm.httpStatus<0){el.style.color='#ffd866';el.textContent='(no Net.Status)\noutput: ['+body.join(', ')+']';return;}var L=[];L.push('HTTP/1.1 '+vm.httpStatus+' '+(reasons[vm.httpStatus]||''));L.push('Content-Type: '+(vm.httpType||'application/octet-stream'));L.push('X-Steps: '+vm.steps);L.push('');var _bt=responseBodyText(vm),_bp=/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(_bt);L.push(_bp&&_bt?_bt:JSON.stringify(body));el.textContent=L.join('\n');}
@@ -23746,6 +23865,7 @@ function selectToolTab(tab){
   if(TOOL_TAB==='cards'||TOOL_TAB==='query')try{cardRender();}catch(e){}
   if(TOOL_TAB==='query')try{queryRenderHead();queryRenderChips();}catch(e){}
   if(TOOL_TAB==='report')try{renderLayout();}catch(e){}
+  if(TOOL_TAB==='routes')try{routesRender();}catch(e){}
 }
 function openToolPanel(tab){
   selectToolTab(tab||TOOL_TAB);
