@@ -519,6 +519,24 @@ def _coerce_steps(source):
     return data
 
 
+def workflow_to_ast(source, array_base: int = DEFAULT_ARRAY_BASE):
+    """Workflow (JSON step list) -> AST, via the same English rendering
+    `compile_workflow` uses -- just stopping one stage earlier, before the
+    Lowerer, so the tree can be inspected/edited (see picoscript_ast.py /
+    docs/ast_designer_spike.html) rather than only compiled.
+
+    Returns ``(prog, warnings)`` where ``prog`` is the same AST shape
+    `picoscript_basic.Lowerer.lower_program` / `picoscript_ast.ast_to_json`
+    consume. `compile_ast(json.dumps(ast_to_json(workflow_to_ast(src)[0])))`
+    produces byte-identical bytecode to `compile_workflow(src)`.
+    """
+    from picoscript_english import tokenize, Parser
+    steps = _coerce_steps(source)
+    english, warnings = workflow_to_english(steps, array_base=array_base)
+    prog = Parser(tokenize(english)).parse_program()
+    return prog, warnings
+
+
 def compile_workflow(source, array_base: int = DEFAULT_ARRAY_BASE):
     """Compile a workflow (JSON step list) to PicoIL, via English PicoScript.
 

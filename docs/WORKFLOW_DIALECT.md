@@ -23,6 +23,17 @@ opaque `RAW` English string (see `astToWorkflow` in `vm/picoc.js`). For editing 
 `docs/ast_designer_spike.html` + `picoscript_ast.py` (`--lang ast`, `.ast`/`.astjson`
 files) — the canonical AST-as-JSON that every dialect already lowers to.
 
+**Escaping Workflow onto the full AST.** `picoscript_workflow.workflow_to_ast(source)`
+stops one stage before `compile_workflow` (steps → English → PicoIL) and returns the
+parsed AST instead of lowering it — so a workflow can be converted to canonical
+AST-JSON (`picoscript_ast.ast_to_json`), edited as a tree, and converted back with
+`picoscript_ast.compile_ast`, producing byte-identical bytecode to compiling the
+workflow directly (see `tests/test_workflow_ast_bridge.py`). The CLI exposes this as
+`python picoscript_build.py emit foo.wf --as ast`. This direction (Workflow → AST)
+is currently Python-only: the JS side only goes the other way (any dialect →
+Workflow, via `astToWorkflow`), since a JS Workflow *compiler* deliberately isn't
+duplicated here — it lives in `baremetaljstools/src/BareMetal.WorkflowPico.js`.
+
 ## Input: the step list
 
 A workflow is a flat JSON array of step objects with block markers (`END` closes

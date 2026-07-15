@@ -88,6 +88,43 @@ def to_il(source: str, lang: str):
     raise ValueError(f"frontend {lang!r} has no IL stage (v1 compiles straight to bytecode)")
 
 
+# Frontends whose AST is the shared picoscript_basic dataclasses (and so is
+# representable as canonical AST-JSON, see picoscript_ast.py). c/cobol/report/
+# functional/v1 each have their own distinct AST shape and aren't included.
+_AST_CAPABLE_LANGS = {"basic", "python", "english", "workflow", "ast"}
+
+
+def to_ast_json(source: str, lang: str) -> str:
+    """Raw (pre-lowering) AST for `lang`, pretty-printed as canonical AST-JSON
+    (picoscript_ast.ast_to_json). Lets you inspect/edit any of these surface
+    dialects as a structural tree (docs/ast_designer_spike.html) and, for
+    `workflow` in particular, escape its flat step-list vocabulary onto the
+    full grammar. `emit --as ast` on a `.ast`/`.astjson` file just reformats.
+    """
+    if lang not in _AST_CAPABLE_LANGS:
+        raise ValueError(
+            f"frontend {lang!r} has no shared AST-JSON representation "
+            f"(only {sorted(_AST_CAPABLE_LANGS)} do)"
+        )
+    from picoscript_ast import ast_to_json, json_to_ast
+    import json as _json
+    if lang == "ast":
+        prog = json_to_ast(_json.loads(source))
+    elif lang == "basic":
+        from picoscript_basic import tokenize, Parser
+        prog = Parser(tokenize(source)).parse_program()
+    elif lang == "python":
+        from picoscript_python import tokenize, Parser
+        prog = Parser(tokenize(source)).parse_program()
+    elif lang == "english":
+        from picoscript_english import tokenize, Parser
+        prog = Parser(tokenize(source)).parse_program()
+    else:  # workflow
+        from picoscript_workflow import workflow_to_ast
+        prog, _warnings = workflow_to_ast(source)
+    return _json.dumps(ast_to_json(prog), indent=2)
+
+
 def to_bytecode(source: str, lang: str, opt: bool = True):
     if lang == "v1":
         from picoscript_lang import Compiler
@@ -134,6 +171,8 @@ def cmd_emit(args):
     elif args.as_ == "js":
         name = args.funcname or "pico"
         out = lower_to_js(to_il(source, lang), module_name=name, opt=not args.no_opt)
+    elif args.as_ == "ast":
+        out = to_ast_json(source, lang)
     else:
         raise SystemExit(f"unknown emit target {args.as_}")
     if args.o:
@@ -202,7 +241,7 @@ def main(argv=None):
     pr.set_defaults(func=cmd_run)
 
     pe = sub.add_parser("emit", parents=[common], help="emit IL / bytecode / C")
-    pe.add_argument("--as", dest="as_", choices=["il", "bytecode", "c", "js"], required=True)
+    pe.add_argument("--as", dest="as_", choices=["il", "bytecode", "c", "js", "ast"], required=True)
     pe.add_argument("--hex", action="store_true", help="bytecode as hex words")
     pe.add_argument("--with-main", action="store_true", help="(c) append a runnable main()")
     pe.add_argument("--func", dest="funcname", help="(c) emitted function name")
