@@ -1,0 +1,16 @@
+Set pack to 1.
+Set is_post to String.StartsWith(Req.Method(), "POST").
+
+If is_post:
+    Set id to Storage.AddCard(pack, Req.BodySpan(0)).
+    Resp.Status(201).
+    Resp.Header("content-type", "text/plain").
+    Resp.Write("created").
+    Resp.End().
+Otherwise:
+    Set id to Number.Parse(Req.Param(1)).
+    Set card to Storage.ReadCard(pack, id).
+    Resp.Status(200).
+    Resp.Header("content-type", "application/octet-stream").
+    Resp.Write(card).
+    Resp.End().

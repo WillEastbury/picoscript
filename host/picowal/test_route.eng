@@ -1,0 +1,4 @@
+Resp.Status(200).
+Resp.Header("content-type", "text/plain").
+Resp.Write("hello from picoscript route").
+Resp.End().
