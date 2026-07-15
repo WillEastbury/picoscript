@@ -28,9 +28,13 @@
 #define HOOK_UPDATECARD 0x63
 #define HOOK_DELETECARD 0x64
 #define HOOK_READCARD   0x66
+#define HOOK_QUERYCARD  0x67
 #define HOOK_USEPACK    0x68
+#define HOOK_QUERYRESULT 0x6E
 #define HOOK_JSON_PARSE 0x340
 #define HOOK_MAP_HASS   0x32F
+#define HOOK_MAP_GETSI  0x32E
+#define HOOK_MAP_GETSS  0x332
 
 /* Schema store: schemas are themselves records in the same append-log engine,
  * parked at a reserved pack number (2), matching picoweb's picowal
@@ -55,6 +59,13 @@
  * caller written against the original 2-arg AddCard(pack,body)/
  * ReadCard(pack,id)/DeleteCard(pack,id) still works). */
 static int32_t g_cur_pack = 0;
+
+/* QueryCard/QueryResult (also the UsePack idiom: querying operates on
+ * g_cur_pack). Results are card ids matching the query, enumerated via
+ * QueryResult(index) exactly like picoscript_vm.py's PicoStoreHost. */
+#define PWF_MAX_QUERY_RESULTS 4096
+static int32_t g_query_results[PWF_MAX_QUERY_RESULTS];
+static int32_t g_query_count = 0;
 
 typedef struct {
     int32_t pack;
@@ -244,6 +255,84 @@ static int pwf_validate(pv_ctx *ctx, int32_t pack, const uint8_t *buf, int32_t n
     return 1;
 }
 
+/* Very small query language for v1 (a documented, deliberate scope cut from
+ * picoweb's full S:/F:/W: multi-pack-join DSL -- see host-picowal-query-
+ * list-report todo): "" (empty) matches every live record in the pack
+ * (this is also how "list" works -- List is just Query("")); "field=value"
+ * is a single-field equality filter, value compared as an int if it parses
+ * as one, else as a string. Populates g_query_results[] with matching card
+ * ids and returns the match count; QueryResult(index) enumerates them,
+ * mirroring picoscript_vm.py's PicoStoreHost.QueryCard/QueryResult.
+ *
+ * NOTE: like g_cur_pack (UsePack), g_query_results/g_query_count are process
+ * globals, not per-connection state -- fine for this single-writer prototype
+ * engine but not yet safe for picovm_pool.c's multi-threaded worker pool if
+ * two requests query concurrently. Flagged as a follow-up, not fixed here. */
+static int32_t pwf_query(pv_ctx *ctx, int32_t pack, const uint8_t *q, int32_t qlen) {
+    char field[64], value[128];
+    int has_filter = 0, is_int_value = 0;
+    int32_t want_int = 0;
+    static int32_t seen[PWF_MAX_INDEX];
+    int seen_count = 0, i;
+
+    g_query_count = 0;
+
+    if (qlen > 0) {
+        const uint8_t *eq = memchr(q, '=', (size_t)qlen);
+        if (eq) {
+            int32_t flen = (int32_t)(eq - q);
+            int32_t vlen = qlen - flen - 1;
+            if (flen >= (int32_t)sizeof(field)) flen = (int32_t)sizeof(field) - 1;
+            if (vlen >= (int32_t)sizeof(value)) vlen = (int32_t)sizeof(value) - 1;
+            if (vlen < 0) vlen = 0;
+            memcpy(field, q, (size_t)flen); field[flen] = 0;
+            memcpy(value, eq + 1, (size_t)vlen); value[vlen] = 0;
+            has_filter = 1;
+            {
+                char *end; long v = strtol(value, &end, 10);
+                if (end != value && *end == 0) { is_int_value = 1; want_int = (int32_t)v; }
+            }
+        }
+    }
+
+    /* Walk the index newest-first per (pack,id); skip ids already resolved
+     * so a superseded (updated-over) older entry isn't visited twice. */
+    for (i = g_index_count - 1; i >= 0 && g_query_count < PWF_MAX_QUERY_RESULTS; i--) {
+        int32_t id; int j, already = 0;
+        if (g_index[i].pack != pack) continue;
+        id = g_index[i].id;
+        for (j = 0; j < seen_count; j++) if (seen[j] == id) { already = 1; break; }
+        if (already) continue;
+        if (seen_count < PWF_MAX_INDEX) seen[seen_count++] = id;
+        if (g_index[i].len < 0) continue; /* tombstoned */
+        if (!has_filter) { g_query_results[g_query_count++] = id; continue; }
+        {
+            uint8_t buf[4096];
+            int32_t n = g_index[i].len; if (n > (int32_t)sizeof(buf)) n = (int32_t)sizeof(buf);
+            int h, keyh, match;
+            int64_t mi;
+            fseek(g_file, (long)g_index[i].offset, SEEK_SET);
+            if (fread(buf, 1, (size_t)n, g_file) != (size_t)n) continue;
+            h = h_span_from_bytes(ctx, buf, n);
+            mi = pv_host2(ctx, HOOK_JSON_PARSE, h, 0);
+            if (mi == 0) continue;
+            keyh = h_span_from_bytes(ctx, (const uint8_t *)field, (int32_t)strlen(field));
+            if (!pv_host2(ctx, HOOK_MAP_HASS, keyh, 0)) continue;
+            if (is_int_value) {
+                int64_t got = pv_host2(ctx, HOOK_MAP_GETSI, keyh, 0);
+                match = (got == want_int);
+            } else {
+                int64_t vh = pv_host2(ctx, HOOK_MAP_GETSS, keyh, 0);
+                int32_t vlen2 = h_span_len(ctx, (int)vh);
+                match = (vlen2 == (int32_t)strlen(value)) &&
+                        (vlen2 == 0 || memcmp(&ctx->mem[h_span_ptr(ctx, (int)vh)], value, (size_t)vlen2) == 0);
+            }
+            if (match) g_query_results[g_query_count++] = id;
+        }
+    }
+    return g_query_count;
+}
+
 int pv_storage_file_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2) {
     switch (hook) {
     case HOOK_GETSCHEMAFORPACK: {
@@ -290,6 +379,22 @@ int pv_storage_file_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2) {
     case HOOK_USEPACK: {
         g_cur_pack = ctx->regs[rs1];
         ctx->regs[rd] = g_cur_pack;
+        return 1;
+    }
+    case HOOK_QUERYCARD: {
+        /* rs1=query text span, operating on g_cur_pack (Storage.UsePack idiom). */
+        int h = ctx->regs[rs1];
+        uint32_t p = h_span_ptr(ctx, h);
+        int32_t n = h_span_len(ctx, h);
+        uint8_t qbuf[192];
+        if (n > (int32_t)sizeof(qbuf)) n = sizeof(qbuf);
+        for (int32_t i = 0; i < n; i++) qbuf[i] = ctx->mem[p + (uint32_t)i];
+        ctx->regs[rd] = pwf_query(ctx, g_cur_pack, qbuf, n);
+        return 1;
+    }
+    case HOOK_QUERYRESULT: {
+        int32_t idx = ctx->regs[rs1];
+        ctx->regs[rd] = (idx >= 0 && idx < g_query_count) ? g_query_results[idx] : 0;
         return 1;
     }
     case HOOK_UPDATECARD: {

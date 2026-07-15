@@ -1,0 +1,32 @@
+Set pack to 1.
+Set path to Req.Path().
+Set is_query to String.StartsWith(path, "/query").
+Set is_post to String.StartsWith(Req.Method(), "POST").
+If is_query:
+    Storage.UsePack(pack).
+    Set qtext to Req.BodySpan(0).
+    Set n to Storage.QueryCard(qtext).
+    Resp.Status(200).
+    Resp.Header("content-type", "application/json").
+    Resp.Write("{\"pack\":").
+    Resp.Write(Number.ToString(pack)).
+    Resp.Write(",\"count\":").
+    Resp.Write(Number.ToString(n)).
+    Resp.Write(",\"ids\":[").
+    For each i from 0 to n minus 1:
+        If i > 0:
+            Resp.Write(",").
+        Resp.Write(Number.ToString(Storage.QueryResult(i))).
+    Resp.Write("]}").
+    Resp.End().
+Otherwise:
+    If is_post:
+        Storage.AddCard(pack, Req.BodySpan(0)).
+        Resp.Status(201).
+        Resp.Header("content-type", "text/plain").
+        Resp.Write("created").
+        Resp.End().
+    Otherwise:
+        Resp.Status(404).
+        Resp.Write("not found").
+        Resp.End().
