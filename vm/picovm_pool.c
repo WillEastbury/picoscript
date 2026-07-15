@@ -59,6 +59,16 @@ void pv_worker_reset(pv_worker *w)
     w->ctx.fault = 0;
     w->ctx.fault_pc = 0;
     w->ctx.fault_detail = 0;
+    /* See the matching, more detailed comment in the POSIX/_WIN32
+     * pv_worker_reset below: map_nmaps/me_count/map_pool_top are a per-ctx-
+     * LIFETIME budget in picovm.c, not per-request, so they must be reset
+     * here too or Map.New/Json.Parse/Binary.ParseCard silently and
+     * permanently fail once PV_MAX_MAPS (16) allocations have ever
+     * happened on this worker. */
+    w->ctx.map_nmaps = 1;
+    w->ctx.map_active = 0;
+    w->ctx.me_count = 0;
+    w->ctx.map_pool_top = 0;
     w->busy = 0;
     w->conn_fd = PV_SOCKET_INVALID;
 }
@@ -156,6 +166,23 @@ void pv_worker_reset(pv_worker *w)
     w->ctx.w_count = 1;
     w->ctx.r_count = 1;
     w->ctx.arena_top = 0x8000;
+    /* Map.* state (see docs/MAP.md) is a per-ctx-LIFETIME budget in picovm.c
+     * (map_nmaps/me_count/map_pool_top are monotonically increasing --
+     * Map.Free only marks a slot unusable, pv_new_active_map never reuses
+     * it), so without resetting these here, any worker thread that has ever
+     * used Map.New/Json.Parse/Binary.ParseCard PV_MAX_MAPS (16) times over
+     * its ENTIRE PROCESS LIFETIME (not per-request) would silently fail
+     * every subsequent Map-using call forever on that thread -- schema
+     * validation and any filtered Storage.QueryCard both rely on this path
+     * (see host/picowal/storage_file.c). Found via that file's own test
+     * suite hitting exactly this ceiling after enough repeated queries.
+     * map_used[]/map_head[]/map_tail[]/map_count[] don't need clearing:
+     * they're only ever read for handles < map_nmaps, so resetting the
+     * high-water counters below makes them unreachable garbage again. */
+    w->ctx.map_nmaps = 1;
+    w->ctx.map_active = 0;
+    w->ctx.me_count = 0;
+    w->ctx.map_pool_top = 0;
     w->conn_fd = PV_SOCKET_INVALID;
     w->busy = 0;
 }

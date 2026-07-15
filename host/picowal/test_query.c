@@ -15,6 +15,26 @@
 static pv_ctx ctx;
 static uint8_t mem[65536];
 
+/* Mirrors picovm_pool.c's pv_worker_reset() -- a real server resets this
+ * per-connection state before running each request's handler. This test
+ * calls query()/add() many times against one long-lived ctx (unlike a real
+ * server, which gets a fresh reset every request), so it must do the same
+ * reset explicitly at each logical "request" boundary; skipping this
+ * reproduces (and was how this file's own tests caught) a real bug in
+ * pv_worker_reset itself: map_nmaps/me_count/map_pool_top are a per-ctx-
+ * LIFETIME budget in picovm.c (Map.Free never lets pv_new_active_map reuse
+ * a freed slot), so a worker that skipped resetting them would permanently
+ * lose the ability to Map.New/Json.Parse after only PV_MAX_MAPS (16) uses
+ * -- now fixed in picovm_pool.c's real pv_worker_reset, mirrored here. */
+static void reset_between_requests(void) {
+    ctx.span_count = 1;
+    ctx.arena_top = 0x8000;
+    ctx.map_nmaps = 1;
+    ctx.map_active = 0;
+    ctx.me_count = 0;
+    ctx.map_pool_top = 0;
+}
+
 static int span_from_str(const char *s) {
     int len = (int)strlen(s);
     int h = ctx.span_count;
@@ -27,12 +47,14 @@ static int span_from_str(const char *s) {
 }
 
 static int add(int32_t pack, const char *json) {
+    reset_between_requests();
     ctx.regs[1] = pack; ctx.regs[2] = span_from_str(json);
     pv_storage_file_hook(&ctx, HOOK_ADDCARD, 0, 1, 2);
     return (int)ctx.regs[0];
 }
 
 static int32_t query(int32_t pack, const char *q) {
+    reset_between_requests();
     ctx.regs[1] = pack;
     pv_storage_file_hook(&ctx, HOOK_USEPACK, 0, 1, 0);
     ctx.regs[1] = span_from_str(q);
@@ -47,6 +69,7 @@ static int32_t result_at(int i) {
 }
 
 int main(void) {
+    setvbuf(stdout, NULL, _IONBF, 0);
     remove("test_query.dat");
     pv_init(&ctx);
     ctx.mem = mem;
@@ -84,7 +107,20 @@ int main(void) {
     printf("query qty=999 (no match) -> count=%d\n", n);
     assert(n == 0);
 
+    /* Multi-clause AND filter: only gizmo has both qty=7 AND name=gizmo. */
+    n = query(20, "qty=7&name=gizmo");
+    printf("query qty=7&name=gizmo -> count=%d\n", n);
+    assert(n == 1 && result_at(0) == id3);
+
+    /* Multi-clause AND filter with no overall match (qty=7 but name=widget
+     * belongs to different records) -> 0 results even though each clause
+     * alone would match something. */
+    n = query(20, "qty=7&name=widget");
+    printf("query qty=7&name=widget (no combined match) -> count=%d\n", n);
+    assert(n == 0);
+
     /* Deleted records are excluded from both list and filtered queries. */
+    reset_between_requests();
     ctx.regs[1] = 20; ctx.regs[2] = id2;
     pv_storage_file_hook(&ctx, HOOK_DELETECARD, 0, 1, 2);
     n = query(20, "");
@@ -93,6 +129,27 @@ int main(void) {
     n = query(20, "qty=7");
     assert(n == 1 && result_at(0) == id3);
     printf("filtered query after delete correctly excludes it -> ok\n");
+
+    /* Map-exhaustion regression guard: run MANY more filtered queries as
+     * separate "requests" (each via query(), which calls
+     * reset_between_requests() -- mirroring the REAL fix, in
+     * picovm_pool.c's pv_worker_reset(), that resets map_nmaps/me_count/
+     * map_pool_top between requests). Without that reset, this loop
+     * reproduces the actual bug found while building this test: map_nmaps
+     * is a per-ctx-LIFETIME budget in picovm.c (Map.Free never lets
+     * pv_new_active_map reuse a freed slot), so any worker that skipped
+     * resetting it would permanently lose the ability to Json.Parse after
+     * only PV_MAX_MAPS (16) uses -- 30 further filtered queries here is far
+     * past that ceiling, proving the reset keeps things working. */
+    {
+        int k, ok_count = 0;
+        for (k = 0; k < 30; k++) {
+            int32_t nn = query(20, "qty=7");
+            if (nn == 1 && result_at(0) == id3) ok_count++;
+        }
+        printf("map-exhaustion guard: %d/30 repeated queries still correct\n", ok_count);
+        assert(ok_count == 30);
+    }
 
     pwf_storage_close();
     remove("test_query.dat");

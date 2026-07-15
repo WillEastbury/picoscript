@@ -33,6 +33,7 @@
 #define HOOK_QUERYRESULT 0x6E
 #define HOOK_JSON_PARSE 0x340
 #define HOOK_MAP_HASS   0x32F
+#define HOOK_MAP_FREE   0x321
 #define HOOK_MAP_GETSI  0x32E
 #define HOOK_MAP_GETSS  0x332
 
@@ -229,6 +230,7 @@ static int pwf_validate(pv_ctx *ctx, int32_t pack, const uint8_t *buf, int32_t n
     int h;
     int64_t mi;
     char name[64], type[16];
+    int result = 1;
 
     if (!se || se->len <= 0) return 1; /* not schema-bound: permissive */
     slen = se->len; if (slen > (int32_t)sizeof(sbuf)) slen = sizeof(sbuf);
@@ -241,59 +243,81 @@ static int pwf_validate(pv_ctx *ctx, int32_t pack, const uint8_t *buf, int32_t n
     if (mi == 0) return 0; /* schema is bound but payload isn't parseable JSON */
 
     pos = 0;
-    while (pwf_next_field(sbuf, slen, &pos, name, (int)sizeof(name), type, (int)sizeof(type))) {
+    while (result && pwf_next_field(sbuf, slen, &pos, name, (int)sizeof(name), type, (int)sizeof(type))) {
         int keyh = h_span_from_bytes(ctx, (const uint8_t *)name, (int32_t)strlen(name));
         int64_t present = pv_host2(ctx, HOOK_MAP_HASS, keyh, 0);
-        if (!present) return 0; /* required field missing */
+        if (!present) { result = 0; break; } /* required field missing */
         {
             int kind = pv_map_value_kind(ctx, keyh); /* 0=int/bool, 1=string, 2=null */
             int wants_str = pwf_type_is_str(type);
-            if (wants_str && kind != 1) return 0;
-            if (!wants_str && kind != 0) return 0;
+            if (wants_str && kind != 1) { result = 0; break; }
+            if (!wants_str && kind != 0) { result = 0; break; }
         }
     }
-    return 1;
+    /* Free the map every time -- see the matching note in pwf_query. Lower
+     * risk here (one map per Add/UpdateCard call vs. N per query scan) but
+     * still worth not leaking across the whole request/ctx lifetime. */
+    pv_host2(ctx, HOOK_MAP_FREE, (int)mi, 0);
+    return result;
 }
 
-/* Very small query language for v1 (a documented, deliberate scope cut from
- * picoweb's full S:/F:/W: multi-pack-join DSL -- see host-picowal-query-
- * list-report todo): "" (empty) matches every live record in the pack
- * (this is also how "list" works -- List is just Query("")); "field=value"
- * is a single-field equality filter, value compared as an int if it parses
- * as one, else as a string. Populates g_query_results[] with matching card
- * ids and returns the match count; QueryResult(index) enumerates them,
- * mirroring picoscript_vm.py's PicoStoreHost.QueryCard/QueryResult.
+/* Small query language for v1.5 (still a documented, deliberate scope cut
+ * from picoweb's full S:/F:/W: multi-PACK-join DSL -- true cross-pack joins
+ * are tracked separately, see host-picowal-joins-v2 -- this only extends
+ * single-pack filtering): "" (empty) matches every live record in the pack
+ * (this is also how "list" works -- List is just Query("")); one or more
+ * "field=value" clauses joined by "&" are ANDed together (e.g.
+ * "qty=7&note=widget"), each compared as an int if the value parses as one,
+ * else as a string. Populates g_query_results[] with matching card ids and
+ * returns the match count; QueryResult(index) enumerates them, mirroring
+ * picoscript_vm.py's PicoStoreHost.QueryCard/QueryResult.
  *
  * NOTE: like g_cur_pack (UsePack), g_query_results/g_query_count are process
  * globals, not per-connection state -- fine for this single-writer prototype
  * engine but not yet safe for picovm_pool.c's multi-threaded worker pool if
- * two requests query concurrently. Flagged as a follow-up, not fixed here. */
+ * two requests query concurrently. Flagged as a follow-up, not fixed here
+ * (see host-picowal-thread-safety). */
+#define PWF_MAX_QUERY_CLAUSES 8
+typedef struct { char field[64]; char value[128]; int is_int; int32_t want_int; } pwf_clause;
+
+static int pwf_parse_clauses(const uint8_t *q, int32_t qlen, pwf_clause *clauses, int max_clauses) {
+    int32_t pos = 0, n = 0;
+    while (pos < qlen && n < max_clauses) {
+        int32_t clause_start = pos, clause_len;
+        const uint8_t *amp = memchr(q + pos, '&', (size_t)(qlen - pos));
+        clause_len = amp ? (int32_t)(amp - (q + pos)) : (qlen - pos);
+        {
+            const uint8_t *cq = q + clause_start;
+            const uint8_t *eq = memchr(cq, '=', (size_t)clause_len);
+            if (eq) {
+                int32_t flen = (int32_t)(eq - cq);
+                int32_t vlen = clause_len - flen - 1;
+                if (flen >= (int32_t)sizeof(clauses[n].field)) flen = (int32_t)sizeof(clauses[n].field) - 1;
+                if (vlen >= (int32_t)sizeof(clauses[n].value)) vlen = (int32_t)sizeof(clauses[n].value) - 1;
+                if (vlen < 0) vlen = 0;
+                memcpy(clauses[n].field, cq, (size_t)flen); clauses[n].field[flen] = 0;
+                memcpy(clauses[n].value, eq + 1, (size_t)vlen); clauses[n].value[vlen] = 0;
+                {
+                    char *end; long v = strtol(clauses[n].value, &end, 10);
+                    clauses[n].is_int = (end != clauses[n].value && *end == 0);
+                    clauses[n].want_int = (int32_t)v;
+                }
+                n++;
+            }
+        }
+        pos = clause_start + clause_len + 1; /* skip past this clause and the '&' (if any) */
+    }
+    return n;
+}
+
 static int32_t pwf_query(pv_ctx *ctx, int32_t pack, const uint8_t *q, int32_t qlen) {
-    char field[64], value[128];
-    int has_filter = 0, is_int_value = 0;
-    int32_t want_int = 0;
+    pwf_clause clauses[PWF_MAX_QUERY_CLAUSES];
+    int nclauses = 0;
     static int32_t seen[PWF_MAX_INDEX];
     int seen_count = 0, i;
 
     g_query_count = 0;
-
-    if (qlen > 0) {
-        const uint8_t *eq = memchr(q, '=', (size_t)qlen);
-        if (eq) {
-            int32_t flen = (int32_t)(eq - q);
-            int32_t vlen = qlen - flen - 1;
-            if (flen >= (int32_t)sizeof(field)) flen = (int32_t)sizeof(field) - 1;
-            if (vlen >= (int32_t)sizeof(value)) vlen = (int32_t)sizeof(value) - 1;
-            if (vlen < 0) vlen = 0;
-            memcpy(field, q, (size_t)flen); field[flen] = 0;
-            memcpy(value, eq + 1, (size_t)vlen); value[vlen] = 0;
-            has_filter = 1;
-            {
-                char *end; long v = strtol(value, &end, 10);
-                if (end != value && *end == 0) { is_int_value = 1; want_int = (int32_t)v; }
-            }
-        }
-    }
+    if (qlen > 0) nclauses = pwf_parse_clauses(q, qlen, clauses, PWF_MAX_QUERY_CLAUSES);
 
     /* Walk the index newest-first per (pack,id); skip ids already resolved
      * so a superseded (updated-over) older entry isn't visited twice. */
@@ -305,29 +329,39 @@ static int32_t pwf_query(pv_ctx *ctx, int32_t pack, const uint8_t *q, int32_t ql
         if (already) continue;
         if (seen_count < PWF_MAX_INDEX) seen[seen_count++] = id;
         if (g_index[i].len < 0) continue; /* tombstoned */
-        if (!has_filter) { g_query_results[g_query_count++] = id; continue; }
+        if (!nclauses) { g_query_results[g_query_count++] = id; continue; }
         {
             uint8_t buf[4096];
             int32_t n = g_index[i].len; if (n > (int32_t)sizeof(buf)) n = (int32_t)sizeof(buf);
-            int h, keyh, match;
-            int64_t mi;
+            int h; int64_t mi; int all_match = 1, c;
             fseek(g_file, (long)g_index[i].offset, SEEK_SET);
             if (fread(buf, 1, (size_t)n, g_file) != (size_t)n) continue;
             h = h_span_from_bytes(ctx, buf, n);
             mi = pv_host2(ctx, HOOK_JSON_PARSE, h, 0);
             if (mi == 0) continue;
-            keyh = h_span_from_bytes(ctx, (const uint8_t *)field, (int32_t)strlen(field));
-            if (!pv_host2(ctx, HOOK_MAP_HASS, keyh, 0)) continue;
-            if (is_int_value) {
-                int64_t got = pv_host2(ctx, HOOK_MAP_GETSI, keyh, 0);
-                match = (got == want_int);
-            } else {
-                int64_t vh = pv_host2(ctx, HOOK_MAP_GETSS, keyh, 0);
-                int32_t vlen2 = h_span_len(ctx, (int)vh);
-                match = (vlen2 == (int32_t)strlen(value)) &&
-                        (vlen2 == 0 || memcmp(&ctx->mem[h_span_ptr(ctx, (int)vh)], value, (size_t)vlen2) == 0);
+            for (c = 0; c < nclauses && all_match; c++) {
+                int keyh = h_span_from_bytes(ctx, (const uint8_t *)clauses[c].field, (int32_t)strlen(clauses[c].field));
+                if (!pv_host2(ctx, HOOK_MAP_HASS, keyh, 0)) { all_match = 0; break; }
+                if (clauses[c].is_int) {
+                    int64_t got = pv_host2(ctx, HOOK_MAP_GETSI, keyh, 0);
+                    if (got != clauses[c].want_int) all_match = 0;
+                } else {
+                    int64_t vh = pv_host2(ctx, HOOK_MAP_GETSS, keyh, 0);
+                    int32_t vlen2 = h_span_len(ctx, (int)vh);
+                    int32_t wantlen = (int32_t)strlen(clauses[c].value);
+                    if (vlen2 != wantlen || (vlen2 > 0 && memcmp(&ctx->mem[h_span_ptr(ctx, (int)vh)], clauses[c].value, (size_t)vlen2) != 0)) all_match = 0;
+                }
             }
-            if (match) g_query_results[g_query_count++] = id;
+            /* Free the map immediately -- PV_MAX_MAPS is small (16) and shared
+             * for the whole request/ctx lifetime; a query scanning more than a
+             * handful of candidate records would otherwise silently exhaust it
+             * (pv_new_active_map returns 0 once exhausted, and this code
+             * correctly treats mi==0 as "doesn't match" -- so records processed
+             * after exhaustion would silently vanish from results with no
+             * error). Found via this file's own test suite hitting exactly
+             * that ceiling after enough queries accumulated maps in one ctx. */
+            pv_host2(ctx, HOOK_MAP_FREE, (int)mi, 0);
+            if (all_match) g_query_results[g_query_count++] = id;
         }
     }
     return g_query_count;
