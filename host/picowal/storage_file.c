@@ -21,6 +21,35 @@
 #include <string.h>
 #include <stdint.h>
 
+/* Thread safety: g_file/g_index/g_next_id/g_cur_pack/g_query_results are all
+ * process-wide globals (single append-log file + in-memory index), by design
+ * -- this is a single-writer store, not a per-connection one. picovm_pool.c
+ * can run several worker threads concurrently, so two simultaneous requests
+ * (e.g. two /query calls, or a /query racing an Add/Update) could otherwise
+ * interleave fseek+fread/fwrite on the same FILE*, corrupt g_index, or clobber
+ * g_query_results/g_cur_pack mid-query. Rather than partially fixing this by
+ * moving only g_cur_pack/g_query_results into pv_ctx (which would still leave
+ * the shared file/index racy), pv_storage_file_hook() takes a single
+ * process-wide mutex around the whole dispatch, serializing all Storage.*
+ * calls. This matches the store's actual single-writer architecture and is
+ * portable (CRITICAL_SECTION on Windows, pthread_mutex_t elsewhere). */
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+static CRITICAL_SECTION g_pwf_lock;
+static void pwf_lock_init(void) { InitializeCriticalSection(&g_pwf_lock); }
+static void pwf_lock(void) { EnterCriticalSection(&g_pwf_lock); }
+static void pwf_unlock(void) { LeaveCriticalSection(&g_pwf_lock); }
+#else
+#include <pthread.h>
+static pthread_mutex_t g_pwf_lock = PTHREAD_MUTEX_INITIALIZER;
+static void pwf_lock_init(void) { /* statically initialized */ }
+static void pwf_lock(void) { pthread_mutex_lock(&g_pwf_lock); }
+static void pwf_unlock(void) { pthread_mutex_unlock(&g_pwf_lock); }
+#endif
+
 /* Keep in sync with vm/pico_hooks.h */
 #define HOOK_GETSCHEMAFORPACK 0x60
 #define HOOK_SETSCHEMAFORPACK 0x61
@@ -101,6 +130,8 @@ static void pwf_index_add(int32_t pack, int32_t id, int64_t offset, int32_t len)
 int pwf_storage_open(const char *path) {
     char magic[8];
     uint32_t version;
+
+    pwf_lock_init();
 
     g_file = fopen(path, "r+b");
     if (!g_file) {
@@ -367,7 +398,16 @@ static int32_t pwf_query(pv_ctx *ctx, int32_t pack, const uint8_t *q, int32_t ql
     return g_query_count;
 }
 
+static int pv_storage_file_hook_impl(pv_ctx *ctx, int hook, int rd, int rs1, int rs2);
+
 int pv_storage_file_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2) {
+    pwf_lock();
+    int r = pv_storage_file_hook_impl(ctx, hook, rd, rs1, rs2);
+    pwf_unlock();
+    return r;
+}
+
+static int pv_storage_file_hook_impl(pv_ctx *ctx, int hook, int rd, int rs1, int rs2) {
     switch (hook) {
     case HOOK_GETSCHEMAFORPACK: {
         int32_t pack = ctx->regs[rs1];
