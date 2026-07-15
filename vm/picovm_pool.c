@@ -150,6 +150,7 @@ void pv_worker_reset(pv_worker *w)
     w->ctx.out_len = 0;
     w->ctx.http_status = -1;
     w->ctx.http_type = 0;
+    w->ctx.out_headers_len = 0;
     w->ctx.host_status = 0;
     w->ctx.span_count = 1;
     w->ctx.w_count = 1;
@@ -234,12 +235,31 @@ void pv_socket_close(pv_socket_t fd)
 #endif
 }
 
+static int pv_headers_has_content_type(const char *h, int len)
+{
+    /* Case-insensitive substring search for "content-type:" -- good enough
+     * for this small, controlled header buffer (not attacker-facing HTML,
+     * just a handful of app-authored header lines). */
+    static const char needle[] = "content-type:";
+    int nlen = (int)(sizeof(needle) - 1), i, j;
+    for (i = 0; i + nlen <= len; i++) {
+        for (j = 0; j < nlen; j++) {
+            char a = h[i + j], b = needle[j];
+            if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+            if (a != b) break;
+        }
+        if (j == nlen) return 1;
+    }
+    return 0;
+}
+
 int pv_send_http_response(pv_socket_t conn_fd, pv_ctx *ctx)
 {
     char header[256];
     int hlen;
     int status;
     const char *ctype;
+    int has_ct;
     if (!ctx) return -1;
     if (ctx->out_len >= 5 && ctx->out[0] == 'H' && ctx->out[1] == 'T' &&
         ctx->out[2] == 'T' && ctx->out[3] == 'P' && ctx->out[4] == '/') {
@@ -247,17 +267,29 @@ int pv_send_http_response(pv_socket_t conn_fd, pv_ctx *ctx)
     }
     status = ctx->http_status > 0 ? ctx->http_status : 200;
     ctype = pv_http_type_name(ctx->http_type);
-    hlen = snprintf(header, sizeof(header),
-        "HTTP/1.1 %d %s\r\n"
-        "Content-Type: %s\r\n"
-        "Content-Length: %d\r\n"
-        "Connection: close\r\n"
-        "\r\n",
-        status, pv_http_reason(status), ctype, ctx->out_len);
+    /* A custom Resp.Header("content-type", ...) call takes precedence over
+     * the ctx->http_type-derived default -- don't emit both. */
+    has_ct = pv_headers_has_content_type(ctx->out_headers, ctx->out_headers_len);
+    if (has_ct) {
+        hlen = snprintf(header, sizeof(header),
+            "HTTP/1.1 %d %s\r\n"
+            "Content-Length: %d\r\n"
+            "Connection: close\r\n",
+            status, pv_http_reason(status), ctx->out_len);
+    } else {
+        hlen = snprintf(header, sizeof(header),
+            "HTTP/1.1 %d %s\r\n"
+            "Content-Type: %s\r\n"
+            "Content-Length: %d\r\n"
+            "Connection: close\r\n",
+            status, pv_http_reason(status), ctype, ctx->out_len);
+    }
     if (hlen < 0) return -1;
     if (pv_socket_write(conn_fd, header, hlen) < 0) return -1;
+    if (ctx->out_headers_len > 0 && pv_socket_write(conn_fd, ctx->out_headers, ctx->out_headers_len) < 0) return -1;
+    if (pv_socket_write(conn_fd, "\r\n", 2) < 0) return -1;
     if (ctx->out_len > 0 && pv_socket_write(conn_fd, ctx->out, ctx->out_len) < 0) return -1;
-    return hlen + ctx->out_len;
+    return hlen + ctx->out_headers_len + 2 + ctx->out_len;
 }
 
 /* Parse an HTTP/1.1 request in `buf` (length n) and point ctx->req_* at it.

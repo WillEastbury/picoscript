@@ -122,6 +122,19 @@ struct pv_ctx {
     int       http_status;     /* -1 until Net.Status */
     int       http_type;       /* content-type marker value, 0 until Net.Type */
 
+    /* Custom response headers (Resp.Header/Net.Header), raw "Name: Value\r\n"
+     * bytes, appended in call order. The default pool-mode HTTP framing
+     * (pv_send_http_response in picovm_pool.c) always emits Content-Type/
+     * Content-Length/Connection itself; this buffer carries anything beyond
+     * that (e.g. CORS, custom Content-Type overrides). Was a documented
+     * no-op until host/picowal's app_router.eng needed real CORS headers to
+     * let the WebIDE (a different origin) call this server. */
+#ifndef PV_MAX_OUT_HEADERS
+#define PV_MAX_OUT_HEADERS 1024
+#endif
+    char      out_headers[PV_MAX_OUT_HEADERS];
+    int       out_headers_len;
+
     /* HTTP request context — populated by the pool worker (pv_http_parse_request)
      * before each handler runs, so PicoScript Req.* hooks resolve natively.
      * Pointers reference the worker's recv buffer (valid for the handler's life). */

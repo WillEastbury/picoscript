@@ -2162,12 +2162,23 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         ctx->http_status = ctx->regs[rs1] & 0xFFF;
         return;
     }
-    /* Resp.Header: append header as raw bytes (name: value\r\n) to header buffer.
-     * For the pool runtime, headers are built by the HTTP framing helper from
-     * ctx->http_status and ctx->http_type; custom headers from Resp.Header are
-     * stored in the arena and collected by pv_send_http_response if needed. */
+    /* Resp.Header: append "Name: Value\r\n" to ctx->out_headers, collected by
+     * pv_send_http_response (picovm_pool.c) alongside the always-emitted
+     * Content-Type/Content-Length/Connection. Was previously a documented
+     * no-op in pool mode; fixed because host/picowal's app_router.eng needs
+     * real CORS headers for the WebIDE (a different origin) to call it. */
     if (hook == PV_HOOK_RESP_HEADER) {
-        /* Silently accepted — pool framing handles standard headers. */
+        int nh = ctx->regs[rs1], vh = ctx->regs[rs2];
+        uint32_t np = pv_span_p(ctx, nh), vp = pv_span_p(ctx, vh);
+        int32_t nn = pv_span_n(ctx, nh), vn = pv_span_n(ctx, vh);
+        int32_t i, room = (int32_t)sizeof(ctx->out_headers) - ctx->out_headers_len - 4; /* ": \r\n" */
+        if (nn + vn > room) return; /* header buffer full: drop silently, don't corrupt */
+        for (i = 0; i < nn; i++) ctx->out_headers[ctx->out_headers_len++] = (char)pv_arena_get(ctx, np + (uint32_t)i);
+        ctx->out_headers[ctx->out_headers_len++] = ':';
+        ctx->out_headers[ctx->out_headers_len++] = ' ';
+        for (i = 0; i < vn; i++) ctx->out_headers[ctx->out_headers_len++] = (char)pv_arena_get(ctx, vp + (uint32_t)i);
+        ctx->out_headers[ctx->out_headers_len++] = '\r';
+        ctx->out_headers[ctx->out_headers_len++] = '\n';
         return;
     }
     /* Resp.End: mark response complete (handler can return) */
@@ -2251,6 +2262,26 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         int32_t base = (hook == PV_HOOK_STRING_ENDSWITH) ? (la - lb) : 0;
         for (int32_t j = 0; ok && j < lb; j++)
             if (pv_arena_get(ctx, pa + (uint32_t)(base + j)) != pv_arena_get(ctx, pb + (uint32_t)j)) ok = 0;
+        ctx->regs[rd] = ok ? 1 : 0;
+        return;
+    }
+    /* String.Eq: full-content equality (not span-handle equality -- two
+     * independently built spans with identical bytes are NOT the same
+     * handle, so `a == b`/`is` on strings only coincidentally works when
+     * both sides happen to alias the same span). This was allocated a hook
+     * code (0x8D) and implemented in the Python reference VM
+     * (picoscript_vm.py Strings.Eq) and documented in every hook table, but
+     * had no C-VM implementation until now -- found while building
+     * host/picowal/app_router.eng, whose route dispatch (`p0 is "schema"`)
+     * silently always took the else branch because it was comparing span
+     * handles, not string content. */
+    if (hook == PV_HOOK_STRING_EQ) {
+        int ha = ctx->regs[rs1], hb = ctx->regs[rs2];
+        uint32_t pa = pv_span_p(ctx, ha), pb = pv_span_p(ctx, hb);
+        int32_t la = pv_span_n(ctx, ha), lb = pv_span_n(ctx, hb);
+        int ok = (la == lb);
+        for (int32_t j = 0; ok && j < la; j++)
+            if (pv_arena_get(ctx, pa + (uint32_t)j) != pv_arena_get(ctx, pb + (uint32_t)j)) ok = 0;
         ctx->regs[rd] = ok ? 1 : 0;
         return;
     }
