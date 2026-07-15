@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PicoScript -- AST Designer (spike)</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font-family: -apple-system, Segoe UI, sans-serif; background: #1b1e24; color: #d8dee9; }
+  header { padding: 10px 16px; background: #14161a; border-bottom: 1px solid #2a2d33; }
+  header h1 { font-size: 15px; margin: 0 0 4px; color: #eceff4; }
+  header p { margin: 0; font-size: 12px; color: #8b93a1; max-width: 90ch; }
+  .wrap { display: flex; gap: 10px; padding: 10px; height: calc(100vh - 74px); box-sizing: border-box; }
+  .pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .pane h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #8b93a1; margin: 0 0 6px; }
+  textarea { flex: 1; background: #0f1114; color: #c7d0dc; border: 1px solid #2a2d33; border-radius: 6px;
+             font: 12px/1.5 Consolas, monospace; padding: 8px; resize: none; }
+  .tree { flex: 1; overflow: auto; background: #0f1114; border: 1px solid #2a2d33; border-radius: 6px; padding: 8px; font-size: 12px; }
+  .toolbar { display: flex; gap: 6px; margin: 8px 0; flex-wrap: wrap; }
+  button { background: #2a2d33; color: #eceff4; border: 1px solid #3a3e46; border-radius: 5px; padding: 5px 10px;
+           font-size: 12px; cursor: pointer; }
+  button:hover { background: #3a3e46; }
+  button.primary { background: #3f6fd1; border-color: #3f6fd1; }
+  button.primary:hover { background: #5081e0; }
+  .node { margin: 2px 0 2px 14px; border-left: 1px dashed #333844; padding-left: 8px; }
+  .node > summary { cursor: pointer; }
+  .tag { color: #f6c177; font-weight: 600; }
+  .field { color: #8b93a1; }
+  .leaf-input { background: #1b1e24; color: #a3d9a5; border: 1px solid #3a3e46; border-radius: 3px;
+                font: 11px Consolas, monospace; padding: 1px 4px; width: 8ch; }
+  .leaf-input.wide { width: 16ch; }
+  .list-label { color: #6a97e0; }
+  #output, #preview { white-space: pre-wrap; background: #0f1114; border: 1px solid #2a2d33; border-radius: 6px;
+                       padding: 8px; font: 12px/1.5 Consolas, monospace; margin-top: 8px; max-height: 30%; overflow: auto; }
+  .err { color: #e06c75; }
+  .ok { color: #98c379; }
+  select { background: #1b1e24; color: #d8dee9; border: 1px solid #3a3e46; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PicoScript &mdash; AST Designer (spike/ast-json-dialect)</h1>
+  <p>Edits the <em>canonical AST-JSON</em> directly (see <code>picoscript_ast.py</code> / <code>vm/picoc.js</code>'s
+     <code>compileAst</code>) &mdash; the same tree every dialect (C/BASIC/Python/English/&hellip;) already lowers to,
+     rendered as a structural tree instead of parsed from text. Not the Workflow designer: Workflow is a flat,
+     externally-constrained step list (see <code>docs/WORKFLOW_DIALECT.md</code>); this edits the full grammar.</p>
+</header>
+<div class="wrap">
+  <div class="pane">
+    <h2>AST-JSON source</h2>
+    <textarea id="src" spellcheck="false"></textarea>
+    <div class="toolbar">
+      <select id="examples">
+        <option value="sum">Example: sum 1..10 (loop)</option>
+        <option value="branch">Example: if/else + print</option>
+      </select>
+      <button id="loadExample">Load</button>
+      <button id="format">Reformat</button>
+    </div>
+  </div>
+  <div class="pane">
+    <h2>Tree view (click a leaf value to edit; re-run to apply)</h2>
+    <div class="tree" id="tree"></div>
+    <div class="toolbar">
+      <button class="primary" id="run">Compile &amp; Run</button>
+      <button id="showEnglish">View as English</button>
+      <button id="showBasic">View as BASIC</button>
+    </div>
+    <div id="output">(not run yet)</div>
+    <div id="preview"></div>
+  </div>
+</div>
+
+<script src="../vm/pico_hooks.js"></script>
+<script src="../vm/picocompress.js"></script>
+<script src="../vm/picobrotli.js"></script>
+<script src="../vm/picovm.js"></script>
+<script src="../vm/picoc.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var EXAMPLES = {
+    sum: [
+      { node: "Let", name: "total", value: { node: "Num", value: 0 } },
+      { node: "ForTo", var: "i", start: { node: "Num", value: 1 }, end: { node: "Num", value: 10 }, step: null,
+        body: [
+          { node: "Let", name: "total", value: { node: "Bin", op: "+", lhs: { node: "Var", name: "total" }, rhs: { node: "Var", name: "i" } } }
+        ] },
+      { node: "Print", value: { node: "Var", name: "total" } }
+    ],
+    branch: [
+      { node: "Let", name: "x", value: { node: "Num", value: 7 } },
+      { node: "If",
+        arms: [[ { node: "Cmp", cond: "GT", lhs: { node: "Var", name: "x" }, rhs: { node: "Num", value: 5 } },
+                 [ { node: "Print", value: { node: "Num", value: 100 } } ] ]],
+        els: [ { node: "Print", value: { node: "Num", value: 200 } } ] }
+    ]
+  };
+
+  var srcEl = document.getElementById("src");
+  var treeEl = document.getElementById("tree");
+  var outEl = document.getElementById("output");
+  var previewEl = document.getElementById("preview");
+
+  function currentProgram() {
+    return JSON.parse(srcEl.value);
+  }
+
+  function setProgram(prog) {
+    srcEl.value = JSON.stringify(prog, null, 2);
+    renderTree();
+  }
+
+  // ---- recursive tree renderer -------------------------------------------
+  // Renders the parsed AST-JSON (the exact objects `srcEl.value` parses to)
+  // as a collapsible tree. Scalar leaf fields (numbers/strings/bools) get an
+  // <input> bound back into the in-memory object graph; edits are flushed to
+  // the JSON textarea immediately so Compile & Run always reflects them.
+  var root = null;
+
+  function isNode(v) { return v && typeof v === "object" && !Array.isArray(v) && "node" in v; }
+
+  function leafInput(container, obj, key) {
+    var val = obj[key];
+    var input = document.createElement("input");
+    input.className = "leaf-input" + (typeof val === "string" && val.length > 6 ? " wide" : "");
+    input.value = val === null || val === undefined ? "" : String(val);
+    input.title = key;
+    input.addEventListener("change", function () {
+      var raw = input.value;
+      if (raw === "" ) obj[key] = null;
+      else if (!isNaN(Number(raw)) && raw.trim() !== "") obj[key] = Number(raw);
+      else obj[key] = raw;
+      srcEl.value = JSON.stringify(root, null, 2);
+    });
+    var label = document.createElement("span");
+    label.className = "field";
+    label.textContent = key + "=";
+    container.appendChild(label);
+    container.appendChild(input);
+    container.appendChild(document.createTextNode(" "));
+  }
+
+  function renderValue(container, val, key) {
+    if (val === null || typeof val !== "object") {
+      leafInput(container, container._boundObj, key);
+      return;
+    }
+    if (Array.isArray(val)) {
+      var wrap = document.createElement("div");
+      wrap.style.marginLeft = "10px";
+      var lbl = document.createElement("div");
+      lbl.className = "list-label";
+      lbl.textContent = key + " [" + val.length + "]";
+      wrap.appendChild(lbl);
+      val.forEach(function (item, i) {
+        if (isNode(item)) {
+          wrap.appendChild(renderNode(item));
+        } else if (Array.isArray(item)) {
+          // tuple-shaped entries (If.arms, Switch.cases, EnumDecl.members): [cond/value, body/expr]
+          var tup = document.createElement("div");
+          tup.className = "node";
+          tup.textContent = "[" + i + "]";
+          item.forEach(function (t) {
+            if (isNode(t)) tup.appendChild(renderNode(t));
+            else if (Array.isArray(t)) t.forEach(function (s) { if (isNode(s)) tup.appendChild(renderNode(s)); });
+          });
+          wrap.appendChild(tup);
+        } else {
+          var scalar = document.createElement("div");
+          scalar.textContent = "[" + i + "] " + JSON.stringify(item);
+          wrap.appendChild(scalar);
+        }
+      });
+      container.appendChild(wrap);
+      return;
+    }
+    if (isNode(val)) { container.appendChild(renderNode(val, key)); return; }
+  }
+
+  function renderNode(node, keyLabel) {
+    var details = document.createElement("details");
+    details.className = "node";
+    details.open = true;
+    var summary = document.createElement("summary");
+    summary.innerHTML = (keyLabel ? '<span class="field">' + keyLabel + ':</span> ' : "") +
+      '<span class="tag">' + node.node + "</span>";
+    details.appendChild(summary);
+    var body = document.createElement("div");
+    body._boundObj = node;
+    Object.keys(node).forEach(function (k) {
+      if (k === "node") return;
+      var row = document.createElement("div");
+      row._boundObj = node;
+      renderValue(row, node[k], k);
+      body.appendChild(row);
+    });
+    details.appendChild(body);
+    return details;
+  }
+
+  function renderTree() {
+    try {
+      root = currentProgram();
+    } catch (e) {
+      treeEl.innerHTML = '<span class="err">JSON parse error: ' + e.message + "</span>";
+      return;
+    }
+    treeEl.innerHTML = "";
+    var progWrap = document.createElement("div");
+    var lbl = document.createElement("div");
+    lbl.className = "list-label";
+    lbl.textContent = "program [" + root.length + " statements]";
+    progWrap.appendChild(lbl);
+    root.forEach(function (stmt) { progWrap.appendChild(renderNode(stmt)); });
+    treeEl.appendChild(progWrap);
+  }
+
+  srcEl.addEventListener("input", renderTree);
+  srcEl.addEventListener("change", renderTree);
+
+  document.getElementById("loadExample").addEventListener("click", function () {
+    var which = document.getElementById("examples").value;
+    setProgram(EXAMPLES[which]);
+  });
+  document.getElementById("format").addEventListener("click", function () {
+    try { setProgram(currentProgram()); } catch (e) { /* leave as-is, error already shown */ }
+  });
+
+  document.getElementById("run").addEventListener("click", function () {
+    try {
+      var r = PicoCompile.compileAst(srcEl.value);
+      var vm = new PicoVM().run(r.words);
+      var values = vm.outputEvents.map(function (e) { return e.value; });
+      outEl.innerHTML = '<span class="ok">compiled ' + r.words.length + ' words, ran ' + vm.steps + ' steps</span>\n' +
+        "output: " + JSON.stringify(values) +
+        (vm.httpStatus >= 0 ? "\nhttp_status: " + vm.httpStatus : "");
+    } catch (e) {
+      outEl.innerHTML = '<span class="err">' + (e && e.message ? e.message : e) + "</span>";
+    }
+  });
+  document.getElementById("showEnglish").addEventListener("click", function () {
+    try { previewEl.textContent = PicoCompile.translate(srcEl.value, "ast", "english"); }
+    catch (e) { previewEl.innerHTML = '<span class="err">' + e.message + "</span>"; }
+  });
+  document.getElementById("showBasic").addEventListener("click", function () {
+    try { previewEl.textContent = PicoCompile.translate(srcEl.value, "ast", "basic"); }
+    catch (e) { previewEl.innerHTML = '<span class="err">' + e.message + "</span>"; }
+  });
+
+  setProgram(EXAMPLES.sum);
+})();
+</script>
+</body>
+</html>

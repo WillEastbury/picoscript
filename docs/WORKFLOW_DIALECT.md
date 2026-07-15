@@ -14,6 +14,15 @@ All of them emit the **same natural-English PicoScript** and therefore the same
 bytecode, so a workflow authored once runs bit-identically in the browser, on the
 Python reference VM, on RP2350/PIOS, and on the C# VM.
 
+**Not the same thing as the AST designer.** Workflow is a deliberately flat,
+externally-constrained step list (`SET`/`IF`/`FOR`/`FOREACH`/`END` markers) shaped
+by an existing flowchart-style UI contract shared with the repos above; anything
+outside that vocabulary (ternaries, sub-definitions, ...) rides through as an
+opaque `RAW` English string (see `astToWorkflow` in `vm/picoc.js`). For editing the
+*full* grammar as a structural tree instead of a flowchart, see
+`docs/ast_designer_spike.html` + `picoscript_ast.py` (`--lang ast`, `.ast`/`.astjson`
+files) — the canonical AST-as-JSON that every dialect already lowers to.
+
 ## Input: the step list
 
 A workflow is a flat JSON array of step objects with block markers (`END` closes
