@@ -289,6 +289,7 @@ PAGE = r"""<!DOCTYPE html>
   .file-badge.python { background:var(--py); } .file-badge.english { background:var(--en); }
   .file-badge.k-card { background:#66e0cc; } .file-badge.k-source { background:#ffd866; }
   .file-badge.k-schema { background:#b0a0ff; } .file-badge.k-static { background:#9aa0ad; } .file-badge.k-code { background:var(--accent); color:#fff; }
+  .file-badge.k-event { background:#ff9f7f; } .file-badge.k-ontology { background:#f0a3ff; }
   .file-ico { font-size:11px; width:14px; text-align:center; flex-shrink:0; }
   .file-folder { display:flex; align-items:center; gap:4px; padding:3px 5px; cursor:pointer; color:var(--muted); font-size:11.5px; font-weight:600; user-select:none; }
   .file-folder:hover { color:#e6e8ef; }
@@ -506,6 +507,8 @@ PAGE = r"""<!DOCTYPE html>
             <button class="ghost" onclick="psFilesDelete()">Delete</button>
             <button class="ghost" onclick="pkgExportOpen()" title="Export / deploy a card package (application)">Package</button>
             <button class="ghost" onclick="schemaQuickNew()" title="Design a new typed pack/card schema">+ Schema</button>
+            <button class="ghost" onclick="eventQuickNew()" title="Design a new fixed-schema event (sync program exit or async handler)">+ Event</button>
+            <button class="ghost" onclick="ontologyQuickNew()" title="Design entities/relations and scaffold their pack events">+ Ontology</button>
           </div>
           <div class="file-list" id="fileList"></div>
           <div class="file-status" id="fileStatus"></div>
@@ -552,6 +555,20 @@ PAGE = r"""<!DOCTYPE html>
           </div>
           <div id="schemaFields"></div>
         </div>
+        <div id="eventDesigner" class="wf-designer" style="display:none">
+          <div class="wf-add">
+            <button class="ghost" onclick="eventOpenJson()" title="View / edit the backing event JSON">&#123; &#125; JSON</button>
+            <span class="muted" style="font-size:11px">design a fixed-schema event &mdash; sync = a "program exit" raised and drained inline; async = a queued handler. Bind a Raise/On box to this file via its "schema" field.</span>
+          </div>
+          <div id="eventFields"></div>
+        </div>
+        <div id="ontologyDesigner" class="wf-designer" style="display:none">
+          <div class="wf-add">
+            <button class="ghost" onclick="ontologyOpenJson()" title="View / edit the backing ontology JSON">&#123; &#125; JSON</button>
+            <span class="muted" style="font-size:11px">design entities (each bound to a pack schema) and relations between them; "+ event" scaffolds standard created/updated/deleted event schemas for an entity</span>
+          </div>
+          <div id="ontologyBody"></div>
+        </div>
         <div class="wf-modal" id="pkgModal">
           <div class="wf-modal-box">
             <div class="wf-modal-head" id="pkgTitle">Card package<button class="ghost" onclick="pkgModalClose()">&#10005;</button></div>
@@ -578,6 +595,20 @@ PAGE = r"""<!DOCTYPE html>
             <div class="wf-modal-head">Schema JSON (backing field list)<button class="ghost" onclick="schemaCloseJson()">&#10005;</button></div>
             <div class="wf-modal-body"><textarea id="schemaJsonText" spellcheck="false"></textarea><div id="schemaJsonErr" class="cerr"></div></div>
             <div class="wf-modal-foot"><button class="act" onclick="schemaApplyJson()">Apply</button><button class="ghost" onclick="schemaCloseJson()">Cancel</button></div>
+          </div>
+        </div>
+        <div class="wf-modal" id="eventJsonModal">
+          <div class="wf-modal-box">
+            <div class="wf-modal-head">Event JSON (mode + fixed field schema + returns)<button class="ghost" onclick="eventCloseJson()">&#10005;</button></div>
+            <div class="wf-modal-body"><textarea id="eventJsonText" spellcheck="false"></textarea><div id="eventJsonErr" class="cerr"></div></div>
+            <div class="wf-modal-foot"><button class="act" onclick="eventApplyJson()">Apply</button><button class="ghost" onclick="eventCloseJson()">Cancel</button></div>
+          </div>
+        </div>
+        <div class="wf-modal" id="ontologyJsonModal">
+          <div class="wf-modal-box">
+            <div class="wf-modal-head">Ontology JSON (entities + relations)<button class="ghost" onclick="ontologyCloseJson()">&#10005;</button></div>
+            <div class="wf-modal-body"><textarea id="ontologyJsonText" spellcheck="false"></textarea><div id="ontologyJsonErr" class="cerr"></div></div>
+            <div class="wf-modal-foot"><button class="act" onclick="ontologyApplyJson()">Apply</button><button class="ghost" onclick="ontologyCloseJson()">Cancel</button></div>
           </div>
         </div>
       </div>
@@ -984,8 +1015,11 @@ function enterStaticMode(name,kind){
   if(info){ info.style.display='block'; info.textContent='Editing '+name+' \u2014 a plain '+kind+' file (no dialect switching or diagnostics; Save writes it'+(kind==='card'?' and pushes it to picowal':'')+')'; }
   if(EDITOR){ try{ monaco.editor.setModelLanguage(EDITOR.getModel(),staticMonacoLang(name)); }catch(e){} }
   // A schema file gets the visual Schema Designer instead of raw JSON text (the
-  // fields table is the surface; edit raw via its own { } JSON modal).
+  // fields table is the surface; edit raw via its own { } JSON modal). Event and
+  // ontology files get their own equivalent visual surfaces.
   if(typeof schemaToggle==='function') schemaToggle(kind==='schema', name);
+  if(typeof eventToggle==='function') eventToggle(kind==='event', name);
+  if(typeof ontologyToggle==='function') ontologyToggle(kind==='ontology', name);
 }
 function exitStaticMode(){
   if(!STATIC_MODE) return;
@@ -999,6 +1033,8 @@ function exitStaticMode(){
   if(info) info.style.display='none';
   if(EDITOR){ try{ monaco.editor.setModelLanguage(EDITOR.getModel(),monacoLangId(document.getElementById('lang').value)); }catch(e){} }
   if(typeof schemaToggle==='function') schemaToggle(false);
+  if(typeof eventToggle==='function') eventToggle(false);
+  if(typeof ontologyToggle==='function') ontologyToggle(false);
   if(typeof wfToggle==='function') wfToggle();
   if(typeof reportToggle==='function') reportToggle();
 }
@@ -1042,13 +1078,15 @@ function filesRead(){
 // source = a read-only input shape; static = a served asset.
 function fileKind(name){
   var n=String(name||'').toLowerCase();
+  if(/\.ontology\.json$/.test(n)) return 'ontology';
+  if(/\.event\.json$/.test(n)) return 'event';
   if(/\.schema\.json$/.test(n)) return 'schema';
   if(/\.card\.json$/.test(n)) return 'card';
   if(/\.json$/.test(n)) return 'source';
   if(/\.(html|js|css|md|txt)$/.test(n)) return 'static';
   return 'code';
 }
-function fileIcon(kind){ return {folder:'\uD83D\uDCC1',card:'\uD83D\uDDC3',schema:'\uD83E\uDDE9',source:'\uD83D\uDD16',static:'\uD83D\uDCC4',code:'\u2039\u203A'}[kind]||'\uD83D\uDCC4'; }
+function fileIcon(kind){ return {folder:'\uD83D\uDCC1',card:'\uD83D\uDDC3',schema:'\uD83E\uDDE9',event:'\u26A1',ontology:'\uD83D\uDD78\uFE0F',source:'\uD83D\uDD16',static:'\uD83D\uDCC4',code:'\u2039\u203A'}[kind]||'\uD83D\uDCC4'; }
 function fileBaseName(p){ var i=String(p).lastIndexOf('/'); return i<0?p:p.slice(i+1); }
 // A card file writes its {addr:int} map (or {cards:{...}}) into the live picowal
 // (WAL) card store so a running program/workflow can Storage.Load it.
@@ -1115,12 +1153,18 @@ function filesRender(){
 }
 function filesToggle(){var el=document.getElementById('fileSidebar');if(!el)return;el.classList.toggle('collapsed');var b=el.querySelector('.file-head button');if(b)b.innerHTML=el.classList.contains('collapsed')?'&#9654;':'&#9664;';}
 function psFilesList(){return filesRead();}
+function fileDefaultSrc(kind){
+  if(kind==='schema') return JSON.stringify({fields:[]},null,2);
+  if(kind==='event') return JSON.stringify({mode:'async',fields:[],returns:null},null,2);
+  if(kind==='ontology') return JSON.stringify({entities:[],relations:[]},null,2);
+  return '';
+}
 function psFilesNew(name){
   var files=filesRead(); name=(name||((typeof prompt==='function')?prompt('New file name (folders via /, e.g. routes/orders.psc)',filesUniqueName(files)):filesUniqueName(files))||'').trim();
   if(!name) return null;
   if(files[name]&&typeof confirm==='function'&&!confirm('Replace "'+name+'"?')) return null;
   var kind=fileKind(name);
-  setSrc(kind==='schema'?JSON.stringify({fields:[]},null,2):'');
+  setSrc(fileDefaultSrc(kind));
   if(kind==='code'){ if(typeof exitStaticMode==='function') exitStaticMode(); } else if(typeof enterStaticMode==='function') enterStaticMode(name,kind);
   files[name]={kind:kind,lang:kind==='code'?(document.getElementById('lang').value||'basic'):'',src:getSrc(),updated:Date.now()}; filesWrite(files); filesSetActive(name); filesRender(); filesStatus('New '+kind+' '+name); return name;
 }
@@ -1527,13 +1571,32 @@ function looksLikeWorkflowJson(src){
   try{ var d=JSON.parse(src); return Array.isArray(d)||(d&&Array.isArray(d.steps)); }
   catch(e){ return false; }
 }
+// A Raise/On step's `eventFile` names an events/*.event.json (see the Event
+// Schema Designer); resolve it to {mode,fields,returns} fresh on every compile
+// (never persisted into the step JSON, mirroring the Report designer's `pack`
+// binding) so WorkflowPico can lower a fixed typed payload via Map + PSC1.
+function eventSchemaForFile(name){
+  if(!name) return null;
+  var files=(typeof filesRead==='function')?filesRead():{}, f=files[name];
+  if(!f) return null;
+  try{ var d=JSON.parse(f.src); return (d&&Array.isArray(d.fields))?{mode:d.mode==='sync'?'sync':'async',fields:d.fields,returns:d.returns||null}:null; }catch(e){ return null; }
+}
+function wfResolveEventSchemas(steps){
+  return steps.map(function(s){
+    if(s&&(s.type==='RAISE'||s.type==='EMIT'||s.type==='ON'||s.type==='SUBSCRIBE')&&s.eventFile){
+      var sch=eventSchemaForFile(s.eventFile);
+      if(sch){ var s2={}; for(var k in s) s2[k]=s[k]; s2.schema=sch; return s2; }
+    }
+    return s;
+  });
+}
 // BareMetal.WorkflowPico.compile expects a steps ARRAY (or registered name); the
 // editor surface is a JSON string, so parse it here before compiling.
 function wfCompileSrc(src){
   var d=JSON.parse(src);
   var steps=Array.isArray(d)?d:(d&&Array.isArray(d.steps)?d.steps:null);
   if(!steps) throw new Error('workflow: expected a JSON step array');
-  return BareMetal.WorkflowPico.compile(steps);
+  return BareMetal.WorkflowPico.compile(wfResolveEventSchemas(steps));
 }
 // ---- designer step/trace highlight + box breakpoints ------------------------
 // The derived-English line the VM is executing maps back to a workflow step via
@@ -1660,7 +1723,7 @@ function wfUpdateEng(steps){
   var engEl=document.getElementById('wfEng'), warnEl=document.getElementById('wfWarn');
   if(!engEl) return;
   try{
-    var wf=BareMetal.WorkflowPico.compile(steps);
+    var wf=BareMetal.WorkflowPico.compile(wfResolveEventSchemas(steps));
     engEl.textContent=wf.source;
     if(warnEl) warnEl.innerHTML=(wf.warnings&&wf.warnings.length)?wf.warnings.map(function(w){return '&#9888; '+esc(w);}).join('<br>'):'';
   }catch(e){ engEl.textContent=''; if(warnEl) warnEl.textContent='&#9888; '+String(e.message||e); }
@@ -1949,6 +2012,217 @@ function schemaQuickNew(){
   var files=filesRead(), base='schemas/untitled', name=base+'.schema.json', n=2;
   while(files[name]){ name=base+'-'+(n++)+'.schema.json'; }
   files[name]={kind:'schema',lang:'',src:JSON.stringify({fields:[]},null,2),updated:Date.now()};
+  filesWrite(files); filesRender();
+  psFilesOpen(name);
+}
+
+// ---- event schema designer (fixed-schema program exits / event handlers) ----
+// A *.event.json file is {mode:'sync'|'async', fields:[{name,type}], returns}.
+// It gives a workflow RAISE ("program exit" -- mode sync) or ON ("event
+// handler" -- mode async) a fixed typed payload with NO new VM hooks: the
+// WebIDE resolves a Raise/On box's `eventFile` field to this schema at compile
+// time (see wfResolveEventSchemas) and BareMetal.WorkflowPico lowers the
+// fields through a Map + the existing PSC1 card codec (Binary.SerializeCard /
+// Binary.ParseCard), carried on the event record via Event.SetData/Event.Data.
+// Same type vocabulary as the Schema Designer (SD_TYPES) so an event field can
+// mirror a pack/card field 1:1.
+function looksLikeEventJson(src){
+  if(!src||!src.trim()) return false;
+  try{ var d=JSON.parse(src); return !!(d&&typeof d==='object'&&Array.isArray(d.fields)&&(d.mode==='sync'||d.mode==='async')); }
+  catch(e){ return false; }
+}
+function eventGetModel(){
+  try{ var d=JSON.parse(getSrc()); if(d&&Array.isArray(d.fields)) return {mode:d.mode==='sync'?'sync':'async',fields:d.fields,returns:d.returns||null}; }catch(e){}
+  return {mode:'async',fields:[],returns:null};
+}
+function eventSetModel(d){ setSrc(JSON.stringify(d,null,2)); eventRenderDesigner(); if(typeof filesRender==='function')filesRender(); }
+function eventSetMode(mode){ var d=eventGetModel(); d.mode=(mode==='sync')?'sync':'async'; if(d.mode==='async') d.returns=null; eventSetModel(d); }
+function eventSetReturnsType(type){ var d=eventGetModel(); d.returns=(type&&type!=='none')?{type:type}:null; eventSetModel(d); }
+function eventAddField(){
+  var nameEl=document.getElementById('evFName'), typeEl=document.getElementById('evFType');
+  var name=(nameEl?nameEl.value:'').trim();
+  if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)){ if(typeof alert==='function') alert('field name must be a simple identifier'); return; }
+  var type=typeEl?typeEl.value:'int';
+  var d=eventGetModel();
+  d.fields=(d.fields||[]).filter(function(f){return f.name!==name;}).concat([{name:name,type:type}]);
+  eventSetModel(d);
+  if(nameEl) nameEl.value='';
+}
+function eventRemoveField(name){ var d=eventGetModel(); d.fields=(d.fields||[]).filter(function(f){return f.name!==name;}); eventSetModel(d); }
+function eventSetFieldType(name,type){ var d=eventGetModel(); var f=(d.fields||[]).filter(function(x){return x.name===name;})[0]; if(f){f.type=type; eventSetModel(d);} }
+function eventRenderDesigner(){
+  var host=document.getElementById('eventFields'); if(!host) return;
+  var d=eventGetModel(), fields=d.fields||[];
+  var html='<div style="display:flex;gap:12px;align-items:center;margin-bottom:8px;flex-wrap:wrap">'+
+    '<label><input type="radio" name="evMode" value="sync"'+(d.mode==='sync'?' checked':'')+' onchange="eventSetMode(this.value)"> sync (program exit)</label>'+
+    '<label><input type="radio" name="evMode" value="async"'+(d.mode!=='sync'?' checked':'')+' onchange="eventSetMode(this.value)"> async (event handler)</label>';
+  if(d.mode==='sync'){
+    html+='<span class="muted" style="font-size:11px">returns</span><select onchange="eventSetReturnsType(this.value)">'+
+      ['none'].concat(SD_TYPES).map(function(t){return '<option'+((d.returns&&d.returns.type===t)?' selected':(t==='none'&&!d.returns?' selected':''))+'>'+t+'</option>';}).join('')+'</select>';
+  }
+  html+='</div>';
+  html+='<table class="wal" style="margin-bottom:8px"><thead><tr><th>field</th><th>type</th><th></th></tr></thead><tbody>';
+  if(!fields.length) html+='<tr><td colspan="3" style="color:var(--muted)">no fields yet</td></tr>';
+  fields.forEach(function(f){
+    html+='<tr><td>'+esc(f.name)+'</td><td><select onchange="eventSetFieldType(\''+esc(f.name)+'\',this.value)">'+
+      SD_TYPES.map(function(t){return '<option'+(t===f.type?' selected':'')+'>'+t+'</option>';}).join('')+'</select></td>'+
+      '<td><button class="ghost" onclick="eventRemoveField(\''+esc(f.name)+'\')" title="remove field">&times;</button></td></tr>';
+  });
+  html+='</tbody></table><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+
+    '<input id="evFName" placeholder="field name" style="width:130px" onkeydown="if(event.key===\'Enter\')eventAddField();">'+
+    '<select id="evFType">'+SD_TYPES.map(function(t){return '<option>'+t+'</option>';}).join('')+'</select>'+
+    '<button class="ghost" onclick="eventAddField()">+ field</button></div>';
+  host.innerHTML=html;
+}
+function eventToggle(active,name){
+  var host=document.getElementById('eventDesigner');
+  if(host) host.style.display=active?'block':'none';
+  if(!active){ eventCloseJson(); return; }
+  var mon=document.getElementById('monaco'), src=document.getElementById('src');
+  if(mon) mon.style.display='none'; if(src) src.style.display='none';
+  try{ eventRenderDesigner(); }catch(e){}
+}
+function eventOpenJson(){
+  var m=document.getElementById('eventJsonModal'), t=document.getElementById('eventJsonText'), e=document.getElementById('eventJsonErr');
+  if(!m||!t) return; if(e) e.textContent='';
+  t.value=getSrc(); m.classList.add('open'); t.focus();
+}
+function eventCloseJson(){ var m=document.getElementById('eventJsonModal'); if(m) m.classList.remove('open'); }
+function eventApplyJson(){
+  var t=document.getElementById('eventJsonText'), e=document.getElementById('eventJsonErr');
+  if(!t) return;
+  try{ var d=JSON.parse(t.value); if(!d||!Array.isArray(d.fields)) throw new Error('expected {mode,fields:[{name,type}],returns}'); }
+  catch(err){ if(e){ e.textContent='invalid JSON: '+String(err.message||err); e.style.color='#ff7b72'; } return; }
+  setSrc(t.value); eventCloseJson();
+  try{ eventRenderDesigner(); }catch(_){}
+  if(typeof filesRender==='function') filesRender();
+}
+// Create a new events/*.event.json file and open it straight into the designer.
+function eventQuickNew(){
+  var files=filesRead(), base='events/untitled', name=base+'.event.json', n=2;
+  while(files[name]){ name=base+'-'+(n++)+'.event.json'; }
+  files[name]={kind:'event',lang:'',src:JSON.stringify({mode:'async',fields:[],returns:null},null,2),updated:Date.now()};
+  filesWrite(files); filesRender();
+  psFilesOpen(name);
+}
+// Scaffold a fixed-fields event file from an entity's bound pack schema (used
+// by both the ontology "+ event" quick action and standalone use).
+function eventScaffoldFromSchema(name,mode,fields){
+  var files=filesRead();
+  files[name]={kind:'event',lang:'',src:JSON.stringify({mode:mode,fields:fields||[],returns:null},null,2),updated:Date.now()};
+  filesWrite(files);
+}
+
+// ---- ontology designer (entities + relations -> scaffolds pack events) ------
+// A *.ontology.json file is {entities:[{name,pack}], relations:[{name,from,to,
+// cardinality}]}. Each entity's `pack` names a schemas/<pack>.schema.json (see
+// schemaForPack); a "+ event" quick action per entity scaffolds standard
+// created/updated/deleted event schemas (mode:'async') bound to that entity's
+// fields, giving "pack events" as a natural side effect of designing the
+// ontology rather than a separate hand-authored artifact.
+function ontologyGetModel(){
+  try{ var d=JSON.parse(getSrc()); if(d&&(Array.isArray(d.entities)||Array.isArray(d.relations))) return {entities:d.entities||[],relations:d.relations||[]}; }catch(e){}
+  return {entities:[],relations:[]};
+}
+function ontologySetModel(d){ setSrc(JSON.stringify(d,null,2)); ontologyRenderDesigner(); if(typeof filesRender==='function')filesRender(); }
+function ontologyAddEntity(){
+  var nameEl=document.getElementById('ontEName'), packEl=document.getElementById('ontEPack');
+  var name=(nameEl?nameEl.value:'').trim();
+  if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)){ if(typeof alert==='function') alert('entity name must be a simple identifier'); return; }
+  var pack=(packEl?packEl.value:'').trim()||name;
+  var d=ontologyGetModel();
+  d.entities=(d.entities||[]).filter(function(x){return x.name!==name;}).concat([{name:name,pack:pack}]);
+  ontologySetModel(d);
+  if(nameEl) nameEl.value=''; if(packEl) packEl.value='';
+}
+function ontologyRemoveEntity(name){
+  var d=ontologyGetModel();
+  d.entities=(d.entities||[]).filter(function(x){return x.name!==name;});
+  d.relations=(d.relations||[]).filter(function(r){return r.from!==name&&r.to!==name;});
+  ontologySetModel(d);
+}
+function ontologyAddRelation(){
+  var nameEl=document.getElementById('ontRName'), fromEl=document.getElementById('ontRFrom'), toEl=document.getElementById('ontRTo'), cardEl=document.getElementById('ontRCard');
+  var name=(nameEl?nameEl.value:'').trim()||'relates';
+  var from=fromEl?fromEl.value:'', to=toEl?toEl.value:'', card=cardEl?cardEl.value:'one-to-many';
+  if(!from||!to){ if(typeof alert==='function') alert('pick both entities for the relation'); return; }
+  var d=ontologyGetModel();
+  d.relations=(d.relations||[]).concat([{name:name,from:from,to:to,cardinality:card}]);
+  ontologySetModel(d);
+  if(nameEl) nameEl.value='';
+}
+function ontologyRemoveRelation(idx){ var d=ontologyGetModel(); d.relations=(d.relations||[]).filter(function(_,i){return i!==idx;}); ontologySetModel(d); }
+// "+ event" scaffolds events/<entity>.created/updated/deleted.event.json bound
+// to the entity's pack schema fields (empty fields if the pack isn't found).
+function ontologyScaffoldEvents(entityName){
+  var d=ontologyGetModel(), ent=(d.entities||[]).filter(function(x){return x.name===entityName;})[0];
+  if(!ent) return;
+  var fields=schemaForPack(ent.pack||ent.name)||[];
+  ['created','updated','deleted'].forEach(function(suffix){
+    eventScaffoldFromSchema('events/'+entityName+'.'+suffix+'.event.json','async',fields.slice());
+  });
+  filesRender();
+  filesStatus('Scaffolded 3 pack events for '+entityName+(fields.length?'':' (pack schema not found; fields empty)'));
+}
+function ontologyRenderDesigner(){
+  var host=document.getElementById('ontologyBody'); if(!host) return;
+  var d=ontologyGetModel(), entities=d.entities||[], relations=d.relations||[];
+  var opts=entities.map(function(e){return '<option>'+esc(e.name)+'</option>';}).join('');
+  var html='<div style="font-weight:600;margin-bottom:4px">Entities</div>';
+  html+='<table class="wal" style="margin-bottom:8px"><thead><tr><th>entity</th><th>pack schema</th><th></th></tr></thead><tbody>';
+  if(!entities.length) html+='<tr><td colspan="3" style="color:var(--muted)">no entities yet</td></tr>';
+  entities.forEach(function(e){
+    html+='<tr><td>'+esc(e.name)+'</td><td>'+esc(e.pack||e.name)+'</td>'+
+      '<td><button class="ghost" onclick="ontologyScaffoldEvents(\''+esc(e.name)+'\')" title="scaffold created/updated/deleted pack events from this entity\'s schema">+ event</button> '+
+      '<button class="ghost" onclick="ontologyRemoveEntity(\''+esc(e.name)+'\')" title="remove entity">&times;</button></td></tr>';
+  });
+  html+='</tbody></table><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:14px">'+
+    '<input id="ontEName" placeholder="entity name" style="width:120px" onkeydown="if(event.key===\'Enter\')ontologyAddEntity();">'+
+    '<input id="ontEPack" placeholder="pack (defaults to name)" style="width:160px">'+
+    '<button class="ghost" onclick="ontologyAddEntity()">+ entity</button></div>';
+  html+='<div style="font-weight:600;margin-bottom:4px">Relations</div>';
+  html+='<table class="wal" style="margin-bottom:8px"><thead><tr><th>name</th><th>from</th><th>to</th><th>cardinality</th><th></th></tr></thead><tbody>';
+  if(!relations.length) html+='<tr><td colspan="5" style="color:var(--muted)">no relations yet</td></tr>';
+  relations.forEach(function(r,i){
+    html+='<tr><td>'+esc(r.name)+'</td><td>'+esc(r.from)+'</td><td>'+esc(r.to)+'</td><td>'+esc(r.cardinality)+'</td>'+
+      '<td><button class="ghost" onclick="ontologyRemoveRelation('+i+')" title="remove relation">&times;</button></td></tr>';
+  });
+  html+='</tbody></table><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+
+    '<input id="ontRName" placeholder="relation name" style="width:110px">'+
+    '<select id="ontRFrom"><option value="">from&hellip;</option>'+opts+'</select>'+
+    '<select id="ontRTo"><option value="">to&hellip;</option>'+opts+'</select>'+
+    '<select id="ontRCard"><option>one-to-one</option><option selected>one-to-many</option><option>many-to-many</option></select>'+
+    '<button class="ghost" onclick="ontologyAddRelation()">+ relation</button></div>';
+  host.innerHTML=html;
+}
+function ontologyToggle(active,name){
+  var host=document.getElementById('ontologyDesigner');
+  if(host) host.style.display=active?'block':'none';
+  if(!active){ ontologyCloseJson(); return; }
+  var mon=document.getElementById('monaco'), src=document.getElementById('src');
+  if(mon) mon.style.display='none'; if(src) src.style.display='none';
+  try{ ontologyRenderDesigner(); }catch(e){}
+}
+function ontologyOpenJson(){
+  var m=document.getElementById('ontologyJsonModal'), t=document.getElementById('ontologyJsonText'), e=document.getElementById('ontologyJsonErr');
+  if(!m||!t) return; if(e) e.textContent='';
+  t.value=getSrc(); m.classList.add('open'); t.focus();
+}
+function ontologyCloseJson(){ var m=document.getElementById('ontologyJsonModal'); if(m) m.classList.remove('open'); }
+function ontologyApplyJson(){
+  var t=document.getElementById('ontologyJsonText'), e=document.getElementById('ontologyJsonErr');
+  if(!t) return;
+  try{ var d=JSON.parse(t.value); if(!d||typeof d!=='object') throw new Error('expected {entities:[...],relations:[...]}'); }
+  catch(err){ if(e){ e.textContent='invalid JSON: '+String(err.message||err); e.style.color='#ff7b72'; } return; }
+  setSrc(t.value); ontologyCloseJson();
+  try{ ontologyRenderDesigner(); }catch(_){}
+  if(typeof filesRender==='function') filesRender();
+}
+// Create a new *.ontology.json file and open it straight into the designer.
+function ontologyQuickNew(){
+  var files=filesRead(), base='ontology', name=base+'.ontology.json', n=2;
+  while(files[name]){ name=base+'-'+(n++)+'.ontology.json'; }
+  files[name]={kind:'ontology',lang:'',src:JSON.stringify({entities:[],relations:[]},null,2),updated:Date.now()};
   filesWrite(files); filesRender();
   psFilesOpen(name);
 }

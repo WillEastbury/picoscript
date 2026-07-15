@@ -139,12 +139,76 @@ function fileUrl(p) { return 'file:///' + path.resolve(p).replace(/\\/g, '/'); }
   const okForm = /data ABI/.test(form.msg) && /"0":2/.test(form.msg);
   console.log('WEBIDE form save write-back:', okForm, '|', form.msg);
 
+  // ---- Event Schema Designer + Ontology Designer + schema-typed RAISE/ON ----
+  const evOnt = await page.evaluate(() => {
+    // Event Schema Designer: create a file, add typed fields via the real UI fns.
+    var evName = eventQuickNew(); // creates events/untitled.event.json, opens it
+    document.getElementById('evFName').value = 'qty';
+    document.getElementById('evFType').value = 'int';
+    eventAddField();
+    document.getElementById('evFName').value = 'note';
+    document.getElementById('evFType').value = 'str';
+    eventAddField();
+    var evModel = eventGetModel();
+
+    // Seed a schemas/orders.schema.json so the ontology entity below is
+    // schema-bound and "+ event" scaffolds real typed fields (not empty).
+    var seedFiles = filesRead();
+    seedFiles['schemas/orders.schema.json'] = { kind: 'schema', lang: '', src: JSON.stringify({ fields: [{ name: 'qty', type: 'int' }, { name: 'price', type: 'int' }] }), updated: Date.now() };
+    filesWrite(seedFiles);
+
+    // Ontology Designer: create a file, add an entity bound to that pack schema,
+    // scaffold its pack events ("+ event").
+    var ontName = ontologyQuickNew();
+    document.getElementById('ontEName').value = 'orders';
+    document.getElementById('ontEPack').value = 'orders';
+    ontologyAddEntity();
+    var ontEntities = ontologyGetModel().entities; // capture before src gets reused below
+    ontologyScaffoldEvents('orders');
+    var files = filesRead();
+    var scaffolded = ['events/orders.created.event.json', 'events/orders.updated.event.json', 'events/orders.deleted.event.json'].every(function (n) { return !!files[n]; });
+    var scaffoldedFields = (function () { try { return JSON.parse(files['events/orders.created.event.json'].src).fields; } catch (e) { return null; } })();
+
+    // Schema-typed RAISE ("program exit") -> ON ("event handler") round trip
+    // through the real WebIDE compile path (wfCompileSrc -> WorkflowPico -> VM),
+    // binding via `eventFile` exactly as a user would from the Raise/On boxes.
+    var files2 = filesRead();
+    files2['events/order.event.json'] = { kind: 'event', lang: '', src: JSON.stringify({ mode: 'async', fields: [{ name: 'qty', type: 'int' }, { name: 'note', type: 'str' }], returns: null }), updated: Date.now() };
+    filesWrite(files2);
+    var steps = [
+      { type: 'RAISE', event: 42, eventFile: 'events/order.event.json', args: { qty: 7, note: 'hi' } },
+      { type: 'ON', event: 42, eventFile: 'events/order.event.json' },
+      { type: 'LOG', message: 'qty' },
+      { type: 'END' }
+    ];
+    setLang('workflow');
+    setSrc(JSON.stringify(steps, null, 2));
+    wfRenderDesigner();
+    compileSrc(true);
+    var out = DBG.vm.outputInts();
+    var eng = document.getElementById('wfEng').textContent;
+
+    return {
+      evFields: evModel.fields,
+      ontEntities: ontEntities,
+      scaffolded: scaffolded, scaffoldedFields: scaffoldedFields,
+      roundTripOut: out,
+      hasSerializeCard: eng.indexOf('Binary.SerializeCard()') >= 0,
+      hasParseCard: eng.indexOf('Binary.ParseCard(') >= 0
+    };
+  });
+  const okEvOnt = JSON.stringify(evOnt.evFields) === JSON.stringify([{ name: 'qty', type: 'int' }, { name: 'note', type: 'str' }]) &&
+    evOnt.ontEntities.length === 1 && evOnt.ontEntities[0].name === 'orders' &&
+    evOnt.scaffolded && JSON.stringify(evOnt.scaffoldedFields) === JSON.stringify([{ name: 'qty', type: 'int' }, { name: 'price', type: 'int' }]) &&
+    JSON.stringify(evOnt.roundTripOut) === '[7]' && evOnt.hasSerializeCard && evOnt.hasParseCard;
+  console.log('WEBIDE event schema + ontology designer + schema-typed RAISE/ON:', okEvOnt, '|', JSON.stringify(evOnt));
+
   await browser.close();
   const pageErrs = errors.filter(e => !/favicon|monaco|cdn\.jsdelivr/i.test(e));
   console.log('WEBIDE page errors (excl. monaco/cdn):', pageErrs.length);
   if (pageErrs.length) console.log(pageErrs.slice(0, 8).join('\n'));
 
-  const allOk = okLayout && okWf && okWfAdd && okWeb && okFidelity && okReport && okForm && pageErrs.length === 0;
+  const allOk = okLayout && okWf && okWfAdd && okWeb && okFidelity && okReport && okForm && okEvOnt && pageErrs.length === 0;
   console.log(allOk ? '\nWEBIDE ALL VERIFIED OK' : '\nWEBIDE VERIFICATION FAILED');
   process.exit(allOk ? 0 : 1);
 })();
