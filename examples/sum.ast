@@ -1,0 +1,48 @@
+[
+  {
+    "node": "Let",
+    "name": "total",
+    "value": {
+      "node": "Num",
+      "value": 0
+    }
+  },
+  {
+    "node": "ForTo",
+    "var": "i",
+    "start": {
+      "node": "Num",
+      "value": 1
+    },
+    "end": {
+      "node": "Num",
+      "value": 10
+    },
+    "step": null,
+    "body": [
+      {
+        "node": "Let",
+        "name": "total",
+        "value": {
+          "node": "Bin",
+          "op": "+",
+          "lhs": {
+            "node": "Var",
+            "name": "total"
+          },
+          "rhs": {
+            "node": "Var",
+            "name": "i"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "node": "Print",
+    "value": {
+      "node": "Var",
+      "name": "total"
+    }
+  }
+]

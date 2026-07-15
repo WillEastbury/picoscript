@@ -3016,6 +3016,58 @@
   };
   function compileFunctional(src) { return new BLowerer().lowerProgram(new FunParser(funtokenize(src)).parseProgram()); }
 
+  // ---- AST-JSON bridge (spike/ast-json-dialect) ---------------------------
+  // Canonical JSON AST <-> the internal {t: ...} node shape the shared
+  // BLowerer consumes. Mirrors picoscript_ast.py's ast_to_json/json_to_ast on
+  // the Python side (same {"node": "ClassName", ...} shape), so the same
+  // JSON document lowers to byte-identical bytecode on both sides. A couple
+  // of Python dataclass field names collide with JS reserved words or differ
+  // for historical reasons (ForTo/ForEach.var -> v; Switch/Dispatch.default
+  // -> def); AST_JSON_FIELD_ALIASES maps canonical name -> JS name per node
+  // kind, only where they differ.
+  var AST_JSON_FIELD_ALIASES = {
+    ForTo: { var: "v" },
+    ForEach: { var: "v" },
+    Switch: { default: "def" },
+    Dispatch: { default: "def" }
+  };
+  // Node kinds picoscript_basic.py has that this JS bridge doesn't support
+  // yet (no JS BLowerer/parser equivalent exists for these).
+  var AST_JSON_UNSUPPORTED = { TryExcept: 1, Raise: 1, OnBlock: 1 };
+
+  function astToJson(node) {
+    if (node === null || typeof node !== "object") return node;
+    if (Array.isArray(node)) return node.map(astToJson);
+    var kind = node.t;
+    if (!kind) throw new Error("astToJson: node missing 't' tag: " + JSON.stringify(node));
+    var aliases = AST_JSON_FIELD_ALIASES[kind] || {};
+    var revAliases = {};
+    Object.keys(aliases).forEach(function (canon) { revAliases[aliases[canon]] = canon; });
+    var out = { node: kind };
+    Object.keys(node).forEach(function (k) {
+      if (k === "t") return;
+      out[revAliases[k] || k] = astToJson(node[k]);
+    });
+    return out;
+  }
+
+  function jsonToAst(data) {
+    if (data === null || typeof data !== "object") return data;
+    if (Array.isArray(data)) return data.map(jsonToAst);
+    var kind = data.node;
+    if (!kind) throw new Error("jsonToAst: object missing 'node' discriminator: " + JSON.stringify(data));
+    if (AST_JSON_UNSUPPORTED[kind]) throw new Error("jsonToAst: '" + kind + "' is not yet supported by the JS bridge (Python-only node kind)");
+    var aliases = AST_JSON_FIELD_ALIASES[kind] || {};
+    var out = { t: kind };
+    Object.keys(data).forEach(function (k) {
+      if (k === "node") return;
+      out[aliases[k] || k] = jsonToAst(data[k]);
+    });
+    return out;
+  }
+
+  function compileAst(src) { return new BLowerer().lowerProgram(jsonToAst(JSON.parse(src))); }
+
   function compileIL(src, lang) {
     return (lang === "basic") ? compileBasic(src)
          : (lang === "python") ? compilePython(src)
@@ -3023,6 +3075,7 @@
          : (lang === "cobol") ? compileCobol(src)
          : (lang === "report") ? compileReport(src)
          : (lang === "functional") ? compileFunctional(src)
+         : (lang === "ast") ? compileAst(src)
          : compileC(src);
   }
 
@@ -3150,6 +3203,7 @@
       else if (fromLang === "cobol") ast = new CobParser(cobtokenize(src)).parseProgram();
       else if (fromLang === "report") ast = new RepParser(reptokenize(src)).parseProgram();
       else if (fromLang === "functional") ast = new FunParser(funtokenize(src)).parseProgram();
+      else if (fromLang === "ast") ast = jsonToAst(JSON.parse(src));
       else return src;
     } catch (e) { return src; }
     // Resolve user const/enum declarations to literal values before emitting, so
@@ -3164,6 +3218,7 @@
     if (toLang === "report") return astToReport(ast);
     if (toLang === "functional") return astToFunctional(ast);
     if (toLang === "workflow") return JSON.stringify(astToWorkflow(ast), null, 2);
+    if (toLang === "ast") return JSON.stringify(astToJson(ast), null, 2);
     return src;
   }
 
@@ -3611,6 +3666,7 @@
     compileCobol: function(src) { return { words: lowerToBytecode(compileCobol(src), true) }; },
     compileReport: function(src) { return { words: lowerToBytecode(compileReport(src), true) }; },
     compileFunctional: function(src) { return { words: lowerToBytecode(compileFunctional(src), true) }; },
+    compileAst: function (src) { return { words: lowerToBytecode(compileAst(src), true), il: compileAst(src) }; },
     compileWithDebug: function (src, lang) {
       var dbg = {};
       var words = lowerToBytecode(compileIL(src, lang), true, null, true, dbg);
@@ -3622,6 +3678,8 @@
     // X -> workflow round-trips and one shared sample set across all dialects.
     toWorkflow: function (src, fromLang) { return translate(src, fromLang, "workflow"); },
     astToWorkflow: astToWorkflow,
+    astToJson: astToJson,
+    jsonToAst: jsonToAst,
     symbolize: symbolize,
     offsetToLineCol: offsetToLineCol,
     sourceLineText: sourceLineText,

@@ -13,7 +13,8 @@ One entry point from source to any target (LANGUAGE_SPEC.md sec 10):
 
 Frontend is chosen by extension (.pc = C-syntax, .pbas/.bas = BASIC-like,
 .ppy = Python-style, .eng/.english = natural-English, .pico = v1
-namespace/method) or forced with --lang {c,basic,python,english,v1}.
+namespace/method, .ast/.astjson = AST-as-JSON) or forced with
+--lang {c,basic,python,english,v1,ast}.
 """
 
 from __future__ import annotations
@@ -57,6 +58,8 @@ def detect_lang(path: str, forced: str | None) -> str:
         return "workflow"
     if ext in (".rptmodel", ".reportmodel"):
         return "report-model"
+    if ext in (".ast", ".astjson"):
+        return "ast"
     return "c"
 
 
@@ -79,6 +82,9 @@ def to_il(source: str, lang: str):
     if lang == "report-model":
         from picoscript_reportmodel import compile_report_model
         return compile_report_model(source)
+    if lang == "ast":
+        from picoscript_ast import compile_ast
+        return compile_ast(source)
     raise ValueError(f"frontend {lang!r} has no IL stage (v1 compiles straight to bytecode)")
 
 
@@ -186,7 +192,7 @@ def main(argv=None):
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("file")
-    common.add_argument("--lang", choices=["c", "basic", "python", "english", "v1"], help="force frontend")
+    common.add_argument("--lang", choices=["c", "basic", "python", "english", "v1", "ast"], help="force frontend")
     common.add_argument("--no-opt", action="store_true", help="disable IL optimizer")
 
     pr = sub.add_parser("run", parents=[common], help="compile and execute on PicoVM")
