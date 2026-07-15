@@ -114,50 +114,96 @@ Otherwise:
                     Resp.Write("}").
                     Resp.End().
                 Otherwise:
-                    Set pack to Number.Parse(p0).
-                    If is_post:
-                        Set newid to Storage.AddCard(pack, Req.BodySpan(0)).
-                        If newid < 0:
-                            Resp.Status(400).
-                            Resp.Write("{\"error\":\"validation_failed\"}").
-                            Resp.End().
-                        Otherwise:
-                            Resp.Status(201).
-                            Resp.Header("content-type", "application/json").
+                    If String.Eq(p0, "join"):
+                        Set pack to Number.Parse(p1).
+                        Set joinpack to Number.Parse(Req.Param(2)).
+                        Set pstr to Number.ToString(joinpack).
+                        Set fkfield to String.Concat(pstr, "_id").
+                        Storage.UsePack(pack).
+                        Set qtext to Req.BodySpan(0).
+                        Set n to Storage.QueryCard(qtext).
+                        Resp.Status(200).
+                        Resp.Header("content-type", "application/json").
+                        Resp.Write("{\"pack\":").
+                        Resp.Write(Number.ToString(pack)).
+                        Resp.Write(",\"joinPack\":").
+                        Resp.Write(Number.ToString(joinpack)).
+                        Resp.Write(",\"fkfield\":\"").
+                        Resp.Write(fkfield).
+                        Resp.Write("\",\"records\":[").
+                        For each i from 0 to n minus 1:
+                            Set rid to Storage.QueryResult(i).
+                            Set card to Storage.ReadCard(pack, rid).
+                            If i > 0:
+                                Resp.Write(",").
                             Resp.Write("{\"record\":").
-                            Resp.Write(Number.ToString(newid)).
+                            Resp.Write(Number.ToString(rid)).
+                            Resp.Write(",\"data\":").
+                            Resp.Write(card).
+                            Set m to Json.Parse(card).
+                            If Map.HasS(fkfield):
+                                Set fkid to Map.GetSI(fkfield).
+                                Set joined to Storage.ReadCard(joinpack, fkid).
+                                Resp.Write(",\"joinedId\":").
+                                Resp.Write(Number.ToString(fkid)).
+                                Resp.Write(",\"joinedData\":").
+                                If joined is 0:
+                                    Resp.Write("null").
+                                Otherwise:
+                                    Resp.Write(joined).
+                            Otherwise:
+                                Resp.Write(",\"joinedId\":null,\"joinedData\":null").
+                            Map.Free(m).
                             Resp.Write("}").
-                            Resp.End().
+                        Resp.Write("],\"count\":").
+                        Resp.Write(Number.ToString(n)).
+                        Resp.Write("}").
+                        Resp.End().
                     Otherwise:
-                        Set record to Number.Parse(p1).
-                        If is_put:
-                            Storage.UsePack(pack).
-                            Set ok to Storage.UpdateCard(record, Req.BodySpan(0)).
-                            If ok is 1:
-                                Resp.Status(204).
+                        Set pack to Number.Parse(p0).
+                        If is_post:
+                            Set newid to Storage.AddCard(pack, Req.BodySpan(0)).
+                            If newid < 0:
+                                Resp.Status(400).
+                                Resp.Write("{\"error\":\"validation_failed\"}").
                                 Resp.End().
                             Otherwise:
-                                Resp.Status(400).
-                                Resp.Write("{\"error\":\"update_failed\"}").
+                                Resp.Status(201).
+                                Resp.Header("content-type", "application/json").
+                                Resp.Write("{\"record\":").
+                                Resp.Write(Number.ToString(newid)).
+                                Resp.Write("}").
                                 Resp.End().
                         Otherwise:
-                            If is_delete:
-                                Set ok to Storage.DeleteCard(pack, record).
+                            Set record to Number.Parse(p1).
+                            If is_put:
+                                Storage.UsePack(pack).
+                                Set ok to Storage.UpdateCard(record, Req.BodySpan(0)).
                                 If ok is 1:
                                     Resp.Status(204).
                                     Resp.End().
                                 Otherwise:
-                                    Resp.Status(404).
-                                    Resp.Write("{\"error\":\"not_found\"}").
+                                    Resp.Status(400).
+                                    Resp.Write("{\"error\":\"update_failed\"}").
                                     Resp.End().
                             Otherwise:
-                                Set card to Storage.ReadCard(pack, record).
-                                If card is 0:
-                                    Resp.Status(404).
-                                    Resp.Write("{\"error\":\"not_found\"}").
-                                    Resp.End().
+                                If is_delete:
+                                    Set ok to Storage.DeleteCard(pack, record).
+                                    If ok is 1:
+                                        Resp.Status(204).
+                                        Resp.End().
+                                    Otherwise:
+                                        Resp.Status(404).
+                                        Resp.Write("{\"error\":\"not_found\"}").
+                                        Resp.End().
                                 Otherwise:
-                                    Resp.Status(200).
-                                    Resp.Header("content-type", "application/json").
-                                    Resp.Write(card).
-                                    Resp.End().
+                                    Set card to Storage.ReadCard(pack, record).
+                                    If card is 0:
+                                        Resp.Status(404).
+                                        Resp.Write("{\"error\":\"not_found\"}").
+                                        Resp.End().
+                                    Otherwise:
+                                        Resp.Status(200).
+                                        Resp.Header("content-type", "application/json").
+                                        Resp.Write(card).
+                                        Resp.End().
