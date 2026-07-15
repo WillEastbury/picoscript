@@ -96,6 +96,7 @@
   .file-badge.k-card { background:#66e0cc; } .file-badge.k-source { background:#ffd866; }
   .file-badge.k-schema { background:#b0a0ff; } .file-badge.k-static { background:#9aa0ad; } .file-badge.k-code { background:var(--accent); color:#fff; }
   .file-badge.k-event { background:#ff9f7f; } .file-badge.k-ontology { background:#f0a3ff; }
+  .file-badge.k-rbac { background:#66d9ef; }
   .file-ico { font-size:11px; width:14px; text-align:center; flex-shrink:0; }
   .file-folder { display:flex; align-items:center; gap:4px; padding:3px 5px; cursor:pointer; color:var(--muted); font-size:11.5px; font-weight:600; user-select:none; }
   .file-folder:hover { color:#e6e8ef; }
@@ -10410,6 +10411,7 @@ lowering convention or host contract.</p>
             <button class="ghost" onclick="schemaQuickNew()" title="Design a new typed pack/card schema">+ Schema</button>
             <button class="ghost" onclick="eventQuickNew()" title="Design a new fixed-schema event (sync program exit or async handler)">+ Event</button>
             <button class="ghost" onclick="ontologyQuickNew()" title="Design entities/relations and scaffold their pack events">+ Ontology</button>
+            <button class="ghost" onclick="rbacQuickNew()" title="Design roles, pack permissions, and row-level security predicates">+ RBAC/RLS</button>
           </div>
           <div class="file-list" id="fileList"></div>
           <div class="file-status" id="fileStatus"></div>
@@ -10471,6 +10473,13 @@ lowering convention or host contract.</p>
           </div>
           <div id="ontologyBody"></div>
         </div>
+        <div id="rbacDesigner" class="wf-designer" style="display:none">
+          <div class="wf-add">
+            <button class="ghost" onclick="rbacOpenJson()" title="View / edit the backing RBAC/RLS JSON">&#123; &#125; JSON</button>
+            <span class="muted" style="font-size:11px">design roles, per-pack action permissions, and row-level security predicates (same query syntax as the Query panel); Cards/Query enforce these for the "current role" selected below</span>
+          </div>
+          <div id="rbacBody"></div>
+        </div>
         <div class="wf-modal" id="pkgModal">
           <div class="wf-modal-box">
             <div class="wf-modal-head" id="pkgTitle">Card package<button class="ghost" onclick="pkgModalClose()">&#10005;</button></div>
@@ -10511,6 +10520,13 @@ lowering convention or host contract.</p>
             <div class="wf-modal-head">Ontology JSON (entities + relations)<button class="ghost" onclick="ontologyCloseJson()">&#10005;</button></div>
             <div class="wf-modal-body"><textarea id="ontologyJsonText" spellcheck="false"></textarea><div id="ontologyJsonErr" class="cerr"></div></div>
             <div class="wf-modal-foot"><button class="act" onclick="ontologyApplyJson()">Apply</button><button class="ghost" onclick="ontologyCloseJson()">Cancel</button></div>
+          </div>
+        </div>
+        <div class="wf-modal" id="rbacJsonModal">
+          <div class="wf-modal-box">
+            <div class="wf-modal-head">RBAC/RLS JSON (roles + permissions + row policies)<button class="ghost" onclick="rbacCloseJson()">&#10005;</button></div>
+            <div class="wf-modal-body"><textarea id="rbacJsonText" spellcheck="false"></textarea><div id="rbacJsonErr" class="cerr"></div></div>
+            <div class="wf-modal-foot"><button class="act" onclick="rbacApplyJson()">Apply</button><button class="ghost" onclick="rbacCloseJson()">Cancel</button></div>
           </div>
         </div>
       </div>
@@ -10584,6 +10600,10 @@ lowering convention or host contract.</p>
         <div id="liveServerBar" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;font-size:11px">
           <span id="liveServerStatus" class="muted">offline (localStorage simulator)</span>
           <button class="ghost" style="padding:1px 7px" onclick="liveServerPrompt()">Set live server&hellip;</button>
+        </div>
+        <div id="rbacRoleBar" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;font-size:11px">
+          <span class="muted">current role:</span>
+          <input id="rbacRoleInput" placeholder="(unrestricted)" style="width:100px" oninput="rbacSetCurrentRole(this.value.trim());cardRender();queryRenderChips();" title="Simulates access as this role for the RBAC/RLS designer's permissions/policies. Blank = unrestricted.">
         </div>
         <input id="packname" value="orders" style="width:100%;margin-bottom:6px" placeholder="pack name" oninput="cardRender();queryRenderChips();">
         <div id="cardSchemaInfo" style="font-size:11px;margin-bottom:6px"></div>
@@ -18932,6 +18952,58 @@ function compressBound(inputLen) {
   };
   function compileFunctional(src) { return new BLowerer().lowerProgram(new FunParser(funtokenize(src)).parseProgram()); }
 
+  // ---- AST-JSON bridge (spike/ast-json-dialect) ---------------------------
+  // Canonical JSON AST <-> the internal {t: ...} node shape the shared
+  // BLowerer consumes. Mirrors picoscript_ast.py's ast_to_json/json_to_ast on
+  // the Python side (same {"node": "ClassName", ...} shape), so the same
+  // JSON document lowers to byte-identical bytecode on both sides. A couple
+  // of Python dataclass field names collide with JS reserved words or differ
+  // for historical reasons (ForTo/ForEach.var -> v; Switch/Dispatch.default
+  // -> def); AST_JSON_FIELD_ALIASES maps canonical name -> JS name per node
+  // kind, only where they differ.
+  var AST_JSON_FIELD_ALIASES = {
+    ForTo: { var: "v" },
+    ForEach: { var: "v" },
+    Switch: { default: "def" },
+    Dispatch: { default: "def" }
+  };
+  // Node kinds picoscript_basic.py has that this JS bridge doesn't support
+  // yet (no JS BLowerer/parser equivalent exists for these).
+  var AST_JSON_UNSUPPORTED = { TryExcept: 1, Raise: 1, OnBlock: 1 };
+
+  function astToJson(node) {
+    if (node === null || typeof node !== "object") return node;
+    if (Array.isArray(node)) return node.map(astToJson);
+    var kind = node.t;
+    if (!kind) throw new Error("astToJson: node missing 't' tag: " + JSON.stringify(node));
+    var aliases = AST_JSON_FIELD_ALIASES[kind] || {};
+    var revAliases = {};
+    Object.keys(aliases).forEach(function (canon) { revAliases[aliases[canon]] = canon; });
+    var out = { node: kind };
+    Object.keys(node).forEach(function (k) {
+      if (k === "t") return;
+      out[revAliases[k] || k] = astToJson(node[k]);
+    });
+    return out;
+  }
+
+  function jsonToAst(data) {
+    if (data === null || typeof data !== "object") return data;
+    if (Array.isArray(data)) return data.map(jsonToAst);
+    var kind = data.node;
+    if (!kind) throw new Error("jsonToAst: object missing 'node' discriminator: " + JSON.stringify(data));
+    if (AST_JSON_UNSUPPORTED[kind]) throw new Error("jsonToAst: '" + kind + "' is not yet supported by the JS bridge (Python-only node kind)");
+    var aliases = AST_JSON_FIELD_ALIASES[kind] || {};
+    var out = { t: kind };
+    Object.keys(data).forEach(function (k) {
+      if (k === "node") return;
+      out[aliases[k] || k] = jsonToAst(data[k]);
+    });
+    return out;
+  }
+
+  function compileAst(src) { return new BLowerer().lowerProgram(jsonToAst(JSON.parse(src))); }
+
   function compileIL(src, lang) {
     return (lang === "basic") ? compileBasic(src)
          : (lang === "python") ? compilePython(src)
@@ -18939,6 +19011,7 @@ function compressBound(inputLen) {
          : (lang === "cobol") ? compileCobol(src)
          : (lang === "report") ? compileReport(src)
          : (lang === "functional") ? compileFunctional(src)
+         : (lang === "ast") ? compileAst(src)
          : compileC(src);
   }
 
@@ -19066,6 +19139,7 @@ function compressBound(inputLen) {
       else if (fromLang === "cobol") ast = new CobParser(cobtokenize(src)).parseProgram();
       else if (fromLang === "report") ast = new RepParser(reptokenize(src)).parseProgram();
       else if (fromLang === "functional") ast = new FunParser(funtokenize(src)).parseProgram();
+      else if (fromLang === "ast") ast = jsonToAst(JSON.parse(src));
       else return src;
     } catch (e) { return src; }
     // Resolve user const/enum declarations to literal values before emitting, so
@@ -19080,6 +19154,7 @@ function compressBound(inputLen) {
     if (toLang === "report") return astToReport(ast);
     if (toLang === "functional") return astToFunctional(ast);
     if (toLang === "workflow") return JSON.stringify(astToWorkflow(ast), null, 2);
+    if (toLang === "ast") return JSON.stringify(astToJson(ast), null, 2);
     return src;
   }
 
@@ -19527,6 +19602,7 @@ function compressBound(inputLen) {
     compileCobol: function(src) { return { words: lowerToBytecode(compileCobol(src), true) }; },
     compileReport: function(src) { return { words: lowerToBytecode(compileReport(src), true) }; },
     compileFunctional: function(src) { return { words: lowerToBytecode(compileFunctional(src), true) }; },
+    compileAst: function (src) { return { words: lowerToBytecode(compileAst(src), true), il: compileAst(src) }; },
     compileWithDebug: function (src, lang) {
       var dbg = {};
       var words = lowerToBytecode(compileIL(src, lang), true, null, true, dbg);
@@ -19538,6 +19614,8 @@ function compressBound(inputLen) {
     // X -> workflow round-trips and one shared sample set across all dialects.
     toWorkflow: function (src, fromLang) { return translate(src, fromLang, "workflow"); },
     astToWorkflow: astToWorkflow,
+    astToJson: astToJson,
+    jsonToAst: jsonToAst,
     symbolize: symbolize,
     offsetToLineCol: offsetToLineCol,
     sourceLineText: sourceLineText,
@@ -23068,6 +23146,7 @@ function enterStaticMode(name,kind){
   if(typeof schemaToggle==='function') schemaToggle(kind==='schema', name);
   if(typeof eventToggle==='function') eventToggle(kind==='event', name);
   if(typeof ontologyToggle==='function') ontologyToggle(kind==='ontology', name);
+  if(typeof rbacToggle==='function') rbacToggle(kind==='rbac', name);
 }
 function exitStaticMode(){
   if(!STATIC_MODE) return;
@@ -23083,6 +23162,7 @@ function exitStaticMode(){
   if(typeof schemaToggle==='function') schemaToggle(false);
   if(typeof eventToggle==='function') eventToggle(false);
   if(typeof ontologyToggle==='function') ontologyToggle(false);
+  if(typeof rbacToggle==='function') rbacToggle(false);
   if(typeof wfToggle==='function') wfToggle();
   if(typeof reportToggle==='function') reportToggle();
 }
@@ -23126,6 +23206,7 @@ function filesRead(){
 // source = a read-only input shape; static = a served asset.
 function fileKind(name){
   var n=String(name||'').toLowerCase();
+  if(/\.rbac\.json$/.test(n)) return 'rbac';
   if(/\.ontology\.json$/.test(n)) return 'ontology';
   if(/\.event\.json$/.test(n)) return 'event';
   if(/\.schema\.json$/.test(n)) return 'schema';
@@ -23134,7 +23215,7 @@ function fileKind(name){
   if(/\.(html|js|css|md|txt)$/.test(n)) return 'static';
   return 'code';
 }
-function fileIcon(kind){ return {folder:'\uD83D\uDCC1',card:'\uD83D\uDDC3',schema:'\uD83E\uDDE9',event:'\u26A1',ontology:'\uD83D\uDD78\uFE0F',source:'\uD83D\uDD16',static:'\uD83D\uDCC4',code:'\u2039\u203A'}[kind]||'\uD83D\uDCC4'; }
+function fileIcon(kind){ return {folder:'\uD83D\uDCC1',card:'\uD83D\uDDC3',schema:'\uD83E\uDDE9',event:'\u26A1',ontology:'\uD83D\uDD78\uFE0F',rbac:'\uD83D\uDD10',source:'\uD83D\uDD16',static:'\uD83D\uDCC4',code:'\u2039\u203A'}[kind]||'\uD83D\uDCC4'; }
 function fileBaseName(p){ var i=String(p).lastIndexOf('/'); return i<0?p:p.slice(i+1); }
 // A card file writes its {addr:int} map (or {cards:{...}}) into the live picowal
 // (WAL) card store so a running program/workflow can Storage.Load it.
@@ -23205,6 +23286,7 @@ function fileDefaultSrc(kind){
   if(kind==='schema') return JSON.stringify({fields:[]},null,2);
   if(kind==='event') return JSON.stringify({mode:'async',fields:[],returns:null},null,2);
   if(kind==='ontology') return JSON.stringify({entities:[],relations:[]},null,2);
+  if(kind==='rbac') return JSON.stringify({roles:[],permissions:[],rowPolicies:[]},null,2);
   return '';
 }
 function psFilesNew(name){
@@ -23471,18 +23553,27 @@ function queryRenderHead(){
 }
 function cardRender(){
   cardRenderSchemaInfo();
-  var fields=schemaForPack(curPack());
+  var pack=curPack(), fields=schemaForPack(pack);
+  if(!rbacCanAct(pack,'read')){ document.getElementById('cardlist').innerHTML=rowsHtml([],true,fields); cardMsg('role "'+rbacCurrentRole()+'" cannot read pack "'+pack+'"',true); return; }
+  var rowPred=rbacRowPredicate(pack);
   var url=liveServerUrl();
-  if(!url){ document.getElementById('cardlist').innerHTML=rowsHtml(STORE.all(curPack()),true,fields); return; }
-  var pid=packNameToId(curPack());
+  if(!url){
+    var entries=STORE.all(pack);
+    if(rowPred) entries=entries.filter(function(e){return rowPred(e[1]);});
+    document.getElementById('cardlist').innerHTML=rowsHtml(entries,true,fields);
+    return;
+  }
+  var pid=packNameToId(pack);
   liveFetch('/list/'+pid).then(function(r){return r.json();}).then(function(d){
     var entries=(d.records||[]).map(function(rr){return [rr.record,rr.data];});
+    if(rowPred) entries=entries.filter(function(e){return rowPred(e[1]);});
     document.getElementById('cardlist').innerHTML=rowsHtml(entries,true,fields);
   }).catch(function(e){ cardMsg('live list failed: '+e.message,true); });
 }
 function cardCreate(){
   var pack=curPack(),rec;
   try{rec=JSON.parse(document.getElementById('cardjson').value);}catch(e){cardMsg('JSON: '+e.message,true);return;}
+  if(!rbacCanAct(pack,'create')){ cardMsg('role "'+rbacCurrentRole()+'" cannot create in pack "'+pack+'"',true); return; }
   var url=liveServerUrl();
   if(!url){
     try{var id=STORE.create(pack,rec);var hex=STORE.cardBytesHex(pack,id);document.getElementById('serout').textContent=hex;cardMsg('#'+id+' created',false);cardRender();}catch(e){cardMsg(e.message,true);}
@@ -23499,6 +23590,7 @@ function cardCreate(){
 function cardCreateTyped(){
   var pack=curPack(), fields=schemaForPack(pack);
   if(!fields){ cardMsg('pack is not schema-bound',true); return; }
+  if(!rbacCanAct(pack,'create')){ cardMsg('role "'+rbacCurrentRole()+'" cannot create in pack "'+pack+'"',true); return; }
   var rec={};
   fields.forEach(function(f){
     var el=document.getElementById('cf_'+f.name); if(!el) return;
@@ -23519,6 +23611,7 @@ function cardCreateTyped(){
 }
 function cardSeed(){
   var pack=curPack(), seed=[{qty:42,sku:"ABC",status:1},{qty:7,sku:"XYZ",status:0},{qty:99,sku:"ABC",status:1},{qty:55,sku:"QRS",status:2}];
+  if(!rbacCanAct(pack,'create')){ cardMsg('role "'+rbacCurrentRole()+'" cannot create in pack "'+pack+'"',true); return; }
   var url=liveServerUrl();
   if(!url){ seed.forEach(function(r){STORE.create(pack,r);}); cardMsg('Seeded 4',false); cardRender(); return; }
   var pid=packNameToId(pack);
@@ -23528,6 +23621,7 @@ function cardSeed(){
 }
 function cardClear(){
   var pack=curPack();
+  if(!rbacCanAct(pack,'delete')){ cardMsg('role "'+rbacCurrentRole()+'" cannot delete in pack "'+pack+'"',true); return; }
   var url=liveServerUrl();
   if(!url){
     STORE.all(pack).forEach(function(e){STORE.delete(pack,e[0]);});
@@ -23544,6 +23638,7 @@ function cardClear(){
 }
 function cardDelete(id){
   var pack=curPack();
+  if(!rbacCanAct(pack,'delete')){ cardMsg('role "'+rbacCurrentRole()+'" cannot delete in pack "'+pack+'"',true); return; }
   var url=liveServerUrl();
   if(!url){ STORE.delete(pack,id); cardRender(); return; }
   var pid=packNameToId(pack);
@@ -23552,21 +23647,28 @@ function cardDelete(id){
 function cardQuery(){
   var pack=curPack(),q=document.getElementById('querybox').value,fields=schemaForPack(pack);
   queryRenderHead(); queryRenderChips();
+  if(!rbacCanAct(pack,'read')){ document.getElementById('qresults').innerHTML=rowsHtml([],false,fields); cardMsg('role "'+rbacCurrentRole()+'" cannot read pack "'+pack+'"',true); return; }
+  var rowPred=rbacRowPredicate(pack);
   var url=liveServerUrl();
   if(!url){
-    try{var res=STORE.query(pack,q);document.getElementById('qresults').innerHTML=rowsHtml(res,false,fields);cardMsg(res.length+' match'+(res.length===1?'':'es'),false);}catch(e){cardMsg(e.message,true);}
+    try{
+      var res=STORE.query(pack,q);
+      if(rowPred) res=res.filter(function(e){return rowPred(e[1]);});
+      document.getElementById('qresults').innerHTML=rowsHtml(res,false,fields);cardMsg(res.length+' match'+(res.length===1?'':'es'),false);
+    }catch(e){cardMsg(e.message,true);}
     return;
   }
   // Live mode fetches the full list and applies the SAME query DSL client-side
   // (PicoStore.compileQuery) rather than reimplementing AND/OR/comparisons
   // server-side -- the native engine's own Storage.QueryCard only understands
   // a single field=value filter (see host-picowal-report-joins), so this keeps
-  // full query-language parity between live and offline modes.
+  // full query-language parity between live and offline modes. Any RLS row
+  // policy is ANDed on as an additional predicate, same as offline mode.
   var pid=packNameToId(pack);
   liveFetch('/list/'+pid).then(function(r){return r.json();}).then(function(d){
     var entries=(d.records||[]).map(function(rr){return [rr.record,rr.data];});
     var pred=PicoStore.compileQuery(q);
-    var res=entries.filter(function(e){ return pred(e[1]); });
+    var res=entries.filter(function(e){ return pred(e[1]) && (!rowPred||rowPred(e[1])); });
     document.getElementById('qresults').innerHTML=rowsHtml(res,false,fields);
     cardMsg(res.length+' match'+(res.length===1?'':'es')+' (live)',false);
   }).catch(function(e){ cardMsg(e.message,true); });
@@ -24118,7 +24220,7 @@ function schemaGetModel(){
   try{ var d=JSON.parse(getSrc()); if(d&&Array.isArray(d.fields)) return d; }catch(e){}
   return {fields:[]};
 }
-function schemaSetModel(d){ setSrc(JSON.stringify(d,null,2)); schemaRenderDesigner(); if(typeof filesRender==='function')filesRender(); }
+function schemaSetModel(d){ setSrc(JSON.stringify(d,null,2)); schemaRenderDesigner(); if(typeof psFilesSave==='function')psFilesSave(); else if(typeof filesRender==='function')filesRender(); }
 function schemaAddField(){
   var nameEl=document.getElementById('schFName'), typeEl=document.getElementById('schFType');
   var name=(nameEl?nameEl.value:'').trim();
@@ -24168,7 +24270,7 @@ function schemaApplyJson(){
   catch(err){ if(e){ e.textContent='invalid JSON: '+String(err.message||err); e.style.color='#ff7b72'; } return; }
   setSrc(t.value); schemaCloseJson();
   try{ schemaRenderDesigner(); }catch(_){}
-  if(typeof filesRender==='function') filesRender();
+  if(typeof psFilesSave==='function') psFilesSave(); else if(typeof filesRender==='function') filesRender();
 }
 // Create a new schemas/*.schema.json file and open it straight into the designer.
 function schemaQuickNew(){
@@ -24214,7 +24316,7 @@ function eventGetModel(){
   try{ var d=JSON.parse(getSrc()); if(d&&Array.isArray(d.fields)) return {mode:d.mode==='sync'?'sync':'async',fields:d.fields,returns:d.returns||null}; }catch(e){}
   return {mode:'async',fields:[],returns:null};
 }
-function eventSetModel(d){ setSrc(JSON.stringify(d,null,2)); eventRenderDesigner(); if(typeof filesRender==='function')filesRender(); }
+function eventSetModel(d){ setSrc(JSON.stringify(d,null,2)); eventRenderDesigner(); if(typeof psFilesSave==='function')psFilesSave(); else if(typeof filesRender==='function')filesRender(); }
 function eventSetMode(mode){ var d=eventGetModel(); d.mode=(mode==='sync')?'sync':'async'; if(d.mode==='async') d.returns=null; eventSetModel(d); }
 function eventSetReturnsType(type){ var d=eventGetModel(); d.returns=(type&&type!=='none')?{type:type}:null; eventSetModel(d); }
 function eventAddField(){
@@ -24274,7 +24376,7 @@ function eventApplyJson(){
   catch(err){ if(e){ e.textContent='invalid JSON: '+String(err.message||err); e.style.color='#ff7b72'; } return; }
   setSrc(t.value); eventCloseJson();
   try{ eventRenderDesigner(); }catch(_){}
-  if(typeof filesRender==='function') filesRender();
+  if(typeof psFilesSave==='function') psFilesSave(); else if(typeof filesRender==='function') filesRender();
 }
 // Create a new events/*.event.json file and open it straight into the designer.
 function eventQuickNew(){
@@ -24303,7 +24405,7 @@ function ontologyGetModel(){
   try{ var d=JSON.parse(getSrc()); if(d&&(Array.isArray(d.entities)||Array.isArray(d.relations))) return {entities:d.entities||[],relations:d.relations||[]}; }catch(e){}
   return {entities:[],relations:[]};
 }
-function ontologySetModel(d){ setSrc(JSON.stringify(d,null,2)); ontologyRenderDesigner(); if(typeof filesRender==='function')filesRender(); }
+function ontologySetModel(d){ setSrc(JSON.stringify(d,null,2)); ontologyRenderDesigner(); if(typeof psFilesSave==='function')psFilesSave(); else if(typeof filesRender==='function')filesRender(); }
 function ontologyAddEntity(){
   var nameEl=document.getElementById('ontEName'), packEl=document.getElementById('ontEPack');
   var name=(nameEl?nameEl.value:'').trim();
@@ -24395,7 +24497,7 @@ function ontologyApplyJson(){
   catch(err){ if(e){ e.textContent='invalid JSON: '+String(err.message||err); e.style.color='#ff7b72'; } return; }
   setSrc(t.value); ontologyCloseJson();
   try{ ontologyRenderDesigner(); }catch(_){}
-  if(typeof filesRender==='function') filesRender();
+  if(typeof psFilesSave==='function') psFilesSave(); else if(typeof filesRender==='function') filesRender();
 }
 // Create a new *.ontology.json file and open it straight into the designer.
 function ontologyQuickNew(){
@@ -24404,6 +24506,168 @@ function ontologyQuickNew(){
   files[name]={kind:'ontology',lang:'',src:JSON.stringify({entities:[],relations:[]},null,2),updated:Date.now()};
   filesWrite(files); filesRender();
   psFilesOpen(name);
+}
+
+// ---- RBAC / row-level security designer -------------------------------------
+// A *.rbac.json file is {roles:[name,...], permissions:[{role,pack,actions:[...]}],
+// rowPolicies:[{pack,role,predicate}]}. `actions` is a subset of
+// ['read','create','update','delete']; `predicate` reuses the EXACT same query
+// syntax as the Query panel/PicoStore.compileQuery (e.g. "status = 1"), so a
+// row policy is just an extra filter ANDed onto whatever the user queries.
+// Enforcement is client-side simulation for BOTH the offline localStorage
+// simulator and live-server mode (see rbacCheckAction/rbacRowPredicate,
+// wired into Cards create/update/delete and Query) -- this is a design-time
+// preview of access control, not a production auth boundary; a real deployed
+// server would need its own enforcement (see program-exits/live-picoweb-hosting).
+var RBAC_ROLE_KEY='picoscript.rbac.role';
+function rbacCurrentRole(){ try{ return localStorage.getItem(RBAC_ROLE_KEY)||''; }catch(e){ return ''; } }
+function rbacSetCurrentRole(role){ try{ if(role) localStorage.setItem(RBAC_ROLE_KEY,role); else localStorage.removeItem(RBAC_ROLE_KEY); }catch(e){} }
+// Find the *.rbac.json file governing a given pack (first file whose
+// permissions/rowPolicies mention it; a repo typically has one rbac file).
+function rbacModelForPack(pack){
+  var files=(typeof filesRead==='function')?filesRead():{};
+  for(var name in files){
+    if(fileKind(name)!=='rbac') continue;
+    try{
+      var d=JSON.parse(files[name].src);
+      var mentions=(d.permissions||[]).some(function(p){return p.pack===pack;})||(d.rowPolicies||[]).some(function(p){return p.pack===pack;});
+      if(mentions) return d;
+    }catch(e){}
+  }
+  return null;
+}
+// true if `role` may perform `action` (read|create|update|delete) on `pack`.
+// No matching RBAC model or no matching permission row = unrestricted (RBAC
+// is opt-in, matching Cards/Query's existing "schema-bound is opt-in" pattern).
+function rbacCanAct(pack,action){
+  var role=rbacCurrentRole(); if(!role) return true;
+  var model=rbacModelForPack(pack); if(!model) return true;
+  var perms=(model.permissions||[]).filter(function(p){return p.pack===pack&&p.role===role;});
+  if(!perms.length) return true;
+  return perms.some(function(p){return (p.actions||[]).indexOf(action)>=0;});
+}
+// Combined row-level predicate (AND of every matching rowPolicy) for the
+// current role on `pack`, or null if none apply (no additional filtering).
+function rbacRowPredicate(pack){
+  var role=rbacCurrentRole(); if(!role) return null;
+  var model=rbacModelForPack(pack); if(!model) return null;
+  var policies=(model.rowPolicies||[]).filter(function(p){return p.pack===pack&&p.role===role&&p.predicate;});
+  if(!policies.length) return null;
+  var preds=policies.map(function(p){return PicoStore.compileQuery(p.predicate);});
+  return function(rec){ return preds.every(function(pred){return pred(rec);}); };
+}
+function rbacGetModel(){
+  try{ var d=JSON.parse(getSrc()); if(d&&typeof d==='object') return {roles:d.roles||[],permissions:d.permissions||[],rowPolicies:d.rowPolicies||[]}; }catch(e){}
+  return {roles:[],permissions:[],rowPolicies:[]};
+}
+function rbacSetModel(d){ setSrc(JSON.stringify(d,null,2)); rbacRenderDesigner(); if(typeof psFilesSave==='function')psFilesSave(); else if(typeof filesRender==='function')filesRender(); }
+var RBAC_ACTIONS=['read','create','update','delete'];
+function rbacAddRole(){
+  var el=document.getElementById('rbacRoleName'); var name=(el?el.value:'').trim();
+  if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)){ if(typeof alert==='function') alert('role name must be a simple identifier'); return; }
+  var d=rbacGetModel();
+  if(d.roles.indexOf(name)<0) d.roles=d.roles.concat([name]);
+  rbacSetModel(d);
+  if(el) el.value='';
+}
+function rbacRemoveRole(name){
+  var d=rbacGetModel();
+  d.roles=d.roles.filter(function(r){return r!==name;});
+  d.permissions=d.permissions.filter(function(p){return p.role!==name;});
+  d.rowPolicies=d.rowPolicies.filter(function(p){return p.role!==name;});
+  rbacSetModel(d);
+}
+function rbacAddPermission(){
+  var roleEl=document.getElementById('rbacPermRole'), packEl=document.getElementById('rbacPermPack');
+  var role=roleEl?roleEl.value:'', pack=(packEl?packEl.value:'').trim();
+  if(!role||!pack){ if(typeof alert==='function') alert('pick a role and enter a pack name'); return; }
+  var actions=RBAC_ACTIONS.filter(function(a){ var cb=document.getElementById('rbacAct_'+a); return cb&&cb.checked; });
+  var d=rbacGetModel();
+  d.permissions=d.permissions.filter(function(p){return !(p.role===role&&p.pack===pack);}).concat([{role:role,pack:pack,actions:actions}]);
+  rbacSetModel(d);
+  if(packEl) packEl.value='';
+}
+function rbacRemovePermission(idx){ var d=rbacGetModel(); d.permissions=d.permissions.filter(function(_,i){return i!==idx;}); rbacSetModel(d); }
+function rbacAddRowPolicy(){
+  var roleEl=document.getElementById('rbacPolRole'), packEl=document.getElementById('rbacPolPack'), predEl=document.getElementById('rbacPolPred');
+  var role=roleEl?roleEl.value:'', pack=(packEl?packEl.value:'').trim(), predicate=(predEl?predEl.value:'').trim();
+  if(!role||!pack||!predicate){ if(typeof alert==='function') alert('role, pack and predicate are all required'); return; }
+  var d=rbacGetModel();
+  d.rowPolicies=(d.rowPolicies||[]).concat([{pack:pack,role:role,predicate:predicate}]);
+  rbacSetModel(d);
+  if(predEl) predEl.value='';
+}
+function rbacRemoveRowPolicy(idx){ var d=rbacGetModel(); d.rowPolicies=d.rowPolicies.filter(function(_,i){return i!==idx;}); rbacSetModel(d); }
+function rbacRenderDesigner(){
+  var host=document.getElementById('rbacBody'); if(!host) return;
+  var d=rbacGetModel(), roles=d.roles||[], perms=d.permissions||[], pols=d.rowPolicies||[];
+  var roleOpts=roles.map(function(r){return '<option>'+esc(r)+'</option>';}).join('');
+  var html='<div style="font-weight:600;margin-bottom:4px">Roles</div>';
+  html+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">'+
+    (roles.length?roles.map(function(r){return '<span class="wf-warn" style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:#2c313f">'+esc(r)+' <button class="ghost" style="padding:0 4px" onclick="rbacRemoveRole(\''+esc(r)+'\')">&times;</button></span>';}).join(''):'<span class="muted">no roles yet</span>')+
+    '</div>';
+  html+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:14px">'+
+    '<input id="rbacRoleName" placeholder="role name" style="width:130px" onkeydown="if(event.key===\'Enter\')rbacAddRole();">'+
+    '<button class="ghost" onclick="rbacAddRole()">+ role</button></div>';
+
+  html+='<div style="font-weight:600;margin-bottom:4px">Permissions (per role/pack action set)</div>';
+  html+='<table class="wal" style="margin-bottom:8px"><thead><tr><th>role</th><th>pack</th><th>actions</th><th></th></tr></thead><tbody>';
+  if(!perms.length) html+='<tr><td colspan="4" style="color:var(--muted)">no permissions yet (unrestricted by default)</td></tr>';
+  perms.forEach(function(p,i){
+    html+='<tr><td>'+esc(p.role)+'</td><td>'+esc(p.pack)+'</td><td>'+esc((p.actions||[]).join(', ')||'(none)')+'</td>'+
+      '<td><button class="ghost" onclick="rbacRemovePermission('+i+')" title="remove">&times;</button></td></tr>';
+  });
+  html+='</tbody></table><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:14px">'+
+    '<select id="rbacPermRole"><option value="">role&hellip;</option>'+roleOpts+'</select>'+
+    '<input id="rbacPermPack" placeholder="pack name" style="width:120px">'+
+    RBAC_ACTIONS.map(function(a){return '<label style="font-size:11px"><input type="checkbox" id="rbacAct_'+a+'"> '+a+'</label>';}).join(' ')+
+    '<button class="ghost" onclick="rbacAddPermission()">+ permission</button></div>';
+
+  html+='<div style="font-weight:600;margin-bottom:4px">Row-level security policies</div>';
+  html+='<table class="wal" style="margin-bottom:8px"><thead><tr><th>pack</th><th>role</th><th>predicate</th><th></th></tr></thead><tbody>';
+  if(!pols.length) html+='<tr><td colspan="4" style="color:var(--muted)">no row policies yet (full row access by default)</td></tr>';
+  pols.forEach(function(p,i){
+    html+='<tr><td>'+esc(p.pack)+'</td><td>'+esc(p.role)+'</td><td><code>'+esc(p.predicate)+'</code></td>'+
+      '<td><button class="ghost" onclick="rbacRemoveRowPolicy('+i+')" title="remove">&times;</button></td></tr>';
+  });
+  html+='</tbody></table><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+
+    '<input id="rbacPolPack" placeholder="pack name" style="width:110px">'+
+    '<select id="rbacPolRole"><option value="">role&hellip;</option>'+roleOpts+'</select>'+
+    '<input id="rbacPolPred" placeholder="status = 1 (Query syntax)" style="width:200px" onkeydown="if(event.key===\'Enter\')rbacAddRowPolicy();">'+
+    '<button class="ghost" onclick="rbacAddRowPolicy()">+ policy</button></div>';
+  host.innerHTML=html;
+}
+function rbacToggle(active,name){
+  var host=document.getElementById('rbacDesigner');
+  if(host) host.style.display=active?'block':'none';
+  if(!active){ rbacCloseJson(); return; }
+  var mon=document.getElementById('monaco'), src=document.getElementById('src');
+  if(mon) mon.style.display='none'; if(src) src.style.display='none';
+  try{ rbacRenderDesigner(); }catch(e){}
+}
+function rbacOpenJson(){
+  var m=document.getElementById('rbacJsonModal'), t=document.getElementById('rbacJsonText'), e=document.getElementById('rbacJsonErr');
+  if(!m||!t) return; if(e) e.textContent='';
+  t.value=getSrc(); m.classList.add('open'); t.focus();
+}
+function rbacCloseJson(){ var m=document.getElementById('rbacJsonModal'); if(m) m.classList.remove('open'); }
+function rbacApplyJson(){
+  var t=document.getElementById('rbacJsonText'), e=document.getElementById('rbacJsonErr');
+  if(!t) return;
+  try{ var d=JSON.parse(t.value); if(!d||typeof d!=='object') throw new Error('expected {roles:[...],permissions:[...],rowPolicies:[...]}'); }
+  catch(err){ if(e){ e.textContent='invalid JSON: '+String(err.message||err); e.style.color='#ff7b72'; } return; }
+  setSrc(t.value); rbacCloseJson();
+  try{ rbacRenderDesigner(); }catch(_){}
+  if(typeof psFilesSave==='function') psFilesSave(); else if(typeof filesRender==='function') filesRender();
+}
+// Create a new *.rbac.json file and open it straight into the designer.
+function rbacQuickNew(){
+  var files=filesRead(), base='access', name=base+'.rbac.json', n=2;
+  while(files[name]){ name=base+'-'+(n++)+'.rbac.json'; }
+  files[name]={kind:'rbac',lang:'',src:JSON.stringify({roles:[],permissions:[],rowPolicies:[]},null,2),updated:Date.now()};
+  filesWrite(files); filesRender();
+  psFilesOpen(name);
+  return name;
 }
 
 // ---- report/form layout (stage 2 over the current program output) -----------
@@ -24467,6 +24731,7 @@ document.getElementById('src').addEventListener('input',function(){filesRender()
 document.getElementById('lang').value='basic';
 document.getElementById('src').value=RESPONDER;
 initMonaco();compileSrc(false);loadSample();renderWal();renderLayout();busRender();liveServerRenderStatus();
+(function(){var el=document.getElementById('rbacRoleInput'); if(el) el.value=rbacCurrentRole();})();
 (function(){var ls=filesSafeLocalStorage(),active='';try{active=ls?ls.getItem(PS_ACTIVE_FILE_KEY)||'':'';}catch(e){} if(active&&filesRead()[active]) psFilesOpen(active); else filesRender();})();
 document.getElementById('flyoutTriggers').style.display='none';
 </script>

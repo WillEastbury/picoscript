@@ -80,12 +80,18 @@ const LIVE_URL = process.argv[2] || 'http://localhost:8110';
     out.queryResultRows = (document.getElementById('qresults').innerHTML.match(/<tr>/g) || []).length;
     out.queryMsg = document.getElementById('cardmsg').textContent;
 
-    // Delete via the real UI, then confirm the list shrinks.
+    // Delete via the real UI, then confirm the list shrinks. Poll briefly
+    // instead of a single fixed wait -- avoids flaking under slow CI load.
     var firstRowMatch = /onclick="cardDelete\((\d+)\)"/.exec(document.getElementById('cardlist').innerHTML);
     out.deleteTargetFound = !!firstRowMatch;
     if (firstRowMatch) {
+      var beforeCount = (document.getElementById('cardlist').innerHTML.match(/<tr>/g) || []).length;
       cardDelete(parseInt(firstRowMatch[1], 10));
-      await new Promise(function (r) { setTimeout(r, 500); });
+      for (var i = 0; i < 20; i++) {
+        await new Promise(function (r) { setTimeout(r, 150); });
+        var nowCount = (document.getElementById('cardlist').innerHTML.match(/<tr>/g) || []).length;
+        if (nowCount < beforeCount) break;
+      }
     }
     out.cardListHtmlAfterDelete = (document.getElementById('cardlist').innerHTML.match(/<tr>/g) || []).length;
 
