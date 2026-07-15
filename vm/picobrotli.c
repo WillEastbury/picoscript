@@ -24,6 +24,15 @@
 #pragma GCC optimize("O1")
 #endif
 
+/* __attribute__((cold)) is a GCC/Clang optimizer hint (this function only runs
+ * once at startup); MSVC has no equivalent attribute, so no-op it there rather
+ * than reject the file outright. */
+#if defined(__GNUC__) || defined(__clang__)
+#define PICOBROTLI_COLD __attribute__((cold))
+#else
+#define PICOBROTLI_COLD
+#endif
+
 /* ================================================================
  * Bit writer (LSB-first, as Brotli requires)
  * ================================================================ */
@@ -713,7 +722,7 @@ static int encode_stored(const uint8_t* in, size_t len,
  * Main encoder
  * ================================================================ */
 
-__attribute__((cold))
+PICOBROTLI_COLD
 int brotli_encode(const uint8_t* input, size_t input_len,
                   uint8_t* output, size_t output_cap) {
     if (input_len == 0) {
