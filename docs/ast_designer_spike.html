@@ -29,6 +29,13 @@
                 font: 11px Consolas, monospace; padding: 1px 4px; width: 8ch; }
   .leaf-input.wide { width: 16ch; }
   .list-label { color: #6a97e0; }
+  .stmt-row { display: flex; align-items: flex-start; gap: 4px; margin: 2px 0; }
+  .mini-toolbar { display: flex; gap: 2px; flex: 0 0 auto; }
+  .mini-btn { background: #23262c; border: 1px solid #3a3e46; color: #c7d0dc; border-radius: 3px;
+              font-size: 10px; line-height: 1; padding: 3px 5px; cursor: pointer; }
+  .mini-btn:hover { background: #3a3e46; }
+  .add-row { display: flex; gap: 6px; margin: 4px 0 4px 4px; }
+  .add-row select { font-size: 11px; padding: 2px 4px; }
   #output, #preview { white-space: pre-wrap; background: #0f1114; border: 1px solid #2a2d33; border-radius: 6px;
                        padding: 8px; font: 12px/1.5 Consolas, monospace; margin-top: 8px; max-height: 30%; overflow: auto; }
   .err { color: #e06c75; }
@@ -58,7 +65,7 @@
     </div>
   </div>
   <div class="pane">
-    <h2>Tree view (click a leaf value to edit; re-run to apply)</h2>
+    <h2>Tree view (edit leaf values; +/&times;/&uarr;&darr;/&#10697; to add, delete, reorder, duplicate statements)</h2>
     <div class="tree" id="tree"></div>
     <div class="toolbar">
       <button class="primary" id="run">Compile &amp; Run</button>
@@ -113,12 +120,99 @@
 
   // ---- recursive tree renderer -------------------------------------------
   // Renders the parsed AST-JSON (the exact objects `srcEl.value` parses to)
-  // as a collapsible tree. Scalar leaf fields (numbers/strings/bools) get an
-  // <input> bound back into the in-memory object graph; edits are flushed to
-  // the JSON textarea immediately so Compile & Run always reflects them.
+  // as a collapsible, *editable* tree -- not just a viewer. Scalar leaf
+  // fields (numbers/strings/bools) get an <input> bound back into the
+  // in-memory object graph; statement-list arrays (a program body, a loop
+  // body, an If's `els`, ...) get add/delete/reorder/duplicate controls that
+  // splice directly into that same array. Either way, every mutation is
+  // flushed straight back to the JSON textarea so Compile & Run always
+  // reflects the current tree.
   var root = null;
 
   function isNode(v) { return v && typeof v === "object" && !Array.isArray(v) && "node" in v; }
+  // A "statement list" is any array whose entries are all AST nodes (or the
+  // array is empty) -- covers the top-level program, every `body` field, and
+  // `els`. Tuple-shaped fields (If.arms, Switch/Dispatch.cases,
+  // EnumDecl.members) are *not* statement lists at the outer level (their
+  // entries are 2-element arrays), but their inner body arrays still are.
+  function isStmtList(v) { return Array.isArray(v) && (v.length === 0 || v.every(isNode)); }
+
+  // A small palette of node kinds the "+ add" control can insert. Deliberately
+  // not exhaustive (Switch/Dispatch/Sub/TryExcept/... still need hand-editing
+  // the JSON) -- covers the common cases so the tree is genuinely editable,
+  // not just viewable.
+  var STMT_TEMPLATES = {
+    Let: function () { return { node: "Let", name: "x", value: { node: "Num", value: 0 } }; },
+    Print: function () { return { node: "Print", value: { node: "Num", value: 0 } }; },
+    If: function () {
+      return { node: "If", arms: [[
+        { node: "Cmp", cond: "EQ", lhs: { node: "Num", value: 0 }, rhs: { node: "Num", value: 0 } }, []
+      ]], els: null };
+    },
+    ForTo: function () {
+      return { node: "ForTo", var: "i", start: { node: "Num", value: 0 }, end: { node: "Num", value: 0 }, step: null, body: [] };
+    },
+    While: function () {
+      return { node: "While", cond: { node: "Cmp", cond: "NE", lhs: { node: "Num", value: 0 }, rhs: { node: "Num", value: 0 } }, body: [] };
+    },
+    CallStmt: function () { return { node: "CallStmt", call: { node: "Call", ns: null, method: "Nop", args: [] } }; },
+    IncDec: function () { return { node: "IncDec", name: "x", delta: 1 }; },
+    Return: function () { return { node: "Return", value: null }; },
+    Break: function () { return { node: "Break" }; },
+    Skip: function () { return { node: "Skip" }; }
+  };
+
+  function mkBtn(label, title, fn) {
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "mini-btn"; b.textContent = label; b.title = title;
+    b.addEventListener("click", fn);
+    return b;
+  }
+
+  function flushAndRender() {
+    srcEl.value = JSON.stringify(root, null, 2);
+    renderTree();
+  }
+
+  // Renders `list` (an array of AST nodes) with per-item reorder/duplicate/
+  // delete controls, splicing directly into `list` (the live array from the
+  // parsed `root`) on every action.
+  function renderStmtList(list) {
+    var wrap = document.createElement("div");
+    list.forEach(function (item, i) {
+      var row = document.createElement("div");
+      row.className = "stmt-row";
+      var toolbar = document.createElement("span");
+      toolbar.className = "mini-toolbar";
+      toolbar.appendChild(mkBtn("\u2191", "move up", function () {
+        if (i > 0) { list.splice(i - 1, 0, list.splice(i, 1)[0]); flushAndRender(); }
+      }));
+      toolbar.appendChild(mkBtn("\u2193", "move down", function () {
+        if (i < list.length - 1) { list.splice(i + 1, 0, list.splice(i, 1)[0]); flushAndRender(); }
+      }));
+      toolbar.appendChild(mkBtn("\u29C9", "duplicate", function () {
+        list.splice(i + 1, 0, JSON.parse(JSON.stringify(item))); flushAndRender();
+      }));
+      toolbar.appendChild(mkBtn("\u00d7", "delete", function () {
+        list.splice(i, 1); flushAndRender();
+      }));
+      row.appendChild(toolbar);
+      row.appendChild(renderNode(item));
+      wrap.appendChild(row);
+    });
+    var addRow = document.createElement("div");
+    addRow.className = "add-row";
+    var sel = document.createElement("select");
+    Object.keys(STMT_TEMPLATES).forEach(function (k) {
+      var o = document.createElement("option"); o.value = k; o.textContent = k; sel.appendChild(o);
+    });
+    addRow.appendChild(sel);
+    addRow.appendChild(mkBtn("+ add", "insert statement", function () {
+      list.push(STMT_TEMPLATES[sel.value]()); flushAndRender();
+    }));
+    wrap.appendChild(addRow);
+    return wrap;
+  }
 
   function leafInput(container, obj, key) {
     var val = obj[key];
@@ -153,25 +247,34 @@
       lbl.className = "list-label";
       lbl.textContent = key + " [" + val.length + "]";
       wrap.appendChild(lbl);
-      val.forEach(function (item, i) {
-        if (isNode(item)) {
-          wrap.appendChild(renderNode(item));
-        } else if (Array.isArray(item)) {
-          // tuple-shaped entries (If.arms, Switch.cases, EnumDecl.members): [cond/value, body/expr]
-          var tup = document.createElement("div");
-          tup.className = "node";
-          tup.textContent = "[" + i + "]";
-          item.forEach(function (t) {
-            if (isNode(t)) tup.appendChild(renderNode(t));
-            else if (Array.isArray(t)) t.forEach(function (s) { if (isNode(s)) tup.appendChild(renderNode(s)); });
-          });
-          wrap.appendChild(tup);
-        } else {
-          var scalar = document.createElement("div");
-          scalar.textContent = "[" + i + "] " + JSON.stringify(item);
-          wrap.appendChild(scalar);
-        }
-      });
+      if (isStmtList(val)) {
+        wrap.appendChild(renderStmtList(val));
+      } else {
+        val.forEach(function (item, i) {
+          if (isNode(item)) {
+            wrap.appendChild(renderNode(item));
+          } else if (Array.isArray(item)) {
+            // tuple-shaped entries (If.arms, Switch/Dispatch.cases, EnumDecl.members):
+            // [cond/value/name, body/expr]. Inner body arrays are still editable
+            // statement lists; the tuple slot itself is not (add/remove an
+            // arm/case by hand-editing the JSON for now).
+            var tup = document.createElement("div");
+            tup.className = "node";
+            tup.textContent = "[" + i + "]";
+            item.forEach(function (t) {
+              if (isNode(t)) tup.appendChild(renderNode(t));
+              else if (isStmtList(t)) tup.appendChild(renderStmtList(t));
+              else if (Array.isArray(t)) t.forEach(function (s) { if (isNode(s)) tup.appendChild(renderNode(s)); });
+              else { var sc = document.createElement("div"); sc.textContent = JSON.stringify(t); tup.appendChild(sc); }
+            });
+            wrap.appendChild(tup);
+          } else {
+            var scalar = document.createElement("div");
+            scalar.textContent = "[" + i + "] " + JSON.stringify(item);
+            wrap.appendChild(scalar);
+          }
+        });
+      }
       container.appendChild(wrap);
       return;
     }
@@ -212,7 +315,7 @@
     lbl.className = "list-label";
     lbl.textContent = "program [" + root.length + " statements]";
     progWrap.appendChild(lbl);
-    root.forEach(function (stmt) { progWrap.appendChild(renderNode(stmt)); });
+    progWrap.appendChild(renderStmtList(root));
     treeEl.appendChild(progWrap);
   }
 
