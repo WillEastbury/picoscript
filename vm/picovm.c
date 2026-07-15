@@ -2689,6 +2689,21 @@ int64_t pv_host2(pv_ctx *ctx, int hook, int64_t a, int64_t b)
     return (int64_t)ctx->regs[0];
 }
 
+/* Value-kind introspection for `key` in the currently active map, for native
+ * host code that needs more than the 2-arg hook ABI exposes (e.g. schema
+ * validation telling an int field from a string one). Not a bytecode hook --
+ * a plain C helper for embedders like host/picowal/storage_file.c.
+ * Returns: 0 = int/bool, 1 = string/span, 2 = null, -1 = absent/no active map. */
+int pv_map_value_kind(pv_ctx *ctx, int key_span_handle)
+{
+    int mi = ctx->map_active;
+    int e;
+    if (!(mi > 0 && mi < ctx->map_nmaps && ctx->map_used[mi])) return -1;
+    e = pv_map_find_s(ctx, mi, key_span_handle);
+    if (e < 0) return -1;
+    return (int)ctx->me_vk[e];
+}
+
 int64_t pv_host(pv_ctx *ctx, const char *ns, const char *method, int64_t a, int64_t b)
 {
     (void)ctx; (void)ns; (void)method; (void)a; (void)b;

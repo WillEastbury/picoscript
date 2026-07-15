@@ -282,6 +282,10 @@ int64_t pv_host(pv_ctx *ctx, const char *ns, const char *method, int64_t a, int6
 int64_t pv_host2(pv_ctx *ctx, int hook, int64_t a, int64_t b);
 int64_t pv_dsp(pv_ctx *ctx, int subop, int64_t a, int64_t b);
 
+/* Value-kind introspection for `key` in the currently active map (see
+ * picovm.c for the full note): 0=int/bool, 1=string/span, 2=null, -1=absent. */
+int pv_map_value_kind(pv_ctx *ctx, int key_span_handle);
+
 /* Dot8: signed int8 span dot product, HW-accelerated where available
  * (AArch64 NEON SDOT / Cortex-M33 SMLAD / portable scalar). pv_dot8_setlen
  * sets the span length; pv_dot8 dots two arena spans of that length. */

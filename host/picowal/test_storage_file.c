@@ -29,10 +29,9 @@ static int span_from_str(const char *s) {
 
 int main(void) {
     remove("test_update.dat");
-    memset(&ctx, 0, sizeof(ctx));
+    pv_init(&ctx);
     ctx.mem = mem;
     ctx.mem_size = sizeof(mem);
-    ctx.span_count = 1; /* 0 = null span */
 
     if (pwf_storage_open("test_update.dat") != 0) { fprintf(stderr, "open failed\n"); return 1; }
 
@@ -99,8 +98,8 @@ int main(void) {
 
     /* Reopen (simulate restart) and confirm the updated value persisted, and
      * the delete after it is still respected. */
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.mem = mem; ctx.mem_size = sizeof(mem); ctx.span_count = 1;
+    pv_init(&ctx);
+    ctx.mem = mem; ctx.mem_size = sizeof(mem);
     if (pwf_storage_open("test_update.dat") != 0) { fprintf(stderr, "reopen failed\n"); return 1; }
     ctx.regs[1] = 5; ctx.regs[2] = id;
     pv_storage_file_hook(&ctx, HOOK_READCARD, 0, 1, 2);
