@@ -83,6 +83,22 @@
     return HOOK_CANON[(ns + "." + m).toLowerCase()] || [ns, m];
   }
 
+  // Compile-time "Ns.Method" -> event-type-int hash used by ON blocks (JS
+  // side has no OnBlock lowering yet, but EVENT RAISE's Event.Post target
+  // must match whatever a Python-compiled ON Ns.Method: block expects, so
+  // this must be byte-for-byte the same algorithm as
+  // picoscript_basic.event_type_hash / picoscript_vm.py's Map.Hash fnv1a).
+  function eventTypeHash(ns, method) {
+    var h = 0x811C9DC5;
+    var s = (ns + "." + method).toUpperCase();
+    for (var i = 0; i < s.length; i++) {
+      var b = s.charCodeAt(i) & 0xFF;
+      h = (h ^ b) >>> 0;
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h >>> 0;
+  }
+
   function enc(op, rd, rs1, rs2, imm) {
     rd = rd || 0; rs1 = rs1 || 0; rs2 = rs2 || 0; imm = imm || 0;
     return (((op << 28) | (rd << 24) | (rs1 << 20) | (rs2 << 16) | (imm & 0xFFFF)) >>> 0);
@@ -1369,6 +1385,17 @@
         if (verb === "COUNT") return { t: "Call", ns: "Event", method: "Count", args: [] };
         if (verb === "SETSLICE") { this.needStmt(wantValue, "EVENT SETSLICE"); var eo = this.parseAtom(); if (this.peek().kind === "op" && this.peek().value === ",") this.next(); var el = this.parseAtom(); return { t: "Call", ns: "Event", method: "SetSlice", args: [eo, el] }; }
         if (verb === "SETDATA") { this.needStmt(wantValue, "EVENT SETDATA"); var ev = this.parseAtom(); this.eatOp("="); var sp = this.parseExpr(); return { t: "Call", ns: "Event", method: "SetData", args: [ev, sp] }; }
+        if (verb === "RAISE") {
+          // EVENT RAISE Ns.Method <target> -- mirrors picoscript_basic.py's
+          // Parser._parse_uievt_body RAISE verb exactly (same compile-time
+          // eventTypeHash, so a JS-compiled EVENT RAISE triggers a
+          // Python-compiled ON Ns.Method: block and vice versa).
+          var rns = this.eatWord();
+          this.eatOp(".");
+          var rmethod = this.eatWord();
+          var rtarget = this.parseAtom();
+          return { t: "Call", ns: "Event", method: "Post", args: [{ t: "Num", value: eventTypeHash(rns, rmethod) }, rtarget] };
+        }
         throw new Error("BASIC: unknown EVENT verb " + verb);
       }
       if (head === "UI") {

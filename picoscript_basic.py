@@ -754,6 +754,18 @@ class Parser:
                 self._need_stmt(want_value, "EVENT SETDATA")
                 ev = self.parse_atom(); self.eat_op("="); sp = self.parse_expr()
                 return Call("Event", "SetData", [ev, sp])
+            if verb == "RAISE":
+                # EVENT RAISE Ns.Method <target> -- ergonomic sugar that closes
+                # the gap docs/EVENTING.md flagged: computes the SAME
+                # compile-time event_type_hash(ns, method) an `ON Ns.Method:`
+                # block matches against, so `EVENT RAISE Ui.Click target` is
+                # guaranteed to trigger a matching `ON Ui.Click:` handler
+                # without the author ever computing/typing the hash by hand.
+                ns = self._eat_word()
+                self.eat_op(".")
+                method = self._eat_word()
+                target = self.parse_atom()
+                return Call("Event", "Post", [Num(event_type_hash(ns, method)), target])
             raise SyntaxError(f"line {self.peek().line}: unknown EVENT verb {verb!r}")
         if head == "UI":
             verb = self._eat_word()

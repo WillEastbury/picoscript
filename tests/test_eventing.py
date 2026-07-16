@@ -101,3 +101,68 @@ def test_on_block_via_direct_ast_multiple_matching_events():
     words = lower_to_bytecode_safe(il)
     vm = PicoVM().run(words)
     assert _out(vm) == [2, 12]  # 2 matching events; targets 5 + 7 = 12
+
+
+def test_event_raise_sugar_computes_matching_hash_and_triggers_on_block():
+    """`EVENT RAISE Ns.Method target` (added alongside this test) is ergonomic
+    sugar over `EVENT POST event_type_hash(ns, method) target` -- closes the
+    gap docs/EVENTING.md flagged (previously an author had to compute/type
+    the hash by hand to raise something an ON block would catch)."""
+    src = """
+LET hits = 0
+LET target = 0
+EVENT RAISE Ui.Click 5
+EVENT RAISE Ui.Hover 9
+ON Ui.Click
+    LET hits = hits + 1
+    LET target = EVENT TARGET __event__
+END ON
+PRINT hits
+PRINT target
+"""
+    words = lower_to_bytecode_safe(compile_basic(src))
+    vm = PicoVM().run(words)
+    assert _out(vm) == [1, 5]
+
+
+def test_event_raise_sugar_is_byte_identical_to_manual_post():
+    """`EVENT RAISE Ui.Click 5` must compile to the exact same bytecode as
+    `EVENT POST <precomputed hash> 5` -- it's pure sugar, not a different
+    code path."""
+    hashed = event_type_hash("Ui", "Click")
+    raise_words = lower_to_bytecode_safe(compile_basic("EVENT RAISE Ui.Click 5"))
+    post_words = lower_to_bytecode_safe(compile_basic(f"EVENT POST {hashed} 5"))
+    assert raise_words == post_words
+
+
+def _node_available():
+    import subprocess
+    try:
+        subprocess.run(["node", "--version"], capture_output=True, timeout=10)
+        return True
+    except Exception:
+        return False
+
+
+def test_event_raise_sugar_matches_js_port_byte_identical():
+    """vm/picoc.js's EVENT RAISE (added alongside the Python side) must
+    compute the exact same eventTypeHash and therefore emit byte-identical
+    bytecode for the same source."""
+    import json
+    import subprocess
+    if not _node_available():
+        import pytest
+        pytest.skip("node not available")
+    src = "DIM h = 0\nEVENT RAISE Ui.Click 5\nPRINT h"
+    py_words = lower_to_bytecode_safe(compile_basic(src))
+    script = f"""
+    var P = require('./vm/picoc.js');
+    var fs = require('fs'); eval(fs.readFileSync('./vm/pico_hooks.js','utf8'));
+    var r = P.compileBasic({json.dumps(src)});
+    console.log(JSON.stringify(r.words));
+    """
+    r = subprocess.run(["node", "-e", script], capture_output=True, text=True,
+                        cwd=ROOT, timeout=30)
+    assert r.returncode == 0, r.stderr
+    js_words = json.loads(r.stdout.strip())
+    assert js_words == py_words
