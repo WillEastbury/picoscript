@@ -553,6 +553,13 @@ NAMESPACE_MAP = {
         "FormatTime":       OP_NOOP,
         "Translate":        OP_NOOP,
     },
+    "Log": {
+        "Write":   OP_NOOP,
+        "Count":   OP_NOOP,
+        "Level":   OP_NOOP,
+        "Message": OP_NOOP,
+        "Clear":   OP_NOOP,
+    },
     "Environment": {
         "GetOsVersion":     OP_NOOP,
         "GetCpuCount":      OP_NOOP,
@@ -1072,6 +1079,15 @@ HOST_HOOK_CODES = {
     ("Net", "Shutdown"):         0x02E4,   # rs1=conn_fd                  rd=ok
     ("Net", "PoolSize"):         0x02E5,   # rs1=n                        rd=ok
     ("Net", "Register"):         0x02E6,   # rs1=event_id                 rd=ok (bind ON handler)
+    # Log.* (0x02F0-0x02F4): deterministic, script-visible tracing/audit log.
+    # See docs/LOGGING.md. Append-only {level, message span} table keyed by a
+    # monotonic sequence id -- no wall-clock timestamp (host-injected/
+    # non-deterministic by this VM's convention; order IS the timeline).
+    ("Log", "Write"):            0x02F0,   # rs1=level rs2=message span   rd=logId (sequence, 1-based)
+    ("Log", "Count"):            0x02F1,   #                              rd=entry count
+    ("Log", "Level"):            0x02F2,   # rs1=logId                    rd=level (0 if unknown id)
+    ("Log", "Message"):          0x02F3,   # rs1=logId                    rd=message span (0 if unknown id)
+    ("Log", "Clear"):            0x02F4,   #                              rd=1 (discards all entries)
     # Arena scopes (0x7C-0x7E): bump-arena mark / rewind / reset for request-scoped
     # allocation -- Mark() snapshots the arena, Rewind(mark) reclaims everything since,
     # Reset() drops all arena spans back to the base. Frees the span/string namespaces

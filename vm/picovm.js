@@ -548,6 +548,7 @@
     if (name.indexOf("Encoding.") === 0) { if (this._encoding(name.slice(9), rd, rs1, rs2)) return; }
     if (name.indexOf("DateTime.") === 0) { if (this._datetime(name.slice(9), rd, rs1, rs2)) return; }
     if (name.indexOf("Locale.") === 0) { if (this._localeHook(name.slice(7), rd, rs1, rs2)) return; }
+    if (name.indexOf("Log.") === 0) { if (this._logHook(name.slice(4), rd, rs1, rs2)) return; }
     if (name === "Req.Param" || name === "Req.ParamCount") { if (this._reqParam(name.slice(4), rd, rs1, rs2)) return; }
     this.log.push("host " + name + " R" + rd + " R" + rs1);
   };
@@ -2593,6 +2594,27 @@
       }
       return true;
     }
+    return false;
+  };
+
+  // -- Log.* deterministic, script-visible tracing/audit log (mirrors
+  // HostApi._log_hook -- see docs/LOGGING.md). Append-only {level, message
+  // span} table keyed by a monotonic sequence id; no wall-clock timestamp
+  // (non-deterministic by this VM's convention -- order IS the timeline).
+  PicoVM.prototype._logHook = function (method, rd, rs1, rs2) {
+    if (!this._logs) { this._logs = {}; this._logSeq = 0; }
+    if (method === "Write") {
+      this._logSeq++;
+      var lid = this._logSeq;
+      this._logs[lid] = { level: this.regs[rs1] >>> 0, span: this.regs[rs2] >>> 0 };
+      this.regs[rd] = lid;
+      return true;
+    }
+    if (method === "Count") { this.regs[rd] = Object.keys(this._logs).length; return true; }
+    var e = this._logs[this.regs[rs1] >>> 0];
+    if (method === "Level") { this.regs[rd] = e ? e.level : 0; return true; }
+    if (method === "Message") { this.regs[rd] = e ? e.span : 0; return true; }
+    if (method === "Clear") { this._logs = {}; this.regs[rd] = 1; return true; }
     return false;
   };
 

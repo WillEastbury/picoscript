@@ -1110,6 +1110,14 @@ class HostApi:
         self._event_seq = 0
         self.event_slice_offset = 0
         self.event_slice_len = 0
+        # Log.* deterministic, script-visible tracing/audit log (see
+        # docs/LOGGING.md): an append-only table of {level, span}, keyed by a
+        # monotonic sequence id returned by Log.Write. Deliberately NOT
+        # timestamped (wall-clock time is host-injected/non-deterministic by
+        # this VM's own established convention -- see docs/NAMESPACE_STATUS.md
+        # -- so entries are ordered by their sequence id, not a clock).
+        self.logs: Dict[int, dict] = {}       # logId -> {level, span}
+        self._log_seq = 0
         # Ui.* retained scene tree: nodeId -> {kind,id,x,y,w,h,value,text,children}.
         self.ui_nodes: Dict[int, dict] = {}
         self._ui_seq = 0
@@ -1462,6 +1470,9 @@ class HostApi:
                 return
         if ns == "Locale":
             if self._locale(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Log":
+            if self._log_hook(vm, method, rd, rs1, rs2):
                 return
         if ns == "Req" and method in ("Param", "ParamCount"):
             if self._req_param(vm, method, rd, rs1, rs2):  # pragma: no branch
@@ -3781,6 +3792,39 @@ class HostApi:
                 vm.regs[rd] = 1
             else:
                 vm.regs[rd] = 0
+            return True
+        return False
+
+    # -- Log.* deterministic, script-visible tracing/audit log (see
+    # docs/LOGGING.md) -- an append-only table any script can write
+    # structured entries to (level + message span) and any script/host tool
+    # can read back, in order, by sequence id. Distinct from `self.log`
+    # (this class's own Python-side debug convenience list, used only for
+    # internal fallback/diagnostic messages -- never exposed to scripts) --
+    # Log.* is the real, working, first-class subsystem previously missing
+    # entirely (see docs/DIALECT_PARITY.md's logging/tracing/auditing
+    # investigation). Pure integer + arena span logic -> Python VM == JS VM
+    # byte-identical, same as Event.*.
+    def _log_hook(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "Write":
+            self._log_seq += 1
+            lid = self._log_seq
+            self.logs[lid] = {"level": vm.regs[rs1] & MASK32, "span": vm.regs[rs2] & MASK32}
+            vm.regs[rd] = lid
+            return True
+        if method == "Count":
+            vm.regs[rd] = len(self.logs)
+            return True
+        e = self.logs.get(vm.regs[rs1] & MASK32)
+        if method == "Level":
+            vm.regs[rd] = e["level"] if e else 0
+            return True
+        if method == "Message":
+            vm.regs[rd] = e["span"] if e else 0
+            return True
+        if method == "Clear":
+            self.logs.clear()
+            vm.regs[rd] = 1
             return True
         return False
 
