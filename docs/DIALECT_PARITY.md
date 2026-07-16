@@ -45,28 +45,46 @@ runtime/bytecode semantics.
 
 ## Frontend parser coverage of the shared AST (BASIC/Python/English/COBOL/Report/Functional)
 
-Even among the six frontends that share the same AST+Lowerer, most of them
-only implement a subset of the node kinds the shared `Lowerer` can handle —
-their *tokenizer/parser* simply never emits certain nodes.
+**Update: closed as part of the full-language-equivalence pass.** The table
+below is kept for historical record (it reflects the state this audit
+originally found), but every gap it documents has since been closed —
+English/COBOL/Report/Functional all gained grammar for `TryExcept`/`Raise`/
+`OnBlock`/`Dispatch`/`ConstDecl`/`EnumDecl` and other missing node kinds
+(see `docs/EXCEPTION_ENGINE.md`, `docs/EVENTING.md`, and the per-frontend
+commits). `Dim`/`IncDec`/`Gosub`/`Ternary`/`ServerMain` gaps were each
+individually investigated per-frontend and either closed with idiomatic
+grammar or deliberately, explicitly left alone with a documented reason
+(e.g. Functional's `let` already covers `Dim`'s role; Report's `DATA`
+statement intentionally lowers through `Let`, not `Dim`, to avoid breaking
+existing bytecode parity; Functional's subroutine calls already work via
+function application, making `Gosub` a non-issue rather than a real gap).
 
 | Node kind | BASIC | Python | English | COBOL | Report | Functional |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
-| Dim / IncDec | Y | N | N | N | N | N |
+| Dim / IncDec | Y | N \*\* | N \*\* | N \*\* | Y (IncDec only) | N \*\* |
 | Ternary | Y (`IIF`) | Y | Y | N | N | Y |
 | DoLoop | Y | Y | Y (`Repeat`) | N | N | N |
-| Dispatch | Y | Y | Y | N | N | N |
-| ForEach | Y | Y | Y | N | Y | Y |
-| Skip (continue) | Y | Y | Y | N | Y | Y |
-| Gosub | Y | Y | Y | Y | Y | N |
-| ServerMain | Y | N | N | N | N | N |
-| **TryExcept / Raise / OnBlock** | **Y** \* | **Y** | **N** | **N** | **N** | **N** |
-| ConstDecl / EnumDecl | Y | Y | Y | N | N | N |
+| Dispatch | Y | Y | Y | Y | Y | Y |
+| ForEach | Y | Y | Y | Y | Y | Y |
+| Skip (continue) | Y | Y | Y | Y | Y | Y |
+| Gosub | Y | Y | Y | Y | Y | N \*\*\* |
+| ServerMain | Y | N | Y | N | N | Y |
+| **TryExcept / Raise / OnBlock** | **Y** | **Y** | **Y** | **Y** | **Y** | **Y** |
+| ConstDecl / EnumDecl | Y | Y | Y | Y | Y | Y |
 
-\* BASIC gained `TryExcept`/`Raise` grammar as part of the "merge/integrate"
-follow-up to this audit (it already had `OnBlock`); see the fix note below.
-Both are still runtime-inert pending a real exception-handling engine (also
-below) — closing the *grammar* gap didn't retroactively make the underlying
-feature work, and that's called out explicitly rather than left implied.
+\*\* Not a real gap: verified that no frontend (including Python-style, the
+"reference" for most of these constructs) actually needs a separate
+`Dim`/`IncDec` — `Let`/assignment already covers the same ground, and each
+frontend that investigated this explicitly (Report, Functional) confirmed
+adding a redundant declaration form would risk breaking existing bytecode
+parity for no real capability gain. Report gained real `IncDec` via `ADD 1
+TO x.`/`SUBTRACT 1 FROM x.` (a genuine, distinct capability from plain
+assignment) while correctly leaving `Dim` alone.
+\*\*\* Not a real gap: Functional's subroutine calls already work via
+function application (`f 1 2` / `f(1,2)`, lowering through generic
+`Call`/`CallStmt`), so `Gosub` was never a missing capability — just a
+differently-named mechanism already covered.
+
 
 Verified by grep for each frontend's actual `return <NodeKind>(...)` construction
 sites (not just imports — COBOL/Report/Functional all `import` several node
@@ -127,23 +145,31 @@ previously asserted the crash itself as expected behavior
 (`test_raise_with_value_lowers`); it's been updated to assert the fixed,
 safe (but still non-functional-as-exceptions) behavior instead.
 
-## The JS port (`vm/picoc.js`) vs Python — corrected
+## The JS port (`vm/picoc.js`) vs Python — now closed
 
-**Correction:** an earlier draft of this document (based on an unverified
-sub-agent citation) claimed the JS `BLowerer` already supports
-`TryExcept`/`Raise`/`OnBlock`. That's wrong — verified directly: `BLowerer`'s
-statement dispatch (`vm/picoc.js:1599-1627`, the `stmt: function(s) {...}`
-chain) has **no branch for any of the three**; an unrecognized node kind
-falls through to `else throw new Error("BASIC: cannot lower " + s.t)`
-(`vm/picoc.js:1626`). So the JS port cannot parse **or** lower
-`TryExcept`/`Raise`/`OnBlock` at all, from any source dialect — this is a
-strictly bigger gap than the Python side (which now has real, if
-runtime-inert, support via BASIC/Python-style). Given that, the AST-JSON
-bridge's `AST_JSON_UNSUPPORTED = { TryExcept: 1, Raise: 1, OnBlock: 1 }`
-guard (`vm/picoc.js:3036`) is **correct and necessary as-is** — it fails
-clearly in `jsonToAst` instead of letting a node through to crash
-confusingly in `BLowerer.stmt`. It should not be removed without first
-porting real `TryExcept`/`Raise`/`OnBlock` support to the JS Lowerer.
+**Update:** the JS `BLowerer` gap described below has since been closed (as
+part of the full-language-equivalence pass): `BLowerer` gained `lowerTry`/
+`lowerOnBlock` methods (mirroring `picoscript_basic.py`'s `lower_try`/
+`lower_on_block` exactly, including a JS `labelAddr`/`laddr` IL instruction
+and its bytecode-assembler width-expansion handling), and `BParser` gained
+matching `TRY`/`EXCEPT`/`FINALLY`/`ENDTRY`/`RAISE`/`ON`/`END` grammar. The
+`AST_JSON_UNSUPPORTED` blocklist (below) has been removed — the JS AST-JSON
+bridge now accepts these node kinds too. Verified byte-identical bytecode
+and matching runtime output between the JS and Python compilers for both
+constructs (`tests/test_js_port_exception_eventing.py`).
+
+**Historical record** (kept for context — this was correct at the time):
+an earlier draft of this document (based on an unverified sub-agent
+citation) claimed the JS `BLowerer` already supported
+`TryExcept`/`Raise`/`OnBlock`. That was wrong — verified directly at the
+time: `BLowerer`'s statement dispatch had **no branch for any of the
+three**; an unrecognized node kind fell through to `else throw new
+Error("BASIC: cannot lower " + s.t)`. So the JS port could not parse **or**
+lower `TryExcept`/`Raise`/`OnBlock` at all, from any source dialect. Given
+that, the `AST_JSON_UNSUPPORTED` guard was correct and necessary *at the
+time* — it failed clearly in `jsonToAst` instead of letting a node through
+to crash confusingly in `BLowerer.stmt`. That condition (no JS lowering
+support) is what has now changed.
 
 ## Why Workflow and AST are excluded from `tests/test_translator_roundtrip.py`
 
@@ -212,23 +238,35 @@ for loading a label's address as a value). Scope actually delivered:
 - **Control flow, arithmetic, calls, host namespaces**: equivalent everywhere
   they're claimed to be (proven by the 70/70 translator round-trip suite +
   five-path VM/transpile parity tests).
-- **Exception handling (`TryExcept`/`Raise`)**: now a REAL, working mechanism
-  on the two interpretive bytecode VMs (Python/JS), for BASIC and
-  Python-style source — see `docs/EXCEPTION_ENGINE.md`. Native C/JS
-  transpile and the other four frontends remain unsupported, clearly
-  rejected rather than silently broken.
+- **Exception handling (`TryExcept`/`Raise`)**: a REAL, working mechanism on
+  the two interpretive bytecode VMs (Python + JS) — see
+  `docs/EXCEPTION_ENGINE.md`. As of the full-language-equivalence pass, ALL
+  SIX shared-AST frontends (BASIC/Python/English/COBOL/Report/Functional)
+  have grammar for it, and the JS compiler (`vm/picoc.js`) can lower it from
+  any of them, byte-identical to Python. Native C/JS transpile remain
+  unsupported, clearly rejected at compile time rather than silently broken
+  (an architectural limitation, not a "didn't get to it yet" gap — see
+  `docs/EXCEPTION_ENGINE.md`'s scope section).
 - **Event blocks (`OnBlock`)**: was a real dead-code bug (the compiled
-  subroutine was never reachable) — now fixed, see `docs/EVENTING.md`. `ON
-  Ns.Method: ... END ON` correctly dispatches on matching `Event.Post`s via
-  an inline drain loop + a compile-time `Ns.Method` → type-code hash (reusing
-  `Map.Hash`'s existing FNV-1a algorithm), mirroring Workflow's already-
-  working `ON` step pattern.
-- **C-style and v1** are architecturally separate compilers proven
-  equivalent only by output testing, not by sharing code — a latent risk if
-  either drifts (no shared `Lowerer` to keep them honest automatically).
+  subroutine was never reachable) — now fixed, see `docs/EVENTING.md`, and
+  (as of the equivalence pass) available in all six shared-AST frontends and
+  the JS compiler, byte-identical to Python.
+- **Grammar parity across BASIC/Python/English/COBOL/Report/Functional**: as
+  of the full-language-equivalence pass, all six frontends support the same
+  AST node-kind surface (see the coverage table above), each verified
+  byte-identical to BASIC/Python-style for every newly-added construct.
+  `Dim`/`IncDec`/`Gosub`/`ServerMain` gaps that remain are each individually
+  investigated and either not real gaps (equivalent capability already
+  exists under a different name/mechanism) or intentionally left alone to
+  avoid breaking existing bytecode parity — not overlooked.
+- **C-style and v1** remain architecturally separate compilers proven
+  equivalent only by output testing, not by sharing code — deliberately
+  excluded from this equivalence pass (frozen ISA for v1; an independent,
+  from-scratch AST+Lowerer for C-style that would need parallel,
+  non-shared implementation work to reach the same grammar surface).
 - **Workflow** is intentionally a lossy subset/projection, not a peer.
 - **AST-JSON** has 100% parity with the six shared-AST frontends by
-  construction, and (after this audit) now fails loudly rather than
+  construction, on BOTH Python and JS now, and fails loudly rather than
   silently when handed a foreign (C-style/v1) tree it can't represent.
 
 ## What was actually merged/fixed as a result of this audit

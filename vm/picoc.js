@@ -130,6 +130,7 @@
     jmp: function (l) { this._push(Inst("jmp", { label: l })); },
     jmptab: function (sel, targets, def) { this._push(Inst("jmptab", { a: sel, targets: targets, label: def })); },
     label: function (n) { this._push(Inst("label", { label: n })); },
+    labelAddr: function (d, l) { this._push(Inst("laddr", { dst: d, label: l })); },
     call: function (l) { this._push(Inst("call", { label: l })); },
     ret: function () { this._push(Inst("ret", {})); },
     host: function (ns, m, args, d) { this._push(Inst("host", { ns: ns, method: m, args: args || [], dst: d || null })); },
@@ -458,14 +459,25 @@
       if (ins.op === "const") return (ins.imm >= -32768 && ins.imm <= 32767) ? 2 : 8;
       if (ins.op === "mov" && isImm(ins.a)) return (ins.a.value >= -32768 && ins.a.value <= 32767) ? 2 : 8;
       if (ins.op === "jmptab") return ins.targets.length + 1;
+      // laddr (label address, used by TryExcept/Raise's exception-handler
+      // registration -- see docs/EXCEPTION_ENGINE.md) always takes the
+      // 8-word big-endian form, regardless of the label's resolved PC size:
+      // that PC isn't known until label positions are fully computed below,
+      // which itself depends on every instruction's width -- so width()
+      // can't depend on laddr's *value*. The 8-word form's word COUNT is
+      // value-independent (unlike the 2-word small-immediate form), which
+      // breaks the circularity. Byte-identical to picoscript_il.py's
+      // _emit_const(..., force_wide=True) counterpart.
+      if (ins.op === "laddr") return 8;
       return 1;
     }
     // Load `value` into rd: 2-word SUB/ADD-imm for a 16-bit immediate (unchanged), else
     // an 8-word big-endian byte build (SUB; ADD b3; MUL 256; ...; ADD b0) using only
     // sign-safe positive immediates. Byte-identical to picoscript_il._emit_const.
-    function emitConst(words, rd, value) {
+    // `forceWide` always takes the 8-word path (see width()'s laddr note above).
+    function emitConst(words, rd, value, forceWide) {
       words.push(enc(OP.SUB, rd, rd, ADDR_REG, rd));   // rd = rd - rd = 0
-      if (value >= -32768 && value <= 32767) {
+      if (!forceWide && value >= -32768 && value <= 32767) {
         words.push(enc(OP.ADD, rd, rd, 0, value & 0xFFFF));
         return 2;
       }
@@ -487,6 +499,10 @@
         var rd = phys(mapping, ins.dst);
         var value = (ins.op === "const") ? ins.imm : ins.a.value;
         pc += emitConst(words, rd, value); return;
+      }
+      if (ins.op === "laddr") {
+        var lrd = phys(mapping, ins.dst);
+        pc += emitConst(words, lrd, labels[ins.label], true); return;
       }
       if (ins.op === "jmptab") {
         var sel = phys(mapping, ins.a);
@@ -1132,7 +1148,7 @@
   // ========================================================================
   // BASIC-LIKE FRONTEND (port of picoscript_basic.py)
   // ========================================================================
-  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","DISPATCH","ENDDISPATCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD","STORE","GPIO","LOAD","SERVER","ENDSERVER","ASSERT","PACK","CARD","FIFO","DEVICE","STREAM","UI","EVENT","CONST","ENUM","ENDENUM"].forEach(function (k) { B_KW[k] = 1; });
+  var B_KW = {}; ["LET","DIM","IF","THEN","ELSEIF","ELSE","ENDIF","WHILE","ENDWHILE","FOR","TO","STEP","NEXT","FOREACH","IN","ENDFOREACH","SWITCH","CASE","DEFAULT","ENDSWITCH","DISPATCH","ENDDISPATCH","GOTO","GOSUB","SUB","ENDSUB","RETURN","PRINT","AND","OR","NOT","DO","LOOP","UNTIL","BREAK","SKIP","INC","DEC","IIF","EQ","NE","LT","GT","LE","GE","MOD","STORE","GPIO","LOAD","SERVER","ENDSERVER","ASSERT","PACK","CARD","FIFO","DEVICE","STREAM","UI","EVENT","CONST","ENUM","ENDENUM","ON","END","TRY","EXCEPT","FINALLY","ENDTRY","RAISE"].forEach(function (k) { B_KW[k] = 1; });
   var B_CMPW = { EQ:"EQ", NE:"NE", LT:"LT", GT:"GT", LE:"LE", GE:"GE" };
   var B_CMPS = { "==":"EQ", "!=":"NE", "<>":"NE", "=":"EQ", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
   var B_COMPARATORS = {}; for (var _k in B_CMPW) B_COMPARATORS[_k] = B_CMPW[_k]; for (var _k2 in B_CMPS) B_COMPARATORS[_k2] = B_CMPS[_k2];
@@ -1214,6 +1230,13 @@
         }
         if (kw === "SUB") return this.parseSub();
         if (kw === "SERVER") return this.parseServer();
+        if (kw === "ON") return this.parseOnBlock();
+        if (kw === "TRY") return this.parseTry();
+        if (kw === "RAISE") {
+          this.next();
+          if (this.peek().kind === "nl" || this.peek().kind === "eof") { this.endLine(); return { t: "Raise", value: null }; }
+          var rv2 = this.parseExpr(); this.endLine(); return { t: "Raise", value: rv2 };
+        }
         if (kw === "RETURN") {
           this.next();
           if (this.peek().kind === "nl" || this.peek().kind === "eof") { this.endLine(); return { t: "Return" }; }
@@ -1501,6 +1524,31 @@
       return { t: "Sub", name: name, body: body, params: params };
     },
     parseServer: function () { this.eatKw("SERVER"); this.endLine(); var body = this.parseBlock("ENDSERVER"); this.eatKw("ENDSERVER"); this.endLine(); return { t: "ServerMain", body: body }; },
+    // ON Ns.Method: ... END ON (mirrors picoscript_basic.py's parse_on_block)
+    parseOnBlock: function () {
+      this.eatKw("ON");
+      var ns = this.next().value;
+      this.eatOp(".");
+      var method = this.next().value;
+      this.endLine();
+      var body = this.parseBlock("END");
+      this.eatKw("END"); this.eatKw("ON"); this.endLine();
+      return { t: "OnBlock", event_ns: ns, event_method: method, body: body };
+    },
+    // TRY ... EXCEPT ... [FINALLY ...] ENDTRY (mirrors picoscript_basic.py's parse_try)
+    parseTry: function () {
+      this.eatKw("TRY"); this.endLine();
+      var tryBody = this.parseBlock("EXCEPT");
+      this.eatKw("EXCEPT"); this.endLine();
+      var exceptBody = this.parseBlock("FINALLY", "ENDTRY");
+      var finallyBody = null;
+      if (this.peek().kind === "kw" && this.peek().value === "FINALLY") {
+        this.eatKw("FINALLY"); this.endLine();
+        finallyBody = this.parseBlock("ENDTRY");
+      }
+      this.eatKw("ENDTRY"); this.endLine();
+      return { t: "TryExcept", try_body: tryBody, except_body: exceptBody, finally_body: finallyBody };
+    },
     parseCallFromId: function () { var ns = this.next().value; this.eatOp("."); var m = this.next().value; return { t: "Call", ns: ns, method: m, args: this.parseArgs() }; },
     parseArgs: function () { this.eatOp("("); var a = []; if (!(this.peek().kind === "op" && this.peek().value === ")")) { a.push(this.parseExpr()); while (this.peek().kind === "op" && this.peek().value === ",") { this.next(); a.push(this.parseExpr()); } } this.eatOp(")"); return a; },
     parseCondition: function () { return this.parseExpr(); },
@@ -1650,6 +1698,17 @@
       else if (s.t === "Print") { if (s.value.t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, s.value.value)], null); } else if (isComposite(s.value)) { emitComposedPrint(this, s.value); } else { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); } }
       else if (s.t === "CallStmt") this.lowerCall(s.call, false);
       else if (s.t === "ServerMain") s.body.forEach(function (st) { self.stmt(st); });
+      else if (s.t === "TryExcept") this.lowerTry(s);
+      else if (s.t === "Raise") {
+        // See docs/EXCEPTION_ENGINE.md: Error.Raise(code) jumps to the
+        // nearest Error.SetHandler'd handler (an enclosing lowerTry), or
+        // propagates as a real uncaught PicoFault if none is active. A bare
+        // Raise (no value) raises code 0.
+        var rv = (s.value != null) ? this.eval(s.value) : (function () { var z = self.b.vreg(); self.b.const_(z, 0); return z; })();
+        var rok = this.b.vreg();
+        this.b.host("Error", "Raise", [rv], rok);
+      }
+      else if (s.t === "OnBlock") this.lowerOnBlock(s);
       else throw new Error("BASIC: cannot lower " + s.t);
     },
     assignTo: function (dst, e) {
@@ -1756,6 +1815,76 @@
       bodies.forEach(function (bd) { self.b.label(bd[0]); bd[1].forEach(function (st) { self.stmt(st); }); self.b.jmp(end); });
       this.b.label(defL); if (s.def) s.def.forEach(function (st) { self.stmt(st); });
       this.scopes.pop();
+      this.b.label(end);
+    },
+    // try/except/finally -> a real exception mechanism using a handler
+    // STACK (see docs/EXCEPTION_ENGINE.md and picoscript_basic.py's
+    // lower_try, which this mirrors exactly for bytecode parity).
+    // Error.SetHandler(handler_label's address) is pushed before the try
+    // body runs, so both a genuine VM fault and a script Raise (Error.Raise)
+    // inside the try body jump straight to handler_label. PopHandler()
+    // restores the enclosing try's handler (if any) on every path out of
+    // this try (normal completion, or having caught) -- popped BEFORE
+    // running except/finally so a fault raised while handling this one
+    // propagates outward instead of looping back here.
+    lowerTry: function (s) {
+      var self = this;
+      var handlerLabel = this.b.newLabel("except");
+      var endLabel = this.b.newLabel("endtry");
+
+      var addr = this.b.vreg();
+      this.b.labelAddr(addr, handlerLabel);
+      var setOk = this.b.vreg();
+      this.b.host("Error", "SetHandler", [addr], setOk);
+
+      (s.try_body || []).forEach(function (st) { self.stmt(st); });
+
+      var pop1 = this.b.vreg();
+      this.b.host("Error", "PopHandler", [], pop1);
+      if (s.finally_body) (s.finally_body || []).forEach(function (st) { self.stmt(st); });
+      this.b.jmp(endLabel);
+
+      this.b.label(handlerLabel);
+      var pop2 = this.b.vreg();
+      this.b.host("Error", "PopHandler", [], pop2);
+      (s.except_body || []).forEach(function (st) { self.stmt(st); });
+      var clr = this.b.vreg();
+      this.b.host("Error", "Clear", [], clr);
+      if (s.finally_body) (s.finally_body || []).forEach(function (st) { self.stmt(st); });
+      this.b.label(endLabel);
+    },
+    // ON Ns.Method: body END ON -> an inline drain-and-dispatch loop over
+    // pending Event.* queue entries (see docs/EVENTING.md and
+    // picoscript_basic.py's lower_on_block, which this mirrors exactly).
+    // Ns.Method is turned into a stable event-type integer at COMPILE TIME
+    // via eventTypeHash (the same FNV-1a algorithm as the Python side and
+    // as Map.Hash at runtime) -- baked in as a plain bytecode constant, so
+    // there's no runtime string hashing and zero cross-VM parity risk.
+    lowerOnBlock: function (s) {
+      var self = this;
+      var typeCode = eventTypeHash(s.event_ns, s.event_method);
+      var idx = this.b.vreg("__on_i__");
+      var cnt = this.b.vreg("__on_cnt__");
+      this.b.host("Event", "Count", [], cnt);
+      this.b.const_(idx, 0);
+      var top = this.b.newLabel("on"), cont = this.b.newLabel("oncont"), end = this.b.newLabel("endon");
+      this.b.label(top);
+      this.b.cmpbr("GE", idx, cnt, end);
+      var evid = this.varOf("__event__");
+      this.b.host("Event", "Next", [], evid);
+      var skip = this.b.newLabel("onskip");
+      var etype = this.b.vreg("__on_type__");
+      this.b.host("Event", "Type", [evid], etype);
+      var typeconst = this.b.vreg("__on_typeconst__");
+      this.b.const_(typeconst, typeCode);
+      this.b.cmpbr("NE", etype, typeconst, skip);
+      this.scopes.push([cont, end]);
+      (s.body || []).forEach(function (st) { self.stmt(st); });
+      this.scopes.pop();
+      this.b.label(skip);
+      this.b.label(cont);
+      this.b.inc(idx);
+      this.b.jmp(top);
       this.b.label(end);
     },
     eval: function (e) {
@@ -3058,9 +3187,11 @@
     Switch: { default: "def" },
     Dispatch: { default: "def" }
   };
-  // Node kinds picoscript_basic.py has that this JS bridge doesn't support
-  // yet (no JS BLowerer/parser equivalent exists for these).
-  var AST_JSON_UNSUPPORTED = { TryExcept: 1, Raise: 1, OnBlock: 1 };
+  // NOTE: TryExcept/Raise/OnBlock were previously blocked here
+  // (AST_JSON_UNSUPPORTED) because the JS BLowerer had no lowering support
+  // for them at all. That gap is closed (see BLowerer.lowerTry/lowerOnBlock,
+  // docs/EXCEPTION_ENGINE.md, docs/EVENTING.md) -- all node kinds
+  // picoscript_ast.py's shared AST supports are now accepted here too.
 
   function astToJson(node) {
     if (node === null || typeof node !== "object") return node;
@@ -3083,7 +3214,6 @@
     if (Array.isArray(data)) return data.map(jsonToAst);
     var kind = data.node;
     if (!kind) throw new Error("jsonToAst: object missing 'node' discriminator: " + JSON.stringify(data));
-    if (AST_JSON_UNSUPPORTED[kind]) throw new Error("jsonToAst: '" + kind + "' is not yet supported by the JS bridge (Python-only node kind)");
     var aliases = AST_JSON_FIELD_ALIASES[kind] || {};
     var out = { t: kind };
     Object.keys(data).forEach(function (k) {
