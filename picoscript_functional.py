@@ -8,8 +8,10 @@ unchanged, so equivalent programs lower to byte-identical PicoIL / bytecode.
 
 Core syntax includes ``let`` bindings, ``let name args = body`` functions,
 juxtaposition application (``f x y``), ``|>`` pipe calls, ``match ... with``,
-``if ... then ... else ...``, ``for i in a..b do``, ``while ... do``, and
-``printfn`` / ``printf`` output.
+``dispatch ... with``, ``const NAME = expr``, ``enum Name with ...``,
+``try ... with ... finally ...``, ``raise [expr]``, ``on Ns.Method do ...``,
+``server do ...``, ``if ... then ... else ...``, ``for i in a..b do``,
+``while ... do``, and ``printfn`` / ``printf`` output.
 """
 
 from __future__ import annotations
@@ -19,13 +21,14 @@ from typing import List, Optional
 from picoscript_basic import (
     Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
     Switch, Goto, Label, Sub, Gosub, Return, Break, Skip, Print, CallStmt, Lowerer,
-    Dispatch, TryExcept, Raise,
+    Dispatch, TryExcept, Raise, OnBlock, ServerMain, ConstDecl, EnumDecl,
 )
 
 KEYWORDS = {
     "let", "in", "if", "then", "else", "elif", "match", "with", "for", "do", "while",
     "fun", "rec", "mutable", "printfn", "printf", "not", "true", "false", "and", "or",
-    "return", "break", "continue", "skip", "goto", "label",
+    "return", "break", "continue", "skip", "goto", "label", "dispatch", "try",
+    "finally", "raise", "on", "server", "const", "enum",
 }
 
 _CMP = {
@@ -336,6 +339,26 @@ class Parser:
                 return self.parse_for_stmt()
             if kw == "match":
                 return self.parse_match_stmt()
+            if kw == "dispatch":
+                return self.parse_dispatch_stmt()
+            if kw == "try":
+                return self.parse_try_stmt()
+            if kw == "on":
+                return self.parse_on_stmt()
+            if kw == "server":
+                return self.parse_server_stmt()
+            if kw == "const":
+                return self.parse_const_stmt()
+            if kw == "enum":
+                return self.parse_enum_stmt()
+            if kw == "raise":
+                self.next()
+                if self.at("newline"):
+                    self.next()
+                    return Raise()
+                v = self.parse_expr()
+                self.expect("newline")
+                return Raise(v)
             if kw == "return":
                 self.next()
                 if self.at("newline"):
@@ -452,6 +475,88 @@ class Parser:
         if not cases and default is None:
             raise SyntaxError(f"line {self.peek().line}: expected at least one '| case -> ...' after 'match ... with'")
         return Switch(expr, cases, default)
+
+    def parse_dispatch_stmt(self) -> Dispatch:
+        self.expect_kw("dispatch")
+        expr = self.parse_expr()
+        self.expect_kw("with")
+        self.expect("newline")
+        cases = []
+        default = None
+        while self.at("op", "|"):
+            self.next()
+            if self.at("id", "_"):
+                self.next()
+                self.expect("op", "->")
+                default = self.parse_stmt_body()
+                continue
+            val = self.parse_expr()
+            self.expect("op", "->")
+            cases.append((val, self.parse_stmt_body()))
+        if not cases and default is None:
+            raise SyntaxError(f"line {self.peek().line}: expected at least one '| case -> ...' after 'dispatch ... with'")
+        return Dispatch(expr, cases, default)
+
+    def parse_try_stmt(self) -> TryExcept:
+        self.expect_kw("try")
+        try_body = self.parse_suite()
+        except_body = []
+        finally_body = None
+        if self.at_kw("with"):
+            self.next()
+            except_body = self.parse_suite()
+        if self.at_kw("finally"):
+            self.next()
+            finally_body = self.parse_suite()
+        return TryExcept(try_body, except_body, finally_body)
+
+    def parse_on_stmt(self) -> OnBlock:
+        self.expect_kw("on")
+        event_ns = self.expect("id").value
+        self.expect("op", ".")
+        event_method = self.expect("id").value
+        if self.at_kw("do"):
+            self.next()
+        elif not self.at("newline"):
+            raise SyntaxError(f"line {self.peek().line}: expected 'do' or newline after event name")
+        return OnBlock(event_ns, event_method, self.parse_stmt_body())
+
+    def parse_server_stmt(self) -> ServerMain:
+        self.expect_kw("server")
+        if self.at_kw("do"):
+            self.next()
+        elif not self.at("newline"):
+            raise SyntaxError(f"line {self.peek().line}: expected 'do' or newline after 'server'")
+        return ServerMain(self.parse_stmt_body())
+
+    def parse_const_stmt(self) -> ConstDecl:
+        self.expect_kw("const")
+        name = self.expect("id").value
+        self.expect("op", "=")
+        value = self.parse_expr()
+        self.expect("newline")
+        return ConstDecl(name, value)
+
+    def parse_enum_stmt(self) -> EnumDecl:
+        self.expect_kw("enum")
+        enum_name = self.expect("id").value
+        if self.at_kw("with"):
+            self.next()
+        self.expect("newline")
+        self.expect("indent")
+        members = []
+        while not self.at("dedent"):
+            if self.at("op", "|"):
+                self.next()
+            member = self.expect("id").value
+            member_value = None
+            if self.at("op", "="):
+                self.next()
+                member_value = self.parse_expr()
+            self.expect("newline")
+            members.append((member, member_value))
+        self.expect("dedent")
+        return EnumDecl(enum_name, members)
 
     # -- expressions ----------------------------------------------------------
     def parse_expr(self) -> object:
