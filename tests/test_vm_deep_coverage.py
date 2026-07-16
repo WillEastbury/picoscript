@@ -276,7 +276,7 @@ def test_vm_step_budget_and_error_handler_recovery():
 
     vm = PicoVM()
     vm.regs[0] = 9999
-    vm.host._error_handler_pc = 1
+    vm.host._error_handler_stack = [1]
     vm.run([
         encode_instruction(isa.OP_JUMP, rs1=0, rs2=isa.ADDR_REGISTER),
         encode_instruction(isa.OP_RETURN),

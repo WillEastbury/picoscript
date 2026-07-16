@@ -179,20 +179,48 @@ capability question, not a surface-syntax one:
   hooks) rather than missing outright.
 - Everything else marked "pure" in that doc is confirmed on all five paths.
 
+## Update: the exception engine is now real
+
+The sections above (and point 3/4 below) described `TryExcept`/`Raise` as a
+"documented, safe no-op" and left "build the real exception engine" as an
+explicitly deferred, separate task. That task is now done — see
+**`docs/EXCEPTION_ENGINE.md`** for the full design (a handler *stack*, a new
+`Error.Raise`/`Error.PopHandler` host op pair, and a `laddr` IL instruction
+for loading a label's address as a value). Scope actually delivered:
+
+- **Fully working**: BASIC and Python-style source, on **both** interpretive
+  bytecode VMs (Python `picoscript_vm.py` and JS `vm/picovm.js` — they share
+  byte-identical bytecode, so implementing this once at the IL/bytecode
+  layer covers both). Nested try/except, genuine VM faults, and script-level
+  `Raise` are all covered by `tests/test_exception_engine.py`.
+- **Still not done, and explicitly rejected rather than silently
+  mis-compiled**: the native C transpile (`lower_to_c`) and native JS
+  transpile (`lower_to_js`) backends — neither has a PC-addressable /
+  fault-catching model compatible with this mechanism yet (see
+  `docs/EXCEPTION_ENGINE.md`'s "Scope" section for why). Feeding a program
+  using `TryExcept`/`Raise` to `--as c` or `--as js` (native) now raises a
+  clear `ValueError` naming the limitation, instead of emitting silently
+  wrong code.
+- **Still not done**: propagating `TRY`/`EXCEPT`/`RAISE`/`ON` grammar to
+  English/COBOL/Report/Functional, or building `TryExcept`/`Raise`/`OnBlock`
+  support in the JS `BLowerer` (`vm/picoc.js`) — this remains a real,
+  separate task (see point 4 below, which is otherwise unchanged: the JS
+  compiler still can't parse or lower these at all, from any dialect).
+
 ## Bottom line
 
 - **Control flow, arithmetic, calls, host namespaces**: equivalent everywhere
   they're claimed to be (proven by the 70/70 translator round-trip suite +
   five-path VM/transpile parity tests).
-- **Exception handling / event blocks (`TryExcept`/`Raise`/`OnBlock`)**: a
-  real gap, only partially closed so far — BASIC now has full grammar for
-  all three (matching Python-style); English/COBOL/Report/Functional still
-  have none. More importantly, the *feature itself* was found to be
-  non-functional at the runtime level for every frontend that has ever
-  supported it (see the bug/fix section above) — closing the grammar gap
-  further without also building the real exception engine would just spread
-  a no-op around, so it was deliberately not propagated to more dialects in
-  this pass.
+- **Exception handling (`TryExcept`/`Raise`)**: now a REAL, working mechanism
+  on the two interpretive bytecode VMs (Python/JS), for BASIC and
+  Python-style source — see `docs/EXCEPTION_ENGINE.md`. Native C/JS
+  transpile and the other four frontends remain unsupported, clearly
+  rejected rather than silently broken.
+- **Event blocks (`OnBlock`)**: still the pre-existing gap described below —
+  not addressed by the exception-engine work (a separate mechanism; see
+  `lower_on_block`'s dead-code-subroutine issue found during the earlier
+  eventing investigation).
 - **C-style and v1** are architecturally separate compilers proven
   equivalent only by output testing, not by sharing code — a latent risk if
   either drifts (no shared `Lowerer` to keep them honest automatically).
@@ -212,15 +240,20 @@ capability question, not a surface-syntax one:
    (`picoscript_basic.py`'s `KEYWORDS`, `_parse_stmt`, and new `parse_try`),
    closing its only remaining gap versus Python-style among the shared-AST
    node kinds it was missing (it already had `OnBlock`).
-3. **Fixed a real, pre-existing, cross-dialect crash**: `Lowerer.stmt`'s
-   `Raise` branch called a nonexistent `ILBuilder.raise_sw` method (crashing
-   with `AttributeError` for BASIC and Python-style alike) and separately
-   misused `Error.SetHandler` with the raised value instead of a jump-target
-   PC (a latent bad-jump risk). Both fixed; `Raise` now safely lowers to the
-   VM's real `RAISE` opcode as a documented, safe no-op pending a proper
-   exception-handling engine. `tests/test_basic_100.py`'s
-   `test_raise_with_value_lowers` — which had asserted the crash as expected
-   behavior — was updated to assert the fixed behavior instead.
+3. **Fixed a real, pre-existing, cross-dialect crash, then built the real
+   exception engine on top of it**: `Lowerer.stmt`'s `Raise` branch called a
+   nonexistent `ILBuilder.raise_sw` method (crashing with `AttributeError`
+   for BASIC and Python-style alike) and separately misused
+   `Error.SetHandler` with the raised value instead of a jump-target PC (a
+   latent bad-jump risk). First fixed to a safe no-op, then -- see
+   `docs/EXCEPTION_ENGINE.md` -- built out fully: `Raise` now genuinely
+   throws (jumps to the nearest handler, or propagates as an uncaught
+   `PicoFault`), on both the Python and JS bytecode VMs.
+   `tests/test_basic_100.py`'s `test_raise_with_value_lowers` — which had
+   asserted the crash as expected behavior — and
+   `tests/test_basic_final_90.py`'s `test_basic_raise_with_value` were
+   updated to assert the real behavior instead; full coverage in
+   `tests/test_exception_engine.py`.
 4. **Deliberately not done**: propagating `TryExcept`/`Raise`/`OnBlock`
    grammar to English/COBOL/Report/Functional, or porting them to the JS
    `BLowerer`. Both are real, larger, separate efforts (a working exception

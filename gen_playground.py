@@ -948,9 +948,13 @@ CONSTRUCTS = [
      None),
 
     ("Error handling (try / except)",
-     "Try/except catches faults at runtime. The except body runs if Error.Code is "
-     "non-zero after the try body. Error.Clear resets the fault state. Phase 1: "
-     "post-try fault-flag check; Phase 2 will add stack unwinding.",
+     "Try/except catches faults at runtime -- both a genuine VM-level fault (bad "
+     "jump, div-by-zero, ...) and a script-level RAISE jump straight to the "
+     "except body via a real handler-stack (Error.SetHandler/PopHandler/Raise), "
+     "so nested try/except and finally-always-runs semantics work correctly. "
+     "See docs/EXCEPTION_ENGINE.md. This sample shows the low-level Error.Code() "
+     "host call directly (works identically in every dialect); BASIC and "
+     "Python-style additionally have native TRY/EXCEPT/RAISE syntax.",
      "int result = 0;\nint code = Error.Code();\n"
      "if (code == 0) { result = 42; }\n"
      "else { result = 99; }\nprint(result);",

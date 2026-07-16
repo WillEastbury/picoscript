@@ -487,6 +487,8 @@ NAMESPACE_MAP = {
         "Clear": OP_NOOP,
         "SetHandler": OP_NOOP,
         "HasHandler": OP_NOOP,
+        "Raise": OP_NOOP,
+        "PopHandler": OP_NOOP,
     },
     # Capsule execution / inter-card module switch (0x02C0-0x02C4)
     "Capsule": {
@@ -1014,13 +1016,22 @@ HOST_HOOK_CODES = {
     ("Capability", "Drop"):      0x02A5,   # rs1=cap-id                   rd=ok
     # Sandbox (0x02A6): revoke a capability for the current process.
     ("Sandbox", "Deny"):         0x02A6,   # rs1=cap-id                   rd=ok
-    # Error handling (0x02B0-0x02B5): global error handler + fault inspection.
-    ("Error", "SetHandler"):     0x02B0,   # rs1=handler PC (label addr)  rd=ok
-    ("Error", "HasHandler"):     0x02B1,   # rd=0/1
+    # Error handling (0x02B0-0x02B7): global error handler + fault inspection.
+    ("Error", "SetHandler"):     0x02B0,   # rs1=handler PC (label addr)  rd=ok; PUSHES onto a
+                                            # handler stack so nested try/except is correct
+    ("Error", "HasHandler"):     0x02B1,   # rd=1 if the handler stack is non-empty
     ("Error", "Code"):           0x02B2,   # rd=last fault code (0=none)
     ("Error", "Detail"):         0x02B3,   # rd=last fault detail value
     ("Error", "Resume"):         0x02B4,   # rd=ok (clear fault and continue at fault PC+1)
     ("Error", "Clear"):          0x02B5,   # rd=ok (clear fault code without resuming)
+    ("Error", "Raise"):          0x02B6,   # rs1=code; if the handler stack is non-empty, jumps
+                                            # to its top entry (Code() reads back rs1) like a
+                                            # caught fault, rd=1; if empty, propagates as a real
+                                            # uncaught PicoFault (crashes / an outer handler sees it)
+    ("Error", "PopHandler"):     0x02B7,   # rd=1 if something was popped, 0 if already empty;
+                                            # pairs with SetHandler to restore the enclosing
+                                            # try's handler once this try's body/except/finally
+                                            # is done running
     # Capsule execution (0x02C0-0x02C4): inter-card module switching.
     ("Capsule", "Call"):         0x02C0,   # rs1=pack rs2=card            rd=result
     ("Capsule", "Schedule"):     0x02C1,   # rs1=pack rs2=card            rd=ok (bind to event)

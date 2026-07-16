@@ -255,6 +255,17 @@ class ILBuilder:
     def label(self, name: str):
         self._emit(Inst("label", label=name))
 
+    def label_addr(self, dst: VReg, label: str):
+        """Load the runtime PC (bytecode word address) of `label` into `dst` as
+        a plain value -- unlike jmp/call/cmpbr, which bake a label into a jump
+        target immediate, this makes the address usable as ordinary data (e.g.
+        passed to Error.SetHandler as a fault-handler PC). Lowers to a
+        CONST-style multi-word load once the label's PC is known (see
+        lower_to_bytecode_safe); always uses the 8-word big-endian form since
+        the value isn't known until all label PCs are resolved, and using the
+        2-word small-immediate form would create a circular width dependency."""
+        self._emit(Inst("laddr", dst=dst, label=label))
+
     def call(self, label: str):
         self._emit(Inst("call", label=label))
 
@@ -757,6 +768,9 @@ def _emit_word(ins: Inst, mapping, labels, pc: int) -> int:
     if op == "jmptab":
         raise ValueError("jmptab requires lower_to_bytecode_safe (multi-word expansion)")
 
+    if op == "laddr":
+        raise ValueError("laddr (label address) requires lower_to_bytecode_safe (multi-word expansion)")
+
     if op == "call":
         return E(isa.OP_CALL, imm16=labels[ins.label])
 
@@ -832,16 +846,23 @@ def _const_width(value: int) -> int:
     return 2 if -32768 <= value <= 32767 else 8
 
 
-def _emit_const(words: List[int], rd: int, value: int) -> int:
+def _emit_const(words: List[int], rd: int, value: int, force_wide: bool = False) -> int:
     """Append the word(s) that load `value` into register rd and return the count.
     Small values keep the 2-word SUB/ADD-imm sequence (so existing bytecode is
     unchanged). Larger literals are built big-endian byte-by-byte
     (SUB; ADD b3; MUL 256; ADD b2; MUL 256; ADD b1; MUL 256; ADD b0) using only
     sign-safe positive immediates (each byte <= 255, the multiplier 256), so any int32
-    literal lowers correctly despite the 16-bit sign-extended immediate field."""
+    literal lowers correctly despite the 16-bit sign-extended immediate field.
+
+    `force_wide` always takes the 8-word path regardless of `value`'s size --
+    needed by `laddr` (label address), whose value (the label's resolved PC)
+    isn't known at width()-computation time, so width() must commit to a
+    fixed word count (8) up front; letting this function pick 2-vs-8 based on
+    the value would silently desync actual emission from that pre-committed
+    width and corrupt every later label/jump target (see lower_to_bytecode_safe)."""
     E = isa.encode_instruction
     words.append(E(isa.OP_SUB, rd=rd, rs1=rd, rs2=isa.ADDR_REGISTER, imm16=rd))   # rd = rd - rd = 0
-    if -32768 <= value <= 32767:
+    if not force_wide and -32768 <= value <= 32767:
         words.append(E(isa.OP_ADD, rd=rd, rs1=rd, imm16=value & 0xFFFF))          # rd = sx16(imm)
         return 2
     u = value & 0xFFFFFFFF
@@ -883,6 +904,15 @@ def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True,
             return _const_width(ins.a.value)
         if ins.op == "jmptab":
             return len(ins.targets) + 1     # 1 computed jump + N inline table entries
+        if ins.op == "laddr":
+            # Always the 8-word big-endian form: the label's resolved PC isn't
+            # known until this same pass finishes (it depends on the total
+            # width of everything before it, which is what we're computing
+            # right now) -- using the value-dependent 2-word-vs-8-word choice
+            # here would make width() depend on its own result. The 8-word
+            # form's *word count* doesn't depend on the value, so it sidesteps
+            # the circularity; see _emit_const.
+            return 8
         return 1
 
     labels: Dict[str, int] = {}
@@ -903,6 +933,10 @@ def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True,
             rd = _phys(mapping, ins.dst)
             value = ins.imm if ins.op == "const" else ins.a.value
             pc += _emit_const(words, rd, value)
+            continue
+        if ins.op == "laddr":
+            rd = _phys(mapping, ins.dst)
+            pc += _emit_const(words, rd, labels[ins.label], force_wide=True)
             continue
         if ins.op == "jmptab":
             sel = _phys(mapping, ins.a)
@@ -1242,6 +1276,16 @@ def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool) -> str:
         return "    pv_wait(ctx);"
     if op == "raise":
         return f"    pv_raise(ctx, {ins.imm});"
+    if op == "laddr":
+        raise ValueError(
+            "lower_to_c: 'laddr' (label-address, used by TryExcept/Raise's "
+            "exception-handler registration) has no equivalent in the native "
+            "C transpile model -- emitted C uses plain goto labels, not "
+            "PC-addressable bytecode, so there is no runtime value to load. "
+            "Native/bare-metal try/except is not yet supported; run this "
+            "program on the Python or JS bytecode VM instead (see "
+            "docs/EXCEPTION_ENGINE.md)."
+        )
     return f"    /* unhandled IL op {op} */"
 
 
@@ -1515,6 +1559,16 @@ def _emit_js_inst(ins: Inst, jop, jname, label_block, label_to_func) -> Tuple[st
         return "return rt;", True
     if op == "raise":
         return f"/* raise {ins.imm} */", False
+    if op == "laddr":
+        raise ValueError(
+            "lower_to_js: 'laddr' (label-address, used by TryExcept/Raise's "
+            "exception-handler registration) has no equivalent in the native "
+            "JS transpile model yet -- it would need the emitted function's "
+            "block-switch dispatcher wrapped in try/catch to actually catch "
+            "faults, not just a label-address value load. Native/transpiled "
+            "try/except is not yet supported; run this program on the "
+            "Python or JS bytecode VM instead (see docs/EXCEPTION_ENGINE.md)."
+        )
     if op == "jmptab":
         sel = jop(ins.a)
         arms = " ".join(f"case {k}: {{ _b = {label_block[t]}; continue; }}"

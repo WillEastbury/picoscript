@@ -203,6 +203,14 @@
     }
   };
 
+  // Top of the handler stack, honoring "SetHandler(0) = no handler" (a
+  // pushed 0 is a deliberate no-op registration, matching the pre-existing
+  // single-slot convention) -- mirrors HostApi._active_handler_pc.
+  PicoVM.prototype._activeHandlerPc = function () {
+    var hs = this._errState && this._errState.handlerStack;
+    return (hs && hs.length) ? hs[hs.length - 1] : 0;
+  };
+
   PicoVM.prototype.run = function (words) {
     if (words) this.load(words);
     this.verify();                       // INV-10: verify before execution
@@ -211,11 +219,12 @@
       try {
         this.step();
       } catch (ex) {
-        if (ex.fault !== undefined && this._errState && this._errState.handlerPc) {
+        var handlerPc = this._activeHandlerPc();
+        if (ex.fault !== undefined && handlerPc) {
           this._errState.code = ex.fault;
           this._errState.detail = ex.detail || 0;
           this._errState.resumePc = (ex.pc || 0) + 1;
-          this.pc = this._errState.handlerPc;
+          this.pc = handlerPc;
         } else {
           throw ex;
         }
@@ -2549,10 +2558,14 @@
 
   // -- Error.* global error handler + fault inspection (mirrors HostApi._error_hook) ----
   PicoVM.prototype._errorHook = function (method, rd, rs1, rs2) {
-    if (!this._errState) this._errState = { handlerPc: 0, code: 0, detail: 0, resumePc: 0 };
+    if (!this._errState) this._errState = { handlerStack: [], code: 0, detail: 0, resumePc: 0 };
     var es = this._errState;
-    if (method === "SetHandler") { es.handlerPc = this.regs[rs1] >>> 0; this.regs[rd] = 1; return true; }
-    if (method === "HasHandler") { this.regs[rd] = es.handlerPc ? 1 : 0; return true; }
+    if (method === "SetHandler") { es.handlerStack.push(this.regs[rs1] >>> 0); this.regs[rd] = 1; return true; }
+    if (method === "PopHandler") {
+      if (es.handlerStack.length) { es.handlerStack.pop(); this.regs[rd] = 1; } else { this.regs[rd] = 0; }
+      return true;
+    }
+    if (method === "HasHandler") { this.regs[rd] = this._activeHandlerPc() ? 1 : 0; return true; }
     if (method === "Code") { this.regs[rd] = es.code >>> 0; return true; }
     if (method === "Detail") { this.regs[rd] = es.detail >>> 0; return true; }
     if (method === "Resume") {
@@ -2561,6 +2574,25 @@
       this.regs[rd] = 1; return true;
     }
     if (method === "Clear") { es.code = 0; es.detail = 0; this.regs[rd] = 1; return true; }
+    if (method === "Raise") {
+      // Script-level throw: mirrors HostApi._error_hook's Raise exactly --
+      // jump straight to the nearest handler if one is registered (same
+      // channel a genuine PicoFault uses), else propagate as a real,
+      // uncaught fault via the same picoFault() PicoVM.run() already knows
+      // how to handle (it'll re-check the handler stack, find nothing
+      // active, and rethrow -- so this naturally crashes exactly like an
+      // unhandled exception should).
+      var code = this.regs[rs1] >>> 0;
+      var handlerPc = this._activeHandlerPc();
+      if (handlerPc) {
+        es.code = code; es.detail = 0; es.resumePc = this.pc;   // step() already advanced pc
+        this.pc = handlerPc;
+        this.regs[rd] = 1;
+      } else {
+        throw picoFault(code, this.curPc, 0, "unhandled Raise(code=" + code + ") at pc=" + this.curPc);
+      }
+      return true;
+    }
     return false;
   };
 

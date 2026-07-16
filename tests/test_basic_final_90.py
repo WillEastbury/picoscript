@@ -63,15 +63,18 @@ def test_basic_raise_stmt():
 
 
 def test_basic_raise_with_value():
-    """BASIC RAISE <value> exercises Raise(value) lowering path."""
+    """BASIC RAISE <value> exercises Raise(value) lowering + the real
+    exception engine (docs/EXCEPTION_ENGINE.md). An uncaught RAISE (no
+    enclosing TRY, as here) now correctly propagates as a real PicoFault --
+    see tests/test_exception_engine.py for full try/except/raise coverage
+    (catch, nesting, finally, JS parity)."""
+    from picoscript_vm import PicoFault
     src = "RAISE 42"
-    try:
-        il = compile_basic(src)
-        words = lower_to_bytecode_safe(il)
-        vm = PicoVM().run(words)
-        assert vm.steps > 0
-    except (SyntaxError, AttributeError):
-        pass
+    il = compile_basic(src)
+    words = lower_to_bytecode_safe(il)
+    with pytest.raises(PicoFault) as exc:
+        PicoVM().run(words)
+    assert exc.value.code == 42
 
 
 # ── BASIC DISPATCH error path ────────────────────────────────────────────────

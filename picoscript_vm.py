@@ -1156,7 +1156,11 @@ class HostApi:
         self._principal_claims: Dict[str, str] = {}
         self._sandbox_denied: int = 0    # bitmask of denied capabilities
         # -- OS-worker: Error handling --
-        self._error_handler_pc: int = 0  # 0 = unset
+        # A real stack (not a single slot): SetHandler pushes so try/except
+        # blocks can nest correctly (the inner try's handler is active only
+        # for its own body; on normal completion or once its except/finally
+        # has run, PopHandler restores the enclosing try's handler, if any).
+        self._error_handler_stack: List[int] = []
         self._error_code: int = 0        # last fault code (0=none)
         self._error_detail: int = 0      # last fault detail
         self._error_resume_pc: int = 0   # pc to resume from after fault
@@ -4072,13 +4076,35 @@ class HostApi:
         return False
 
     # -- Error.* global error handler + fault inspection ---------------------
+    def _active_handler_pc(self) -> int:
+        """Top of the handler stack, honoring the "0 = no handler" convention
+        SetHandler(0) has always documented (a pushed 0 is a deliberate
+        no-op registration, not a real jump target) -- returns 0 if the
+        stack is empty OR its top entry is 0."""
+        return self._error_handler_stack[-1] if self._error_handler_stack else 0
+
     def _error_hook(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
         if method == "SetHandler":
-            self._error_handler_pc = vm.regs[rs1] & MASK32
+            # Pushes -- see the handler-stack note on _error_handler_stack's
+            # declaration. lower_try() pairs every SetHandler with a matching
+            # PopHandler once the try block is done (success, or having run
+            # except/finally), so nested try/except restores the enclosing
+            # handler correctly instead of leaking an inner one. Pushing 0 is
+            # a legitimate "register a no-op handler" call (matches the
+            # pre-existing "0 = unset" convention) -- HasHandler/Raise below
+            # look at the top entry's truthiness, not just stack depth.
+            self._error_handler_stack.append(vm.regs[rs1] & MASK32)
             vm.regs[rd] = 1
             return True
+        if method == "PopHandler":
+            if self._error_handler_stack:
+                self._error_handler_stack.pop()
+                vm.regs[rd] = 1
+            else:
+                vm.regs[rd] = 0
+            return True
         if method == "HasHandler":
-            vm.regs[rd] = 1 if self._error_handler_pc else 0
+            vm.regs[rd] = 1 if self._active_handler_pc() else 0
             return True
         if method == "Code":
             vm.regs[rd] = self._error_code & MASK32
@@ -4098,6 +4124,33 @@ class HostApi:
             self._error_code = 0
             self._error_detail = 0
             vm.regs[rd] = 1
+            return True
+        if method == "Raise":
+            # Script-level "throw a value": if a handler is registered (we're
+            # lexically inside a try), jump straight there -- same effect a
+            # genuine VM fault has via PicoVM.run()'s PicoFault handling, just
+            # triggered in-band instead of via a caught Python exception.
+            # Error.Code() in the except body reads back exactly the raised
+            # value (this shares one channel with real VM fault codes --
+            # e.g. a script Raise(2) and a genuine bad-opcode fault are both
+            # readable as Code()==2; this is a documented, accepted tradeoff,
+            # not a bug: most languages share one errno/exception-code space
+            # between system and user-level errors).
+            # If there is NO handler, this must not be silently swallowed --
+            # propagate as a real, uncaught PicoFault so it crashes the
+            # program (or is caught by an *outer* frame's handler) exactly
+            # like an unhandled exception would.
+            code = vm.regs[rs1] & MASK32
+            handler_pc = self._active_handler_pc()
+            if handler_pc:
+                self._error_code = code
+                self._error_detail = 0
+                self._error_resume_pc = vm.pc   # _step() already advanced pc past this call
+                vm.pc = handler_pc
+                vm.regs[rd] = 1
+            else:
+                raise PicoFault(code, vm.cur_pc, 0,
+                                 f"unhandled Raise(code={code}) at pc={vm.cur_pc}")
             return True
         return False
 
@@ -4577,11 +4630,12 @@ class PicoVM:
                 try:
                     self._step()
                 except PicoFault as pf:
-                    if self.host._error_handler_pc:
+                    handler_pc = self.host._active_handler_pc()
+                    if handler_pc:
                         self.host._error_code = pf.code
                         self.host._error_detail = pf.detail
                         self.host._error_resume_pc = pf.pc + 1
-                        self.pc = self.host._error_handler_pc
+                        self.pc = handler_pc
                     else:
                         raise
         except Halt:

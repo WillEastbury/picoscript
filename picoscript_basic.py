@@ -1161,33 +1161,27 @@ class Lowerer:
         elif isinstance(s, TryExcept):
             self.lower_try(s)
         elif isinstance(s, Raise):
-            # NOTE (found during dialect-parity audit): this is currently a
-            # best-effort, non-corrupting no-op, not a real "throw a script
-            # value and unwind to the nearest except" mechanism. The VM's
-            # only fault-catching primitive is Error.SetHandler(pc), which
-            # registers a JUMP TARGET for genuine VM-level faults (bad
-            # opcode/jump, div-by-zero, step budget -- see PicoFault handling
-            # in PicoVM.run); it does not accept/store an arbitrary script
-            # value, and lower_try() never calls it to protect the try body.
-            # The previous code called `self.b.host("Error", "SetHandler",
-            # (v,), None)` with the raised *value* -- if that value weren't
-            # already a valid bytecode address, a later fault could jump to
-            # a garbage PC. That call is intentionally removed rather than
-            # "fixed" to look functional: emitting a real script-raisable
-            # error needs a new host op (e.g. `Error.Raise(code)` that sets
-            # _error_code directly) plumbed through all 3 VMs + 2
-            # transpilers, and lower_try() needs to actually call
-            # Error.SetHandler around the try body -- a larger, separate fix
-            # tracked in docs/DIALECT_PARITY.md, not attempted here.
-            # `raise_irq` (the VM's actual RAISE opcode) is the closest
-            # existing, safe, side-effect-only primitive: it just logs
-            # "raise swirq channel=N" (software-IRQ signaling, unrelated to
-            # exceptions) and cannot corrupt VM state.
-            self.b.raise_irq(0)
+            # Real exception engine (see docs/EXCEPTION_ENGINE.md): sets the
+            # VM's fault-code state and jumps to the nearest registered
+            # handler (Error.SetHandler'd by an enclosing lower_try), exactly
+            # like a genuine VM-level fault (bad opcode/jump, div-by-zero)
+            # would via PicoVM.run()'s PicoFault handling. If no handler is
+            # registered, it propagates as a real, uncaught fault (crashes),
+            # matching normal exception semantics. A bare `RAISE` (no value)
+            # raises code 0 -- this does NOT re-raise "the current" exception
+            # (there's no such tracking); every Raise needs its own code.
+            v = self.eval(s.value) if s.value is not None else self._const(0)
+            ok = self.b.vreg()
+            self.b.host("Error", "Raise", (v,), ok)
         elif isinstance(s, OnBlock):
             self.lower_on_block(s)
         else:
             raise SyntaxError(f"cannot lower {s}")
+
+    def _const(self, value: int) -> VReg:
+        v = self.b.vreg()
+        self.b.const(v, value)
+        return v
 
     def _resolve_constant(self, name: str):
         key = str(name).strip().upper()
@@ -1239,24 +1233,50 @@ class Lowerer:
             self.user_constants[f"{enum_key}.{member_key}"] = cur
 
     def lower_try(self, s: TryExcept):
-        """try/except/finally -> Error.SetHandler + conditional check pattern.
-        Phase 1: simple fault-flag checking (no label addresses needed).
-        The except block runs if any host call in the try body faults."""
+        """try/except/finally -> a real exception mechanism using a handler
+        STACK (see docs/EXCEPTION_ENGINE.md and Error.SetHandler's docstring
+        note on picoscript_vm.HostApi._error_handler_stack).
+
+        SetHandler(handler_label's address) is pushed before the try body
+        runs, so both a genuine VM fault (PicoFault, caught by
+        PicoVM.run()) and a script `Raise` (the Error.Raise host op) inside
+        the try body jump straight to handler_label -- bypassing whatever's
+        left of the try body. PopHandler() restores the enclosing try's
+        handler (if any) on every path out of this try (normal completion,
+        or having caught), which is what makes nested try/except correct:
+        the except/finally bodies -- and anything after this try block --
+        run with THIS try's handler no longer registered, so a fault inside
+        them propagates to the next-outer handler (or crashes, if none),
+        never back into this same except block.
+        """
         handler_label = self.b.new_label("except")
         end_label = self.b.new_label("endtry")
-        # try body: execute normally
+
+        addr = self.b.vreg()
+        self.b.label_addr(addr, handler_label)
+        set_ok = self.b.vreg()
+        self.b.host("Error", "SetHandler", (addr,), set_ok)
+
+        # try body: runs normally; a fault/raise jumps straight to
+        # handler_label, skipping everything below down to that label.
         for st in s.try_body:
             self.stmt(st)
-        # check if error occurred (Status.Last != 0)
-        status = self.b.vreg()
-        self.b.host("Error", "Code", (), status)
-        self.b.cmpbr("NZ", status, status, handler_label)
+
+        # Normal completion (no fault): pop our handler, run finally, skip
+        # the except body entirely.
+        pop1 = self.b.vreg()
+        self.b.host("Error", "PopHandler", (), pop1)
         if s.finally_body:
             for st in s.finally_body:
                 self.stmt(st)
         self.b.jmp(end_label)
-        # except body
+
+        # except body: landed here via a fault/raise inside the try body.
+        # Pop first (before running except/finally) so a fault raised WHILE
+        # handling this one propagates outward instead of looping back here.
         self.b.label(handler_label)
+        pop2 = self.b.vreg()
+        self.b.host("Error", "PopHandler", (), pop2)
         for st in s.except_body:
             self.stmt(st)
         clear = self.b.vreg()

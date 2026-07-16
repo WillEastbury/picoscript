@@ -246,22 +246,27 @@ def test_store_value_atom_and_const_addition():
 
 
 def test_raise_with_value_lowers():
-    # Historically this asserted the *bug* (Lowerer.stmt(Raise(...)) crashing
-    # with AttributeError: 'raise_sw') as if it were expected behavior -- see
-    # docs/DIALECT_PARITY.md for the full audit. Raise's lowering was calling
-    # a nonexistent ILBuilder method, and (independently) misusing
-    # Error.SetHandler with the raised *value* where the VM expects a jump
-    # target PC -- a latent bad-jump risk, not just a crash. Both are fixed:
-    # Raise now lowers to the VM's actual RAISE opcode (`raise_irq`), a safe
-    # no-corrupting-state primitive, and emits no "host" instruction at all.
-    # NOTE: this does NOT make Raise a real "throw a value, unwind to the
-    # nearest except" mechanism yet -- it's a documented no-op pending a
-    # proper Error.Raise(code) host op + lower_try() actually registering
-    # Error.SetHandler around the try body (tracked, not attempted here).
+    # History (see docs/DIALECT_PARITY.md / docs/EXCEPTION_ENGINE.md):
+    # 1st gen: Lowerer.stmt(Raise(...)) crashed with AttributeError
+    #          ('raise_sw' didn't exist) and separately misused
+    #          Error.SetHandler with the raised *value* as if it were a jump
+    #          target PC -- a latent bad-jump risk, not just a crash.
+    # 2nd gen: fixed to a safe, side-effect-only no-op (VM's real RAISE
+    #          opcode / raise_irq) -- no longer crashed, but Raise still
+    #          didn't actually throw anything catchable.
+    # Now: Raise is a real exception primitive -- it lowers to a genuine
+    #      Error.Raise(code) host call, which jumps to the nearest
+    #      Error.SetHandler'd handler (registered by an enclosing
+    #      lower_try()) or propagates as an uncaught PicoFault if none is
+    #      active. See tests/test_exception_engine.py for full behavioral
+    #      coverage (happy path, catch, nesting, uncaught propagation, JS
+    #      parity); this unit test just pins the IL shape.
     lowerer = Lowerer()
     lowerer.stmt(Raise(Num(7)))
-    assert any(getattr(inst, "op", None) == "raise" for inst in lowerer.b.insts)
-    assert not any(getattr(inst, "op", None) == "host" for inst in lowerer.b.insts)
+    host_insts = [i for i in lowerer.b.insts if getattr(i, "op", None) == "host"]
+    assert len(host_insts) == 1
+    assert host_insts[0].ns == "Error" and host_insts[0].method == "Raise"
+    assert not any(getattr(inst, "op", None) == "raise" for inst in lowerer.b.insts)
 
 
 def test_basic_try_except_endtry_parses_and_lowers():

@@ -540,6 +540,8 @@
       0x2B3: "Error.Detail",
       0x2B4: "Error.Resume",
       0x2B5: "Error.Clear",
+      0x2B6: "Error.Raise",
+      0x2B7: "Error.PopHandler",
       0x2C0: "Capsule.Call",
       0x2C1: "Capsule.Schedule",
       0x2C2: "Capsule.Jump",
@@ -598,6 +600,13 @@
       0x338: "Map.ValSpanAt",
       0x339: "Map.ValIsSpan",
       0x33A: "Map.Use",
+      0x340: "Json.Parse",
+      0x341: "Binary.ParseCard",
+      0x342: "Binary.SerializeCard",
+      0x343: "Binary.ParseEntity",
+      0x344: "Binary.SerializeEntity",
+      0x345: "Binary.SetKey",
+      0x346: "Binary.Verify",
     }
   };
   function _canonConstant(name) {
@@ -902,6 +911,14 @@
     }
   };
 
+  // Top of the handler stack, honoring "SetHandler(0) = no handler" (a
+  // pushed 0 is a deliberate no-op registration, matching the pre-existing
+  // single-slot convention) -- mirrors HostApi._active_handler_pc.
+  PicoVM.prototype._activeHandlerPc = function () {
+    var hs = this._errState && this._errState.handlerStack;
+    return (hs && hs.length) ? hs[hs.length - 1] : 0;
+  };
+
   PicoVM.prototype.run = function (words) {
     if (words) this.load(words);
     this.verify();                       // INV-10: verify before execution
@@ -910,11 +927,12 @@
       try {
         this.step();
       } catch (ex) {
-        if (ex.fault !== undefined && this._errState && this._errState.handlerPc) {
+        var handlerPc = this._activeHandlerPc();
+        if (ex.fault !== undefined && handlerPc) {
           this._errState.code = ex.fault;
           this._errState.detail = ex.detail || 0;
           this._errState.resumePc = (ex.pc || 0) + 1;
-          this.pc = this._errState.handlerPc;
+          this.pc = handlerPc;
         } else {
           throw ex;
         }
@@ -1092,6 +1110,8 @@
     if (name === "Arena.Reset") { this.arenaTop = 0x8000; this.spans = [null]; return; }
     // ---- Map.* first-class dictionary (active-handle model; see docs/MAP.md) ---
     if (name.indexOf("Map.") === 0) { if (this._mapHook(name.slice(4), rd, rs1, rs2)) return; }
+    // ---- parsers: Json.Parse / Binary.ParseCard|SerializeCard -> Map -----------
+    if (name === "Json.Parse" || name.indexOf("Binary.") === 0) { if (this._parseHook(name, rd, rs1, rs2)) return; }
     // ---- EL0-facing PIOS request/response hooks ---------------------------
     if (name.indexOf("Req.") === 0) {
       if (this._req(name.slice(4), rd, rs1, rs2)) return;
@@ -1273,6 +1293,176 @@
   function _ws(c) { return c === 32 || c === 9 || c === 10 || c === 13; }
   function _keystr(arr) { var s = ""; for (var i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]); return s; }
 
+  // ---- shared deserializers: string/bytes -> Map entries (see docs/MAP.md) -----
+  // Byte-array parsers replicated identically in picovm.py + picovm.c so a parsed
+  // Map is bit-identical on every VM. Values are pushed via the caller's put*
+  // callbacks (which write into the active Map entry structure).
+  function _hexv(c) { if (c >= 48 && c <= 57) return c - 48; if (c >= 97 && c <= 102) return c - 87; if (c >= 65 && c <= 70) return c - 55; return 0; }
+  function _pushUtf8(out, cp) {
+    if (cp < 0x80) out.push(cp);
+    else if (cp < 0x800) { out.push(0xC0 | (cp >> 6), 0x80 | (cp & 0x3F)); }
+    else { out.push(0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)); }
+  }
+  function _cmpBytes(a, b) { var n = Math.min(a.length, b.length), i; for (i = 0; i < n; i++) { if (a[i] !== b[i]) return a[i] - b[i]; } return a.length - b.length; }
+  // Parse a flat JSON object. Scalar values are decoded (string/int/bool/null);
+  // nested object/array values are captured as their raw source substring (a
+  // string value), so the scan is deterministic and identical across VMs.
+  function _jsonParseObject(b, putSI, putSS, putNS) {
+    var i = 0, n = b.length;
+    function skip() { while (i < n && _ws(b[i])) i++; }
+    function pstr() {
+      i++; var out = [];
+      while (i < n) {
+        var c = b[i++];
+        if (c === 34) break;
+        if (c === 92) {
+          var e = b[i++];
+          if (e === 34) out.push(34); else if (e === 92) out.push(92); else if (e === 47) out.push(47);
+          else if (e === 110) out.push(10); else if (e === 116) out.push(9); else if (e === 114) out.push(13);
+          else if (e === 98) out.push(8); else if (e === 102) out.push(12);
+          else if (e === 117) { var cp = 0, k; for (k = 0; k < 4; k++) cp = (cp << 4) | _hexv(b[i++]); _pushUtf8(out, cp); }
+          else out.push(e);
+        } else out.push(c);
+      }
+      return out;
+    }
+    function praw() {
+      var start = i, depth = 0, instr = false;
+      while (i < n) {
+        var c = b[i];
+        if (instr) { if (c === 92) { i += 2; continue; } if (c === 34) instr = false; i++; continue; }
+        if (c === 34) { instr = true; i++; continue; }
+        if (c === 123 || c === 91) depth++;
+        else if (c === 125 || c === 93) { depth--; if (depth === 0) { i++; break; } }
+        i++;
+      }
+      return b.slice(start, i);
+    }
+    skip(); if (b[i] !== 123) return; i++;
+    while (i < n) {
+      skip(); if (b[i] === 125) { i++; break; }
+      if (b[i] !== 34) break;
+      var key = pstr(); skip(); if (b[i] !== 58) break; i++; skip();
+      var c = b[i];
+      if (c === 34) putSS(key, pstr());
+      else if (c === 123 || c === 91) putSS(key, praw());
+      else if (c === 116) { i += 4; putSI(key, 1); }
+      else if (c === 102) { i += 5; putSI(key, 0); }
+      else if (c === 110) { i += 4; putNS(key); }
+      else {
+        var neg = (b[i] === 45); if (b[i] === 45 || b[i] === 43) i++;
+        var val = 0;
+        while (i < n && b[i] >= 48 && b[i] <= 57) { val = val * 10 + (b[i] - 48); i++; }
+        if (i < n && (b[i] === 46 || b[i] === 101 || b[i] === 69)) { i++; while (i < n && ((b[i] >= 48 && b[i] <= 57) || b[i] === 46 || b[i] === 101 || b[i] === 69 || b[i] === 45 || b[i] === 43)) i++; }
+        putSI(key, (neg ? -val : val) | 0);
+      }
+      skip(); if (b[i] === 44) { i++; continue; } if (b[i] === 125) { i++; break; } break;
+    }
+  }
+  // Parse a PicoBinarySerializer PSC1 card (magic 0x50534331): [magic][u16 count]
+  // then per field [u8 nameLen][name][u8 type: 1=int(4 BE), 2=str(u16 len + bytes)].
+  function _psc1Parse(b, putSI, putSS) {
+    if (b.length < 6) return;
+    var magic = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
+    if (magic !== 0x50534331) return;
+    var count = (b[4] << 8) | b[5], pos = 6, k;
+    for (k = 0; k < count; k++) {
+      var nlen = b[pos++]; var key = b.slice(pos, pos + nlen); pos += nlen;
+      var t = b[pos++];
+      if (t === 1) { var x = ((b[pos] << 24) | (b[pos + 1] << 16) | (b[pos + 2] << 8) | b[pos + 3]) | 0; pos += 4; putSI(key, x); }
+      else if (t === 2) { var vlen = (b[pos] << 8) | b[pos + 1]; pos += 2; putSS(key, b.slice(pos, pos + vlen)); pos += vlen; }
+      else break;
+    }
+  }
+  // Serialize an ordered [{kb,vk,vi,vb}] entry list to a PSC1 card (keys sorted by
+  // UTF-8 bytes, matching picoserializer). Null values serialize as int 0.
+  function _psc1Serialize(entries) {
+    var es = entries.filter(function (e) { return e.kk === 's'; }).slice();
+    es.sort(function (a, b) { return _cmpBytes(a.kb, b.kb); });
+    var out = [0x50, 0x53, 0x43, 0x31, (es.length >> 8) & 255, es.length & 255];
+    es.forEach(function (e) {
+      out.push(e.kb.length & 255); for (var i = 0; i < e.kb.length; i++) out.push(e.kb[i] & 255);
+      if (e.vk === 's') { out.push(2); var v = e.vb || []; out.push((v.length >> 8) & 255, v.length & 255); for (var j = 0; j < v.length; j++) out.push(v[j] & 255); }
+      else { out.push(1); var x = (e.vk === 'i' ? e.vi : 0) | 0; out.push((x >> 24) & 255, (x >> 16) & 255, (x >> 8) & 255, x & 255); }
+    });
+    return out;
+  }
+  // ---- BSO1 (BareMetal.Binary): schema-driven, little-endian, HMAC-SHA256 signed.
+  // HDR: MAGIC(i32) VERSION(i32) schemaVer(i32) byte(0) + 32-byte sig = 45 bytes,
+  // then a presence byte, then fields in schema order. 64-bit/float/temporal values
+  // are stored as their raw LE bytes (string) in the Map. Wire-compatible with
+  // BareMetalJsTools/src/BareMetal.Binary.js. See docs/MAP.md.
+  var BSO1_HDR = 45, BSO1_SIG_AT = 13;
+  var BSO1_SZ = { 1: 1, 2: 1, 3: 1, 4: 2, 5: 2, 6: 4, 7: 4, 8: 8, 9: 8, 10: 4, 11: 8, 12: 16, 13: 2, 14: 0, 15: 16, 16: 9, 17: 4, 18: 8, 19: 10, 20: 8, 21: 16, 22: 4 };
+  var BSO1_INT = { 1: 'u', 2: 'u', 3: 's', 4: 's', 5: 'u', 6: 's', 7: 'u', 13: 'u', 17: 's', 22: 's' };
+  function _leInt(b, pos, size, signed) {
+    var v = 0, i; for (i = 0; i < size; i++) v += (b[pos + i] || 0) * Math.pow(256, i);
+    if (signed) { var lim = Math.pow(2, size * 8 - 1); if (v >= lim) v -= lim * 2; }
+    return v | 0;
+  }
+  function _bso1Schema(mapObj) {
+    var members = [], version = 1;
+    if (mapObj) mapObj.forEach(function (e) {
+      var nm = e.kb;
+      if (nm.length && nm[0] === 58) { if (_keystr(nm) === ':version' && e.vk === 'i') version = e.vi; return; }
+      var code = (e.vk === 'i') ? e.vi : 0;
+      members.push({ name: nm, wt: code & 255, nullable: (code & 256) !== 0 });
+    });
+    return { members: members, version: version };
+  }
+  function _bso1Read(b, sch, putSI, putSS, putNS) {
+    var pos = BSO1_HDR, i;
+    if (pos >= b.length) return;
+    if (b[pos++] === 0) return;   // null object
+    for (i = 0; i < sch.members.length; i++) {
+      var m = sch.members[i], wt = m.wt;
+      if (m.nullable) { if ((b[pos++] || 0) === 0) { putNS(m.name); continue; } }
+      if (wt === 14) {
+        var len = _leInt(b, pos, 4, true); pos += 4;
+        if (len < 0) putNS(m.name);
+        else { putSS(m.name, b.slice(pos, pos + len)); pos += len; }
+      } else if (BSO1_INT[wt]) {
+        var sz = BSO1_SZ[wt]; putSI(m.name, _leInt(b, pos, sz, BSO1_INT[wt] === 's')); pos += sz;
+      } else {
+        var sz2 = BSO1_SZ[wt]; putSS(m.name, b.slice(pos, pos + sz2)); pos += sz2;
+      }
+    }
+  }
+  function _bso1Write(dataMap, sch, hmacKey) {
+    var out = [], i, k;
+    function wI32(v) { out.push(v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255); }
+    wI32(0x314F5342); wI32(3); wI32(sch.version | 0); out.push(0);
+    for (i = 0; i < 32; i++) out.push(0);
+    out.push(1);
+    for (i = 0; i < sch.members.length; i++) {
+      var m = sch.members[i], wt = m.wt;
+      var e = dataMap ? dataMap.get('s' + _keystr(m.name)) : null;
+      var isNull = !e || e.vk === 'n';
+      if (m.nullable) { if (isNull) { out.push(0); continue; } out.push(1); }
+      if (wt === 14) {
+        if (isNull) wI32(-1);
+        else { var sb = (e && e.vk === 's') ? e.vb : []; wI32(sb.length); for (k = 0; k < sb.length; k++) out.push(sb[k] & 255); }
+      } else if (BSO1_INT[wt]) {
+        var sz = BSO1_SZ[wt], val = (e && e.vk === 'i') ? e.vi : 0; for (k = 0; k < sz; k++) out.push((val >> (8 * k)) & 255);
+      } else {
+        var sz2 = BSO1_SZ[wt], rb = (e && e.vk === 's') ? e.vb : []; for (k = 0; k < sz2; k++) out.push((k < rb.length ? rb[k] : 0) & 255);
+      }
+    }
+    if (hmacKey && hmacKey.length) {
+      var parts = out.slice(0, BSO1_SIG_AT).concat(out.slice(BSO1_HDR));
+      var sig = _hmacSha256(hmacKey, parts);
+      for (k = 0; k < 32; k++) out[BSO1_SIG_AT + k] = sig[k];
+    }
+    return out;
+  }
+  function _bso1Verify(b, key) {
+    if (!key || !key.length || b.length < BSO1_HDR) return 0;
+    var parts = b.slice(0, BSO1_SIG_AT).concat(b.slice(BSO1_HDR));
+    var sig = _hmacSha256(key, parts), i;
+    for (i = 0; i < 32; i++) if ((b[BSO1_SIG_AT + i] || 0) !== (sig[i] || 0)) return 0;
+    return 1;
+  }
+
   PicoVM.prototype._spanBytes = function (h) {
     if (h <= 0 || h >= this.spans.length || !this.spans[h]) return [];
     var s = this.spans[h], out = new Array(s.len);
@@ -1326,6 +1516,42 @@
       case "ValAt": { var ej = vals(m)[R[rs1] | 0]; R[rd] = ej && ej.vk === 'i' ? ej.vi : 0; return true; }
       case "ValSpanAt": { var ek = vals(m)[R[rs1] | 0]; R[rd] = this._newSpanBytes(ek && ek.vk === 's' ? ek.vb : []); return true; }
       case "ValIsSpan": { var el = vals(m)[R[rs1] | 0]; R[rd] = el && el.vk === 's' ? 1 : 0; return true; }
+    }
+    return false;
+  };
+  PicoVM.prototype._parseHook = function (name, rd, rs1, rs2) {
+    var R = this.regs, self = this;
+    if (!this.maps) { this.maps = [null]; this.activeMap = 0; }
+    function newMap() { self.maps.push(new Map()); self.activeMap = self.maps.length - 1; return self.activeMap; }
+    if (name === "Json.Parse" || name === "Binary.ParseCard") {
+      var bytes = this._spanBytes(R[rs1]);
+      var h = newMap(), m = this.maps[h];
+      var putSI = function (kb, v) { m.set('s' + _keystr(kb), { kk: 's', ki: 0, kb: kb, vk: 'i', vi: v | 0, vb: null }); };
+      var putSS = function (kb, vb) { m.set('s' + _keystr(kb), { kk: 's', ki: 0, kb: kb, vk: 's', vi: 0, vb: vb }); };
+      var putNS = function (kb) { m.set('s' + _keystr(kb), { kk: 's', ki: 0, kb: kb, vk: 'n', vi: 0, vb: null }); };
+      if (name === "Json.Parse") _jsonParseObject(bytes, putSI, putSS, putNS);
+      else _psc1Parse(bytes, putSI, putSS);
+      R[rd] = h; return true;
+    }
+    if (name === "Binary.SetKey") { var kb = this._spanBytes(R[rs1]); this.bso1Key = kb.length ? kb : null; return true; }
+    if (name === "Binary.ParseEntity") {
+      var blob = this._spanBytes(R[rs1]), sch = _bso1Schema(this.maps[R[rs2]]);
+      var hh = newMap(), mm = this.maps[hh];
+      var pSI = function (kb2, v) { mm.set('s' + _keystr(kb2), { kk: 's', ki: 0, kb: kb2, vk: 'i', vi: v | 0, vb: null }); };
+      var pSS = function (kb2, vb) { mm.set('s' + _keystr(kb2), { kk: 's', ki: 0, kb: kb2, vk: 's', vi: 0, vb: vb }); };
+      var pNS = function (kb2) { mm.set('s' + _keystr(kb2), { kk: 's', ki: 0, kb: kb2, vk: 'n', vi: 0, vb: null }); };
+      _bso1Read(blob, sch, pSI, pSS, pNS);
+      R[rd] = hh; return true;
+    }
+    if (name === "Binary.SerializeEntity") {
+      var dm = this.maps[R[rs1]], sch2 = _bso1Schema(this.maps[R[rs2]]);
+      R[rd] = this._newSpanBytes(_bso1Write(dm, sch2, this.bso1Key || null)); return true;
+    }
+    if (name === "Binary.Verify") { R[rd] = _bso1Verify(this._spanBytes(R[rs1]), this.bso1Key || null); return true; }
+    if (name === "Binary.SerializeCard") {
+      var mm = this.maps[this.activeMap];
+      var entries = mm ? Array.from(mm.values()) : [];
+      R[rd] = this._newSpanBytes(_psc1Serialize(entries)); return true;
     }
     return false;
   };
@@ -3040,10 +3266,14 @@
 
   // -- Error.* global error handler + fault inspection (mirrors HostApi._error_hook) ----
   PicoVM.prototype._errorHook = function (method, rd, rs1, rs2) {
-    if (!this._errState) this._errState = { handlerPc: 0, code: 0, detail: 0, resumePc: 0 };
+    if (!this._errState) this._errState = { handlerStack: [], code: 0, detail: 0, resumePc: 0 };
     var es = this._errState;
-    if (method === "SetHandler") { es.handlerPc = this.regs[rs1] >>> 0; this.regs[rd] = 1; return true; }
-    if (method === "HasHandler") { this.regs[rd] = es.handlerPc ? 1 : 0; return true; }
+    if (method === "SetHandler") { es.handlerStack.push(this.regs[rs1] >>> 0); this.regs[rd] = 1; return true; }
+    if (method === "PopHandler") {
+      if (es.handlerStack.length) { es.handlerStack.pop(); this.regs[rd] = 1; } else { this.regs[rd] = 0; }
+      return true;
+    }
+    if (method === "HasHandler") { this.regs[rd] = this._activeHandlerPc() ? 1 : 0; return true; }
     if (method === "Code") { this.regs[rd] = es.code >>> 0; return true; }
     if (method === "Detail") { this.regs[rd] = es.detail >>> 0; return true; }
     if (method === "Resume") {
@@ -3052,6 +3282,25 @@
       this.regs[rd] = 1; return true;
     }
     if (method === "Clear") { es.code = 0; es.detail = 0; this.regs[rd] = 1; return true; }
+    if (method === "Raise") {
+      // Script-level throw: mirrors HostApi._error_hook's Raise exactly --
+      // jump straight to the nearest handler if one is registered (same
+      // channel a genuine PicoFault uses), else propagate as a real,
+      // uncaught fault via the same picoFault() PicoVM.run() already knows
+      // how to handle (it'll re-check the handler stack, find nothing
+      // active, and rethrow -- so this naturally crashes exactly like an
+      // unhandled exception should).
+      var code = this.regs[rs1] >>> 0;
+      var handlerPc = this._activeHandlerPc();
+      if (handlerPc) {
+        es.code = code; es.detail = 0; es.resumePc = this.pc;   // step() already advanced pc
+        this.pc = handlerPc;
+        this.regs[rd] = 1;
+      } else {
+        throw picoFault(code, this.curPc, 0, "unhandled Raise(code=" + code + ") at pc=" + this.curPc);
+      }
+      return true;
+    }
     return false;
   };
 
@@ -4444,6 +4693,41 @@
     return span;
   }
 
+  // ---- first-class string composition -----------------------------------------
+  // A `+` chain that contains any string literal is a COMPOSITION, not integer
+  // addition: string parts are written as bytes and numeric parts as decimal
+  // digits, via the byte-writer, then emitted. This makes `Print "total=" + total`
+  // produce `total=15` in every dialect (no manual Utf8Writer / escaped-JSON junk).
+  function exprHasStr(e) { if (!e) return false; if (e.t === "Str") return true; if (e.t === "Bin" && e.op === "+") return exprHasStr(e.lhs) || exprHasStr(e.rhs); return false; }
+  function isComposite(e) { return !!(e && e.t === "Bin" && e.op === "+" && exprHasStr(e)); }
+  function flattenPlus(e) { return (e && e.t === "Bin" && e.op === "+") ? flattenPlus(e.lhs).concat(flattenPlus(e.rhs)) : [e]; }
+  function emitComposedPrint(self, expr) {
+    // Utf8Writer.New(ptr, cap) needs a real scratch buffer -- calling it with no
+    // args leaves ptr/cap as whatever garbage happens to be in those registers,
+    // which "works" once by luck and then corrupts/truncates on every subsequent
+    // composed print (each New() call must get its own non-overlapping region).
+    // Reserve fixed 512-byte scratch buffers, bump-allocated downward from a high
+    // address well clear of the string-literal pool (which grows down from
+    // 0x8000), one per composed-print call site (compile-time, not per iteration
+    // -- loops safely reuse the same buffer since each Print fully completes
+    // New->fill->ToSpan->Io.Write before the next one runs).
+    if (self._scratchTop === undefined) self._scratchTop = 0x40000;
+    var CAP = 512;
+    self._scratchTop -= CAP;
+    var ptrReg = self.b.vreg(), capReg = self.b.vreg();
+    self.b.const_(ptrReg, self._scratchTop);
+    self.b.const_(capReg, CAP);
+    var w = self.b.vreg();
+    self.b.host("Utf8Writer", "New", [ptrReg, capReg], w);
+    flattenPlus(expr).forEach(function (part) {
+      if (part && part.t === "Str") self.b.host("Utf8Writer", "Span", [w, emitStrSpan(self, part.value)], null);
+      else { var pr = self.eval(part); self.b.host("Utf8Writer", "Int", [w, pr], null); }
+    });
+    var sp = self.b.vreg();
+    self.b.host("Utf8Writer", "ToSpan", [w], sp);
+    self.b.host("Io", "Write", [sp], null);
+  }
+
   function CLowerer() { this.b = new ILBuilder(); this.vars = {}; this.funcs = []; this.loop = []; this._strlitN = 0; this.userConstants = {}; }
   CLowerer.prototype = {
     varOf: function (name) { var k = name.toLowerCase(); if (!this.vars[k]) this.vars[k] = new VReg(name, true); return this.vars[k]; },
@@ -4705,7 +4989,7 @@
     lowerCall: function (c, want) {
       var ns = c.ns, m = c.method;
       if (ns == null) {
-        if (m.toLowerCase() === "print") { if (c.args[0].t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, c.args[0].value)], null); return null; } var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
+        if (m.toLowerCase() === "print") { if (c.args[0].t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, c.args[0].value)], null); return null; } if (isComposite(c.args[0])) { emitComposedPrint(this, c.args[0]); return null; } var v = this.eval(c.args[0]); this.b.save(v, 0xFFFE); this.b.pipe(v, 0xFFFE); return null; }
         var ak = m.toLowerCase();
         if (C_ALIASES[ak] && !this.funcs.some(function (f) { return f.name.toLowerCase() === ak; })) {
           return this.lowerCall({ t: "Call", ns: C_ALIASES[ak][0], method: C_ALIASES[ak][1], args: c.args }, want);
@@ -5253,7 +5537,7 @@
       else if (s.t === "ForEach") this.lowerForeach(s);
       else if (s.t === "Switch") this.lowerSwitch(s);
       else if (s.t === "Dispatch") this.lowerDispatch(s);
-      else if (s.t === "Print") { if (s.value.t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, s.value.value)], null); } else { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); } }
+      else if (s.t === "Print") { if (s.value.t === "Str") { this.b.host("Io", "Write", [emitStrSpan(this, s.value.value)], null); } else if (isComposite(s.value)) { emitComposedPrint(this, s.value); } else { var v = this.eval(s.value); this.b.save(v, B_PRINT_CARD); this.b.pipe(v, B_PRINT_CARD); } }
       else if (s.t === "CallStmt") this.lowerCall(s.call, false);
       else if (s.t === "ServerMain") s.body.forEach(function (st) { self.stmt(st); });
       else throw new Error("BASIC: cannot lower " + s.t);
@@ -6649,6 +6933,58 @@
   };
   function compileFunctional(src) { return new BLowerer().lowerProgram(new FunParser(funtokenize(src)).parseProgram()); }
 
+  // ---- AST-JSON bridge (spike/ast-json-dialect) ---------------------------
+  // Canonical JSON AST <-> the internal {t: ...} node shape the shared
+  // BLowerer consumes. Mirrors picoscript_ast.py's ast_to_json/json_to_ast on
+  // the Python side (same {"node": "ClassName", ...} shape), so the same
+  // JSON document lowers to byte-identical bytecode on both sides. A couple
+  // of Python dataclass field names collide with JS reserved words or differ
+  // for historical reasons (ForTo/ForEach.var -> v; Switch/Dispatch.default
+  // -> def); AST_JSON_FIELD_ALIASES maps canonical name -> JS name per node
+  // kind, only where they differ.
+  var AST_JSON_FIELD_ALIASES = {
+    ForTo: { var: "v" },
+    ForEach: { var: "v" },
+    Switch: { default: "def" },
+    Dispatch: { default: "def" }
+  };
+  // Node kinds picoscript_basic.py has that this JS bridge doesn't support
+  // yet (no JS BLowerer/parser equivalent exists for these).
+  var AST_JSON_UNSUPPORTED = { TryExcept: 1, Raise: 1, OnBlock: 1 };
+
+  function astToJson(node) {
+    if (node === null || typeof node !== "object") return node;
+    if (Array.isArray(node)) return node.map(astToJson);
+    var kind = node.t;
+    if (!kind) throw new Error("astToJson: node missing 't' tag: " + JSON.stringify(node));
+    var aliases = AST_JSON_FIELD_ALIASES[kind] || {};
+    var revAliases = {};
+    Object.keys(aliases).forEach(function (canon) { revAliases[aliases[canon]] = canon; });
+    var out = { node: kind };
+    Object.keys(node).forEach(function (k) {
+      if (k === "t") return;
+      out[revAliases[k] || k] = astToJson(node[k]);
+    });
+    return out;
+  }
+
+  function jsonToAst(data) {
+    if (data === null || typeof data !== "object") return data;
+    if (Array.isArray(data)) return data.map(jsonToAst);
+    var kind = data.node;
+    if (!kind) throw new Error("jsonToAst: object missing 'node' discriminator: " + JSON.stringify(data));
+    if (AST_JSON_UNSUPPORTED[kind]) throw new Error("jsonToAst: '" + kind + "' is not yet supported by the JS bridge (Python-only node kind)");
+    var aliases = AST_JSON_FIELD_ALIASES[kind] || {};
+    var out = { t: kind };
+    Object.keys(data).forEach(function (k) {
+      if (k === "node") return;
+      out[aliases[k] || k] = jsonToAst(data[k]);
+    });
+    return out;
+  }
+
+  function compileAst(src) { return new BLowerer().lowerProgram(jsonToAst(JSON.parse(src))); }
+
   function compileIL(src, lang) {
     return (lang === "basic") ? compileBasic(src)
          : (lang === "python") ? compilePython(src)
@@ -6656,10 +6992,123 @@
          : (lang === "cobol") ? compileCobol(src)
          : (lang === "report") ? compileReport(src)
          : (lang === "functional") ? compileFunctional(src)
+         : (lang === "ast") ? compileAst(src)
          : compileC(src);
   }
 
   // ── Cross-language translator ──────────────────────────────────────────
+  // ── AST -> Workflow steps (the "raise": makes Workflow a first-class dialect) ──
+  // Emits the same flat step model the visual designer / BareMetal.WorkflowPico use
+  // (SET/IF/ELSE/END/FOR/FOREACH/WHILE/LOG). Anything without a dedicated box is
+  // carried as a RAW step holding its English rendering, so any dialect -> workflow
+  // -> any dialect round-trips with full fidelity through the shared AST.
+  function astToWorkflow(prog) {
+    var parts = splitProgDefs(prog), steps = [];
+    parts.defs.forEach(function (f) {
+      // sub-definitions have no dedicated box; keep them verbatim (English) for fidelity
+      var pa = (f.params || []).length ? "(" + f.params.join(", ") + ")" : "";
+      var lines = ["Define " + (f.name || "") + pa + ":"];
+      (f.body || []).forEach(function (s) { lines.push(sE(s, 1)); });
+      lines.push("Stop.");
+      steps.push({ type: "RAW", code: lines.join("\n") });
+    });
+    wfEmitSeq(parts.body, steps);
+    return steps;
+  }
+  function wfExpr(e) { return exprStr(e, "c"); }               // C-like: WorkflowPico-compatible
+  function wfLitOrExpr(e) { return (e && e.t === "Num") ? (e.value | 0) : wfExpr(e || { t: "Num", value: 0 }); }
+  function wfRaw(s) { return sE(s, 0); }                        // English rendering (round-trips via WorkflowPico)
+  // Ternary (and other constructs WorkflowPico's expression translator can't lower)
+  // must ride through a RAW English statement to keep full round-trip fidelity.
+  function exprHasTernary(e) {
+    if (!e || typeof e !== "object") return false;
+    if (e.t === "Ternary") return true;
+    return ["lhs", "rhs", "cond", "then", "els", "operand", "value"].some(function (k) { return exprHasTernary(e[k]); }) ||
+      (Array.isArray(e.args) && e.args.some(exprHasTernary));
+  }
+  function wfEmitSeq(list, steps) { (list || []).forEach(function (s) { wfEmitStmt(s, steps); }); }
+  function wfEmitIf(arms, i, els, steps) {
+    steps.push({ type: "IF", condition: wfExpr(arms[i][0]) });
+    wfEmitSeq(arms[i][1], steps);
+    var hasMore = (i + 1 < arms.length);
+    var hasEls = els && (Array.isArray(els) ? els.length : true);
+    if (hasMore) { steps.push({ type: "ELSE" }); wfEmitIf(arms, i + 1, els, steps); }
+    else if (hasEls) { steps.push({ type: "ELSE" }); wfEmitSeq(Array.isArray(els) ? els : [els], steps); }
+    steps.push({ type: "END" });
+  }
+  function wfEmitStmt(s, steps) {
+    if (!s) return;
+    switch (s.t) {
+      case "Let": case "Assign": case "Decl": case "Dim": {
+        var v = (s.value != null) ? s.value : s.init;
+        if (exprHasTernary(v)) { steps.push({ type: "RAW", code: wfRaw(s) }); break; }
+        if (v && v.t === "Num") steps.push({ type: "SET", name: s.name, value: v.value | 0 });
+        else if (v && v.t === "Arr" && Array.isArray(v.items)) {
+          var allNum = v.items.every(function (x) { return x && x.t === "Num"; });
+          if (allNum) steps.push({ type: "SET", name: s.name, value: v.items.map(function (x) { return x.value | 0; }) });
+          else steps.push({ type: "SET", name: s.name, expr: wfExpr(v) });
+        } else if (v == null) steps.push({ type: "SET", name: s.name, value: 0 });
+        else steps.push({ type: "SET", name: s.name, expr: wfExpr(v) });
+        break;
+      }
+      case "IncDec": {
+        var nm = incDecName(s), d = incDecDelta(s);
+        steps.push({ type: "SET", name: nm, expr: nm + (d >= 0 ? " + " : " - ") + Math.abs(d) });
+        break;
+      }
+      case "If": wfEmitIf(s.arms || [[s.cond, s.then]], 0, s.els, steps); break;
+      case "While": steps.push({ type: "WHILE", condition: wfExpr(s.cond) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
+      case "DoLoop": case "DoWhile": {
+        var cond = s.botCond || s.cond || { t: "Num", value: 1 };
+        var until = !!(s.until || s.botUntil);
+        steps.push({ type: "DO" }); wfEmitSeq(s.body, steps);
+        steps.push({ type: "LOOP", until: until, condition: wfExpr(cond) }); break;
+      }
+      case "ForTo": steps.push({ type: "FOR", "var": s.v, from: wfLitOrExpr(s.start), to: wfLitOrExpr(s.end) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
+      case "ForEach": {
+        // ForEach iterates 0..count-1; workflow expresses that as a FOR loop
+        // (WorkflowPico's FOREACH is for iterating array *values*, not a count).
+        var cnt = s.count;
+        var to = (cnt && cnt.t === "Num") ? ((cnt.value | 0) - 1) : wfExpr({ t: "Bin", op: "-", lhs: cnt || { t: "Num", value: 0 }, rhs: { t: "Num", value: 1 } });
+        steps.push({ type: "FOR", "var": s.v, from: 0, to: to }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); break;
+      }
+      case "For": {
+        var f = forLoopInfo(s);
+        if (f) { steps.push({ type: "FOR", "var": f.v, from: wfLitOrExpr(f.start), to: wfLitOrExpr(f.end) }); wfEmitSeq(s.body, steps); steps.push({ type: "END" }); }
+        else steps.push({ type: "RAW", code: wfRaw(s) });
+        break;
+      }
+      case "Switch": case "Dispatch": {
+        steps.push({ type: s.t === "Dispatch" ? "DISPATCH" : "SWITCH", expr: wfExpr(s.expr) });
+        (s.cases || []).forEach(function (c) { steps.push({ type: "CASE", value: wfExpr(c[0]) }); wfEmitSeq(c[1], steps); });
+        var def = s.def || s.els; if (def && (Array.isArray(def) ? def.length : true)) { steps.push({ type: "DEFAULT" }); wfEmitSeq(Array.isArray(def) ? def : [def], steps); }
+        steps.push({ type: "END" }); break;
+      }
+      case "Print": {
+        if (exprHasTernary(s.value)) { steps.push({ type: "RAW", code: wfRaw(s) }); break; }
+        var pv = s.value;
+        if (pv && pv.t === "Num") steps.push({ type: "LOG", message: pv.value | 0 });
+        else if (pv && pv.t === "Var") steps.push({ type: "LOG", message: pv.name });
+        else steps.push({ type: "LOG", message: "${" + wfExpr(pv) + "}" });   // expression -> printed by emitLog
+        break;
+      }
+      case "Break": steps.push({ type: "BREAK" }); break;
+      case "Skip": case "Continue": steps.push({ type: "SKIP" }); break;
+      case "Return": steps.push(s.value ? { type: "RETURN", value: wfExpr(s.value) } : { type: "RETURN" }); break;
+      case "Goto": steps.push({ type: "GOTO", label: s.label }); break;
+      case "Label": steps.push({ type: "LABEL", name: s.name }); break;
+      case "Gosub": steps.push({ type: "GOSUB", name: s.name, args: (s.args || []).map(wfExpr) }); break;
+      case "ExprStmt":
+        if (s.expr && s.expr.t === "Call" && !s.expr.ns && s.expr.method === "print") { steps.push({ type: "LOG", message: wfExpr(s.expr.args[0]) }); break; }
+        if (s.expr && s.expr.t === "Call") { steps.push({ type: "CALLNS", call: exprStr(s.expr, "english") }); break; }
+        if (s.expr && s.expr.t === "IncDec") { wfEmitStmt(s.expr, steps); break; }
+        steps.push({ type: "RAW", code: wfRaw(s) }); break;
+      case "CallStmt": steps.push({ type: "CALLNS", call: exprStr(s.call, "english") }); break;
+      case "ServerMain": wfEmitSeq(s.body, steps); break;
+      default: steps.push({ type: "RAW", code: wfRaw(s) });
+    }
+  }
+
   function translate(src, fromLang, toLang) {
     if (fromLang === toLang) return src;
     var ast;
@@ -6671,6 +7120,7 @@
       else if (fromLang === "cobol") ast = new CobParser(cobtokenize(src)).parseProgram();
       else if (fromLang === "report") ast = new RepParser(reptokenize(src)).parseProgram();
       else if (fromLang === "functional") ast = new FunParser(funtokenize(src)).parseProgram();
+      else if (fromLang === "ast") ast = jsonToAst(JSON.parse(src));
       else return src;
     } catch (e) { return src; }
     // Resolve user const/enum declarations to literal values before emitting, so
@@ -6684,6 +7134,8 @@
     if (toLang === "cobol") return astToCobol(ast);
     if (toLang === "report") return astToReport(ast);
     if (toLang === "functional") return astToFunctional(ast);
+    if (toLang === "workflow") return JSON.stringify(astToWorkflow(ast), null, 2);
+    if (toLang === "ast") return JSON.stringify(astToJson(ast), null, 2);
     return src;
   }
 
@@ -6803,6 +7255,13 @@
       if (L === "c") return e.prefix ? (delta >= 0 ? "++" : "--") + name : name + (delta >= 0 ? "++" : "--");
       return name + (delta >= 0 ? " + " : " - ") + Math.abs(delta);
     }
+    if (e.t === "Unary") {
+      var inner = exprStr(e.operand, L);
+      if (e.op === "!" || e.op === "NOT" || e.op === "not") return (L === "python" || L === "english" || L === "functional") ? "not " + inner : "!" + inner;
+      if (e.op === "-") return "-" + inner;
+      if (e.op === "+") return inner;
+      return e.op + inner;
+    }
     return "?";
   }
   function splitProgDefs(prog) {
@@ -6886,9 +7345,12 @@
     else if (s && s.t === "ExprStmt") call = s.expr;
     return call && call.t === "Call" && !call.ns ? call : null;
   }
+  var C_DECL = null;   // names already declared in the current astToC pass (avoid `int x` twice)
   function astToC(prog) {
+    C_DECL = {};
     var parts = splitProgDefs(prog), l = [];
     parts.defs.forEach(function (fn) {
+      (fn.params || []).forEach(function (p) { C_DECL[p] = 1; });
       l.push("void " + fn.name + "(" + (fn.params || []).map(function (p) { return "int " + p; }).join(", ") + ") {");
       (fn.body || []).forEach(function (s) { l.push(sC(s, 1)); });
       l.push("}");
@@ -6896,7 +7358,7 @@
     parts.body.forEach(function (s) { l.push(sC(s, 0)); });
     return l.join("\n");
   }
-  function sC(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Let"||s.t==="Dim")return p+"int "+s.name+" = "+exprStr(s.init||s.value||{t:"Num",value:0},"c")+";";if(s.t==="Assign")return p+s.name+" = "+exprStr(s.value,"c")+";";if(s.t==="IncDec")return p+s.name+(s.delta>0?"++":"--")+";";if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]];var els=s.els;var o=p+"if ("+exprStr(arms[0][0],"c")+") {\n";arms[0][1].forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";for(var i=1;i<arms.length;i++){o+=" else if ("+exprStr(arms[i][0],"c")+") {\n";arms[i][1].forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";}if(els){o+=" else {\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";}return o;}if(s.t==="While"){var o=p+"while ("+exprStr(s.cond,"c")+") {\n";s.body.forEach(function(st){o+=sC(st,d+1)+"\n";});return o+p+"}";}if(s.t==="ForTo")return p+"for ("+s.v+" = "+exprStr(s.start,"c")+"; "+s.v+" <= "+exprStr(s.end,"c")+"; "+s.v+"++) {\n"+s.body.map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="ForEach")return p+"for ("+s.v+" = 0; "+s.v+" < "+exprStr(s.count,"c")+"; "+s.v+"++) {\n"+s.body.map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="Return")return p+"return"+(s.value?" "+exprStr(s.value,"c"):"")+";";if(s.t==="Break")return p+"break;";if(s.t==="Skip"||s.t==="Continue")return p+"continue;";if(s.t==="Goto")return p+"goto "+s.label+";";if(s.t==="Label")return p+s.name+":";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"c");});return p+s.name+"("+a.join(", ")+");";}if(s.t==="CallStmt")return p+exprStr(s.call,"c")+";";if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print")return p+"print("+exprStr(s.expr.args[0],"c")+");";return s.expr?p+exprStr(s.expr,"c")+";":"";}if(s.t==="Print")return p+"print("+exprStr(s.value,"c")+");";if(s.t==="Switch"||s.t==="Dispatch"){var o=p+(s.t==="Dispatch"?"dispatch":"switch")+" ("+exprStr(s.expr,"c")+") {\n";(s.cases||[]).forEach(function(c){o+=p+"    case "+exprStr(c[0],"c")+": ";c[1].forEach(function(st){o+=sC(st,d+2)+"\n";});o+=p+"    break;\n";});if(s.def||s.els){o+=p+"    default: ";(s.def||s.els||[]).forEach(function(st){o+=sC(st,d+2)+"\n";});}return o+p+"}";}if(s.t==="DoLoop"||s.t==="DoWhile"){var cond=s.botCond||s.cond||{t:"Num",value:1};return p+"do {\n"+(s.body||[]).map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"} while ("+exprStr(cond,"c")+");";}if(s.t==="For")return p+"for ("+cForClause(s.init)+"; "+(s.cond?exprStr(s.cond,"c"):"")+"; "+cForClause(s.step)+") {\n"+(s.body||[]).map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="ServerMain")return (s.body||[]).map(function(st){return sC(st,d);}).join("\n");return p+"// "+s.t;}
+  function sC(s,d){var p="    ".repeat(d||0);if(!s)return"";if(s.t==="Decl"||s.t==="Let"||s.t==="Dim"){var _cv=exprStr(s.init||s.value||{t:"Num",value:0},"c");if(C_DECL&&C_DECL[s.name])return p+s.name+" = "+_cv+";";if(C_DECL)C_DECL[s.name]=1;return p+"int "+s.name+" = "+_cv+";";}if(s.t==="Assign")return p+s.name+" = "+exprStr(s.value,"c")+";";if(s.t==="IncDec")return p+s.name+(s.delta>0?"++":"--")+";";if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]];var els=s.els;var o=p+"if ("+exprStr(arms[0][0],"c")+") {\n";arms[0][1].forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";for(var i=1;i<arms.length;i++){o+=" else if ("+exprStr(arms[i][0],"c")+") {\n";arms[i][1].forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";}if(els){o+=" else {\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sC(st,d+1)+"\n";});o+=p+"}";}return o;}if(s.t==="While"){var o=p+"while ("+exprStr(s.cond,"c")+") {\n";s.body.forEach(function(st){o+=sC(st,d+1)+"\n";});return o+p+"}";}if(s.t==="ForTo")return p+"for ("+s.v+" = "+exprStr(s.start,"c")+"; "+s.v+" <= "+exprStr(s.end,"c")+"; "+s.v+"++) {\n"+s.body.map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="ForEach")return p+"for ("+s.v+" = 0; "+s.v+" < "+exprStr(s.count,"c")+"; "+s.v+"++) {\n"+s.body.map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="Return")return p+"return"+(s.value?" "+exprStr(s.value,"c"):"")+";";if(s.t==="Break")return p+"break;";if(s.t==="Skip"||s.t==="Continue")return p+"continue;";if(s.t==="Goto")return p+"goto "+s.label+";";if(s.t==="Label")return p+s.name+":";if(s.t==="Gosub"){var a=(s.args||[]).map(function(x){return exprStr(x,"c");});return p+s.name+"("+a.join(", ")+");";}if(s.t==="CallStmt")return p+exprStr(s.call,"c")+";";if(s.t==="ExprStmt"){if(s.expr&&s.expr.t==="Call"&&!s.expr.ns&&s.expr.method==="print")return p+"print("+exprStr(s.expr.args[0],"c")+");";return s.expr?p+exprStr(s.expr,"c")+";":"";}if(s.t==="Print")return p+"print("+exprStr(s.value,"c")+");";if(s.t==="Switch"||s.t==="Dispatch"){var o=p+(s.t==="Dispatch"?"dispatch":"switch")+" ("+exprStr(s.expr,"c")+") {\n";(s.cases||[]).forEach(function(c){o+=p+"    case "+exprStr(c[0],"c")+": ";c[1].forEach(function(st){o+=sC(st,d+2)+"\n";});o+=p+"    break;\n";});if(s.def||s.els){o+=p+"    default: ";(s.def||s.els||[]).forEach(function(st){o+=sC(st,d+2)+"\n";});}return o+p+"}";}if(s.t==="DoLoop"||s.t==="DoWhile"){var cond=s.botCond||s.cond||{t:"Num",value:1};var cstr=exprStr(cond,"c");if(s.botUntil||s.until)cstr="!("+cstr+")";return p+"do {\n"+(s.body||[]).map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"} while ("+cstr+");";}if(s.t==="For")return p+"for ("+cForClause(s.init)+"; "+(s.cond?exprStr(s.cond,"c"):"")+"; "+cForClause(s.step)+") {\n"+(s.body||[]).map(function(st){return sC(st,d+1);}).join("\n")+"\n"+p+"}";if(s.t==="ServerMain")return (s.body||[]).map(function(st){return sC(st,d);}).join("\n");return p+"// "+s.t;}
   function astToBasic(prog) {
     var parts = splitProgDefs(prog), l = [];
     parts.defs.forEach(function (f) {
@@ -6953,7 +7415,8 @@
     if(s.t==="IncDec")return p+(incDecDelta(s)>=0?"Increase ":"Decrease ")+incDecName(s)+" by "+Math.abs(incDecDelta(s))+".";
     if(s.t==="If"){var arms=s.arms||[[s.cond,s.then]],els=s.els;var o=p+"If "+exprStr(arms[0][0],"english")+":\n";arms[0][1].forEach(function(st){o+=sE(st,d+1)+"\n";});if(els){o+=p+"Otherwise:\n";(Array.isArray(els)?els:[els]).forEach(function(st){o+=sE(st,d+1)+"\n";});}return o.trimEnd();}
     if(s.t==="While"){var o2=p+"While "+exprStr(s.cond,"english")+":\n";s.body.forEach(function(st){o2+=sE(st,d+1)+"\n";});return o2.trimEnd();}
-    if(s.t==="ForTo"||s.t==="ForEach"){var n=s.count||s.end,start=s.count?{t:"Num",value:0}:s.start;return p+"For each "+(s.v||"i")+" from "+exprStr(start,"english")+" to "+exprStr(n,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");}
+    if(s.t==="ForTo")return p+"For each "+(s.v||"i")+" from "+exprStr(s.start,"english")+" to "+exprStr(s.end,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");
+    if(s.t==="ForEach"){var cnt=s.count||{t:"Num",value:0};var endN=(cnt.t==="Num")?{t:"Num",value:(cnt.value|0)-1}:{t:"Bin",op:"-",lhs:cnt,rhs:{t:"Num",value:1}};return p+"For each "+(s.v||"i")+" from 0 to "+exprStr(endN,"english")+":\n"+(s.body||[]).map(function(st){return sE(st,d+1);}).join("\n");}
     if(s.t==="Return")return p+"Return"+(s.value?" "+exprStr(s.value,"english"):"")+".";
     if(s.t==="Break")return p+"Stop.";
     if(s.t==="Skip"||s.t==="Continue")return p+"Skip.";
@@ -7120,12 +7583,20 @@
     compileCobol: function(src) { return { words: lowerToBytecode(compileCobol(src), true) }; },
     compileReport: function(src) { return { words: lowerToBytecode(compileReport(src), true) }; },
     compileFunctional: function(src) { return { words: lowerToBytecode(compileFunctional(src), true) }; },
+    compileAst: function (src) { return { words: lowerToBytecode(compileAst(src), true), il: compileAst(src) }; },
     compileWithDebug: function (src, lang) {
       var dbg = {};
       var words = lowerToBytecode(compileIL(src, lang), true, null, true, dbg);
       return { words: words, debug: dbg };
     },
     translate: translate,
+    // Raise any source (via its dialect parser) into the first-class Workflow step
+    // model. `toWorkflow(src, fromLang)` -> pretty JSON step array. Enables real
+    // X -> workflow round-trips and one shared sample set across all dialects.
+    toWorkflow: function (src, fromLang) { return translate(src, fromLang, "workflow"); },
+    astToWorkflow: astToWorkflow,
+    astToJson: astToJson,
+    jsonToAst: jsonToAst,
     symbolize: symbolize,
     offsetToLineCol: offsetToLineCol,
     sourceLineText: sourceLineText,
@@ -7343,8 +7814,13 @@ BareMetal.WorkflowPico = (() => {
       var type = String(step.type || '').toUpperCase();
       if (type === 'END') { pos.i++; return 'END'; }
       if (type === 'ELSE') return 'ELSE';
+      var si = pos.i;                    // flat index of this step (maps back to a designer box)
+      var startLine = ctx.out.length;
       pos.i++;
       emitStep(step, type, steps, pos, indent, ctx);
+      // Tag every line this step produced with its index; nested children were
+      // tagged first during recursion, so only the block's own lines fill here.
+      for (var L = startLine; L < ctx.out.length; L++) { if (ctx.lineStep[L] == null) ctx.lineStep[L] = si; }
     }
     return 'EOF';
   }
@@ -7359,6 +7835,17 @@ BareMetal.WorkflowPico = (() => {
   function closeLoop(steps, pos, indent, ctx) {
     var term = emitBody(steps, pos, indent + 1, ctx);
     if (term === 'ELSE') { pos.i++; ctx.warnings.push('ELSE without a matching IF; ignored'); }
+  }
+
+  // Emit statements belonging to a SWITCH case, stopping (without consuming) at the
+  // next CASE / DEFAULT / END marker.
+  function emitCaseBody(steps, pos, indent, ctx) {
+    while (pos.i < steps.length) {
+      var t = String((steps[pos.i] || {}).type || '').toUpperCase();
+      if (t === 'CASE' || t === 'DEFAULT' || t === 'END') return;
+      var st = steps[pos.i]; pos.i++;
+      emitStep(st, t, steps, pos, indent, ctx);
+    }
   }
 
   function emitStep(step, type, steps, pos, indent, ctx) {
@@ -7407,6 +7894,10 @@ BareMetal.WorkflowPico = (() => {
 
       case 'RAISE':
       case 'EMIT':
+        if (step.schema && Array.isArray(step.schema.fields) && step.schema.fields.length) {
+          emitRaiseTyped(step, indent, ctx);
+          break;
+        }
         var ev = emitOperand(step.event == null ? 0 : step.event, warnings, 'RAISE event');
         var tgt = step.target != null ? emitOperand(step.target, warnings, 'RAISE target') : '0';
         var call = 'Event.Post(' + ev + ', ' + tgt + ')';
@@ -7429,6 +7920,74 @@ BareMetal.WorkflowPico = (() => {
 
       case 'WEB':
         emitWeb(step, indent, ctx);
+        break;
+
+      case 'RESPOND':
+        emitRespond(step, indent, ctx);
+        break;
+
+      case 'WHILE':
+        out.push(pad(indent) + 'While ' + translateExpr(step.condition || 'false') + ':');
+        closeLoop(steps, pos, indent, ctx);
+        break;
+
+      case 'DO': {
+        out.push(pad(indent) + 'Repeat:');
+        while (pos.i < steps.length && String((steps[pos.i] || {}).type || '').toUpperCase() !== 'LOOP') {
+          var dst = steps[pos.i]; pos.i++;
+          emitStep(dst, String(dst.type || '').toUpperCase(), steps, pos, indent + 1, ctx);
+        }
+        var loopStep = steps[pos.i]; if (loopStep) pos.i++;
+        var kw = (loopStep && loopStep.until) ? 'Until ' : 'While ';
+        out.push(pad(indent) + kw + translateExpr((loopStep && loopStep.condition) || 'true') + '.');
+        break;
+      }
+
+      case 'SWITCH':
+      case 'DISPATCH':
+        out.push(pad(indent) + 'Choose ' + translateExpr(step.expr == null ? '0' : step.expr) + ':');
+        while (pos.i < steps.length) {
+          var ct = String((steps[pos.i] || {}).type || '').toUpperCase();
+          if (ct === 'END') { pos.i++; break; }
+          if (ct === 'CASE') { var cv = steps[pos.i].value; pos.i++; out.push(pad(indent + 1) + 'When ' + translateExpr(cv == null ? '0' : cv) + ':'); emitCaseBody(steps, pos, indent + 2, ctx); }
+          else if (ct === 'DEFAULT') { pos.i++; out.push(pad(indent + 1) + 'Otherwise:'); emitCaseBody(steps, pos, indent + 2, ctx); }
+          else { pos.i++; warnings.push('unexpected ' + ct + ' inside SWITCH; ignored'); }
+        }
+        break;
+
+      case 'BREAK':
+        out.push(pad(indent) + 'Stop.');
+        break;
+
+      case 'SKIP':
+      case 'CONTINUE':
+        out.push(pad(indent) + 'Skip.');
+        break;
+
+      case 'RETURN':
+        out.push(pad(indent) + 'Return' + (step.value != null && step.value !== '' ? ' ' + translateExpr(step.value) : '') + '.');
+        break;
+
+      case 'GOTO':
+        out.push(pad(indent) + 'Go to ' + sanitizeId(step.label || 'L') + '.');
+        break;
+
+      case 'LABEL':
+        out.push(pad(indent) + 'Label ' + sanitizeId(step.name || 'L') + '.');
+        break;
+
+      case 'GOSUB':
+        out.push(pad(indent) + 'Call ' + sanitizeId(step.name || '') + '(' + (Array.isArray(step.args) ? step.args.map(function (a) { return translateExpr(a); }).join(', ') : '') + ').');
+        break;
+
+      case 'CALLNS':
+        // A generic namespace call (e.g. Net.Status(200)) carried verbatim in English.
+        out.push(pad(indent) + String(step.call || '').replace(/\.\s*$/, '') + '.');
+        break;
+
+      case 'RAW':
+        // Escape hatch: emit the carried English lines verbatim (full-fidelity round-trip).
+        String(step.code == null ? '' : step.code).split('\n').forEach(function (ln) { out.push(pad(indent) + ln); });
         break;
 
       case 'CALL':
@@ -7479,6 +8038,37 @@ BareMetal.WorkflowPico = (() => {
 
   // ON/SUBSCRIBE <event>: drain the Event.* queue, running the handler body for
   // each matching event (bounded by the pending count).
+  // Event schemas ({mode:'sync'|'async', fields:[{name,type}], returns}) give
+  // RAISE ("program exit") and ON ("event handler") steps a fixed, typed
+  // payload without any new VM hooks: the payload is a Map serialised through
+  // the existing PSC1 card codec (Binary.SerializeCard/ParseCard) and carried
+  // as raw bytes on the event record via Event.SetData/Event.Data. `mode` is
+  // designer-level metadata (sync exits vs async handlers use identical
+  // plumbing on this single-threaded, queue-based Event.* primitive).
+  function isStrFieldType(t) { return t === 'str' || t === 'utf8' || t === 'latin1' || t === 'blob'; }
+
+  function emitRaiseTyped(step, indent, ctx) {
+    var out = ctx.out, p = pad(indent), warnings = ctx.warnings;
+    var ev = emitOperand(step.event == null ? 0 : step.event, warnings, 'RAISE event');
+    var tgt = step.target != null ? emitOperand(step.target, warnings, 'RAISE target') : '0';
+    out.push(p + 'Map.New().');
+    var args = step.args || {};
+    step.schema.fields.forEach(function (f) {
+      var val = args[f.name];
+      if (val === undefined || val === null) {
+        warnings.push('RAISE: missing arg for schema field "' + f.name + '"; omitted from payload');
+        return;
+      }
+      if (isStrFieldType(f.type)) out.push(p + 'Map.PutSS(' + strLit(f.name) + ', ' + emitStringValue(String(val), warnings, 'RAISE field ' + f.name) + ').');
+      else out.push(p + 'Map.PutSI(' + strLit(f.name) + ', ' + emitOperand(val, warnings, 'RAISE field ' + f.name) + ').');
+    });
+    var body = '_evbody' + (ctx.tempN++);
+    out.push(p + 'Set ' + body + ' to Binary.SerializeCard().');
+    var resultVar = step.result ? sanitizeId(step.result) : ('_evid' + (ctx.tempN++));
+    out.push(p + 'Set ' + resultVar + ' to Event.Post(' + ev + ', ' + tgt + ').');
+    out.push(p + 'Event.SetData(' + resultVar + ', ' + body + ').');
+  }
+
   function emitOn(step, steps, pos, indent, ctx) {
     var ev = emitOperand(step.event == null ? 0 : step.event, ctx.warnings, 'ON event');
     var v = sanitizeId(step.var || 'event');
@@ -7488,6 +8078,16 @@ BareMetal.WorkflowPico = (() => {
     ctx.out.push(pad(indent + 1) + 'Set ' + evid + ' to Event.Next().');
     ctx.out.push(pad(indent + 1) + 'If Event.Type(' + evid + ') is ' + ev + ':');
     ctx.out.push(pad(indent + 2) + 'Set ' + v + ' to ' + evid + '.');
+    if (step.schema && Array.isArray(step.schema.fields) && step.schema.fields.length) {
+      var body = '_evbody' + (ctx.tempN++);
+      ctx.out.push(pad(indent + 2) + 'Set ' + body + ' to Event.Data(' + evid + ').');
+      ctx.out.push(pad(indent + 2) + 'Binary.ParseCard(' + body + ').');
+      step.schema.fields.forEach(function (f) {
+        var fv = sanitizeId(f.name);
+        if (isStrFieldType(f.type)) ctx.out.push(pad(indent + 2) + 'Set ' + fv + ' to Map.GetSS(' + strLit(f.name) + ').');
+        else ctx.out.push(pad(indent + 2) + 'Set ' + fv + ' to Map.GetSI(' + strLit(f.name) + ').');
+      });
+    }
     var start = ctx.out.length;
     var term = emitSeq(steps, pos, indent + 2, ctx);
     if (ctx.out.length === start) ctx.out.push(pad(indent + 2) + 'Set _nop to 0.');
@@ -7516,9 +8116,27 @@ BareMetal.WorkflowPico = (() => {
 
   // LOAD name from <source>. `variable` clones another context value (a plain
   // assignment, array-aware); `memory`/`scratch` read a Memory/Context cell.
+  // Inbound HTTP request descriptor fields, as written by the kernel / WebIDE
+  // HTTP simulator into the low PicoWAL cards (0,0,K). Reading them lets a served
+  // workflow branch on method/length/body before it RESPONDs. See docs/MAP.md and
+  // the "HTTP responder" showcase.
+  var REQ_FIELDS = { length: 0, method: 1, bodylen: 2, sum: 3, pathlen: 4, querylen: 5 };
   function emitLoad(step, indent, ctx) {
     var name = sanitizeId(step.name);
     var from = String(step.from || '').toLowerCase();
+    if (from === 'request') {
+      var fld = String(step.field || step.key || 'method').toLowerCase();
+      var k = own(REQ_FIELDS, fld) ? REQ_FIELDS[fld] : null;
+      if (k == null) {
+        ctx.out.push(pad(indent) + '# LOAD ' + (step.name || '') + ' <- request.' + fld + ' (unknown field)');
+        ctx.warnings.push('LOAD from request: unknown field ' + JSON.stringify(fld) + ' (use method/length/bodylen/pathlen/querylen/sum)');
+        return;
+      }
+      ctx.out.push(pad(indent) + 'Set ' + name + ' to 0.');
+      ctx.out.push(pad(indent) + 'Storage.Load(0, 0, ' + k + ', ' + name + ').');
+      delete ctx.arrays[name];
+      return;
+    }
     if (from === 'variable') {
       var srcRaw = step.key || step.var || step.source || '';
       var srcId = sanitizeId(String(srcRaw).trim());
@@ -7587,6 +8205,23 @@ BareMetal.WorkflowPico = (() => {
     ctx.warnings.push('WEB: Http.Request runs on a transport-capable host; the integer VM builds the request Map but does not perform network I/O');
   }
 
+  // RESPOND: emit an HTTP response (Net.Status + optional Net.Type + body). This
+  // is what makes a workflow *serve* HTTP -- the kernel (or the WebIDE HTTP
+  // simulator) renders Net.* output as the response. body may be a string
+  // (text/JSON), a number, or {var:'x'} to print a variable's value.
+  function emitRespond(step, indent, ctx) {
+    var out = ctx.out, p = pad(indent);
+    var status = (step.status == null) ? 200 : step.status;
+    out.push(p + 'Net.Status(' + emitOperand(status, ctx.warnings, 'RESPOND status') + ').');
+    if (step.contentType) out.push(p + 'Net.Type(' + strLit(step.contentType) + ').');
+    if (step.body != null && step.body !== '') {
+      if (typeof step.body === 'number') out.push(p + 'Print ' + numLit(step.body) + '.');
+      else out.push(p + 'Print ' + strLit(step.body) + '.');
+    } else if (step.bodyVar) {
+      out.push(p + 'Print ' + sanitizeId(step.bodyVar) + '.');
+    }
+  }
+
   function emitLog(step, indent, ctx) {
     var msg = step.message;
     if (typeof msg === 'number') { ctx.out.push(pad(indent) + 'Print ' + numLit(msg) + '.'); return; }
@@ -7619,6 +8254,7 @@ BareMetal.WorkflowPico = (() => {
     var steps = resolveSteps(stepsOrName);
     var ctx = {
       out: [],
+      lineStep: [],   // lineStep[outputLineIndex] = flat step index that produced it
       warnings: [],
       arrays: {},
       memNext: opts.arrayBase || DEFAULT_ARRAY_BASE,
@@ -7632,7 +8268,7 @@ BareMetal.WorkflowPico = (() => {
       else if (term === 'END') { ctx.warnings.push('END without a matching block; ignored'); }
       else break;
     }
-    return { source: ctx.out.join('\n') + '\n', warnings: ctx.warnings };
+    return { source: ctx.out.join('\n') + '\n', warnings: ctx.warnings, lineSteps: ctx.lineStep };
   }
 
   // ── PicoScript integration ──────────────────────────────────────────────────

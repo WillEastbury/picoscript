@@ -488,6 +488,8 @@
       0x2B3: "Error.Detail",
       0x2B4: "Error.Resume",
       0x2B5: "Error.Clear",
+      0x2B6: "Error.Raise",
+      0x2B7: "Error.PopHandler",
       0x2C0: "Capsule.Call",
       0x2C1: "Capsule.Schedule",
       0x2C2: "Capsule.Jump",
