@@ -2,10 +2,14 @@
 # -*- coding: utf-8 -*-
 """picoscript_cobol.py -- COBOL-style PicoScript frontend.
 Reuses the shared BASIC AST nodes + Lowerer exactly like the English and
-Python frontends. Supports DATA/PROCEDURE DIVISION, 01 VALUE items, MOVE,
-COMPUTE, DISPLAY, IF/ELSE/END-IF, EVALUATE/WHEN/OTHER, PERFORM paragraphs,
-PERFORM VARYING ... UNTIL ... END-PERFORM, arithmetic verbs, STOP RUN, and
-Ns.Method(args). host-call statements.
+Python frontends. Supports DATA/PROCEDURE DIVISION, 01 VALUE items, level-78
+constants (`78 NAME VALUE expr.`), level-88 condition-name enums (`01 COLOR
+...` followed by `88 RED VALUE 1.` etc.), MOVE, COMPUTE, DISPLAY,
+IF/ELSE/END-IF, EVALUATE/WHEN/OTHER, DISPATCH/WHEN/OTHER/END-DISPATCH,
+PERFORM paragraphs, PERFORM VARYING ... UNTIL ... END-PERFORM, counted
+`PERFORM VARYING I TIMES n ... END-PERFORM`, CONTINUE (loop-continue),
+TRY./EXCEPT./FINALLY./END-TRY., RAISE, ON Ns.Method./END-ON., arithmetic
+verbs, STOP RUN, and Ns.Method(args). host-call statements.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -13,7 +17,7 @@ from typing import List, Optional, Sequence, Set
 from picoscript_basic import (
     Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
     Switch, Goto, Label, Sub, Gosub, Return, Break, Skip, Print, CallStmt, Lowerer,
-    Dispatch, TryExcept, Raise,
+    Dispatch, TryExcept, Raise, OnBlock, ConstDecl, EnumDecl,
 )
 KEYWORDS = {
     "IDENTIFICATION", "DIVISION", "PROGRAM-ID", "DATA", "PROCEDURE",
@@ -22,7 +26,11 @@ KEYWORDS = {
     "GIVING", "FROM", "BY", "DISPLAY",
     "IF", "ELSE", "END-IF",
     "EVALUATE", "WHEN", "OTHER", "END-EVALUATE",
-    "PERFORM", "VARYING", "UNTIL", "END-PERFORM",
+    "DISPATCH", "END-DISPATCH",
+    "PERFORM", "VARYING", "UNTIL", "TIMES", "END-PERFORM",
+    "CONTINUE",
+    "TRY", "EXCEPT", "FINALLY", "END-TRY", "RAISE",
+    "ON", "END-ON",
     "STOP", "RUN",
     "NOT", "AND", "OR", "IS",
     "GREATER", "LESS", "EQUAL", "THAN",
@@ -148,6 +156,11 @@ class Parser:
         t = self.next()
         if t.kind != "id": raise SyntaxError(f"line {t.line}: expected identifier, got {t.value!r}")
         return t.value
+    def expect_word(self, what: str = "name") -> str:
+        t = self.next()
+        if t.kind not in ("id", "kw"):
+            raise SyntaxError(f"line {t.line}: expected {what}, got {t.value!r}")
+        return t.value
     def skip_nl(self):
         while self.at("nl"): self.next()
     def end_simple(self):
@@ -213,12 +226,30 @@ class Parser:
                 continue
             if self.peek().kind == "num":
                 item = self.parse_data_item()
-                if item is not None: out.append(item)  # pragma: no branch
+                if item is None:
+                    continue
+                out.extend(item) if isinstance(item, list) else out.append(item)
                 continue
             self.skip_sentence()
         return out
-    def parse_data_item(self) -> Optional[Let]:
-        self.expect("num")
+    def parse_data_item(self) -> Optional[object]:
+        level = self.expect("num").value
+        if level == "78":
+            name = self.expect_name()
+            value = None
+            while not self.at("eof") and not self.at("op", "."):
+                if self.at_kw("VALUE"):
+                    self.next()
+                    value = self.parse_expr()
+                    break
+                self.next()
+            self.expect("op", ".")
+            self.skip_nl()
+            if value is None:
+                raise SyntaxError("78 level constants require VALUE")
+            return ConstDecl(name, value)
+        if level == "88":
+            raise SyntaxError("88 level item must follow a parent data item")
         name = self.expect_name()
         init: object = Num(0)
         while not self.at("eof") and not self.at("op", "."):
@@ -229,7 +260,28 @@ class Parser:
             self.next()
         self.expect("op", ".")
         self.skip_nl()
-        return Let(name, init)
+        base = Let(name, init)
+        members = []
+        while self.at("num", "88"):
+            members.append(self.parse_condition_name_item())
+        if members:
+            return [base, self.make_enum_decl(name, members)]
+        return base
+    def parse_condition_name_item(self):
+        self.expect("num", "88")
+        name = self.expect_name()
+        value = None
+        while not self.at("eof") and not self.at("op", "."):
+            if self.at_kw("VALUE"):
+                self.next()
+                value = self.parse_expr()
+                break
+            self.next()
+        self.expect("op", ".")
+        self.skip_nl()
+        return (name, value)
+    def make_enum_decl(self, enum_name: str, members: list) -> EnumDecl:
+        return EnumDecl(enum_name, members)
     def parse_procedure_division(self):
         body: List[object] = []
         subs: List[Sub] = []
@@ -279,8 +331,20 @@ class Parser:
                 return self.parse_if()
             if t.value == "EVALUATE":
                 return self.parse_evaluate()
+            if t.value == "DISPATCH":
+                return self.parse_dispatch()
             if t.value == "PERFORM":
                 return self.parse_perform()
+            if t.value == "CONTINUE":
+                self.next()
+                self.end_simple()
+                return Skip()
+            if t.value == "TRY":
+                return self.parse_try()
+            if t.value == "RAISE":
+                return self.parse_raise()
+            if t.value == "ON":
+                return self.parse_on()
             if t.value == "ADD":
                 return self.parse_add()
             if t.value == "SUBTRACT":
@@ -367,15 +431,55 @@ class Parser:
         self.expect_kw("END-EVALUATE")
         self.end_simple()
         return Switch(expr, cases, default)
+    def parse_dispatch(self) -> Dispatch:
+        self.expect_kw("DISPATCH")
+        expr = self.parse_expr()
+        self.end_simple()
+        cases = []
+        default = None
+        while True:
+            self.skip_nl()
+            if self.at_kw("END-DISPATCH"):
+                break
+            if self.at_kw("WHEN"):
+                self.next()
+                if self.at_kw("OTHER"):
+                    self.next()
+                    self.end_simple()
+                    default = self.parse_block({"END-DISPATCH"})
+                    continue
+                val = self.parse_expr()
+                self.end_simple()
+                body = self.parse_block({"WHEN", "OTHER", "END-DISPATCH"})
+                cases.append((val, body))
+                continue
+            if self.at_kw("OTHER"):
+                self.next()
+                self.end_simple()
+                default = self.parse_block({"END-DISPATCH"})
+                continue
+            t = self.peek()
+            raise SyntaxError(f"line {t.line}: expected WHEN / OTHER / END-DISPATCH, got {t.value!r}")
+        self.expect_kw("END-DISPATCH")
+        self.end_simple()
+        return Dispatch(expr, cases, default)
     def parse_perform(self):
         self.expect_kw("PERFORM")
         if self.at_kw("VARYING"): return self.parse_perform_varying()
         name = self.expect_name()
         self.end_simple()
         return Gosub(name)
-    def parse_perform_varying(self) -> ForTo:
+    def parse_perform_varying(self):
         self.expect_kw("VARYING")
         var = self.expect_name()
+        if self.at_kw("TIMES"):
+            self.next()
+            count = self.parse_expr()
+            self.end_simple()
+            body = self.parse_block({"END-PERFORM"})
+            self.expect_kw("END-PERFORM")
+            self.end_simple()
+            return ForEach(var, count, body)
         self.expect_kw("FROM")
         start = self.parse_expr()
         step = Num(1)
@@ -384,12 +488,45 @@ class Parser:
             step = self.parse_expr()
         self.expect_kw("UNTIL")
         cond = self.parse_expr()
-        self.end_header()
+        self.end_simple()
         body = self.parse_block({"END-PERFORM"})
         self.expect_kw("END-PERFORM")
         self.end_simple()
         end = self._for_end_from_until(var, cond)
         return ForTo(var, start, end, step, body)
+    def parse_try(self) -> TryExcept:
+        self.expect_kw("TRY")
+        self.end_simple()
+        try_body = self.parse_block({"EXCEPT"})
+        self.expect_kw("EXCEPT")
+        self.end_simple()
+        except_body = self.parse_block({"FINALLY", "END-TRY"})
+        finally_body = None
+        if self.at_kw("FINALLY"):
+            self.next()
+            self.end_simple()
+            finally_body = self.parse_block({"END-TRY"})
+        self.expect_kw("END-TRY")
+        self.end_simple()
+        return TryExcept(try_body, except_body, finally_body)
+    def parse_raise(self) -> Raise:
+        self.expect_kw("RAISE")
+        if self.at("op", ".") or self.at("nl") or self.at("eof"):
+            self.end_simple()
+            return Raise()
+        value = self.parse_expr()
+        self.end_simple()
+        return Raise(value)
+    def parse_on(self) -> OnBlock:
+        self.expect_kw("ON")
+        ns = self.expect_word("event namespace")
+        self.expect("op", ".")
+        method = self.expect_word("event method")
+        self.end_simple()
+        body = self.parse_block({"END-ON"})
+        self.expect_kw("END-ON")
+        self.end_simple()
+        return OnBlock(ns, method, body)
     def parse_add(self) -> Let:
         self.expect_kw("ADD")
         value = self.parse_expr()
