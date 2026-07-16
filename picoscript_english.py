@@ -25,6 +25,10 @@ the Python frontend); simple statements end at the line (an optional trailing
   Define <name>:              To <name>:              -> subroutine (globals; no params)
   Do <name>.                  Call <name>.            -> invoke a subroutine
   Return.   Stop.  (break)    Skip.  (continue)
+  Try: / Except: / Finally:   -> exception handling blocks
+  Raise <expr>.   Raise.      -> raise an exception code (bare Raise => 0)
+  On Ns.Method:               -> event handler block over Event.* queue
+  Server:                     -> transparent server-entry wrapper
   Ns.Method(a, b).            -> host hook call statement
 
 Expressions: numbers, variables, ( ... ), host calls Ns.Method(...), and binary
@@ -44,7 +48,7 @@ import copy
 from picoscript_basic import (  # reuse AST + lowering unchanged
     Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
     Switch, Goto, Label, Sub, Gosub, Return, Break, Skip, Print, CallStmt, Lowerer,
-    Dispatch, ConstDecl, EnumDecl,
+    Dispatch, TryExcept, Raise, OnBlock, ServerMain, ConstDecl, EnumDecl,
 )
 
 _TWO = {"==", "!=", "<=", ">=", "<>"}
@@ -281,6 +285,20 @@ class Parser:
                 return self.parse_choose()
             if w == "dispatch":                 # "Dispatch on <expr>:" / "When <v>:" / "Otherwise:"
                 return self.parse_dispatch()
+            if w == "try":
+                return self.parse_try()
+            if w == "raise":
+                self.next()
+                if self.at("newline") or self.at("eof") or self.at("op", "."):
+                    self.end_stmt()
+                    return Raise()
+                v = self.parse_expr()
+                self.end_stmt()
+                return Raise(v)
+            if w == "on":
+                return self.parse_on()
+            if w == "server":
+                return self.parse_server()
             if w == "label":                    # "Label <name>."
                 self.next(); name = self.expect("word").value; self.end_stmt(); return Label(name)
             if w == "go":                       # "Go to <name>."
@@ -481,6 +499,31 @@ class Parser:
             self.next()
             step = self.parse_expr()
         return ForTo(var, start, end, step, self.parse_suite())
+
+    def parse_try(self) -> TryExcept:
+        self.eat_word("try")
+        try_body = self.parse_suite()
+        except_body = []
+        finally_body = None
+        if self.at_word("except"):
+            self.eat_word("except")
+            except_body = self.parse_suite()
+        if self.at_word("finally"):
+            self.eat_word("finally")
+            finally_body = self.parse_suite()
+        return TryExcept(try_body, except_body, finally_body)
+
+    def parse_on(self) -> OnBlock:
+        self.eat_word("on")
+        ns = self.expect("word").value
+        self.expect("op", ".")
+        method = self.expect("word").value
+        body = self.parse_suite()
+        return OnBlock(ns, method, body)
+
+    def parse_server(self) -> ServerMain:
+        self.eat_word("server")
+        return ServerMain(self.parse_suite())
 
     def parse_call_from_word(self) -> Call:
         ns = self.next().value
