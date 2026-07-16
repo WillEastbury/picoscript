@@ -217,10 +217,12 @@ for loading a label's address as a value). Scope actually delivered:
   Python-style source — see `docs/EXCEPTION_ENGINE.md`. Native C/JS
   transpile and the other four frontends remain unsupported, clearly
   rejected rather than silently broken.
-- **Event blocks (`OnBlock`)**: still the pre-existing gap described below —
-  not addressed by the exception-engine work (a separate mechanism; see
-  `lower_on_block`'s dead-code-subroutine issue found during the earlier
-  eventing investigation).
+- **Event blocks (`OnBlock`)**: was a real dead-code bug (the compiled
+  subroutine was never reachable) — now fixed, see `docs/EVENTING.md`. `ON
+  Ns.Method: ... END ON` correctly dispatches on matching `Event.Post`s via
+  an inline drain loop + a compile-time `Ns.Method` → type-code hash (reusing
+  `Map.Hash`'s existing FNV-1a algorithm), mirroring Workflow's already-
+  working `ON` step pattern.
 - **C-style and v1** are architecturally separate compilers proven
   equivalent only by output testing, not by sharing code — a latent risk if
   either drifts (no shared `Lowerer` to keep them honest automatically).

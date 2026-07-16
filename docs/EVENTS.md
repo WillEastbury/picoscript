@@ -64,13 +64,25 @@ The handler body runs once for each pending event whose type matches; `var`
 (default `event`) is bound to the event id so the body can read `Event.Target` /
 `Event.Data`.
 
-## `RAISE` opcode / swirq
+## `RAISE` opcode / swirq — NOT the same as the BASIC/Python-style `RAISE` statement
 
-Separately, the `RAISE` **opcode** (`0xE`) is a low-level software interrupt
-(`Thread.Raise` / the BASIC `RAISE` statement): fire-and-forget on a channel,
-surfaced by the host (the reference VM logs `raise swirq channel=N`). Use the
-`Event.*` queue for application pub/sub; use the opcode for interrupt-style
-signals.
+**Correction:** an earlier version of this doc described the BASIC/Python-style
+`RAISE` *statement* as firing this opcode. That was only ever true for a brief,
+explicitly-interim safety fix (see `docs/DIALECT_PARITY.md`'s bug writeup) --
+`RAISE`/`TryExcept` now has a real exception engine
+(`docs/EXCEPTION_ENGINE.md`): `RAISE <value>` lowers to `Error.Raise(value)`,
+which jumps to the nearest `Error.SetHandler`-registered handler (an
+enclosing `TRY`/`EXCEPT`) or propagates as a real, uncaught VM fault if none
+is active. It has nothing to do with the opcode below.
+
+Separately, the `RAISE` **opcode** (`0xE`) is a low-level software interrupt:
+fire-and-forget on a channel, surfaced by the host (the reference VM logs
+`raise swirq channel=N`; all three VMs -- Python, JS, C -- currently just log
+it, no script-level statement or host call exposes it yet, so it's presently
+inert). Use the `Event.*` queue for application pub/sub; use `Error.Raise`
+(via `TRY`/`EXCEPT`/`RAISE`) for script-level exceptions; the swirq opcode is
+reserved for a future kernel-coupled interrupt primitive, not implemented as
+a language-level feature today.
 
 ## Browser bridge — `BareMetal.PubSub`
 

@@ -65,6 +65,28 @@ from picoscript_lang import encode_card_addr, resolve_named_constant
 
 PRINT_CARD = 0xFFFE   # scratch card used to pipe PRINT output
 
+
+def event_type_hash(ns: str, method: str) -> int:
+    """Compile-time (deterministic) 'Ns.Method' -> event-type-int mapping used
+    by ON blocks (see Lowerer.lower_on_block) and by any script/host code
+    that needs to raise a matching event via `Event.Post(event_type_hash(ns,
+    method), target)`. Case-insensitive (uppercased) to match BASIC's general
+    identifier case-insensitivity.
+
+    Uses the *exact same* FNV-1a algorithm picoscript_vm.py's `Map.Hash`
+    already implements at runtime (see its local `fnv1a` closure) -- reusing
+    an established, precedented hash primitive rather than inventing a new
+    one. Computed once here, at compile time, and baked into the bytecode as
+    a plain integer constant: there is no runtime string hashing anywhere,
+    so this has zero cross-VM parity risk (every execution path just sees
+    the same integer literal, like any other CONST)."""
+    h = 0x811C9DC5
+    for b in f"{ns}.{method}".upper().encode("utf-8"):
+        h ^= b
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return h & 0xFFFFFFFF
+
+
 KEYWORDS = {
     "LET", "DIM", "IF", "THEN", "ELSEIF", "ELSE", "ENDIF", "WHILE", "ENDWHILE",
     "FOR", "TO", "STEP", "NEXT", "FOREACH", "IN", "ENDFOREACH",
@@ -1287,19 +1309,64 @@ class Lowerer:
         self.b.label(end_label)
 
     def lower_on_block(self, s: OnBlock):
-        """ON Ns.Method: body END ON → register handler + labelled sub."""
-        handler_label = f"__on_{s.event_ns.lower()}_{s.event_method.lower()}"
-        # Skip handler body during normal execution
-        end_label = self.b.new_label("endon")
-        self.b.jmp(end_label)
-        # Emit handler as a labelled sub
-        self.b.label(handler_label)
+        """ON Ns.Method: body END ON -> an inline drain-and-dispatch loop over
+        pending Event.* queue entries (see docs/EVENTING.md), mirroring the
+        proven pattern picoscript_workflow.py's ON/SUBSCRIBE steps already use
+        (poll Event.Count()/Event.Next(), compare Event.Type() per pending
+        event). This REPLACES what was previously dead code: the old lowering
+        emitted the body as an unreachable labelled "subroutine" followed by
+        a bogus `host(event_ns, "Register", (), None)` call -- there was no
+        runtime "Register" host op anywhere, and nothing ever jumped to that
+        label, so `ON` blocks silently never ran.
+
+        `Ns.Method` is turned into a stable event *type* integer at compile
+        time via FNV-1a (the exact algorithm `Map.Hash` already uses at
+        runtime, see picoscript_vm.py's `fnv1a`/`event_type_hash` below) --
+        baked in as a plain bytecode constant, so there's no runtime string
+        hashing and therefore no cross-VM parity risk (every execution path
+        just sees the same integer literal). Case-insensitive (uppercased),
+        matching BASIC's general keyword/identifier case-insensitivity.
+
+        The event id is bound to the reserved variable `__event__` for the
+        body to read via `Event.Target(__event__)`/`Event.Data(__event__)` --
+        OnBlock's grammar has no `AS var` clause to customize this name (unlike
+        Workflow's ON step, which does), so a clearly-reserved internal name
+        is used instead of risking a collision with a user variable.
+
+        To actually trigger a handler, something must call
+        `Event.Post(event_type_hash(ns, method), target)` with a MATCHING
+        hash -- see `event_type_hash()` below, which is exactly what a script
+        (or a future host integration raising e.g. real UI click events)
+        needs to call to compute the same value. Adding first-class script
+        syntax for "raise a named Ns.Method event" is a deliberate, separate
+        follow-up (see docs/EVENTING.md), not attempted here.
+        """
+        type_code = event_type_hash(s.event_ns, s.event_method)
+        idx = self.b.vreg("__on_i__")
+        cnt = self.b.vreg("__on_cnt__")
+        self.b.host("Event", "Count", (), cnt)
+        self.b.const(idx, 0)
+        top = self.b.new_label("on"); cont = self.b.new_label("oncont")
+        end = self.b.new_label("endon")
+        self.b.label(top)
+        self.b.cmpbr("GE", idx, cnt, end)      # exit when we've checked `cnt` pending events
+        evid = self.var("__event__")
+        self.b.host("Event", "Next", (), evid)
+        skip = self.b.new_label("onskip")
+        etype = self.b.vreg("__on_type__")
+        self.b.host("Event", "Type", (evid,), etype)
+        typeconst = self.b.vreg("__on_typeconst__")
+        self.b.const(typeconst, type_code)
+        self.b.cmpbr("NE", etype, typeconst, skip)
+        self.scopes.append((cont, end))
         for st in s.body:
             self.stmt(st)
-        self.b.ret()
-        self.b.label(end_label)
-        # Register: Net.Register(event_constant, handler) — the host binds it
-        self.b.host(s.event_ns, "Register", (), None)
+        self.scopes.pop()
+        self.b.label(skip)
+        self.b.label(cont)
+        self.b.inc(idx)
+        self.b.jmp(top)
+        self.b.label(end)
 
     def assign_to(self, dst: VReg, expr):
         if isinstance(expr, Bin) and expr.op in _ARITH:
