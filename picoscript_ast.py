@@ -54,13 +54,36 @@ _NODE_CLASSES = {
 
 
 def ast_to_json(node: Any) -> Any:
-    """Recursively convert an AST node (or list/scalar) to plain JSON data."""
+    """Recursively convert an AST node (or list/scalar) to plain JSON data.
+
+    Only accepts the canonical `picoscript_basic` dataclasses (the ones
+    BASIC/Python/English/COBOL/Report/Functional all share) -- NOT any
+    dataclass that merely happens to share a class *name*, e.g.
+    `picoscript_cfront.ConstDecl` (the C-style frontend has its own,
+    independent AST + Lowerer, never imports from picoscript_basic). Without
+    this identity check, a same-named-but-foreign node (e.g. cfront's
+    `ConstDecl`/`Num`/`Var`, which happen to have identical field shapes to
+    picoscript_basic's) would silently serialize and then get reconstructed
+    by json_to_ast as the *wrong* class -- a silent cross-dialect mix-up
+    rather than a clean error. Nodes with no shared-AST counterpart at all
+    (e.g. cfront's `Decl`) still fail, just less predictably depending on
+    field-shape luck; this check makes ALL non-shared-AST nodes fail the
+    same way, immediately and clearly.
+    """
     if node is None or isinstance(node, (int, float, str, bool)):
         return node
     if isinstance(node, (list, tuple)):
         return [ast_to_json(n) for n in node]
     if is_dataclass(node):
-        out = {"node": type(node).__name__}
+        kind = type(node).__name__
+        if _NODE_CLASSES.get(kind) is not type(node):
+            raise TypeError(
+                f"cannot serialize {type(node).__module__}.{kind}: not a "
+                f"picoscript_basic AST node (e.g. picoscript_cfront's C-style "
+                f"frontend has its own independent, same-named node classes "
+                f"that are NOT interchangeable with this shared AST)"
+            )
+        out = {"node": kind}
         for f in fields(node):
             out[f.name] = ast_to_json(getattr(node, f.name))
         return out

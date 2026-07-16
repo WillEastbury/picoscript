@@ -65,3 +65,20 @@ def test_ast_frontend_rejects_unknown_node_kind():
     import pytest
     with pytest.raises(ValueError):
         compile_ast(json.dumps([{"node": "NotARealNode"}]))
+
+
+def test_ast_to_json_rejects_foreign_same_named_node_class():
+    """picoscript_cfront.py (the C-style frontend) has its own independent AST
+    + Lowerer -- it never imports from picoscript_basic -- but some of its
+    node classes happen to share a name with a picoscript_basic node (e.g.
+    both define a `ConstDecl` with fields `name`/`value`). ast_to_json must
+    reject these by class *identity*, not just name: silently accepting them
+    would let json_to_ast reconstruct a cfront node as the wrong
+    (picoscript_basic) class, a silent cross-dialect mix-up rather than a
+    clear error. See picoscript_ast.ast_to_json's identity check.
+    """
+    import pytest
+    from picoscript_cfront import tokenize as c_tokenize, Parser as CParser
+    prog = CParser(c_tokenize("const int X = 5;\n")).parse_program()
+    with pytest.raises(TypeError):
+        ast_to_json(prog)
