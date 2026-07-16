@@ -1,30 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""picoscript_4gl.py -- an ABAP/4GL-style PicoScript frontend.
+"""picoscript_report.py -- an ABAP/4GL-style PicoScript frontend.
 
-Period-terminated, case-insensitive 4GL syntax that reuses the BASIC AST nodes
-and `Lowerer` unchanged. Supports DATA declarations, assignment/MOVE/COMPUTE,
-ADD/SUBTRACT/MULTIPLY/DIVIDE, WRITE, IF/ELSEIF/ELSE/ENDIF, LOOP/DO blocks,
-CASE/WHEN/OTHERS, FORM/PERFORM, RETURN/EXIT/CONTINUE, and Ns.Method(args).
-`*` starts a full-line comment; `"` starts an inline comment.
+Period-terminated, case-insensitive REPORT syntax that reuses the BASIC AST
+nodes and `Lowerer` unchanged. Supports DATA declarations, CONSTANTS blocks,
+ENUM/ENDENUM, assignment/MOVE/COMPUTE, ADD/SUBTRACT/MULTIPLY/DIVIDE, WRITE,
+IF/ELSEIF/ELSE/ENDIF, LOOP/DO blocks, CASE/WHEN/OTHERS, DISPATCH/WHEN/OTHERS/
+ENDDISPATCH, FORM/PERFORM, TRY/CATCH/CLEANUP/ENDTRY, RAISE, ON/ENDON,
+RETURN/EXIT/CONTINUE, and Ns.Method(args). `*` starts a full-line comment; `"`
+starts an inline comment.
 """
 
 from typing import List, Optional, Set
 
 from picoscript_basic import (  # reuse AST + lowering unchanged
-    Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
+    Num, Str, Var, Bin, Cmp, Call, Let, IncDec, Ternary, If, While, DoLoop, ForTo, ForEach,
     Switch, Goto, Label, Sub, Gosub, Return, Break, Skip, Print, CallStmt, Lowerer,
-    Dispatch, TryExcept, Raise,
+    Dispatch, TryExcept, Raise, OnBlock, ConstDecl, EnumDecl,
 )
 KEYWORDS = {
     "DATA", "TYPE", "VALUE",
+    "CONSTANTS", "ENUM", "ENDENUM",
     "IF", "ELSE", "ELSEIF", "ENDIF",
     "LOOP", "AT", "INTO", "WHERE", "ENDLOOP",
     "DO", "TIMES", "ENDDO",
     "CASE", "WHEN", "OTHERS", "ENDCASE",
+    "DISPATCH", "ENDDISPATCH",
     "FORM", "ENDFORM", "USING", "PERFORM",
     "WRITE", "MOVE", "TO", "COMPUTE",
     "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "BY", "FROM", "GIVING",
+    "TRY", "CATCH", "CLEANUP", "ENDTRY", "RAISE",
+    "ON", "ENDON",
     "RETURN", "EXIT", "CONTINUE",
     "AND", "OR", "NOT",
     "EQ", "NE", "LT", "GT", "LE", "GE",
@@ -214,6 +220,10 @@ class Parser:
             kw = t.value
             if kw == "DATA":
                 return self.parse_data()
+            if kw == "CONSTANTS":
+                return self.parse_constants()
+            if kw == "ENUM":
+                return self.parse_enum()
             if kw == "IF":
                 return self.parse_if()
             if kw == "LOOP":
@@ -222,10 +232,18 @@ class Parser:
                 return self.parse_do()
             if kw == "CASE":
                 return self.parse_case()
+            if kw == "DISPATCH":
+                return self.parse_dispatch()
             if kw == "FORM":
                 return self.parse_form()
             if kw == "PERFORM":
                 return self.parse_perform()
+            if kw == "TRY":
+                return self.parse_try()
+            if kw == "RAISE":
+                return self.parse_raise()
+            if kw == "ON":
+                return self.parse_on()
             if kw == "WRITE":
                 self.next()
                 value = self.parse_expr()
@@ -297,6 +315,52 @@ class Parser:
                 continue
             self.end_stmt()
             return decls
+    def parse_constants(self) -> List[ConstDecl]:
+        self.expect_kw("CONSTANTS")
+        if self.at("op", ":"):
+            self.next()
+        decls = []
+        while True:
+            decls.append(self.parse_constant_decl())
+            if self.at("op", ","):
+                self.next()
+                continue
+            self.end_stmt()
+            return decls
+    def parse_constant_decl(self) -> ConstDecl:
+        name = self.expect("id").value
+        value = None
+        while self.peek().kind == "kw" and self.peek().value in ("TYPE", "VALUE"):
+            if self.at_kw("TYPE"):
+                self.next()
+                t = self.next()
+                if t.kind not in ("id", "kw"):
+                    raise SyntaxError(f"line {t.line}: expected type name, got {t.value!r}")
+            elif self.at_kw("VALUE"):  # pragma: no branch
+                self.next()
+                value = self.parse_expr()
+        if value is None:
+            raise SyntaxError(f"line {self.peek().line}: CONSTANTS declaration requires VALUE")
+        return ConstDecl(name, value)
+    def parse_enum(self) -> EnumDecl:
+        self.expect_kw("ENUM")
+        enum_name = self.expect("id").value
+        self.end_stmt()
+        members = []
+        while not self.at_kw("ENDENUM"):
+            t = self.next()
+            if t.kind not in ("id", "kw"):
+                raise SyntaxError(f"line {t.line}: expected enum member name, got {t.value!r}")
+            member_name = t.value
+            member_value = None
+            if self.at_kw("VALUE"):
+                self.next()
+                member_value = self.parse_expr()
+            self.end_stmt()
+            members.append((member_name, member_value))
+        self.expect_kw("ENDENUM")
+        self.end_stmt()
+        return EnumDecl(enum_name, members)
     def parse_if(self) -> If:
         self.expect_kw("IF")
         cond = self.parse_expr()
@@ -361,6 +425,26 @@ class Parser:
         self.expect_kw("ENDCASE")
         self.end_stmt()
         return Switch(expr, cases, default)
+    def parse_dispatch(self) -> Dispatch:
+        self.expect_kw("DISPATCH")
+        expr = self.parse_expr()
+        self.end_stmt()
+        cases = []
+        default = None
+        while not self.at_kw("ENDDISPATCH"):
+            self.expect_kw("WHEN")
+            if self.at_kw("OTHERS"):
+                self.next()
+                self.end_stmt()
+                default = self.parse_block_until({"ENDDISPATCH"})
+                break
+            val = self.parse_expr()
+            self.end_stmt()
+            body = self.parse_block_until({"WHEN", "ENDDISPATCH"})
+            cases.append((val, body))
+        self.expect_kw("ENDDISPATCH")
+        self.end_stmt()
+        return Dispatch(expr, cases, default)
     def parse_form(self) -> Sub:
         self.expect_kw("FORM")
         name = self.expect("id").value
@@ -406,6 +490,8 @@ class Parser:
             self.next()
             dest = self.expect("id").value
         self.end_stmt()
+        if dest == target and isinstance(value, Num) and value.value == 1:
+            return IncDec(target, 1)
         return Let(dest, Bin("+", Var(target), value))
     def parse_subtract(self) -> Let:
         self.expect_kw("SUBTRACT")
@@ -417,6 +503,8 @@ class Parser:
             self.next()
             dest = self.expect("id").value
         self.end_stmt()
+        if dest == target and isinstance(value, Num) and value.value == 1:
+            return IncDec(target, -1)
         return Let(dest, Bin("-", Var(target), value))
     def parse_multiply(self) -> Let:
         self.expect_kw("MULTIPLY")
@@ -474,6 +562,45 @@ class Parser:
                 args.append(self.parse_expr())
         self.expect("op", ")")
         return args
+    def parse_try(self) -> TryExcept:
+        self.expect_kw("TRY")
+        self.end_stmt()
+        try_body = self.parse_block_until({"CATCH", "CLEANUP", "ENDTRY"})
+        except_body = []
+        finally_body = None
+        if self.at_kw("CATCH"):
+            self.next()
+            self.end_stmt()
+            except_body = self.parse_block_until({"CLEANUP", "ENDTRY"})
+        if self.at_kw("CLEANUP"):
+            self.next()
+            self.end_stmt()
+            finally_body = self.parse_block_until({"ENDTRY"})
+        self.expect_kw("ENDTRY")
+        self.end_stmt()
+        return TryExcept(try_body, except_body, finally_body)
+    def parse_raise(self) -> Raise:
+        self.expect_kw("RAISE")
+        if self.at("op", "."):
+            self.end_stmt()
+            return Raise()
+        value = self.parse_expr()
+        self.end_stmt()
+        return Raise(value)
+    def parse_on(self) -> OnBlock:
+        self.expect_kw("ON")
+        ns = self.next()
+        if ns.kind not in ("id", "kw"):
+            raise SyntaxError(f"line {ns.line}: expected event namespace, got {ns.value!r}")
+        self.expect("op", ".")
+        method = self.next()
+        if method.kind not in ("id", "kw"):
+            raise SyntaxError(f"line {method.line}: expected event method, got {method.value!r}")
+        self.end_stmt()
+        body = self.parse_block_until({"ENDON"})
+        self.expect_kw("ENDON")
+        self.end_stmt()
+        return OnBlock(ns.value, method.value, body)
     def parse_expr(self, min_prec: int = 0) -> object:
         left = self.parse_unary()
         while True:
