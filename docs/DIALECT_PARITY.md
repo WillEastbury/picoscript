@@ -59,8 +59,14 @@ their *tokenizer/parser* simply never emits certain nodes.
 | Skip (continue) | Y | Y | Y | N | Y | Y |
 | Gosub | Y | Y | Y | Y | Y | N |
 | ServerMain | Y | N | N | N | N | N |
-| **TryExcept / Raise / OnBlock** | **Y** | **Y** | **N** | **N** | **N** | **N** |
+| **TryExcept / Raise / OnBlock** | **Y** \* | **Y** | **N** | **N** | **N** | **N** |
 | ConstDecl / EnumDecl | Y | Y | Y | N | N | N |
+
+\* BASIC gained `TryExcept`/`Raise` grammar as part of the "merge/integrate"
+follow-up to this audit (it already had `OnBlock`); see the fix note below.
+Both are still runtime-inert pending a real exception-handling engine (also
+below) — closing the *grammar* gap didn't retroactively make the underlying
+feature work, and that's called out explicitly rather than left implied.
 
 Verified by grep for each frontend's actual `return <NodeKind>(...)` construction
 sites (not just imports — COBOL/Report/Functional all `import` several node
@@ -71,16 +77,17 @@ loop-continue keyword.
 
 The standout gap: **`TryExcept`/`Raise`/`OnBlock` (exception handling and
 `ON Ns.Method: ... END ON` event blocks) are parseable only from BASIC and
-Python-style source.** COBOL/Report/Functional even `import` those three
-names from `picoscript_basic` (`picoscript_cobol.py:16`,
-`picoscript_report.py:17`, `picoscript_functional.py:22`) but never
-construct them — confirmed by grep: no `return TryExcept(...)` /
-`return Raise(...)` in any of the three files. English has no import of
-them at all. So a program using try/except or an `ON` event handler, written
-in BASIC or Python-style, **cannot be transliterated by hand into English,
-COBOL, Report, or Functional syntax** — there is no surface grammar for it in
-those four, even though the shared `Lowerer` would happily lower the node if
-it existed.
+Python-style source** (BASIC gained `TryExcept`/`Raise` grammar after this
+audit — see the fix note below; it already had `OnBlock`). COBOL/Report/
+Functional even `import` those three names from `picoscript_basic`
+(`picoscript_cobol.py:16`, `picoscript_report.py:17`,
+`picoscript_functional.py:22`) but never construct them — confirmed by grep:
+no `return TryExcept(...)` / `return Raise(...)` in any of the three files.
+English has no import of them at all. So a program using try/except or an
+`ON` event handler, written in BASIC or Python-style, **cannot be
+transliterated by hand into English, COBOL, Report, or Functional syntax** —
+there is no surface grammar for it in those four, even though the shared
+`Lowerer` would happily lower the node if it existed.
 
 Workflow routes around this entirely rather than closing it: its `RAISE`/`ON`
 steps lower to plain `Event.Post(...)` host calls and a hand-rolled
@@ -88,18 +95,55 @@ while-loop drain (`picoscript_workflow.py:322-325`, `:381`), not to actual
 `Raise`/`OnBlock` AST nodes — so Workflow's "equivalent" feature is really a
 different, lower-level desugaring, not evidence that the gap is closed.
 
-## The JS port (`vm/picoc.js`) vs Python
+## A deeper, pre-existing bug found while closing the BASIC gap
 
-The JS port's own `BLowerer` (shared by JS BASIC/Python/English/COBOL/
-Report/Functional, mirroring the Python side) **does** support
-`TryExcept`/`Raise`/`OnBlock` in its statement dispatch — so JS BASIC/Python
-source using them compiles fine. The gap is narrower and newer: the
-**AST-JSON bridge added to `vm/picoc.js`** (`jsonToAst`) explicitly rejects
-those three kinds via `AST_JSON_UNSUPPORTED = { TryExcept: 1, Raise: 1,
-OnBlock: 1 }` — i.e. the JS visual/AST-designer path can't accept them yet,
-even though the JS *compiler* can. This mirrors the Python side's situation
-before this audit (Python's `compile_ast` always supported them fine — only
-the JS AST-JSON bridge has this restriction).
+While adding `TryExcept`/`Raise` grammar to BASIC (below), constructing and
+lowering a `Raise` node crashed with `AttributeError: 'ILBuilder' object has
+no attribute 'raise_sw'` — **this is not new**; it reproduces identically for
+Python-style `raise` too (`compile_python` + `lower_to_bytecode_safe` on any
+program containing `raise`), so **`Raise` has never actually worked from any
+frontend**. Worse than the crash itself: the surrounding code
+(`self.b.host("Error", "SetHandler", (v,), None)`) passed the *raised value*
+as if it were a jump-target PC — `Error.SetHandler` (`picoscript_vm.py:4076`)
+registers a **fault-handler PC** for genuine VM-level faults (bad opcode/jump,
+div-by-zero, step budget — see the `PicoFault` handling in `PicoVM.run`,
+`picoscript_vm.py:4577-4586`), not an arbitrary script value. Had the
+`AttributeError` not fired first, a later fault could have jumped to a
+garbage address.
+
+**Fixed** (`picoscript_basic.py`, `Lowerer.stmt`'s `Raise` branch): the
+erroneous `SetHandler` call is removed, and `Raise` now lowers to the VM's
+actual, already-safe `RAISE` opcode (`raise_irq` — logs `"raise swirq
+channel=N"`, a software-IRQ signal, and cannot corrupt VM state). **This does
+not make `Raise`/`TryExcept` functionally complete** — `Raise` still doesn't
+set any state `Error.Code()` reads, so `TryExcept`'s except-branch is
+reachable only if some *other*, unrelated host call happens to set the VM's
+fault state first. A real fix needs a new host op (e.g. `Error.Raise(code)`
+that sets `_error_code` directly) plumbed through all three VMs plus both
+transpilers, and `lower_try()` would need to actually call
+`Error.SetHandler` around the try body so genuine faults are caught too —
+a separate, larger effort, not attempted here. `tests/test_basic_100.py`
+previously asserted the crash itself as expected behavior
+(`test_raise_with_value_lowers`); it's been updated to assert the fixed,
+safe (but still non-functional-as-exceptions) behavior instead.
+
+## The JS port (`vm/picoc.js`) vs Python — corrected
+
+**Correction:** an earlier draft of this document (based on an unverified
+sub-agent citation) claimed the JS `BLowerer` already supports
+`TryExcept`/`Raise`/`OnBlock`. That's wrong — verified directly: `BLowerer`'s
+statement dispatch (`vm/picoc.js:1599-1627`, the `stmt: function(s) {...}`
+chain) has **no branch for any of the three**; an unrecognized node kind
+falls through to `else throw new Error("BASIC: cannot lower " + s.t)`
+(`vm/picoc.js:1626`). So the JS port cannot parse **or** lower
+`TryExcept`/`Raise`/`OnBlock` at all, from any source dialect — this is a
+strictly bigger gap than the Python side (which now has real, if
+runtime-inert, support via BASIC/Python-style). Given that, the AST-JSON
+bridge's `AST_JSON_UNSUPPORTED = { TryExcept: 1, Raise: 1, OnBlock: 1 }`
+guard (`vm/picoc.js:3036`) is **correct and necessary as-is** — it fails
+clearly in `jsonToAst` instead of letting a node through to crash
+confusingly in `BLowerer.stmt`. It should not be removed without first
+porting real `TryExcept`/`Raise`/`OnBlock` support to the JS Lowerer.
 
 ## Why Workflow and AST are excluded from `tests/test_translator_roundtrip.py`
 
@@ -141,9 +185,14 @@ capability question, not a surface-syntax one:
   they're claimed to be (proven by the 70/70 translator round-trip suite +
   five-path VM/transpile parity tests).
 - **Exception handling / event blocks (`TryExcept`/`Raise`/`OnBlock`)**: a
-  real, undocumented-until-now gap — parseable only in BASIC and Python-style
-  syntax among the six shared-AST frontends; no English/COBOL/Report/
-  Functional grammar for it.
+  real gap, only partially closed so far — BASIC now has full grammar for
+  all three (matching Python-style); English/COBOL/Report/Functional still
+  have none. More importantly, the *feature itself* was found to be
+  non-functional at the runtime level for every frontend that has ever
+  supported it (see the bug/fix section above) — closing the grammar gap
+  further without also building the real exception engine would just spread
+  a no-op around, so it was deliberately not propagated to more dialects in
+  this pass.
 - **C-style and v1** are architecturally separate compilers proven
   equivalent only by output testing, not by sharing code — a latent risk if
   either drifts (no shared `Lowerer` to keep them honest automatically).
@@ -151,3 +200,33 @@ capability question, not a surface-syntax one:
 - **AST-JSON** has 100% parity with the six shared-AST frontends by
   construction, and (after this audit) now fails loudly rather than
   silently when handed a foreign (C-style/v1) tree it can't represent.
+
+## What was actually merged/fixed as a result of this audit
+
+1. **`picoscript_ast.ast_to_json`** now checks class *identity*, not just
+   class *name*, before serializing a node — closes a real latent bug where
+   a C-style (`picoscript_cfront.py`) AST could be silently miscoerced into
+   the wrong (`picoscript_basic`) node class. Covered by
+   `tests/test_ast_frontend.py::test_ast_to_json_rejects_foreign_same_named_node_class`.
+2. **BASIC gained `TRY`/`EXCEPT`/`FINALLY`/`ENDTRY`/`RAISE` grammar**
+   (`picoscript_basic.py`'s `KEYWORDS`, `_parse_stmt`, and new `parse_try`),
+   closing its only remaining gap versus Python-style among the shared-AST
+   node kinds it was missing (it already had `OnBlock`).
+3. **Fixed a real, pre-existing, cross-dialect crash**: `Lowerer.stmt`'s
+   `Raise` branch called a nonexistent `ILBuilder.raise_sw` method (crashing
+   with `AttributeError` for BASIC and Python-style alike) and separately
+   misused `Error.SetHandler` with the raised value instead of a jump-target
+   PC (a latent bad-jump risk). Both fixed; `Raise` now safely lowers to the
+   VM's real `RAISE` opcode as a documented, safe no-op pending a proper
+   exception-handling engine. `tests/test_basic_100.py`'s
+   `test_raise_with_value_lowers` — which had asserted the crash as expected
+   behavior — was updated to assert the fixed behavior instead.
+4. **Deliberately not done**: propagating `TryExcept`/`Raise`/`OnBlock`
+   grammar to English/COBOL/Report/Functional, or porting them to the JS
+   `BLowerer`. Both are real, larger, separate efforts (a working exception
+   engine needs a new `Error.Raise(code)` host op across all 3 VMs + 2
+   transpilers, plus `lower_try()` actually registering `Error.SetHandler`;
+   the JS port needs the grammar *and* lowering built from scratch) that
+   go beyond "close the parity gap" into "build a feature that never fully
+   existed" — flagged here for a scoping decision rather than attempted
+   silently.

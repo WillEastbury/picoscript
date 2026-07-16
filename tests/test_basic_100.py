@@ -246,10 +246,67 @@ def test_store_value_atom_and_const_addition():
 
 
 def test_raise_with_value_lowers():
-   lowerer = Lowerer()
-   with pytest.raises(AttributeError, match="raise_sw"):
-       lowerer.stmt(Raise(Num(7)))
-   assert any(getattr(inst, "op", None) == "host" for inst in lowerer.b.insts)
+    # Historically this asserted the *bug* (Lowerer.stmt(Raise(...)) crashing
+    # with AttributeError: 'raise_sw') as if it were expected behavior -- see
+    # docs/DIALECT_PARITY.md for the full audit. Raise's lowering was calling
+    # a nonexistent ILBuilder method, and (independently) misusing
+    # Error.SetHandler with the raised *value* where the VM expects a jump
+    # target PC -- a latent bad-jump risk, not just a crash. Both are fixed:
+    # Raise now lowers to the VM's actual RAISE opcode (`raise_irq`), a safe
+    # no-corrupting-state primitive, and emits no "host" instruction at all.
+    # NOTE: this does NOT make Raise a real "throw a value, unwind to the
+    # nearest except" mechanism yet -- it's a documented no-op pending a
+    # proper Error.Raise(code) host op + lower_try() actually registering
+    # Error.SetHandler around the try body (tracked, not attempted here).
+    lowerer = Lowerer()
+    lowerer.stmt(Raise(Num(7)))
+    assert any(getattr(inst, "op", None) == "raise" for inst in lowerer.b.insts)
+    assert not any(getattr(inst, "op", None) == "host" for inst in lowerer.b.insts)
+
+
+def test_basic_try_except_endtry_parses_and_lowers():
+    """BASIC's TRY/EXCEPT/ENDTRY grammar (added alongside the docs/
+    DIALECT_PARITY.md audit -- BASIC previously had ON blocks but not
+    TryExcept/Raise, unlike Python-style). Mirrors picoscript_python.py's
+    try/except/finally 1:1 at the AST level, so it must lower to the exact
+    same bytecode as the equivalent Python-style source."""
+    from picoscript_python import compile_python
+
+    basic_src = (
+        "LET x = 1\n"
+        "TRY\n"
+        "    LET x = 2\n"
+        "EXCEPT\n"
+        "    LET x = 3\n"
+        "FINALLY\n"
+        "    LET x = 4\n"
+        "ENDTRY\n"
+        "PRINT x\n"
+    )
+    python_src = (
+        "x = 1\n"
+        "try:\n"
+        "    x = 2\n"
+        "except:\n"
+        "    x = 3\n"
+        "finally:\n"
+        "    x = 4\n"
+        "print(x)\n"
+    )
+    basic_words = lower_to_bytecode_safe(compile_basic(basic_src))
+    python_words = lower_to_bytecode_safe(compile_python(python_src))
+    assert basic_words == python_words
+
+    vm = PicoVM().run(basic_words)
+    output = [int.from_bytes(b, "big") for b in vm.output]
+    assert output == [4]  # try body runs, then falls through to finally
+
+
+def test_basic_try_except_no_finally():
+    src = "LET x = 1\nTRY\n    LET x = 2\nEXCEPT\n    LET x = 3\nENDTRY\nPRINT x\n"
+    words = lower_to_bytecode_safe(compile_basic(src))
+    vm = PicoVM().run(words)
+    assert [int.from_bytes(b, "big") for b in vm.output] == [2]
 
 
 def test_lowerer_rejects_unknown_statement():

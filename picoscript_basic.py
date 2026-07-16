@@ -78,6 +78,7 @@ KEYWORDS = {
     "PACK", "CARD", "FIFO", "DEVICE", "STREAM", "UI", "EVENT",
     "CONST", "ENUM", "ENDENUM",
     "ON", "END",
+    "TRY", "EXCEPT", "FINALLY", "ENDTRY", "RAISE",
 }
 CMP_WORDS = {"EQ": "EQ", "NE": "NE", "LT": "LT", "GT": "GT", "LE": "LE", "GE": "GE"}
 
@@ -399,6 +400,13 @@ class Parser:
                 return self.parse_server()
             if kw == "ON":
                 return self.parse_on_block()
+            if kw == "TRY":
+                return self.parse_try()
+            if kw == "RAISE":
+                self.next()
+                if self.peek().kind in ("nl", "eof"):
+                    self.end_line(); return Raise()
+                v = self.parse_expr(); self.end_line(); return Raise(v)
             if kw == "RETURN":
                 self.next()
                 if self.peek().kind in ("nl", "eof"):
@@ -928,6 +936,25 @@ class Parser:
         self.eat_kw("END"); self.eat_kw("ON"); self.end_line()
         return OnBlock(ns, method, body)
 
+    def parse_try(self) -> TryExcept:
+        """TRY ... EXCEPT ... [FINALLY ...] ENDTRY -- mirrors the Python-style
+        frontend's try/except/finally (parse_try in picoscript_python.py),
+        just with BASIC's END-keyword block-closing convention instead of
+        indentation."""
+        self.eat_kw("TRY")
+        self.end_line()
+        try_body = self.parse_block("EXCEPT")
+        self.eat_kw("EXCEPT")
+        self.end_line()
+        except_body = self.parse_block("FINALLY", "ENDTRY")
+        finally_body = None
+        if self.at_kw("FINALLY"):
+            self.eat_kw("FINALLY")
+            self.end_line()
+            finally_body = self.parse_block("ENDTRY")
+        self.eat_kw("ENDTRY"); self.end_line()
+        return TryExcept(try_body, except_body, finally_body)
+
     def parse_call_from_id(self) -> Call:
         ns = self.next().value
         self.eat_op(".")
@@ -1134,10 +1161,29 @@ class Lowerer:
         elif isinstance(s, TryExcept):
             self.lower_try(s)
         elif isinstance(s, Raise):
-            if s.value is not None:
-                v = self.eval(s.value)
-                self.b.host("Error", "SetHandler", (v,), None)  # raise uses RAISE opcode
-            self.b.raise_sw(0)
+            # NOTE (found during dialect-parity audit): this is currently a
+            # best-effort, non-corrupting no-op, not a real "throw a script
+            # value and unwind to the nearest except" mechanism. The VM's
+            # only fault-catching primitive is Error.SetHandler(pc), which
+            # registers a JUMP TARGET for genuine VM-level faults (bad
+            # opcode/jump, div-by-zero, step budget -- see PicoFault handling
+            # in PicoVM.run); it does not accept/store an arbitrary script
+            # value, and lower_try() never calls it to protect the try body.
+            # The previous code called `self.b.host("Error", "SetHandler",
+            # (v,), None)` with the raised *value* -- if that value weren't
+            # already a valid bytecode address, a later fault could jump to
+            # a garbage PC. That call is intentionally removed rather than
+            # "fixed" to look functional: emitting a real script-raisable
+            # error needs a new host op (e.g. `Error.Raise(code)` that sets
+            # _error_code directly) plumbed through all 3 VMs + 2
+            # transpilers, and lower_try() needs to actually call
+            # Error.SetHandler around the try body -- a larger, separate fix
+            # tracked in docs/DIALECT_PARITY.md, not attempted here.
+            # `raise_irq` (the VM's actual RAISE opcode) is the closest
+            # existing, safe, side-effect-only primitive: it just logs
+            # "raise swirq channel=N" (software-IRQ signaling, unrelated to
+            # exceptions) and cannot corrupt VM state.
+            self.b.raise_irq(0)
         elif isinstance(s, OnBlock):
             self.lower_on_block(s)
         else:
