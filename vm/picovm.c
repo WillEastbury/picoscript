@@ -26,6 +26,21 @@ static void pv_bzero(void *p, unsigned long len)
 
 static void pv_set_fault(pv_ctx *ctx, int code, int pc, int detail)
 {
+    /* Error.*: if a try/except handler is active (top of the handler stack
+     * is truthy -- SetHandler(0) is a deliberate no-op push, matching
+     * Python/JS's "0 = no handler" convention), redirect there instead of
+     * halting -- exactly like Python's `except PicoFault` around _step().
+     * Real VM faults and script-raised Error.Raise(code) share one
+     * Error.Code() channel (see docs/EXCEPTION_ENGINE.md), same as Python/JS. */
+    int32_t handler_pc = (ctx->err_sp > 0) ? ctx->err_stack[ctx->err_sp - 1] : 0;
+    if (handler_pc) {
+        ctx->err_code = code;
+        ctx->err_detail = detail;
+        ctx->err_resume_pc = pc + 1;
+        ctx->pending_jump = handler_pc;
+        ctx->pending_jump_set = 1;
+        return;
+    }
     ctx->fault = code;
     ctx->fault_pc = pc;
     ctx->fault_detail = detail;
@@ -2028,16 +2043,125 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         }
         if (hook == PV_HOOK_FIFO_POLL) { ctx->regs[rd] = f_ok ? ctx->fifo_depth[fh] : 0; return; }
     }
+    /* Error.*: real try/except (handler stack) -- see docs/EXCEPTION_ENGINE.md.
+     * Mirrors picoscript_vm.py's _error_hook / vm/picovm.js's _errorHook
+     * exactly. `laddr` (the label-address IL construct lower_try/Raise use
+     * to pass a handler PC into Error.SetHandler) needs NO new C opcode --
+     * it lowers to plain SUB/ADD/MUL bytecode (the same "wide constant load"
+     * form used for any large integer literal, see picoscript_il.py's
+     * _emit_const), which this interpreter already executes; the only real
+     * gap was this dispatch + the handler-stack/pending-jump mechanism. */
+    if (hook == PV_HOOK_ERROR_SETHANDLER) {
+        if (ctx->err_sp < PV_MAX_ERR_HANDLERS) ctx->err_stack[ctx->err_sp++] = ctx->regs[rs1];
+        ctx->regs[rd] = 1;
+        return;
+    }
+    if (hook == PV_HOOK_ERROR_POPHANDLER) {
+        if (ctx->err_sp > 0) { ctx->err_sp--; ctx->regs[rd] = 1; }
+        else ctx->regs[rd] = 0;
+        return;
+    }
+    if (hook == PV_HOOK_ERROR_HASHANDLER) {
+        int32_t top = (ctx->err_sp > 0) ? ctx->err_stack[ctx->err_sp - 1] : 0;
+        ctx->regs[rd] = top ? 1 : 0;
+        return;
+    }
+    if (hook == PV_HOOK_ERROR_CODE) { ctx->regs[rd] = ctx->err_code; return; }
+    if (hook == PV_HOOK_ERROR_DETAIL) { ctx->regs[rd] = ctx->err_detail; return; }
+    if (hook == PV_HOOK_ERROR_RESUME) {
+        ctx->err_code = 0;
+        ctx->err_detail = 0;
+        if (ctx->err_resume_pc) {
+            ctx->pending_jump = ctx->err_resume_pc;
+            ctx->pending_jump_set = 1;
+            ctx->err_resume_pc = 0;
+        }
+        ctx->regs[rd] = 1;
+        return;
+    }
+    if (hook == PV_HOOK_ERROR_CLEAR) {
+        ctx->err_code = 0;
+        ctx->err_detail = 0;
+        ctx->regs[rd] = 1;
+        return;
+    }
+    if (hook == PV_HOOK_ERROR_RAISE) {
+        /* Script-level "throw a value": jump to the active handler if one is
+         * registered (same channel as a genuine VM fault -- Error.Code()
+         * reads back exactly the raised value either way); otherwise this
+         * must NOT be silently swallowed -- propagate as a real, uncaught
+         * fault (halts the VM), exactly like an unhandled exception would. */
+        int32_t code = ctx->regs[rs1];
+        int32_t handler_pc = (ctx->err_sp > 0) ? ctx->err_stack[ctx->err_sp - 1] : 0;
+        if (handler_pc) {
+            ctx->err_code = code;
+            ctx->err_detail = 0;
+            ctx->err_resume_pc = ctx->cur_pc + 1;
+            ctx->pending_jump = handler_pc;
+            ctx->pending_jump_set = 1;
+            ctx->regs[rd] = 1;
+        } else {
+            ctx->fault = code;
+            ctx->fault_pc = ctx->cur_pc;
+            ctx->fault_detail = 0;
+            ctx->halted = 1;
+            ctx->regs[rd] = 0;
+        }
+        return;
+    }
+    /* Log.*: deterministic, script-visible tracing/audit log (see
+     * docs/LOGGING.md). Real, deterministic, no host state -- fixed-size
+     * (PV_MAX_LOGS), matching this embedded runtime's other handle tables.
+     * Mirrors picoscript_vm.py's _log_hook / vm/picovm.js's _logHook exactly
+     * (Count() scans used slots, matching Python's `len(self.logs)`, which
+     * shrinks after Clear -- unlike the monotonic handle counter itself). */
+    if (hook == PV_HOOK_LOG_WRITE) {
+        int h;
+        if (ctx->log_count >= PV_MAX_LOGS) { ctx->regs[rd] = 0; return; }
+        h = ctx->log_count++;
+        ctx->log_level[h] = ctx->regs[rs1];
+        ctx->log_span[h] = ctx->regs[rs2];
+        ctx->log_used[h] = 1;
+        ctx->regs[rd] = h;
+        return;
+    }
+    if (hook == PV_HOOK_LOG_COUNT) {
+        int i, n = 0;
+        for (i = 1; i < PV_MAX_LOGS; i++) if (ctx->log_used[i]) n++;
+        ctx->regs[rd] = n;
+        return;
+    }
+    if (hook == PV_HOOK_LOG_LEVEL || hook == PV_HOOK_LOG_MESSAGE) {
+        int lh = ctx->regs[rs1];
+        int l_ok = (lh > 0 && lh < PV_MAX_LOGS && ctx->log_used[lh]);
+        ctx->regs[rd] = l_ok ? (hook == PV_HOOK_LOG_LEVEL ? ctx->log_level[lh] : ctx->log_span[lh]) : 0;
+        return;
+    }
+    if (hook == PV_HOOK_LOG_CLEAR) {
+        int i;
+        for (i = 0; i < PV_MAX_LOGS; i++) ctx->log_used[i] = 0;
+        ctx->regs[rd] = 1;
+        return;
+    }
     /* Kernel.*: WaitIRQ/WaitSWIRQ reuse the same cooperative-yield halt as the
-     * raw OP_WAIT opcode (no separate log -- this embedded runtime carries no
-     * debug-log list, unlike Python/JS); FireSWIRQ is an ack-only signal for
-     * the same reason. ProfileStart/ProfileEnd/TracePoint (real tracing via
-     * a Log.* table) are a separate, larger addition -- deliberately not
-     * done in this pass; see docs/FEATURE_MATRIX.md. */
+     * raw OP_WAIT opcode; FireSWIRQ is an ack-only signal (no separate log --
+     * this embedded runtime carries no free-text debug-log list, unlike
+     * Python/JS -- but ProfileStart/ProfileEnd/TracePoint now reuse the
+     * real Log.* table above, same as Python/JS). */
     if (hook == PV_HOOK_KERNEL_WAITIRQ || hook == PV_HOOK_KERNEL_WAITSWIRQ) {
         ctx->waiting = 1; ctx->halted = 1; return;
     }
     if (hook == PV_HOOK_KERNEL_FIRESWIRQ) { ctx->regs[rd] = 1; return; }
+    if (hook == PV_HOOK_KERNEL_PROFILESTART || hook == PV_HOOK_KERNEL_PROFILEEND || hook == PV_HOOK_KERNEL_TRACEPOINT) {
+        int h;
+        if (ctx->log_count >= PV_MAX_LOGS) { ctx->regs[rd] = 0; return; }
+        h = ctx->log_count++;
+        ctx->log_level[h] = (hook == PV_HOOK_KERNEL_PROFILESTART) ? 100 : (hook == PV_HOOK_KERNEL_PROFILEEND) ? 101 : 102;
+        ctx->log_span[h] = ctx->regs[rs1];
+        ctx->log_used[h] = 1;
+        ctx->regs[rd] = h;
+        return;
+    }
     /* Pack.Use: a lightweight "active pack" selector, independent of
      * Storage's own pack context (a different namespace/concept). */
     if (hook == PV_HOOK_PACK_USE) {
@@ -3000,6 +3124,7 @@ void pv_init(pv_ctx *ctx)
     ctx->desc_count = 1;        /* Descriptor.*: handle 0 reserved as null */
     ctx->lease_count = 1;       /* Lease.*: handle 0 reserved as null */
     ctx->fifo_count = 1;        /* Fifo.*: handle 0 reserved as null */
+    ctx->log_count = 1;         /* Log.*: handle 0 reserved as null */
     ctx->host = pv_default_host;
     ctx->cur_pc = 0;
 }
@@ -3183,6 +3308,10 @@ long pv_vm_run(pv_ctx *ctx, const uint32_t *program, int len)
         default:
             pv_set_fault(ctx, PV_FAULT_BAD_OPCODE, cur, op);
             break;
+        }
+        if (ctx->pending_jump_set) {
+            pc = ctx->pending_jump;
+            ctx->pending_jump_set = 0;
         }
     }
     return ctx->steps;

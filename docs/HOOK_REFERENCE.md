@@ -546,7 +546,7 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | Kernel.WaitIRQ() | 0x0001 | Real: reuses the same cooperative-yield halt as the raw OP_WAIT opcode, on all 3 runtimes. |
 | Kernel.WaitSWIRQ() | 0x0002 | Real: same mechanism as WaitIRQ. |
 | Kernel.FireSWIRQ() | 0x0003 | Real: signals a software IRQ (ack-only on the embedded C runtime, which carries no debug-log list; Python/JS also append a log line). |
-| Kernel.ProfileStart() | 0x0004 | Python/JS: real, reuses the Log.* table (deterministic, sequence-ordered). **Not yet implemented in the C VM** -- a separate, larger addition (new fixed-size Log table); see docs/FEATURE_MATRIX.md. |
+| Kernel.ProfileStart() | 0x0004 | Real on all 3 runtimes: reuses the Log.* table (deterministic, sequence-ordered). |
 | Kernel.ProfileEnd() | 0x0005 | Same status as ProfileStart. |
 | Kernel.TracePoint() | 0x0006 | Same status as ProfileStart. |
 
@@ -830,21 +830,26 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Error.SetHandler() | 0x02B0 | Pushes a handler PC onto the exception-handler stack (real try/except mechanism -- see docs/EXCEPTION_ENGINE.md). Python VM + JS VM only. |
-| Error.HasHandler() | 0x02B1 | Returns 1 if a handler is active (checks the top of the handler stack's truthiness). Python VM + JS VM only. |
-| Error.Code() | 0x02B2 | Returns the last fault/raise code. Python VM + JS VM only. |
-| Error.Detail() | 0x02B3 | Returns the last fault/raise detail. Python VM + JS VM only. |
-| Error.Resume() | 0x02B4 | Returns the PC to resume at after a caught fault. Python VM + JS VM only. |
-| Error.Clear() | 0x02B5 | Clears the last fault/raise state. Python VM + JS VM only. |
-| Error.Raise() | 0x02B6 | Raises to the nearest handler (or propagates as an uncaught fault). Python VM + JS VM only. |
-| Error.PopHandler() | 0x02B7 | Pops the handler stack (restores the enclosing try's handler, if any). Python VM + JS VM only. |
+| Error.SetHandler() | 0x02B0 | Pushes a handler PC onto the exception-handler stack (real try/except mechanism -- see docs/EXCEPTION_ENGINE.md). Real on all 3 bytecode VMs (Python/JS/C). |
+| Error.HasHandler() | 0x02B1 | Returns 1 if a handler is active (checks the top of the handler stack's truthiness). All 3 bytecode VMs. |
+| Error.Code() | 0x02B2 | Returns the last fault/raise code. All 3 bytecode VMs. |
+| Error.Detail() | 0x02B3 | Returns the last fault/raise detail. All 3 bytecode VMs. |
+| Error.Resume() | 0x02B4 | Returns the PC to resume at after a caught fault. All 3 bytecode VMs. |
+| Error.Clear() | 0x02B5 | Clears the last fault/raise state. All 3 bytecode VMs. |
+| Error.Raise() | 0x02B6 | Raises to the nearest handler (or propagates as an uncaught fault). All 3 bytecode VMs. |
+| Error.PopHandler() | 0x02B7 | Pops the handler stack (restores the enclosing try's handler, if any). All 3 bytecode VMs. |
 
-**Not implemented in the C VM (`vm/picovm.c`) interpreter or native-C transpile** -- this
-requires the `laddr` (load-label-address) bytecode instruction, which the C decoder does
-not yet recognize at all; a scoped-out follow-up, not an oversight (see
-docs/FEATURE_MATRIX.md and docs/EXCEPTION_ENGINE.md's scope section, which already
-documents this same `laddr` limitation for native-C/JS *transpile* -- the interpretive C
-VM shares the identical gap for the same underlying reason).
+**Now implemented on the C VM (`vm/picovm.c`) interpreter too** (fixed in the
+namespace-equalization pass's follow-up -- see docs/EXCEPTION_ENGINE.md).
+`laddr` (the label-address IL construct) needed no new C opcode -- it's a
+purely compile-time bytecode-assembly trick (plain `SUB`/`ADD`/`MUL` words);
+the real gaps were the `Error.*` dispatch itself and a `pending_jump` channel
+for hooks/caught-faults to redirect the interpreter's `pc`. **Not
+implemented in native-C transpile** (`lower_to_c` → straight-line `goto`-
+based C, no bytecode PC to jump to at all) or native-JS transpile — both
+still raise a clear `ValueError` at compile time (see
+docs/EXCEPTION_ENGINE.md's scope section) — that limitation is unrelated to
+and unaffected by the interpreter fix.
 
 ---
 

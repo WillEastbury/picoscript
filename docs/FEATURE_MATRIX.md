@@ -61,7 +61,7 @@ language-equivalence pass. All v1 bytecode still executes on the **same**
 |---|:-:|:-:|
 | Python VM (bytecode) | Y — real, nested-safe (`docs/EXCEPTION_ENGINE.md`) | Y (`docs/EVENTING.md`) |
 | JS VM (bytecode, `vm/picovm.js`) | Y — byte-identical to Python | Y — byte-identical to Python |
-| C VM (bytecode, `vm/picovm.c`) | **N — found this pass** (see below) | Y |
+| C VM (bytecode, `vm/picovm.c`) | **Y — fixed this pass** (see below) | Y |
 | Native C transpile (`lower_to_c`) | **N — explicitly rejected** at compile time (`ValueError`), not silently mis-compiled | N (same reason) |
 | Native JS transpile (`lower_to_js`) | **N — explicitly rejected** at compile time | N (same reason) |
 
@@ -70,15 +70,25 @@ PC-addressable/fault-catching equivalent in straight-line native C/JS output —
 a real architectural limitation, documented in `docs/EXCEPTION_ENGINE.md`'s
 scope section, not an oversight.
 
-**Correction found this pass**: an earlier revision of this file claimed the
-C VM interpreter "shares the `laddr`/handler-stack bytecode contract" — that
-was never actually verified and is **wrong**. Direct inspection of
-`vm/picovm.c` found neither the `laddr` opcode nor any `Error.*` host-hook
-dispatch branch at all (`PV_HOOK_ERROR_*` is registered in `HOST_HOOK_CODES`
-but never referenced in `picovm.c`). `OnBlock`/`Event.*` are unaffected (pure
-host hooks, no `laddr` dependency) and remain correct on the C VM. `Error.*`
-on the C VM is a real, scoped-out follow-up (needs a new opcode in the
-decoder, not just a host hook) — see section 3's `Error` row.
+**Update — fixed this pass.** A prior revision of this file claimed the C VM
+interpreter "shares the `laddr`/handler-stack bytecode contract" without
+verifying it — that was wrong at the time (there was no `Error.*` dispatch in
+`vm/picovm.c` at all). Investigating it properly turned up a key fact: `laddr`
+needs **no new C opcode whatsoever** — it's a purely compile-time IL/bytecode-
+assembly construct (`picoscript_il.py`'s `_emit_const(..., force_wide=True)`)
+that lowers to plain `SUB`/`ADD`/`MUL` words (the same "wide constant load"
+form used for any large integer literal), which the C interpreter already
+executes correctly. The only real gaps were (1) the `Error.*` host-hook
+dispatch and (2) a handler-stack + "redirect PC" mechanism — Python/JS can
+mutate `vm.pc`/`this.pc` directly from a host hook, but C's `pv_vm_run`'s `pc`
+is a local variable, so a new `ctx->pending_jump`/`pending_jump_set` channel
+was added for hooks (and caught VM faults) to request a jump back into the
+main loop. Both are now implemented (`vm/picovm.c`'s `pv_set_fault` + the new
+`Error.*` dispatch block), verified byte-identical to Python for: try/catch/
+finally/raise, nested try/catch, uncaught raise (propagates as a real fault,
+same code), and — the architecturally riskiest case — a **genuine VM fault**
+(bad computed jump) caught by an active handler, not just a script-level
+`Raise`. See `tests/test_c_vm_error_parity.py`.
 
 ## 3. Host namespaces by runtime (Python VM / JS VM+native-JS / C VM+native-C)
 
@@ -112,7 +122,7 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Encoding | 12 | Y | Y | Y | ASCII/UTF-8/UTF-16/UTF-7/Hex |
 | Env | 4 | Y | Y | Y | |
 | Environment | 9 | Stub | Stub | Stub | Host-injected by design — OS/host facts. Defined 0/empty-span default on all 3 runtimes. |
-| Error | 8 | Y | Y | **N (gap found)** | Handler stack, `Raise`/`PopHandler` — **fully working on Python + JS VMs only**. Not implemented in the C VM interpreter at all (needs the `laddr` opcode, which the C decoder doesn't recognize) — a real gap this audit found in a previous claim; see below. |
+| Error | 8 | Y | Y | **Y (fixed)** | Handler stack, `Raise`/`PopHandler`. **Now working on all 3 runtimes.** The C VM gap found this pass turned out to need no new opcode (`laddr` is a pure compile-time bytecode-assembly trick) — just the `Error.*` dispatch + a `pending_jump` PC-redirect channel; see section 2. |
 | Event | 10 | Y | Y | Y | FIFO queue + `OnBlock` dispatch |
 | **Fifo** | 4 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: independent named byte-channel FIFOs (distinct from `Queue.*`'s fixed 8-channel int FIFO). No host state — real and deterministic. |
 | Gpio | 7 | Y | Y | Y | Reference emulator; PIOS injects real driver |
@@ -120,11 +130,11 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Http | 12 | Partial | Partial | Partial | `ParseQuery/ParseForm/ParseJson/EncodeJson` implemented (pure); `ReadHeader/ReadBody/GenerateHeaders/GenerateResponse` host-injected (live connection) |
 | Io | 2 | Y | Y | Y | |
 | Json | 11 | Y | Y | Y | |
-| Kernel | 6 | Partial | Partial | Partial | `WaitIRQ`/`WaitSWIRQ`/`FireSWIRQ` are now real on all 3 runtimes (reuse the same halt/ack semantics as the raw `OP_WAIT`/`OP_RAISE` opcodes). `ProfileStart`/`ProfileEnd`/`TracePoint` (real tracing via the `Log.*` table) are implemented on Python + JS only — **not yet on the C VM** (needs a new fixed-size Log table there; scoped-out follow-up). |
+| Kernel | 6 | Y | Y | **Y (fixed)** | `WaitIRQ`/`WaitSWIRQ`/`FireSWIRQ` reuse the same halt/ack semantics as the raw `OP_WAIT`/`OP_RAISE` opcodes. `ProfileStart`/`ProfileEnd`/`TracePoint` reuse the `Log.*` table — **now on all 3 runtimes** (C VM's `Log.*` gap closed this pass). |
 | Kv | 12 | Y | Y | Y | |
 | **Lease** | 6 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: a generic capability/ownership token over a span + type hint, no host state — real and deterministic. Distinct from `Stream.Next`'s own unrelated internal per-frame lease concept. |
 | Locale | 7 | Y | Y | Y | Needs `tzdata` on Windows for non-empty `zoneinfo` — see note below |
-| Log | 5 | Y | Y | **N (gap found)** | Real `Log.*` subsystem — **Python + JS VM only**. Not implemented in the C VM interpreter (needs a new fixed-size handle table there) — a real gap this audit found in a previous claim; scoped-out follow-up, not attempted this pass. |
+| Log | 5 | Y | Y | **Y (fixed)** | Real `Log.*` subsystem — **now on all 3 runtimes**. C VM uses a fixed-size table (`PV_MAX_LOGS=128`), consistent with this embedded runtime's other handle tables (Map/Descriptor/Lease/Fifo) — a bounded vs. Python/JS's unbounded dict, not a behavioral difference at any realistic scale. |
 | Map | 27 | Y | Y | Y | |
 | Maths | 12 | Partial | Partial | Partial | `Sin/Cos/Tan/Log/Log10/Exp` (Q16.16 CORDIC), `Power/Sqrt/Clamp/Lerp` implemented; `Random`/`RandomRange` host-injected (entropy) |
 | Memory | 9 | Y | Y | Y | |
@@ -199,24 +209,55 @@ Prompted by "start making them work and equal... even if returning null":
    `Environment`, `Net`, `X509` (plus `Data` above) now return a defined
    0/empty-span default on every runtime instead of silently logging an
    "unknown hook" and leaving the destination register untouched.
-5. **A real gap found and honestly documented, not silently left mis-stated**:
-   this pass discovered that `Error.*` (the exception-engine handler stack)
-   and `Log.*` (the tracing/audit subsystem) — both previously documented
-   elsewhere in this repo as working on "all runtimes" — are **not actually
-   implemented in the C VM interpreter (`vm/picovm.c`) at all**. Python and
-   JS VMs are unaffected and fully correct; this was a real inaccuracy in
-   prior documentation (this file's own earlier revision included), now
-   corrected. `Error.*` additionally needs the `laddr` opcode (not just a
-   host hook) to work at all, which the C decoder doesn't recognize —
-   architecturally the same class of gap already documented for native-C/JS
-   *transpile* in `docs/EXCEPTION_ENGINE.md`, just also true of the
-   interpretive C VM. `Log.*` needs a new fixed-size handle table in the
-   embedded-style `pv_ctx` struct (same pattern as `Descriptor`/`Lease`/`Fifo`
-   above, just not attempted in this already-large pass). Both are real,
-   scoped, documented follow-ups — not silently claimed as done.
-6. **`Kernel.ProfileStart`/`ProfileEnd`/`TracePoint`** are real on Python + JS
-   (reusing the `Log.*` table) but depend on the same missing C-VM `Log.*`
-   table, so remain unimplemented on the C VM for the same reason as #5.
+5. **A real gap found and honestly documented, then closed**: this pass
+   discovered that `Error.*` (the exception-engine handler stack) and `Log.*`
+   (the tracing/audit subsystem) — both previously documented elsewhere in
+   this repo as working on "all runtimes" — were **not actually implemented
+   in the C VM interpreter (`vm/picovm.c`) at all**. Python and JS VMs were
+   unaffected; this was a real inaccuracy in prior documentation (this file's
+   own earlier revision included). **Both are now fixed** — see "Follow-up:
+   C VM `Error.*`/`Log.*` closed" below.
+6. **`Kernel.ProfileStart`/`ProfileEnd`/`TracePoint`** are real on all 3
+   runtimes now (reusing the `Log.*` table on each).
+
+## Follow-up: C VM `Error.*`/`Log.*` closed
+
+The gap documented in point 5 above (and previously in section 2) is now
+fixed:
+
+- **`Log.*`**: added a fixed-size handle table (`log_level`/`log_span`/
+  `log_used`, `PV_MAX_LOGS=128`) to `pv_ctx`, consistent with this embedded
+  runtime's other handle tables (`Map`/`Descriptor`/`Lease`/`Fifo`) — a
+  bounded vs. Python/JS's unbounded dict, not a behavioral difference at any
+  realistic scale. `Kernel.ProfileStart/ProfileEnd/TracePoint` now reuse it,
+  same as Python/JS.
+- **`Error.*`**: the investigation turned up a key fact that changed the
+  scope entirely — **`laddr` needs no new C opcode at all**. It's a purely
+  compile-time IL/bytecode-assembly construct (`picoscript_il.py`'s
+  `_emit_const(..., force_wide=True)`) that lowers to plain `SUB`/`ADD`/`MUL`
+  words (the same "wide constant load" form used for any large integer
+  literal) — the C interpreter already executes this correctly. The only
+  real gaps were (1) the `Error.*` host-hook dispatch itself, and (2) a way
+  for a hook (or a caught VM fault) to redirect the interpreter's `pc` —
+  Python/JS can mutate `vm.pc`/`this.pc` directly from a host hook, but
+  `pv_vm_run`'s `pc` is a local C variable, so a new
+  `ctx->pending_jump`/`pending_jump_set` channel was added, consumed once
+  per instruction in the main loop. `pv_set_fault` (used by every genuine VM
+  fault: bad jump, bad opcode, step budget, call overflow) now checks the
+  handler stack first and redirects instead of halting, exactly mirroring
+  Python's `except PicoFault` handling around `_step()`.
+- Verified byte-identical to Python for: try/catch/finally/raise, nested
+  try/catch, uncaught raise (propagates as a real fault with the same code),
+  and — the architecturally riskiest case, since it touches the core
+  interpreter loop used by every program — a **genuine VM fault** (bad
+  computed jump) caught by an active handler, not just a script-level
+  `Raise`. See `tests/test_c_vm_error_parity.py`.
+- Full regression suite (including `--runslow`, which builds and exercises
+  the C interpreter + native C/JS transpile via `ziglang`) shows zero new
+  failures after this change — the two pre-existing, unrelated failure
+  clusters (`test_aliases.py`, `test_engine_security.py`) were re-verified
+  via git-stash bisection to fail identically without any of this session's
+  changes.
 
 ### `String.*` — the earlier `_stringlib` regression (separate from #3 above)
 

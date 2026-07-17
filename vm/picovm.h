@@ -48,6 +48,12 @@
 #ifndef PV_FIFO_DEPTH
 #define PV_FIFO_DEPTH 16        /* max buffered messages per Fifo channel */
 #endif
+#ifndef PV_MAX_LOGS
+#define PV_MAX_LOGS   128       /* Log.* table: handle = 1-based sequence id, 0 = null */
+#endif
+#ifndef PV_MAX_ERR_HANDLERS
+#define PV_MAX_ERR_HANDLERS 32  /* Error.* handler stack depth (nested try/except) */
+#endif
 
 /* ---- 16 core opcodes (bits [31:28]) ---------------------------------- */
 enum {
@@ -166,6 +172,23 @@ struct pv_ctx {
     int       fault_pc;        /* bytecode PC where fault was recorded; 0 until fault */
     int       fault_detail;    /* fault-specific detail: opcode, jump target, hook id, or 0 */
     int       cur_pc;          /* current bytecode PC, retained so host faults can report it */
+
+    /* Error.*: real try/except -- see docs/EXCEPTION_ENGINE.md. A handler
+     * *stack* (not a single slot), mirroring picoscript_vm.py's
+     * _error_handler_stack / vm/picovm.js's _errState.handlerStack exactly,
+     * so nested try/except is correct. pending_jump/pending_jump_set let a
+     * host hook (Error.Raise/Resume) or a caught fault (pv_set_fault)
+     * redirect the interpreter's *local* `pc` variable in pv_vm_run's main
+     * loop -- unlike Python/JS where the host can mutate `vm.pc` directly,
+     * the C loop's pc is a local, so this is the channel back to it. */
+    int32_t   err_stack[PV_MAX_ERR_HANDLERS];
+    int       err_sp;
+    int32_t   err_code;
+    int32_t   err_detail;
+    int32_t   err_resume_pc;
+    int32_t   pending_jump;
+    uint8_t   pending_jump_set;
+
     uint32_t  caps;            /* granted binding capabilities (PV_CAP_*); default PV_CAP_ALL */
     int       no_alloc;        /* when set, arena allocation in a hook faults (INV-5 hot path) */
     int       host_status;     /* INV-18: typed status of the last fallible hook (0 = OK) */
@@ -265,6 +288,20 @@ struct pv_ctx {
     int       fifo_depth[PV_MAX_FIFOS];
     uint8_t   fifo_used[PV_MAX_FIFOS];
     int       fifo_count;
+
+    /* Log.*: deterministic, script-visible tracing/audit log (see
+     * docs/LOGGING.md) -- an append-only table of {level, span}, keyed by a
+     * monotonic sequence id returned by Log.Write. Not timestamped
+     * (wall-clock time is host-injected/non-deterministic by this VM's own
+     * established convention). Fixed-size (PV_MAX_LOGS), consistent with
+     * this embedded runtime's other handle tables (Map/Descriptor/Lease/
+     * Fifo above) -- a bounded, deterministic difference from Python/JS's
+     * unbounded dict-backed version, not a behavioral divergence at any
+     * realistic scale. */
+    int32_t   log_level[PV_MAX_LOGS];
+    int32_t   log_span[PV_MAX_LOGS];
+    uint8_t   log_used[PV_MAX_LOGS];
+    int       log_count;
 
     pv_host_fn host;
 };

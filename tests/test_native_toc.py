@@ -254,8 +254,34 @@ def main():
         check(tpl_prog(b"{{#each xs}}[{{.}}]{{/each}}", b"xs.0=1\nxs.1=2\nxs.2=3"),
               b"[1][2][3]", "tpl_each_scalar")
 
+        # Namespace-equalization pass (see docs/FEATURE_MATRIX.md): Descriptor.*/
+        # Lease.*/Fifo.*/Pack.Use/Thread.YieldCounted/Log.*/Kernel.WaitIRQ+FireSWIRQ+
+        # Profile* are real, pure, deterministic primitives added to all 3 runtimes
+        # (Python VM, JS VM, C VM) -- no host state, so they get full 5-path parity
+        # like everything else in this file (Error.*/TryExcept is NOT included here:
+        # native transpile explicitly rejects it, see test_cfront_exception_eventing.py
+        # and tests/test_c_vm_error_parity.py for that 2-path-only coverage instead).
+        check("int p = Memory.ArenaAlloc(8); int h = Descriptor.Make(p, 4); "
+              "Descriptor.SetFlags(h, 9); int f = Descriptor.GetFlags(h); Io.WriteByte(f);",
+              bytes([9]), "descriptor_flags")
+        check('int s = "hi"; int h = Lease.Acquire(s, 3); int v = Lease.Validate(h); Io.WriteByte(v);',
+              bytes([1]), "lease_validate")
+        check('int ch = Fifo.Open(0); Fifo.Send(ch, "Z"); int r = Fifo.Recv(ch); Io.Write(r);',
+              b"Z", "fifo_roundtrip")
+        check("int r = Pack.Use(4); Io.WriteByte(r);", bytes([4]), "pack_use")
+        check("int a = Thread.YieldCounted(); int b = Thread.YieldCounted(); Io.WriteByte(b);",
+              bytes([2]), "thread_yield")
+        check('int s = "m"; int id = Log.Write(2, s); int cnt = Log.Count(); Io.WriteByte(cnt);',
+              bytes([1]), "log_write_count")
+        check("Kernel.FireSWIRQ(1); int r = 1; Io.WriteByte(r);", bytes([1]), "kernel_fireswirq")
+        check('int s = "p"; int id = Kernel.ProfileStart(s); Kernel.ProfileEnd(id); '
+              "int cnt = Log.Count(); Io.WriteByte(cnt);", bytes([2]), "kernel_profile")
+        check('int s = "a,b"; int d = ","; int parts = String.Split(s, d); int sep = "-"; '
+              "int r = String.Join(sep, parts); Io.Write(r);", b"a-b", "string_split_join")
+
         print("PASS first-class native: Python VM == C interpreter == toC-compiled == toJS-compiled, "
-              "byte-exact -- Span/String/Number/Maths/Compress/Html/Http/Crypto(Sha256+HmacSha256)/Template "
+              "byte-exact -- Span/String/Number/Maths/Compress/Html/Http/Crypto(Sha256+HmacSha256)/Template/"
+              "Descriptor/Lease/Fifo/Pack/Thread/Log/Kernel "
               "(compiled C and JS both skip the bytecode VM)")
     finally:
         shutil.rmtree(BUILD, ignore_errors=True)

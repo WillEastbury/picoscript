@@ -6,12 +6,14 @@ and documented in `docs/DIALECT_PARITY.md` during the dialect-parity audit.
 
 ## Scope: which execution paths actually support this
 
-**Fully working:** the two interpretive bytecode VMs -- **Python**
-(`picoscript_vm.py`) and **JavaScript** (`vm/picovm.js`) -- for **every**
-frontend: BASIC, Python-style, English, COBOL, Report, Functional (all six
-sharing `picoscript_basic.py`'s `Lowerer`), and C-style
-(`picoscript_cfront.py`, an independent AST + `Lowerer`, but reusing the
-same `picoscript_il.ILBuilder`/`label_addr` and `Error.*` host ops, so the
+**Fully working:** all **three** interpretive bytecode VMs -- **Python**
+(`picoscript_vm.py`), **JavaScript** (`vm/picovm.js`), and **C**
+(`vm/picovm.c`, fixed after this doc originally shipped only claiming the
+first two — see "The C VM interpreter" below) -- for **every** frontend:
+BASIC, Python-style, English, COBOL, Report, Functional (all six sharing
+`picoscript_basic.py`'s `Lowerer`), and C-style (`picoscript_cfront.py`, an
+independent AST + `Lowerer`, but reusing the same
+`picoscript_il.ILBuilder`/`label_addr` and `Error.*` host ops, so the
 underlying mechanism is identical). The JS compiler (`vm/picoc.js`) mirrors
 all of this too -- `BLowerer.lowerTry`/`lowerOnBlock` (shared by the six
 BASIC-family JS parsers) and each frontend's own JS parser grammar were
@@ -21,22 +23,49 @@ ported alongside the Python side, verified byte-identical
 command and the browser Playground's compile-and-run/step debugger for
 every dialect.
 
+### The C VM interpreter (`vm/picovm.c`) — fixed
+
+Direct inspection during the namespace-equalization pass found that
+`picovm.c` had **no `Error.*` host-hook dispatch at all** (`PV_HOOK_ERROR_*`
+is registered in `HOST_HOOK_CODES` but was never referenced there) — a real
+gap, and a real inaccuracy in an earlier revision of this doc/
+`docs/FEATURE_MATRIX.md` that had (wrongly, unverified) claimed C VM parity.
+
+The investigation turned up a fact that changed the whole scope of the fix:
+**`laddr` needs no new C opcode at all.** It's a purely compile-time IL/
+bytecode-assembly construct (`picoscript_il.py`'s
+`_emit_const(..., force_wide=True)`) that lowers to plain `SUB`/`ADD`/`MUL`
+words — the same "wide constant load" form used for any large integer
+literal — which the C interpreter already executes correctly, opcode-for-
+opcode identical to any other constant load. There is no `laddr` *runtime*
+instruction to add; by the time bytecode reaches any interpreter, `laddr`
+has already been resolved into ordinary arithmetic.
+
+The two real gaps were:
+1. The `Error.*` host-hook dispatch itself (straightforward — the same kind
+   of addition as `Descriptor.*`/`Lease.*`/`Fifo.*`/`Log.*` elsewhere in
+   this pass).
+2. A way for a host hook (`Error.Raise`/`Error.Resume`) or a caught genuine
+   VM fault (`pv_set_fault`) to redirect execution. Python/JS can mutate
+   `vm.pc`/`this.pc` directly from a host hook because it's an object
+   attribute; `pv_vm_run`'s `pc` is a **local C variable**, so a new
+   `ctx->pending_jump`/`pending_jump_set` field was added as the channel
+   back into the main loop, consumed once per instruction.
+
+`pv_set_fault` (called by every genuine VM fault: bad jump, bad opcode, step
+budget, call overflow) now checks the handler stack (`ctx->err_stack`) first
+and redirects there instead of halting — exactly mirroring Python's
+`except PicoFault` handling wrapped around `_step()` in `PicoVM.run()`.
+
+Verified byte-identical to Python for: try/catch/finally/raise, nested
+try/catch, uncaught raise (propagates as a real fault with the same code),
+and — the architecturally riskiest case, since `pv_set_fault`/the main loop
+change affects every program, not just ones using exceptions — a **genuine
+VM fault** (bad computed jump) caught by an active handler, not just a
+script-level `Raise`. See `tests/test_c_vm_error_parity.py`.
+
 **Not supported, and explicitly, loudly rejected rather than silently
 mis-compiled:**
-- **The interpretive C VM itself** (`vm/picovm.c`, the bytecode interpreter,
-  not just the "native C transpile" target described below). Verified
-  directly this pass (`docs/FEATURE_MATRIX.md`): the C decoder has no
-  `laddr` opcode at all, and `picovm.c` has no `Error.*` host-hook dispatch
-  branch (`PV_HOOK_ERROR_*` is registered in `HOST_HOOK_CODES` but never
-  referenced there). A program using `TryExcept`/`Raise` compiled to
-  bytecode and run on the C interpreter (`vm/picovm_run.c`) will therefore
-  hit an unrecognized/no-op instruction rather than working correctly --
-  this is a real, currently-open gap, not yet guarded with a clear compile-
-  time error the way the two transpile backends below are. A good next
-  step: either add `laddr` + the handler-stack host ops to `picovm.c` (real
-  fix), or make bytecode-safe-lowering reject `laddr` for the C interpreter
-  target the same way it already does for the two transpile backends
-  (clear failure instead of silent wrong behavior).
 - **Native C transpile** (`lower_to_c` → `vm/picovm.c` host ABI). Emitted C
   uses plain `goto` labels, not PC-addressable bytecode -- there is no
   runtime "program counter" value to load a label's address into, so
@@ -44,6 +73,10 @@ mis-compiled:**
   a fundamentally different mechanism (e.g. `setjmp`/`longjmp`). Compiling a
   program containing `TryExcept`/`Raise` (any frontend, including C-style)
   with `--as c` (or `native`) raises a clear `ValueError` at compile time.
+  Note this is a genuinely different problem from the interpreter gap above:
+  emitted native C has no bytecode PC to jump to at all (it's straight-line
+  `goto`-based C), so the "no new opcode needed" trick that fixed the
+  interpreter doesn't apply here.
 - **Native JS transpile** (`lower_to_js`, the "compile straight to a JS
   function" backend used for embedding compiled output, distinct from the
   *interpretive* `vm/picovm.js` above). Its block-switch dispatch model
@@ -59,8 +92,9 @@ mis-compiled:**
   the Python interpretive VM; it just can't be compiled via the JS
   compiler yet.
 
-If you need exception handling in native/bare-metal deployment, this is the
-gap to close next; it needs its own design (most likely a from-scratch
+If you need exception handling in native/bare-metal *transpiled* deployment
+(as opposed to running bytecode on the C interpreter, which now works), this
+is the gap to close next; it needs its own design (most likely a from-scratch
 `setjmp`/`longjmp`-based C mechanism, and a try/catch-wrapped JS dispatcher),
 not an extension of the bytecode-VM approach here.
 
