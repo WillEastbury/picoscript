@@ -2904,6 +2904,32 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         ctx->regs[rd] = pv_arena_finish(ctx, st.k);
         return;
     }
+    /* ReadHeader/ReadBody/GenerateHeaders/GenerateResponse/Request/
+     * RespStatus/RespHeaders/RespBody all read/write a live host connection
+     * -- host-injected by design. Explicit default (never leave rd
+     * untouched), matching picoscript_vm.py's _httplib exactly. */
+    if (hook == PV_HOOK_HTTP_READHEADER || hook == PV_HOOK_HTTP_READBODY ||
+        hook == PV_HOOK_HTTP_GENERATEHEADERS || hook == PV_HOOK_HTTP_GENERATERESPONSE ||
+        hook == PV_HOOK_HTTP_RESPHEADERS || hook == PV_HOOK_HTTP_RESPBODY) {
+        ctx->regs[rd] = pv_arena_finish(ctx, 0);
+        return;
+    }
+    if (hook == PV_HOOK_HTTP_REQUEST || hook == PV_HOOK_HTTP_RESPSTATUS) {
+        ctx->regs[rd] = 0;
+        return;
+    }
+    /* Html.* DOM tree ops are not built -- explicit default, matching
+     * picoscript_vm.py's _htmllib exactly. */
+    if (hook == PV_HOOK_HTML_GETATTRIBUTE || hook == PV_HOOK_HTML_SERIALIZE) {
+        ctx->regs[rd] = pv_arena_finish(ctx, 0);
+        return;
+    }
+    if (hook == PV_HOOK_HTML_CREATENODE || hook == PV_HOOK_HTML_ADDCHILDNODE ||
+        hook == PV_HOOK_HTML_REMOVECHILDNODE || hook == PV_HOOK_HTML_SETATTRIBUTE ||
+        hook == PV_HOOK_HTML_PARSETREE || hook == PV_HOOK_HTML_QUERYSELECTOR) {
+        ctx->regs[rd] = 0;
+        return;
+    }
 
     /* ---- Maths.* (pure integer: Power = modular pow, Sqrt = floor sqrt;
        Sin/Cos/Tan = Q16.16 CORDIC) - */

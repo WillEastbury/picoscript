@@ -283,3 +283,35 @@ int d = X509.FetchCertificate(0, 0);
 Io.Write(a); Io.Write(b); Io.Write(c); Io.Write(d);
 """)
     assert out_bytes(vm) == b""
+
+
+# -- Partial namespaces: unbuilt sub-features return defined defaults --------
+# (Html.* DOM tree ops, Http.* live-connection ops -- these namespaces are
+# otherwise real: Html.Encode/Decode and Http.ParseQuery/ParseForm/ParseJson/
+# EncodeJson all work. Only the unbuilt/host-injected pieces are stubbed.)
+
+def test_html_dom_ops_return_defined_defaults():
+    vm = run("""
+int a = 0;
+int h = Html.CreateNode(a, a);
+int ok = Html.AddChildNode(h, a);
+int attr = Html.GetAttribute(h, a);
+int html = Html.Serialize(h);
+Io.Write(attr); Io.Write(html);
+print(h); print(ok);
+""")
+    assert vm.output == [b"", b"", (0).to_bytes(4, "big"), (0).to_bytes(4, "big")]
+
+
+def test_http_live_connection_ops_return_defined_defaults():
+    vm = run("""
+int a = 0;
+int hdr = Http.ReadHeader(a, a);
+int body = Http.ReadBody(a, a);
+int req = Http.Request(a, a);
+int status = Http.RespStatus(a, a);
+Io.Write(hdr); Io.Write(body);
+print(req); print(status);
+""")
+    assert vm.output == [b"", b"", (0).to_bytes(4, "big"), (0).to_bytes(4, "big")]
+

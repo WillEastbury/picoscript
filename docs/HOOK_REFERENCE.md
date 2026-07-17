@@ -301,33 +301,37 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | Resp.Abort() | 0x0038 | |
 | Resp.EarlyHints() | 0x0039 | |
 
-### Http.* (8 hooks)
+### Http.* (12 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Http.ReadHeader() | 0x0130 | |
-| Http.ReadBody() | 0x0131 | |
-| Http.GenerateHeaders() | 0x0132 | |
-| Http.GenerateResponse() | 0x0133 | |
-| Http.ParseQuery() | 0x0134 | |
-| Http.ParseForm() | 0x0135 | |
-| Http.ParseJson() | 0x0136 | |
-| Http.EncodeJson() | 0x0137 | |
+| Http.ReadHeader() | 0x0130 | Reads a header from the live host connection -- host-injected by design. Returns an empty span until a host installs a real binding. |
+| Http.ReadBody() | 0x0131 | Reads the live connection's body -- host-injected. Returns an empty span. |
+| Http.GenerateHeaders() | 0x0132 | Generates response headers for the live connection -- host-injected. Returns an empty span. |
+| Http.GenerateResponse() | 0x0133 | Generates a full response for the live connection -- host-injected. Returns an empty span. |
+| Http.ParseQuery() | 0x0134 | Pure: URL-decodes a query string into the Template `key=value` model. Implemented on all 3 runtimes. |
+| Http.ParseForm() | 0x0135 | Pure: same as ParseQuery for form-encoded bodies. Implemented on all 3 runtimes. |
+| Http.ParseJson() | 0x0136 | Pure: JSON -> dotted-path Template model (feeds `{{#each}}`). Implemented on all 3 runtimes. |
+| Http.EncodeJson() | 0x0137 | Pure: Template model -> JSON object with escaping. Implemented on all 3 runtimes. |
+| Http.Request() | 0x0138 | Makes an outbound HTTP request -- host-injected (live network). Returns 0 until a host installs a real binding. (Previously an undocumented gap -- silently fell through; now an explicit default.) |
+| Http.RespStatus() | 0x0139 | Sets/reads a live response's status -- host-injected. Returns 0. (Previously undocumented -- now an explicit default.) |
+| Http.RespHeaders() | 0x013A | Live response headers -- host-injected. Returns an empty span. (Previously undocumented -- now an explicit default.) |
+| Http.RespBody() | 0x013B | Live response body -- host-injected. Returns an empty span. (Previously undocumented -- now an explicit default.) |
 
 ### Html.* (10 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Html.CreateNode() | 0x0140 | |
-| Html.AddChildNode() | 0x0141 | |
-| Html.RemoveChildNode() | 0x0142 | |
-| Html.SetAttribute() | 0x0143 | |
-| Html.GetAttribute() | 0x0144 | |
-| Html.ParseTree() | 0x0145 | |
-| Html.Encode() | 0x0146 | |
-| Html.Decode() | 0x0147 | |
-| Html.Serialize() | 0x0148 | |
-| Html.QuerySelector() | 0x0149 | |
+| Html.CreateNode() | 0x0140 | DOM tree ops are not built (a full mutable tree model is a separate, larger feature). Returns 0 (a defined default, not a silent fallthrough). |
+| Html.AddChildNode() | 0x0141 | Not built. Returns 0. |
+| Html.RemoveChildNode() | 0x0142 | Not built. Returns 0. |
+| Html.SetAttribute() | 0x0143 | Not built. Returns 0. |
+| Html.GetAttribute() | 0x0144 | Not built. Returns an empty span. |
+| Html.ParseTree() | 0x0145 | Not built (needs an HTML parser). Returns 0. |
+| Html.Encode() | 0x0146 | Pure: HTML entity-encodes a span (&amp;/&lt;/&gt;/&quot;/&#39;). Implemented on all 3 runtimes. |
+| Html.Decode() | 0x0147 | Pure: the inverse of Encode. Implemented on all 3 runtimes. |
+| Html.Serialize() | 0x0148 | Not built. Returns an empty span. |
+| Html.QuerySelector() | 0x0149 | Not built. Returns 0. |
 
 ### Context.* (15 hooks)
 

@@ -2002,6 +2002,13 @@
       s = s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
       this.regs[rd] = this._newSpanBytes(_strBytes(s)); return true;
     }
+    // DOM tree ops are not built -- explicit 0/empty-span default (never
+    // leave rd untouched), matching picoscript_vm.py's _htmllib exactly.
+    if (method === "GetAttribute" || method === "Serialize") { this.regs[rd] = this._newSpanBytes([]); return true; }
+    if (method === "CreateNode" || method === "AddChildNode" || method === "RemoveChildNode" ||
+        method === "SetAttribute" || method === "ParseTree" || method === "QuerySelector") {
+      this.regs[rd] = 0; return true;
+    }
     return false;
   };
 
@@ -2149,6 +2156,15 @@
     if (method === "ParseJson") {
       this.regs[rd] = this._newSpanBytes(this._parseJsonToModel(src)); return true;
     }
+    // ReadHeader/ReadBody/GenerateHeaders/GenerateResponse/Request/
+    // RespStatus/RespHeaders/RespBody all read/write a live host connection
+    // -- host-injected by design. Explicit default, matching
+    // picoscript_vm.py's _httplib exactly.
+    if (method === "ReadHeader" || method === "ReadBody" || method === "GenerateHeaders" ||
+        method === "GenerateResponse" || method === "RespHeaders" || method === "RespBody") {
+      this.regs[rd] = this._newSpanBytes([]); return true;
+    }
+    if (method === "Request" || method === "RespStatus") { this.regs[rd] = 0; return true; }
     return false;
   };
 

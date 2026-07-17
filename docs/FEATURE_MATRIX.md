@@ -126,8 +126,8 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Event | 10 | Y | Y | Y | FIFO queue + `OnBlock` dispatch |
 | **Fifo** | 4 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: independent named byte-channel FIFOs (distinct from `Queue.*`'s fixed 8-channel int FIFO). No host state — real and deterministic. |
 | Gpio | 7 | Y | Y | Y | Reference emulator; PIOS injects real driver |
-| Html | 10 | Partial | Partial | Partial | `Encode`/`Decode` implemented; DOM tree ops (`CreateNode`/`QuerySelector`/…) not built |
-| Http | 12 | Partial | Partial | Partial | `ParseQuery/ParseForm/ParseJson/EncodeJson` implemented (pure); `ReadHeader/ReadBody/GenerateHeaders/GenerateResponse` host-injected (live connection) |
+| Html | 10 | Partial | Partial | Partial | `Encode`/`Decode` implemented; DOM tree ops (`CreateNode`/`AddChildNode`/`RemoveChildNode`/`SetAttribute`/`GetAttribute`/`ParseTree`/`Serialize`/`QuerySelector`) not built, but now return an explicit 0/empty-span default on all 3 runtimes (fixed this pass — were silently falling through, leaving `rd` untouched) |
+| Http | 12 | Partial | Partial | Partial | `ParseQuery/ParseForm/ParseJson/EncodeJson` implemented (pure); `ReadHeader/ReadBody/GenerateHeaders/GenerateResponse/Request/RespStatus/RespHeaders/RespBody` host-injected (live connection), now return an explicit default on all 3 runtimes (fixed this pass — same silent-fallthrough bug as `Data.*`; note `Request`/`RespStatus`/`RespHeaders`/`RespBody` were previously undocumented gaps, found during this fix) |
 | Io | 2 | Y | Y | Y | |
 | Json | 11 | Y | Y | Y | |
 | Kernel | 6 | Y | Y | **Y (fixed)** | `WaitIRQ`/`WaitSWIRQ`/`FireSWIRQ` reuse the same halt/ack semantics as the raw `OP_WAIT`/`OP_RAISE` opcodes. `ProfileStart`/`ProfileEnd`/`TracePoint` reuse the `Log.*` table — **now on all 3 runtimes** (C VM's `Log.*` gap closed this pass). |
@@ -279,6 +279,32 @@ on the JS VM vs. the Python VM for try/catch/finally/raise, nested
 try/catch, and `on Ns.Method{}` event dispatch. See
 `tests/test_cstyle_js_exception_eventing.py`. C-style's control-flow row in
 section 1 is now **Y** across the board except v1 (by design).
+
+## Follow-up: `Html.*`/`Http.*` silent-fallthrough fix (same class as `Data.*`)
+
+Reviewing the remaining "partial-by-design" namespaces turned up two more
+instances of the exact same bug class fixed for `Data.*` earlier: `Html.*`'s
+unbuilt DOM tree ops (`CreateNode`/`AddChildNode`/`RemoveChildNode`/
+`SetAttribute`/`GetAttribute`/`ParseTree`/`Serialize`/`QuerySelector`) and
+`Http.*`'s live-connection ops (`ReadHeader`/`ReadBody`/`GenerateHeaders`/
+`GenerateResponse`/`Request`/`RespStatus`/`RespHeaders`/`RespBody`) were
+silently falling through to the generic "unknown hook" path on all three
+runtimes — never a crash, but `rd` was left untouched (stale) rather than a
+defined value. Fixed identically to the `Data.*`/reserved-namespace pattern:
+an explicit 0 (numeric/boolean-shaped) or empty span (text-shaped) default,
+verified byte-identical across Python VM / JS VM / C VM. `Request`/
+`RespStatus`/`RespHeaders`/`RespBody` were previously undocumented gaps
+(this file's own earlier revision only mentioned `ReadHeader`/`ReadBody`/
+`GenerateHeaders`/`GenerateResponse`) — found and closed together. See
+`tests/test_namespace_equalization.py`'s
+`test_html_dom_ops_return_defined_defaults`/
+`test_http_live_connection_ops_return_defined_defaults`.
+
+This does **not** build the DOM tree model or a live HTTP connection — those
+remain genuinely separate, larger features (a full parser + mutable tree for
+Html; an actual host-injected socket for Http) — it only closes the "silent
+fallthrough leaves a stale register" bug, which is the specific thing the
+namespace-equalization pass set out to fix everywhere.
 
 ### `String.*` — the earlier `_stringlib` regression (separate from #3 above)
 

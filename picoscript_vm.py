@@ -2003,6 +2003,18 @@ class HostApi:
             out = (src.replace(b"&lt;", b"<").replace(b"&gt;", b">").replace(b"&quot;", b'"')
                       .replace(b"&#39;", b"'").replace(b"&amp;", b"&"))
             vm.regs[rd] = self._new_span_bytes(vm, out); return True
+        # DOM tree ops (CreateNode/AddChildNode/RemoveChildNode/SetAttribute/
+        # GetAttribute/ParseTree/Serialize/QuerySelector) are not built -- a
+        # full mutable tree model + HTML parser is a separate, much larger
+        # feature (see docs/NAMESPACE_STATUS.md). Until then, return a
+        # defined 0/empty-span default (never leave `rd` untouched) so every
+        # method is at least safely callable -- same convention as the
+        # reserved/host-injected namespaces (see docs/FEATURE_MATRIX.md).
+        if method in ("GetAttribute", "Serialize"):
+            vm.regs[rd] = self._new_span_bytes(vm, b""); return True
+        if method in ("CreateNode", "AddChildNode", "RemoveChildNode", "SetAttribute",
+                      "ParseTree", "QuerySelector"):
+            vm.regs[rd] = 0; return True
         return False
 
     @staticmethod
@@ -2158,6 +2170,16 @@ class HostApi:
             vm.regs[rd] = self._new_span_bytes(vm, b"{" + b",".join(items) + b"}"); return True
         if method == "ParseJson":
             vm.regs[rd] = self._new_span_bytes(vm, self._parsejson_to_model(src)); return True
+        # ReadHeader/ReadBody/GenerateHeaders/GenerateResponse/Request/
+        # RespStatus/RespHeaders/RespBody all read/write a live host
+        # connection -- host-injected by design (see docs/NAMESPACE_STATUS.md).
+        # Explicit empty-span default (never leave `rd` untouched), same
+        # convention as the reserved namespaces.
+        if method in ("ReadHeader", "ReadBody", "GenerateHeaders", "GenerateResponse",
+                      "RespHeaders", "RespBody"):
+            vm.regs[rd] = self._new_span_bytes(vm, b""); return True
+        if method in ("Request", "RespStatus"):
+            vm.regs[rd] = 0; return True
         return False
 
     def _templatelib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
