@@ -259,6 +259,27 @@ fixed:
   via git-stash bisection to fail identically without any of this session's
   changes.
 
+## Follow-up: C-style's JS mirror (`CParser`/`CLowerer`) closed
+
+Row 1's control-flow table above listed C-style's `try`/`catch`/`finally`/
+`raise`/`on Ns.Method{}` as working only via the Python `cfront` compiler
+(`picoscript_cfront.py`), not its JS mirror (`vm/picoc.js`'s `CParser`/
+`CLowerer`) — a third, independent implementation of the exception/eventing
+mechanism, deliberately deferred earlier this session to avoid rushing it.
+**Now closed**: `C_KW` gained the five keywords (previously `try` etc. would
+tokenize as plain identifiers and fail with a confusing parse error, not a
+clear "unsupported" one), `CParser` gained `parseTry`/`parseOnBlock`, and
+`CLowerer` gained `lowerTry`/`lowerOnBlock` — mirroring
+`picoscript_cfront.py`'s grammar/lowering exactly, just re-expressed against
+`CLowerer`'s own conventions (`this.loop`/`this.varOf`) rather than sharing
+code with `BLowerer` (the two lowerer families remain deliberately
+independent, matching the existing architecture). Verified byte-identical
+bytecode to the Python `cfront` compiler and byte-identical runtime output
+on the JS VM vs. the Python VM for try/catch/finally/raise, nested
+try/catch, and `on Ns.Method{}` event dispatch. See
+`tests/test_cstyle_js_exception_eventing.py`. C-style's control-flow row in
+section 1 is now **Y** across the board except v1 (by design).
+
 ### `String.*` — the earlier `_stringlib` regression (separate from #3 above)
 
 `String.*` was **completely broken in the Python VM** earlier this session

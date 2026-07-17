@@ -531,7 +531,7 @@
   // ========================================================================
   // C-SYNTAX FRONTEND (port of picoscript_cfront.py)
   // ========================================================================
-  var C_KW = { int:1, var:1, void:1, if:1, else:1, while:1, for:1, return:1, break:1, continue:1, switch:1, case:1, default:1, do:1, goto:1, dispatch:1, const:1, enum:1 };
+  var C_KW = { int:1, var:1, void:1, if:1, else:1, while:1, for:1, return:1, break:1, continue:1, switch:1, case:1, default:1, do:1, goto:1, dispatch:1, const:1, enum:1, try:1, catch:1, finally:1, raise:1, on:1 };
   var C_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "&&":1, "||":1, "++":1, "--":1, "+=":1, "-=":1, "*=":1, "/=":1, "%=":1 };
   var C_ONE = "+-*/%()<>=;,{}.!?:";
   var C_PREC = { "||":1, "&&":2, "==":3, "!=":3, "<":4, ">":4, "<=":4, ">=":4, "+":5, "-":5, "*":6, "/":6, "%":6 };
@@ -620,6 +620,9 @@
         if (t.value === "switch") return this.parseSwitch();
         if (t.value === "dispatch") return this.parseDispatch();
         if (t.value === "do") return this.parseDo();
+        if (t.value === "try") return this.parseTry();
+        if (t.value === "raise") { this.next(); if (this.accept(";")) return { t: "Raise", value: null }; var rv = this.parseExpr(); this.expect(";"); return { t: "Raise", value: rv }; }
+        if (t.value === "on") return this.parseOnBlock();
         if (t.value === "goto") { this.next(); var gl = this.next().value; this.expect(";"); return { t: "Goto", label: gl }; }
         if (t.value === "return") { this.next(); if (this.accept(";")) return { t: "Return", value: null }; var v = this.parseExpr(); this.expect(";"); return { t: "Return", value: v }; }
         if (t.value === "break") { this.next(); this.expect(";"); return { t: "Break" }; }
@@ -734,6 +737,27 @@
       if (!(this.peek().kind === "kw" && this.peek().value === "while")) throw new Error("C: expected 'while' after do block");
       this.next(); this.expect("("); var cond = this.parseExpr(); this.expect(")"); this.expect(";");
       return { t: "DoWhile", cond: cond, until: false, body: body };
+    },
+    // try { ... } catch { ... } [finally { ... }] (C-brace style, mirrors
+    // picoscript_cfront.py's parse_try at the AST level).
+    parseTry: function () {
+      this.next(); // try
+      var tryBody = this.parseBlock();
+      if (!(this.peek().kind === "kw" && this.peek().value === "catch")) throw new Error("C: expected 'catch' after try block");
+      this.next(); // catch
+      var catchBody = this.parseBlock();
+      var finallyBody = null;
+      if (this.peek().kind === "kw" && this.peek().value === "finally") { this.next(); finallyBody = this.parseBlock(); }
+      return { t: "TryExcept", try_body: tryBody, except_body: catchBody, finally_body: finallyBody };
+    },
+    // on Ns.Method { ... } (mirrors picoscript_cfront.py's parse_on_block).
+    parseOnBlock: function () {
+      this.next(); // on
+      var ns = this.next().value;
+      this.expect(".");
+      var method = this.next().value;
+      var body = this.parseBlock();
+      return { t: "OnBlock", event_ns: ns, event_method: method, body: body };
     },
     parseExpr: function (minp) { return this.parseTernary(); },
     parseTernary: function () {
@@ -934,6 +958,17 @@
       else if (s.t === "Break") { if (!this.loop.length) throw new Error("break outside loop"); this.b.jmp(this.loop[this.loop.length - 1][1]); }
       else if (s.t === "Continue") { if (!this.loop.length) throw new Error("continue outside loop"); this.b.jmp(this.loop[this.loop.length - 1][0]); }
       else if (s.t === "ServerMain") s.body.forEach(function (st) { self.stmt(st); });
+      else if (s.t === "TryExcept") this.lowerTry(s);
+      else if (s.t === "Raise") {
+        // See docs/EXCEPTION_ENGINE.md: Error.Raise(code) jumps to the
+        // nearest Error.SetHandler'd handler (an enclosing lowerTry), or
+        // propagates as a real uncaught PicoFault if none is active. A bare
+        // raise (no value) raises code 0.
+        var rv = (s.value != null) ? this.eval(s.value) : (function () { var z = self.b.vreg(); self.b.const_(z, 0); return z; })();
+        var rok = this.b.vreg();
+        this.b.host("Error", "Raise", [rv], rok);
+      }
+      else if (s.t === "OnBlock") this.lowerOnBlock(s);
       else throw new Error("C: cannot lower " + s.t);
     },
     assignTo: function (dst, e) {
@@ -1017,6 +1052,69 @@
       this.b.label(cont);
       if (s.until) { this.branchFalse(s.cond, top); }
       else { this.branchFalse(s.cond, end); this.b.jmp(top); }
+      this.b.label(end);
+    },
+    // try { } catch { } [finally { }] -- a real exception mechanism using a
+    // handler STACK; see docs/EXCEPTION_ENGINE.md and picoscript_cfront.py's
+    // lower_try, which this mirrors exactly (cfront has its own, independent
+    // AST + Lowerer, but shares the same Error.SetHandler/PopHandler/Raise
+    // host ops and laddr IL instruction, so the underlying mechanism is
+    // identical, just re-expressed against this JS mirror's own CLowerer).
+    lowerTry: function (s) {
+      var self = this;
+      var handlerLabel = this.b.newLabel("except");
+      var endLabel = this.b.newLabel("endtry");
+
+      var addr = this.b.vreg();
+      this.b.labelAddr(addr, handlerLabel);
+      var setOk = this.b.vreg();
+      this.b.host("Error", "SetHandler", [addr], setOk);
+
+      (s.try_body || []).forEach(function (st) { self.stmt(st); });
+
+      var pop1 = this.b.vreg();
+      this.b.host("Error", "PopHandler", [], pop1);
+      if (s.finally_body) (s.finally_body || []).forEach(function (st) { self.stmt(st); });
+      this.b.jmp(endLabel);
+
+      this.b.label(handlerLabel);
+      var pop2 = this.b.vreg();
+      this.b.host("Error", "PopHandler", [], pop2);
+      (s.except_body || []).forEach(function (st) { self.stmt(st); });
+      var clr = this.b.vreg();
+      this.b.host("Error", "Clear", [], clr);
+      if (s.finally_body) (s.finally_body || []).forEach(function (st) { self.stmt(st); });
+      this.b.label(endLabel);
+    },
+    // on Ns.Method { body } -- an inline drain-and-dispatch loop over pending
+    // Event.* queue entries; see docs/EVENTING.md and picoscript_cfront.py's
+    // lower_on_block, which this mirrors exactly (same eventTypeHash, so the
+    // SAME compile-time hash matches an ON block declared in ANY frontend).
+    lowerOnBlock: function (s) {
+      var self = this;
+      var typeCode = eventTypeHash(s.event_ns, s.event_method);
+      var idx = this.b.vreg("__on_i__");
+      var cnt = this.b.vreg("__on_cnt__");
+      this.b.host("Event", "Count", [], cnt);
+      this.b.const_(idx, 0);
+      var top = this.b.newLabel("on"), cont = this.b.newLabel("oncont"), end = this.b.newLabel("endon");
+      this.b.label(top);
+      this.b.cmpbr("GE", idx, cnt, end);
+      var evid = this.varOf("__event__");
+      this.b.host("Event", "Next", [], evid);
+      var skip = this.b.newLabel("onskip");
+      var etype = this.b.vreg("__on_type__");
+      this.b.host("Event", "Type", [evid], etype);
+      var typeconst = this.b.vreg("__on_typeconst__");
+      this.b.const_(typeconst, typeCode);
+      this.b.cmpbr("NE", etype, typeconst, skip);
+      this.loop.push([cont, end]);
+      (s.body || []).forEach(function (st) { self.stmt(st); });
+      this.loop.pop();
+      this.b.label(skip);
+      this.b.label(cont);
+      this.b.inc(idx);
+      this.b.jmp(top);
       this.b.label(end);
     },
     branchFalse: function (cond, falseL) {

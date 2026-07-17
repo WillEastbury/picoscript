@@ -84,19 +84,34 @@ mis-compiled:**
   try/catch wrapped around the dispatcher to actually catch a JS-level fault
   and redirect it -- that's a separate, not-yet-built piece. Also raises a
   clear `ValueError`.
-- **C-style's JS mirror** (`CParser`/`CLowerer` in `vm/picoc.js`) does not
-  have `try`/`catch`/`finally`/`raise`/`on` support yet -- porting it would
-  be a THIRD independent implementation of the same mechanism (the BASIC
-  family's `BLowerer` port was the second), deliberately deferred rather
-  than rushed. C-style source using these constructs works correctly on
-  the Python interpretive VM; it just can't be compiled via the JS
-  compiler yet.
 
 If you need exception handling in native/bare-metal *transpiled* deployment
 (as opposed to running bytecode on the C interpreter, which now works), this
 is the gap to close next; it needs its own design (most likely a from-scratch
 `setjmp`/`longjmp`-based C mechanism, and a try/catch-wrapped JS dispatcher),
 not an extension of the bytecode-VM approach here.
+
+## Update: C-style's JS mirror (`CParser`/`CLowerer`) — fixed
+
+The gap above used to also list "C-style's JS mirror (`CParser`/`CLowerer` in
+`vm/picoc.js`) does not have `try`/`catch`/`finally`/`raise`/`on` support" as
+a third, deliberately-deferred implementation. This is now closed: `C_KW`
+gained `try`/`catch`/`finally`/`raise`/`on`, `CParser` gained
+`parseTry`/`parseOnBlock` (mirroring `picoscript_cfront.py`'s `parse_try`/
+`parse_on_block` grammar exactly), and `CLowerer` gained `lowerTry`/
+`lowerOnBlock` (mirroring `picoscript_cfront.py`'s `lower_try`/
+`lower_on_block` — same handler-stack mechanism, same `labelAddr`/`laddr`,
+same `Error.*`/`Event.*` host ops, just re-expressed against `CLowerer`'s own
+`this.loop`/`this.varOf`/`this.b` conventions instead of `BLowerer`'s). This
+is now a **third**, independently-verified implementation of the same
+mechanism (BASIC-family's `BLowerer` port was the second), not sharing code
+with either — deliberately re-derived rather than refactored into a shared
+helper, to avoid entangling two already-independent lowerer families under
+time pressure. Verified byte-identical bytecode to the Python `cfront`
+compiler and byte-identical runtime output on the JS VM vs the Python VM, for
+try/catch/finally/raise, nested try/catch, and `on Ns.Method{}` event
+dispatch (both matching and non-matching events). See
+`tests/test_cstyle_js_exception_eventing.py`.
 
 ## The mechanism
 
