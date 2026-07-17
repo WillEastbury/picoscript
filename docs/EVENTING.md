@@ -103,3 +103,20 @@ real BASIC `EVENT POST` source, reading the target back via
 was posted, and (via direct AST construction, to isolate the lowering from
 BASIC's `EVENT`-keyword parsing quirks) multiple matching events in one
 drain pass being dispatched correctly.
+
+## Cross-frontend and cross-VM status (as of the full-language-equivalence pass)
+
+`OnBlock` is now available in all six BASIC-family frontends
+(BASIC/Python/English/COBOL/Report/Functional) and in C-style
+(`picoscript_cfront.py`, its own independent `on Ns.Method { }` grammar +
+`lower_on_block`, reusing the same `event_type_hash` import so the hash
+matches across every frontend regardless of which one declared the `ON`
+block or posted the matching event). The JS compiler (`vm/picoc.js`) mirrors
+the six BASIC-family frontends (`BLowerer.lowerOnBlock` + matching parser
+grammar in each of `BParser`/`PyParser`/`EnParser`/`CobParser`/`RepParser`/
+`FunParser`), verified byte-identical
+(`tests/test_js_port_exception_eventing.py`,
+`tests/test_js_grammar_all_frontends.py`) -- **except** C-style's JS mirror
+(`CParser`/`CLowerer`), which does not have `on` support yet (see
+`docs/EXCEPTION_ENGINE.md`'s scope section for why this specific gap was
+deliberately deferred rather than rushed).

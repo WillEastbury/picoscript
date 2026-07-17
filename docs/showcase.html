@@ -6223,7 +6223,15 @@
         if (w === "while") { this.next(); var wc = this.parseExpr(); return { t: "While", cond: wc, body: this.parseSuite() }; }
         if (w === "as") { this.next(); this.eatWord("long"); this.eatWord("as"); var ac = this.parseExpr(); return { t: "While", cond: ac, body: this.parseSuite() }; }
         if (w === "choose") return this.parseChoose();
-      if (w === "dispatch") return this.parseDispatch();
+        if (w === "dispatch") return this.parseDispatch();
+        if (w === "try") return this.parseTry();
+        if (w === "raise") {
+          this.next();
+          if (this.at("newline") || this.at("eof") || this.at("op", ".")) { this.endStmt(); return { t: "Raise", value: null }; }
+          var rv = this.parseExpr(); this.endStmt(); return { t: "Raise", value: rv };
+        }
+        if (w === "on") return this.parseOn();
+        if (w === "server") return this.parseServer();
         if (w === "label") { this.next(); var lname = this.expect("word").value; this.endStmt(); return { t: "Label", name: lname }; }
         if (w === "go") { this.next(); this.eatWord("to"); var gname = this.expect("word").value; this.endStmt(); return { t: "Goto", label: gname }; }
         if (w === "repeat") return this.parseRepeat();
@@ -6311,6 +6319,24 @@
       }
       this.expect("dedent");
       return { t: "Dispatch", expr: expr, cases: cases, def: def };
+    },
+    parseTry: function () {
+      this.eatWord("try");
+      var tryBody = this.parseSuite(), exceptBody = [], finallyBody = null;
+      if (this.atWord("except")) { this.eatWord("except"); exceptBody = this.parseSuite(); }
+      if (this.atWord("finally")) { this.eatWord("finally"); finallyBody = this.parseSuite(); }
+      return { t: "TryExcept", try_body: tryBody, except_body: exceptBody, finally_body: finallyBody };
+    },
+    parseOn: function () {
+      this.eatWord("on");
+      var ns = this.expect("word").value;
+      this.expect("op", ".");
+      var method = this.expect("word").value;
+      return { t: "OnBlock", event_ns: ns, event_method: method, body: this.parseSuite() };
+    },
+    parseServer: function () {
+      this.eatWord("server");
+      return { t: "ServerMain", body: this.parseSuite() };
     },
     parseRepeat: function () {
       this.eatWord("repeat");
@@ -6494,7 +6520,7 @@
 
   // ---- COBOL-style frontend -------------------------------------------------
   var COB_KW = {};
-  ["IDENTIFICATION","DIVISION","PROGRAM-ID","DATA","PROCEDURE","WORKING-STORAGE","SECTION","PIC","VALUE","MOVE","TO","COMPUTE","DISPLAY","IF","ELSE","END-IF","PERFORM","VARYING","FROM","BY","UNTIL","END-PERFORM","STOP","RUN","NOT","AND","OR","IS","GREATER","LESS","EQUAL","THAN","EVALUATE","WHEN","OTHER","END-EVALUATE","GO","MOD","EXIT","CYCLE"].forEach(function (k) { COB_KW[k] = 1; });
+  ["IDENTIFICATION","DIVISION","PROGRAM-ID","DATA","PROCEDURE","WORKING-STORAGE","SECTION","PIC","VALUE","MOVE","TO","COMPUTE","DISPLAY","IF","ELSE","END-IF","EVALUATE","WHEN","OTHER","END-EVALUATE","DISPATCH","END-DISPATCH","PERFORM","VARYING","FROM","BY","UNTIL","TIMES","END-PERFORM","CONTINUE","TRY","EXCEPT","FINALLY","END-TRY","RAISE","ON","END-ON","STOP","RUN","NOT","AND","OR","IS","GREATER","LESS","EQUAL","THAN","GO","MOD","EXIT","CYCLE"].forEach(function (k) { COB_KW[k] = 1; });
   var COB_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "<>":1 };
   var COB_ONE = "+-*/()<>=,.:";
   var COB_CMP = { "=":"EQ", "==":"EQ", "!=":"NE", "<>":"NE", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
@@ -6511,6 +6537,7 @@
     expect: function (kind, value) { var t = this.next(); if (t.kind !== kind || (value !== undefined && t.value !== value)) throw new Error("COBOL: expected " + (value !== undefined ? value : kind) + " got " + t.value); return t; },
     expectKw: function (name) { var t = this.next(); if (!(t.kind === "kw" && t.value === name)) throw new Error("COBOL: expected " + name + " got " + t.value); },
     expectName: function () { var t = this.next(); if (t.kind !== "id") throw new Error("COBOL: expected identifier got " + t.value); return t.value; },
+    expectWord: function () { var t = this.next(); if (t.kind !== "id" && t.kind !== "kw") throw new Error("COBOL: expected word got " + t.value); return t.value; },
     skipNl: function () { while (this.at("nl")) this.next(); },
     endHeader: function () { if (this.at("op", ".")) this.next(); if (this.at("nl") || this.at("eof")) { this.skipNl(); return; } throw new Error("COBOL: expected end of line got " + this.peek().value); },
     endSimple: function () { if (this.at("op", ".")) this.next(); if (this.at("nl") || this.at("eof")) { this.skipNl(); return; } throw new Error("COBOL: expected end of statement got " + this.peek().value); },
@@ -6518,6 +6545,7 @@
     atDivision: function (name) { return this.atKw(name) && this.peek(1).kind === "kw" && this.peek(1).value === "DIVISION"; },
     consumeDivision: function (name) { this.expectKw(name); this.expectKw("DIVISION"); if (this.at("op", ".")) this.next(); this.skipNl(); },
     atParagraph: function () { return this.peek().kind === "id" && this.peek(1).kind === "op" && this.peek(1).value === "." && (this.peek(2).kind === "nl" || this.peek(2).kind === "eof"); },
+    atSectionHeader: function () { return (this.peek().kind === "kw" || this.peek().kind === "id") && this.peek(1).kind === "kw" && this.peek(1).value === "SECTION"; },
     parseProgram: function () {
       var decls = [], main = [], subs = [];
       this.skipNl();
@@ -6534,21 +6562,51 @@
       while (!this.at("eof") && !this.atDivision("PROCEDURE")) {
         this.skipNl();
         if (this.at("eof") || this.atDivision("PROCEDURE")) break;
-        if (this.peek().kind === "num") out.push(this.parseDataItem());
+        if (this.atSectionHeader()) { this.skipLine(); continue; }
+        if (this.peek().kind === "num") pushAst(out, this.parseDataItem());
         else this.skipLine();
       }
       return out;
     },
     parseDataItem: function () {
-      this.expect("num");
-      var name = this.expectName(), init = { t: "Num", value: 0 };
-      while (!this.at("eof") && !this.at("op", ".") && !this.at("nl")) {
+      var level = this.expect("num").value, name, value, init, base, members;
+      if (level === "78") {
+        name = this.expectName();
+        value = null;
+        while (!this.at("eof") && !this.at("op", ".")) {
+          if (this.atKw("VALUE")) { this.next(); value = this.parseExpr(); break; }
+          this.next();
+        }
+        this.expect("op", ".");
+        this.skipNl();
+        if (value == null) throw new Error("COBOL: 78 level constants require VALUE");
+        return { t: "ConstDecl", name: name, value: value };
+      }
+      if (level === "88") throw new Error("COBOL: 88 level item must follow a parent data item");
+      name = this.expectName();
+      init = { t: "Num", value: 0 };
+      while (!this.at("eof") && !this.at("op", ".")) {
         if (this.atKw("VALUE")) { this.next(); init = this.parseExpr(); break; }
         this.next();
       }
-      if (this.at("op", ".")) this.next();
+      this.expect("op", ".");
       this.skipNl();
-      return { t: "Let", name: name, value: init };
+      base = { t: "Let", name: name, value: init };
+      members = [];
+      while (this.at("num", "88")) members.push(this.parseConditionNameItem());
+      if (members.length) return [base, { t: "EnumDecl", enum_name: name, members: members }];
+      return base;
+    },
+    parseConditionNameItem: function () {
+      this.expect("num", "88");
+      var name = this.expectName(), value = null;
+      while (!this.at("eof") && !this.at("op", ".")) {
+        if (this.atKw("VALUE")) { this.next(); value = this.parseExpr(); break; }
+        this.next();
+      }
+      this.expect("op", ".");
+      this.skipNl();
+      return [name, value];
     },
     collectGotoTargets: function () {
       var labels = {};
@@ -6591,7 +6649,12 @@
         if (t.value === "COMPUTE") return this.parseCompute();
         if (t.value === "DISPLAY") return this.parseDisplay();
         if (t.value === "IF") return this.parseIf();
+        if (t.value === "DISPATCH") return this.parseDispatch();
         if (t.value === "PERFORM") return this.parsePerform();
+        if (t.value === "CONTINUE") { this.next(); this.endSimple(); return { t: "Skip" }; }
+        if (t.value === "TRY") return this.parseTry();
+        if (t.value === "RAISE") return this.parseRaise();
+        if (t.value === "ON") return this.parseOn();
         if (t.value === "EVALUATE") return this.parseEvaluate();
         if (t.value === "STOP") return this.parseStopRun();
         if (t.value === "GO") return this.parseGoTo();
@@ -6628,6 +6691,14 @@
     parsePerformVarying: function () {
       this.expectKw("VARYING");
       var v = this.expectName();
+      if (this.atKw("TIMES")) {
+        this.next();
+        var count = this.parseExpr();
+        this.endSimple();
+        var body2 = this.parseBlock(["END-PERFORM"], false);
+        this.expectKw("END-PERFORM"); this.endSimple();
+        return { t: "ForEach", v: v, count: count, body: body2 };
+      }
       this.expectKw("FROM");
       var start = this.parseExpr(), step = { t: "Num", value: 1 };
       if (this.atKw("BY")) { this.next(); step = this.parseExpr(); }
@@ -6663,6 +6734,69 @@
       }
       this.expectKw("END-EVALUATE"); this.endSimple();
       return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    parseDispatch: function () {
+      this.expectKw("DISPATCH");
+      var expr = this.parseExpr(), cases = [], def = null;
+      this.endSimple();
+      while (true) {
+        this.skipNl();
+        if (this.atKw("END-DISPATCH")) break;
+        if (this.atKw("WHEN")) {
+          this.next();
+          if (this.atKw("OTHER")) {
+            this.next();
+            this.endSimple();
+            def = this.parseBlock(["END-DISPATCH"], false);
+            continue;
+          }
+          var val = this.parseExpr();
+          this.endSimple();
+          cases.push([val, this.parseBlock(["WHEN", "OTHER", "END-DISPATCH"], false)]);
+          continue;
+        }
+        if (this.atKw("OTHER")) {
+          this.next();
+          this.endSimple();
+          def = this.parseBlock(["END-DISPATCH"], false);
+          continue;
+        }
+        throw new Error("COBOL: expected WHEN / OTHER / END-DISPATCH, got " + this.peek().value);
+      }
+      this.expectKw("END-DISPATCH"); this.endSimple();
+      return { t: "Dispatch", expr: expr, cases: cases, def: def };
+    },
+    parseTry: function () {
+      this.expectKw("TRY");
+      this.endSimple();
+      var tryBody = this.parseBlock(["EXCEPT"], false);
+      this.expectKw("EXCEPT");
+      this.endSimple();
+      var exceptBody = this.parseBlock(["FINALLY", "END-TRY"], false), finallyBody = null;
+      if (this.atKw("FINALLY")) {
+        this.next();
+        this.endSimple();
+        finallyBody = this.parseBlock(["END-TRY"], false);
+      }
+      this.expectKw("END-TRY"); this.endSimple();
+      return { t: "TryExcept", try_body: tryBody, except_body: exceptBody, finally_body: finallyBody };
+    },
+    parseRaise: function () {
+      this.expectKw("RAISE");
+      if (this.at("op", ".") || this.at("nl") || this.at("eof")) { this.endSimple(); return { t: "Raise", value: null }; }
+      var value = this.parseExpr();
+      this.endSimple();
+      return { t: "Raise", value: value };
+    },
+    parseOn: function () {
+      this.expectKw("ON");
+      var ns = this.expectWord();
+      this.expect("op", ".");
+      var method = this.expectWord();
+      this.endSimple();
+      var body = this.parseBlock(["END-ON"], false);
+      this.expectKw("END-ON"); this.endSimple();
+      return { t: "OnBlock", event_ns: ns, event_method: method, body: body };
     },
     negateExpr: function (expr) { return { t: "Cmp", cond: "EQ", lhs: expr, rhs: { t: "Num", value: 0 } }; },
     parseStopRun: function () { this.expectKw("STOP"); if (this.atKw("RUN")) this.next(); this.endSimple(); return { t: "Return" }; },
@@ -6709,7 +6843,7 @@
 
   // ---- Report/4GL frontend --------------------------------------------------
   var REP_KW = {};
-  ["DATA","TYPE","VALUE","IF","ELSE","ELSEIF","ENDIF","WRITE","FORM","ENDFORM","USING","PERFORM","CASE","WHEN","OTHERS","ENDCASE","LOOP","AT","INTO","WHERE","ENDLOOP","RETURN","EXIT","CONTINUE","AND","OR","NOT","WHILE","ENDWHILE","LABEL","GOTO","MOD","COMPUTE","MOVE","TO"].forEach(function (k) { REP_KW[k] = 1; });
+  ["DATA","TYPE","VALUE","CONSTANTS","ENUM","ENDENUM","IF","ELSE","ELSEIF","ENDIF","WRITE","FORM","ENDFORM","USING","PERFORM","CASE","WHEN","OTHERS","ENDCASE","DISPATCH","ENDDISPATCH","LOOP","AT","INTO","WHERE","ENDLOOP","RETURN","EXIT","CONTINUE","AND","OR","NOT","WHILE","ENDWHILE","LABEL","GOTO","MOD","COMPUTE","MOVE","TO","ADD","SUBTRACT","MULTIPLY","DIVIDE","BY","FROM","GIVING","TRY","CATCH","CLEANUP","ENDTRY","RAISE","ON","ENDON"].forEach(function (k) { REP_KW[k] = 1; });
   var REP_TWO = { "==":1, "!=":1, "<=":1, ">=":1, "<>":1 };
   var REP_ONE = "+-*/%()<>=,.:";
   var REP_CMP = { "=":"EQ", "==":"EQ", "!=":"NE", "<>":"NE", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
@@ -6724,6 +6858,7 @@
     atKw: function () { var t = this.peek(); if (t.kind !== "kw") return false; for (var k = 0; k < arguments.length; k++) if (t.value === arguments[k]) return true; return false; },
     expect: function (kind, value) { var t = this.next(); if (t.kind !== kind || (value !== undefined && t.value !== value)) throw new Error("Report: expected " + (value !== undefined ? value : kind) + " got " + t.value); return t; },
     expectKw: function (name) { var t = this.next(); if (!(t.kind === "kw" && t.value === name)) throw new Error("Report: expected " + name + " got " + t.value); },
+    expectName: function () { var t = this.next(); if (t.kind !== "id" && t.kind !== "kw") throw new Error("Report: expected identifier got " + t.value); return t.value; },
     skipNl: function () { while (this.at("nl")) this.next(); },
     endStmt: function () { if (this.at("op", ".")) this.next(); this.skipNl(); },
     freshTemp: function () { this.tmp++; return "__loop" + this.tmp; },
@@ -6752,13 +6887,19 @@
       var t = this.peek();
       if (t.kind === "kw") {
         if (t.value === "DATA") return this.parseData();
+        if (t.value === "CONSTANTS") return this.parseConstants();
+        if (t.value === "ENUM") return this.parseEnum();
         if (t.value === "IF") return this.parseIf();
         if (t.value === "WRITE") { this.next(); var pv = this.parseExpr(); this.endStmt(); return { t: "Print", value: pv }; }
         if (t.value === "FORM") return this.parseForm();
         if (t.value === "PERFORM") return this.parsePerform();
         if (t.value === "CASE") return this.parseCase();
+        if (t.value === "DISPATCH") return this.parseDispatch();
         if (t.value === "LOOP") return this.parseLoop();
         if (t.value === "WHILE") return this.parseWhile();
+        if (t.value === "TRY") return this.parseTry();
+        if (t.value === "RAISE") return this.parseRaise();
+        if (t.value === "ON") return this.parseOn();
         if (t.value === "LABEL") return this.parseLabel();
         if (t.value === "GOTO") return this.parseGoto();
         if (t.value === "RETURN") { this.next(); if (this.at("op", ".") || this.at("nl") || this.at("eof")) { this.endStmt(); return { t: "Return" }; } var rv = this.parseExpr(); this.endStmt(); return { t: "Return", value: rv }; }
@@ -6766,6 +6907,10 @@
         if (t.value === "CONTINUE") { this.next(); this.endStmt(); return { t: "Skip" }; }
         if (t.value === "COMPUTE") { this.next(); var cName = this.next().value; this.expect("op", "="); var cVal = this.parseExpr(); this.endStmt(); return { t: "Let", name: cName, value: cVal }; }
         if (t.value === "MOVE") { this.next(); var mVal = this.parseExpr(); this.expectKw("TO"); var mName = this.next().value; this.endStmt(); return { t: "Let", name: mName, value: mVal }; }
+        if (t.value === "ADD") return this.parseAdd();
+        if (t.value === "SUBTRACT") return this.parseSubtract();
+        if (t.value === "MULTIPLY") return this.parseMultiply();
+        if (t.value === "DIVIDE") return this.parseDivide();
       }
       if (t.kind === "id") {
         if (this.peek(1).kind === "op" && this.peek(1).value === "=") { var name = this.next().value; this.next(); var vv = this.parseExpr(); this.endStmt(); return { t: "Let", name: name, value: vv }; }
@@ -6779,7 +6924,7 @@
       var decls = [];
       while (true) {
         this.skipNl();
-        var name = this.expect("id").value, init = { t: "Num", value: 0 };
+        var name = this.expectName(), init = { t: "Num", value: 0 };
         while (this.peek().kind === "kw" && (this.peek().value === "TYPE" || this.peek().value === "VALUE")) {
           if (this.peek().value === "TYPE") { this.next(); this.next(); }
           else { this.next(); init = this.parseExpr(); }
@@ -6788,6 +6933,48 @@
         if (this.at("op", ",")) { this.next(); continue; }
         this.endStmt(); return decls;
       }
+    },
+    parseConstants: function () {
+      this.expectKw("CONSTANTS");
+      if (this.at("op", ":")) this.next();
+      var decls = [];
+      while (true) {
+        decls.push(this.parseConstantDecl());
+        if (this.at("op", ",")) { this.next(); continue; }
+        this.endStmt(); return decls;
+      }
+    },
+    parseConstantDecl: function () {
+      var name = this.expectName(), value = null;
+      while (this.peek().kind === "kw" && (this.peek().value === "TYPE" || this.peek().value === "VALUE")) {
+        if (this.atKw("TYPE")) {
+          this.next();
+          var typ = this.next();
+          if (typ.kind !== "id" && typ.kind !== "kw") throw new Error("Report: expected type name got " + typ.value);
+        } else {
+          this.next();
+          value = this.parseExpr();
+        }
+      }
+      if (value == null) throw new Error("Report: CONSTANTS declaration requires VALUE");
+      return { t: "ConstDecl", name: name, value: value };
+    },
+    parseEnum: function () {
+      this.expectKw("ENUM");
+      var enumName = this.expectName();
+      this.endStmt();
+      var members = [];
+      while (!this.atKw("ENDENUM")) {
+        var t = this.next();
+        if (t.kind !== "id" && t.kind !== "kw") throw new Error("Report: expected enum member name got " + t.value);
+        var memberName = t.value, memberValue = null;
+        if (this.atKw("VALUE")) { this.next(); memberValue = this.parseExpr(); }
+        this.endStmt();
+        members.push([memberName, memberValue]);
+      }
+      this.expectKw("ENDENUM");
+      this.endStmt();
+      return { t: "EnumDecl", enum_name: enumName, members: members };
     },
     parseIf: function () {
       this.expectKw("IF");
@@ -6801,7 +6988,7 @@
     },
     parseForm: function () {
       this.expectKw("FORM");
-      var name = this.expect("id").value, params = null;
+      var name = this.expectName(), params = null;
       if (this.atKw("USING")) { this.next(); params = this.parseNameListUntilDot(); }
       this.endStmt();
       var body = this.parseBlockUntil(["ENDFORM"]);
@@ -6810,7 +6997,7 @@
     },
     parsePerform: function () {
       this.expectKw("PERFORM");
-      var name = this.expect("id").value, args = null;
+      var name = this.expectName(), args = null;
       if (this.atKw("USING")) { this.next(); args = this.parseExprListUntilDot(); }
       this.endStmt();
       return { t: "Gosub", name: name, args: args && args.length ? args : null };
@@ -6828,9 +7015,22 @@
       this.expectKw("ENDCASE"); this.endStmt();
       return { t: "Switch", expr: expr, cases: cases, def: def };
     },
+    parseDispatch: function () {
+      this.expectKw("DISPATCH");
+      var expr = this.parseExpr(), cases = [], def = null;
+      this.endStmt();
+      while (!this.atKw("ENDDISPATCH")) {
+        this.expectKw("WHEN");
+        if (this.atKw("OTHERS")) { this.next(); this.endStmt(); def = this.parseBlockUntil(["ENDDISPATCH"]); break; }
+        var val = this.parseExpr(); this.endStmt();
+        cases.push([val, this.parseBlockUntil(["WHEN", "ENDDISPATCH"])]);
+      }
+      this.expectKw("ENDDISPATCH"); this.endStmt();
+      return { t: "Dispatch", expr: expr, cases: cases, def: def };
+    },
     parseLoop: function () {
       this.expectKw("LOOP"); this.expectKw("AT");
-      var count = this.parseExpr(); this.expectKw("INTO"); var v = this.expect("id").value; var where = null;
+      var count = this.parseExpr(); this.expectKw("INTO"); var v = this.expectName(); var where = null;
       if (this.atKw("WHERE")) { this.next(); where = this.parseExpr(); }
       this.endStmt();
       var body = this.parseBlockUntil(["ENDLOOP"]);
@@ -6846,11 +7046,80 @@
       this.expectKw("ENDWHILE"); this.endStmt();
       return { t: "While", cond: cond, body: body };
     },
-    parseLabel: function () { this.expectKw("LABEL"); var name = this.expect("id").value; this.endStmt(); return { t: "Label", name: name }; },
-    parseGoto: function () { this.expectKw("GOTO"); var name = this.expect("id").value; this.endStmt(); return { t: "Goto", label: name }; },
-    parseNameListUntilDot: function () { var a = []; while (!this.at("op", ".") && !this.at("eof")) { if (this.at("op", ",")) { this.next(); continue; } a.push(this.expect("id").value); } return a; },
+    parseTry: function () {
+      this.expectKw("TRY");
+      this.endStmt();
+      var tryBody = this.parseBlockUntil(["CATCH", "CLEANUP", "ENDTRY"]);
+      var exceptBody = [], finallyBody = null;
+      if (this.atKw("CATCH")) { this.next(); this.endStmt(); exceptBody = this.parseBlockUntil(["CLEANUP", "ENDTRY"]); }
+      if (this.atKw("CLEANUP")) { this.next(); this.endStmt(); finallyBody = this.parseBlockUntil(["ENDTRY"]); }
+      this.expectKw("ENDTRY");
+      this.endStmt();
+      return { t: "TryExcept", try_body: tryBody, except_body: exceptBody, finally_body: finallyBody };
+    },
+    parseRaise: function () {
+      this.expectKw("RAISE");
+      if (this.at("op", ".") || this.at("nl") || this.at("eof")) { this.endStmt(); return { t: "Raise", value: null }; }
+      var value = this.parseExpr();
+      this.endStmt();
+      return { t: "Raise", value: value };
+    },
+    parseOn: function () {
+      this.expectKw("ON");
+      var ns = this.next();
+      if (ns.kind !== "id" && ns.kind !== "kw") throw new Error("Report: expected event namespace got " + ns.value);
+      this.expect("op", ".");
+      var method = this.next();
+      if (method.kind !== "id" && method.kind !== "kw") throw new Error("Report: expected event method got " + method.value);
+      this.endStmt();
+      var body = this.parseBlockUntil(["ENDON"]);
+      this.expectKw("ENDON");
+      this.endStmt();
+      return { t: "OnBlock", event_ns: ns.value, event_method: method.value, body: body };
+    },
+    parseLabel: function () { this.expectKw("LABEL"); var name = this.expectName(); this.endStmt(); return { t: "Label", name: name }; },
+    parseGoto: function () { this.expectKw("GOTO"); var name = this.expectName(); this.endStmt(); return { t: "Goto", label: name }; },
+    parseAdd: function () {
+      this.expectKw("ADD");
+      var value = this.parseExpr();
+      this.expectKw("TO");
+      var target = this.expectName(), dest = target;
+      if (this.atKw("GIVING")) { this.next(); dest = this.expectName(); }
+      this.endStmt();
+      if (dest === target && value.t === "Num" && value.value === 1) return { t: "IncDec", name: target, delta: 1 };
+      return { t: "Let", name: dest, value: { t: "Bin", op: "+", lhs: { t: "Var", name: target }, rhs: value } };
+    },
+    parseSubtract: function () {
+      this.expectKw("SUBTRACT");
+      var value = this.parseExpr();
+      this.expectKw("FROM");
+      var target = this.expectName(), dest = target;
+      if (this.atKw("GIVING")) { this.next(); dest = this.expectName(); }
+      this.endStmt();
+      if (dest === target && value.t === "Num" && value.value === 1) return { t: "IncDec", name: target, delta: -1 };
+      return { t: "Let", name: dest, value: { t: "Bin", op: "-", lhs: { t: "Var", name: target }, rhs: value } };
+    },
+    parseMultiply: function () {
+      this.expectKw("MULTIPLY");
+      var target = this.expectName();
+      this.expectKw("BY");
+      var value = this.parseExpr(), dest = target;
+      if (this.atKw("GIVING")) { this.next(); dest = this.expectName(); }
+      this.endStmt();
+      return { t: "Let", name: dest, value: { t: "Bin", op: "*", lhs: { t: "Var", name: target }, rhs: value } };
+    },
+    parseDivide: function () {
+      this.expectKw("DIVIDE");
+      var target = this.expectName();
+      this.expectKw("BY");
+      var value = this.parseExpr(), dest = target;
+      if (this.atKw("GIVING")) { this.next(); dest = this.expectName(); }
+      this.endStmt();
+      return { t: "Let", name: dest, value: { t: "Bin", op: "/", lhs: { t: "Var", name: target }, rhs: value } };
+    },
+    parseNameListUntilDot: function () { var a = []; while (!this.at("op", ".") && !this.at("eof")) { if (this.at("op", ",")) { this.next(); continue; } a.push(this.expectName()); } return a; },
     parseExprListUntilDot: function () { var a = []; while (!this.at("op", ".") && !this.at("eof")) { if (this.at("op", ",")) { this.next(); continue; } a.push(this.parseExpr()); } return a; },
-    parseCallFromId: function () { var ns = this.expect("id").value; this.expect("op", "."); var m = this.next(); if (m.kind !== "id" && m.kind !== "kw") throw new Error("Report: expected method after ."); return { t: "Call", ns: ns, method: m.value, args: this.parseArgs() }; },
+    parseCallFromId: function () { var ns = this.expectName(); this.expect("op", "."); var m = this.next(); if (m.kind !== "id" && m.kind !== "kw") throw new Error("Report: expected method after ."); return { t: "Call", ns: ns, method: m.value, args: this.parseArgs() }; },
     parseArgs: function () { this.expect("op", "("); var a = []; if (!this.at("op", ")")) { a.push(this.parseExpr()); while (this.at("op", ",")) { this.next(); a.push(this.parseExpr()); } } this.expect("op", ")"); return a; },
     matchBinop: function () {
       var t = this.peek();
@@ -6876,7 +7145,7 @@
       if (t.kind === "num") return { t: "Num", value: numval(t.value) };
       if (t.kind === "str") return { t: "Str", value: t.value };
       if (t.kind === "op" && t.value === "(") { var e = this.parseExpr(); this.expect("op", ")"); return e; }
-      if (t.kind === "id") {
+      if (t.kind === "id" || t.kind === "kw") {
         if (this.at("op", ".") && (this.peek(1).kind === "id" || this.peek(1).kind === "kw") && this.peek(2).kind === "op" && this.peek(2).value === "(") { this.next(); var m = this.next().value; return { t: "Call", ns: t.value, method: m, args: this.parseArgs() }; }
         if (this.at("op", "(")) return { t: "Call", ns: null, method: t.value, args: this.parseArgs() };
         return { t: "Var", name: t.value };
@@ -6888,7 +7157,7 @@
 
   // ---- Functional frontend --------------------------------------------------
   var FUN_KW = {};
-  ["let","if","then","else","elif","match","with","for","in","do","while","printfn","printf","not","true","false","and","or","return","break","continue","skip","rec","mutable","goto","label"].forEach(function (k) { FUN_KW[k] = 1; });
+  ["let","if","then","else","elif","match","with","for","in","do","while","printfn","printf","not","true","false","and","or","return","break","continue","skip","rec","mutable","goto","label","dispatch","try","finally","raise","on","server","const","enum"].forEach(function (k) { FUN_KW[k] = 1; });
   var FUN_TWO = { "==":1, "!=":1, "<>":1, "<=":1, ">=":1, "|>":1, "->":1, "..":1, "&&":1, "||":1 };
   var FUN_ONE = "+-*/%()<>=,.:|";
   var FUN_CMP = { "=":"EQ", "==":"EQ", "!=":"NE", "<>":"NE", "<":"LT", ">":"GT", "<=":"LE", ">=":"GE" };
@@ -6999,8 +7268,15 @@
         if (kw === "while") return this.parseWhileStmt();
         if (kw === "for") return this.parseForStmt();
         if (kw === "match") return this.parseMatchStmt();
+        if (kw === "dispatch") return this.parseDispatchStmt();
+        if (kw === "try") return this.parseTryStmt();
+        if (kw === "on") return this.parseOnStmt();
+        if (kw === "server") return this.parseServerStmt();
+        if (kw === "const") return this.parseConstStmt();
+        if (kw === "enum") return this.parseEnumStmt();
         if (kw === "label") { this.next(); var lname = this.expect("id").value; this.expect("newline"); return { t: "Label", name: lname }; }
         if (kw === "goto") { this.next(); var gname = this.expect("id").value; this.expect("newline"); return { t: "Goto", label: gname }; }
+        if (kw === "raise") { this.next(); if (this.at("newline")) { this.next(); return { t: "Raise", value: null }; } var xv = this.parseExpr(); this.expect("newline"); return { t: "Raise", value: xv }; }
         if (kw === "return") { this.next(); if (this.at("newline")) { this.next(); return { t: "Return" }; } var rv = this.parseExpr(); this.expect("newline"); return { t: "Return", value: rv }; }
         if (kw === "break") { this.next(); this.expect("newline"); return { t: "Break" }; }
         if (kw === "continue" || kw === "skip") { this.next(); this.expect("newline"); return { t: "Skip" }; }
@@ -7062,6 +7338,64 @@
       }
       if (!cases.length && !def) throw new Error("Functional: expected at least one match arm");
       return { t: "Switch", expr: expr, cases: cases, def: def };
+    },
+    parseDispatchStmt: function () {
+      this.expectKw("dispatch"); var expr = this.parseExpr(); this.expectKw("with"); this.expect("newline");
+      var cases = [], def = null;
+      while (this.at("op", "|")) {
+        this.next();
+        if (this.at("id", "_")) { this.next(); this.expect("op", "->"); def = this.parseStmtBody(); continue; }
+        var val = this.parseExpr(); this.expect("op", "->"); cases.push([val, this.parseStmtBody()]);
+      }
+      if (!cases.length && !def) throw new Error("Functional: expected at least one dispatch arm");
+      return { t: "Dispatch", expr: expr, cases: cases, def: def };
+    },
+    parseTryStmt: function () {
+      this.expectKw("try");
+      var tryBody = this.parseSuite(false), exceptBody = [], finallyBody = null;
+      if (this.atKw("with")) { this.next(); exceptBody = this.parseSuite(false); }
+      if (this.atKw("finally")) { this.next(); finallyBody = this.parseSuite(false); }
+      return { t: "TryExcept", try_body: tryBody, except_body: exceptBody, finally_body: finallyBody };
+    },
+    parseOnStmt: function () {
+      this.expectKw("on");
+      var eventNs = this.expect("id").value;
+      this.expect("op", ".");
+      var eventMethod = this.expect("id").value;
+      if (this.atKw("do")) this.next();
+      else if (!this.at("newline")) throw new Error("Functional: expected do or newline after event name");
+      return { t: "OnBlock", event_ns: eventNs, event_method: eventMethod, body: this.parseStmtBody() };
+    },
+    parseServerStmt: function () {
+      this.expectKw("server");
+      if (this.atKw("do")) this.next();
+      else if (!this.at("newline")) throw new Error("Functional: expected do or newline after server");
+      return { t: "ServerMain", body: this.parseStmtBody() };
+    },
+    parseConstStmt: function () {
+      this.expectKw("const");
+      var name = this.expect("id").value;
+      this.expect("op", "=");
+      var value = this.parseExpr();
+      this.expect("newline");
+      return { t: "ConstDecl", name: name, value: value };
+    },
+    parseEnumStmt: function () {
+      this.expectKw("enum");
+      var enumName = this.expect("id").value;
+      if (this.atKw("with")) this.next();
+      this.expect("newline");
+      this.expect("indent");
+      var members = [];
+      while (!this.at("dedent")) {
+        if (this.at("op", "|")) this.next();
+        var member = this.expect("id").value, memberValue = null;
+        if (this.at("op", "=")) { this.next(); memberValue = this.parseExpr(); }
+        this.expect("newline");
+        members.push([member, memberValue]);
+      }
+      this.expect("dedent");
+      return { t: "EnumDecl", enum_name: enumName, members: members };
     },
     parseExpr: function () { if (this.atKw("if")) return this.parseIfExpr(); return this.parsePipe(); },
     parseIfExpr: function () { this.expectKw("if"); var cond = this.parsePipe(); this.expectKw("then"); var th = this.parseExpr(); this.expectKw("else"); var el = this.parseExpr(); return { t: "Ternary", cond: cond, then: th, els: el }; },

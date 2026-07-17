@@ -259,11 +259,27 @@ for loading a label's address as a value). Scope actually delivered:
   investigated and either not real gaps (equivalent capability already
   exists under a different name/mechanism) or intentionally left alone to
   avoid breaking existing bytecode parity — not overlooked.
-- **C-style and v1** remain architecturally separate compilers proven
-  equivalent only by output testing, not by sharing code — deliberately
-  excluded from this equivalence pass (frozen ISA for v1; an independent,
-  from-scratch AST+Lowerer for C-style that would need parallel,
-  non-shared implementation work to reach the same grammar surface).
+- **C-style** gained real `try`/`catch`/`finally`/`raise`/`on Ns.Method { }`
+  support too (`picoscript_cfront.py`'s own, independent `TryCatch`/`Raise`/
+  `OnBlock` node classes + `lower_try`/`lower_on_block` methods) — verified
+  byte-identical bytecode vs. the equivalent BASIC source
+  (`tests/test_cfront_exception_eventing.py`), because cfront shares the
+  same underlying `picoscript_il.ILBuilder` (including `label_addr`) and the
+  same `Error.SetHandler`/`PopHandler`/`Raise`/`Clear` host ops as the BASIC
+  family — the mechanism is identical, just re-expressed against cfront's
+  own AST/Lowerer rather than the shared one. **Not yet ported to the JS
+  mirror** (`CParser`/`CLowerer` in `vm/picoc.js`) — that would be a THIRD,
+  independent implementation of the same mechanism (the BASIC family's JS
+  `BLowerer` port was the second), deliberately not attempted in this pass
+  to avoid rushing a third from-scratch implementation without adequate
+  time to verify it as carefully as the first two. A legitimate, explicitly
+  scoped-out follow-up, not an oversight.
+- **v1** remains architecturally separate and fully excluded from this
+  equivalence pass by design — a frozen, stable bytecode ISA
+  ("Each statement compiles 1:1 to a single 32-bit instruction. No
+  optimisation. No reordering." — `picoscript_lang.py`) with no shared
+  AST/IL at all; evolving its grammar would contradict its own stated
+  purpose.
 - **Workflow** is intentionally a lossy subset/projection, not a peer.
 - **AST-JSON** has 100% parity with the six shared-AST frontends by
   construction, on BOTH Python and JS now, and fails loudly rather than

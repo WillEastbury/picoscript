@@ -7,12 +7,19 @@ and documented in `docs/DIALECT_PARITY.md` during the dialect-parity audit.
 ## Scope: which execution paths actually support this
 
 **Fully working:** the two interpretive bytecode VMs -- **Python**
-(`picoscript_vm.py`) and **JavaScript** (`vm/picovm.js`). They execute the
-exact same bytecode words (the whole point of the "byte-identical" parity
-guarantee), so implementing this once at the IL/bytecode-assembly layer
-(`picoscript_il.py`) covers both. This is the path the CLI's `run` command
-and the browser Playground's compile-and-run/step debugger use -- the most
-commonly exercised path.
+(`picoscript_vm.py`) and **JavaScript** (`vm/picovm.js`) -- for **every**
+frontend: BASIC, Python-style, English, COBOL, Report, Functional (all six
+sharing `picoscript_basic.py`'s `Lowerer`), and C-style
+(`picoscript_cfront.py`, an independent AST + `Lowerer`, but reusing the
+same `picoscript_il.ILBuilder`/`label_addr` and `Error.*` host ops, so the
+underlying mechanism is identical). The JS compiler (`vm/picoc.js`) mirrors
+all of this too -- `BLowerer.lowerTry`/`lowerOnBlock` (shared by the six
+BASIC-family JS parsers) and each frontend's own JS parser grammar were
+ported alongside the Python side, verified byte-identical
+(`tests/test_js_port_exception_eventing.py`,
+`tests/test_js_grammar_all_frontends.py`). This covers the CLI's `run`
+command and the browser Playground's compile-and-run/step debugger for
+every dialect.
 
 **Not supported, and explicitly, loudly rejected rather than silently
 mis-compiled:**
@@ -21,8 +28,8 @@ mis-compiled:**
   runtime "program counter" value to load a label's address into, so
   `Error.SetHandler(pc)`'s whole model doesn't map onto this backend without
   a fundamentally different mechanism (e.g. `setjmp`/`longjmp`). Compiling a
-  program containing `TryExcept`/`Raise` with `--as c` (or `native`) raises a
-  clear `ValueError` at compile time.
+  program containing `TryExcept`/`Raise` (any frontend, including C-style)
+  with `--as c` (or `native`) raises a clear `ValueError` at compile time.
 - **Native JS transpile** (`lower_to_js`, the "compile straight to a JS
   function" backend used for embedding compiled output, distinct from the
   *interpretive* `vm/picovm.js` above). Its block-switch dispatch model
@@ -30,10 +37,13 @@ mis-compiled:**
   try/catch wrapped around the dispatcher to actually catch a JS-level fault
   and redirect it -- that's a separate, not-yet-built piece. Also raises a
   clear `ValueError`.
-- **Frontends other than BASIC and Python-style.** English/COBOL/Report/
-  Functional have no `TRY`/`EXCEPT`/`RAISE`/`ON` grammar (see
-  `docs/DIALECT_PARITY.md`); this pass did not add any (deliberately -- see
-  that doc's "what was actually merged/fixed" section for the reasoning).
+- **C-style's JS mirror** (`CParser`/`CLowerer` in `vm/picoc.js`) does not
+  have `try`/`catch`/`finally`/`raise`/`on` support yet -- porting it would
+  be a THIRD independent implementation of the same mechanism (the BASIC
+  family's `BLowerer` port was the second), deliberately deferred rather
+  than rushed. C-style source using these constructs works correctly on
+  the Python interpretive VM; it just can't be compiled via the JS
+  compiler yet.
 
 If you need exception handling in native/bare-metal deployment, this is the
 gap to close next; it needs its own design (most likely a from-scratch
