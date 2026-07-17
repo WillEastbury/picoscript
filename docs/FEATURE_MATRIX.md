@@ -183,7 +183,7 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Process | 8 | Y | Y | Y | |
 | Quant | 5 | Y | Y | Y | |
 | Query | 2 | Y | Y | Y | |
-| Queue | 5 | Y | Y | Y | |
+| Queue | 5 | Y | Y | Y | `DequeueBatch`/`EnqueueBatch` are docs/CONFORMANCE_LEVELS.md's "L3: Optional" batch-container API ("no correctness impact if omitted") -- explicit 0 default on all 3 runtimes (was a silent fallthrough leaving `rd` untouched; fixed this pass) rather than a full v2 batch-container implementation, which is a separate, deliberately deferred design question. |
 | Random | 1 | Y (seeded, non-deterministic by design) | Y | Y | |
 | Req | 13 | Y | Y | Y | Host-fed request context; native C has a real HTTP server (`docs/NATIVE_HTTP_SERVER.md`) |
 | Resp | 13 | Y | Y | Y | |

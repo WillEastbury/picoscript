@@ -17,9 +17,9 @@ Covers (Python VM, `picoscript_vm.py`):
 
 C VM (vm/picovm.c) and JS VM (vm/picovm.js) parity for the same features is
 covered by tests/test_native_toc.py-style ad hoc verification during
-development; see docs/FEATURE_MATRIX.md for the full per-runtime status
-(Kernel.Profile*/TracePoint and Log.* are Python+JS only, not yet on the C VM
-interpreter -- a documented, scoped-out follow-up).
+development; see docs/FEATURE_MATRIX.md for the full per-runtime status.
+Kernel.Profile*/TracePoint and Log.* are real on all 3 runtimes, including
+the C VM interpreter (fixed-size PV_MAX_LOGS=128 handle table).
 """
 import os
 import sys
@@ -314,6 +314,25 @@ print(h); print(ok);
     # fragment) -- both correctly empty for genuinely different, real
     # reasons than the old "unbuilt" stub.
     assert vm.output == [b"", b"", (1).to_bytes(4, "big"), (0).to_bytes(4, "big")]
+
+
+def test_queue_batch_ops_return_defined_default():
+    # Queue.DequeueBatch/EnqueueBatch: docs/CONFORMANCE_LEVELS.md's "L3:
+    # Profiling & Amortization (Optional)" tier -- an aspirational v2
+    # batch-container API ("no correctness impact if omitted"), found via
+    # this pass's fallthrough audit to be silently falling through (rd left
+    # untouched) on all 3 runtimes, same bug class as Data.*/Html.*/Http.*
+    # earlier. Unlike those, a real implementation would require designing
+    # a new v2 container type not otherwise part of this codebase, so this
+    # closes just the "silent fallthrough" bug via an explicit default,
+    # deliberately not a full batch-container implementation.
+    vm = run("""
+int a = 5;
+int b = Queue.DequeueBatch(0, 10);
+int c = Queue.EnqueueBatch(0, a);
+print(b); print(c);
+""")
+    assert out_ints(vm) == [0, 0]
 
 
 def test_http_live_connection_ops_return_defined_defaults():

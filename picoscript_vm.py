@@ -1278,6 +1278,17 @@ class HostApi:
         if ns == "Queue" and method == "Depth":
             vm.regs[rd] = len(self.queues.get(rs1, []))
             return
+        if ns == "Queue" and method in ("DequeueBatch", "EnqueueBatch"):
+            # docs/CONFORMANCE_LEVELS.md's "L3: Profiling & Amortization
+            # (Optional)" tier -- an aspirational v2 batch-container API
+            # ("no correctness impact if omitted") with no existing
+            # container type it can return without inventing new v2
+            # semantics that would preempt a future, deliberate design.
+            # Explicit defined default (never a silent fallthrough leaving
+            # rd untouched), same convention as every other deferred
+            # namespace in this codebase.
+            vm.regs[rd] = 0
+            return
         if ns == "Bits":
             a = vm.regs[rs1] & MASK32
             b = vm.regs[rs2] & MASK32

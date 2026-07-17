@@ -429,6 +429,17 @@
       this.regs[rd] = (this.queues[rs1] || []).length;
       return;
     }
+    if (name === "Queue.DequeueBatch" || name === "Queue.EnqueueBatch") {
+      // docs/CONFORMANCE_LEVELS.md's "L3: Profiling & Amortization
+      // (Optional)" tier -- an aspirational v2 batch-container API ("no
+      // correctness impact if omitted") with no existing container type it
+      // can return without inventing new v2 semantics that would preempt a
+      // future, deliberate design. Explicit defined default (never a
+      // silent fallthrough leaving regs[rd] untouched), same convention as
+      // every other deferred namespace in this codebase.
+      this.regs[rd] = 0;
+      return;
+    }
     if (name.indexOf("Bits.") === 0) {
       var ba = this.regs[rs1] | 0;
       var bb = this.regs[rs2] | 0;

@@ -2558,6 +2558,17 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         ctx->regs[rd] = ctx->qdepth[rs1 & 7];
         return;
     }
+    if (hook == PV_HOOK_QUEUE_DEQUEUEBATCH || hook == PV_HOOK_QUEUE_ENQUEUEBATCH) {
+        /* docs/CONFORMANCE_LEVELS.md's "L3: Profiling & Amortization
+         * (Optional)" tier -- an aspirational v2 batch-container API ("no
+         * correctness impact if omitted") with no existing container type
+         * it can return without inventing new v2 semantics that would
+         * preempt a future, deliberate design. Explicit defined default
+         * (never a silent fallthrough leaving regs[rd] untouched), same
+         * convention as every other deferred namespace in this codebase. */
+        ctx->regs[rd] = 0;
+        return;
+    }
     if (hook == PV_HOOK_BITS_AND) {
         ctx->regs[rd] = (int32_t)((uint32_t)ctx->regs[rs1] & (uint32_t)ctx->regs[rs2]);
         return;
