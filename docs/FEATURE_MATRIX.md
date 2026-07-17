@@ -61,14 +61,44 @@ language-equivalence pass. All v1 bytecode still executes on the **same**
 |---|:-:|:-:|
 | Python VM (bytecode) | Y — real, nested-safe (`docs/EXCEPTION_ENGINE.md`) | Y (`docs/EVENTING.md`) |
 | JS VM (bytecode, `vm/picovm.js`) | Y — byte-identical to Python | Y — byte-identical to Python |
-| C VM (bytecode, `vm/picovm.c`) | **Y — fixed this pass** (see below) | Y |
-| Native C transpile (`lower_to_c`) | **N — explicitly rejected** at compile time (`ValueError`), not silently mis-compiled | N (same reason) |
-| Native JS transpile (`lower_to_js`) | **N — explicitly rejected** at compile time | N (same reason) |
+| C VM (bytecode, `vm/picovm.c`) | Y — fixed a prior gap (see below) | Y |
+| Native C transpile (`lower_to_c`) | **Y — fixed this pass** (see below) | Y |
+| Native JS transpile (`lower_to_js`) | **Y — fixed this pass** (see below) | Y |
 
-Native transpile rejects these because `laddr` (load-label-address) has no
-PC-addressable/fault-catching equivalent in straight-line native C/JS output —
-a real architectural limitation, documented in `docs/EXCEPTION_ENGINE.md`'s
-scope section, not an oversight.
+**Update — native transpile now supported.** This table previously showed
+native C/JS transpile as explicitly rejecting `TryExcept`/`Raise` at compile
+time because `laddr` "has no PC-addressable/fault-catching equivalent in
+straight-line native C/JS output". That diagnosis was correct, and the fix
+follows exactly that insight: `Lowerer.lower_try` no longer flattens
+`TryExcept` into `laddr`/`Error.SetHandler`/`label`/`jmp` IL at all — it now
+builds a **structured** `trycatch` IL node (`ILBuilder.trycatch`) carrying
+nested `try_body`/`except_body`/`finally_body` instruction lists.
+`lower_to_bytecode_safe` still expands this into the classic flat form
+(`_flatten_trycatch`) for the three bytecode VMs — byte-identical to before.
+But `lower_to_c` now compiles it into **plain `goto`/labels** (the handler's
+label is known at compile time from the structure itself, so there's no
+runtime PC value to load at all — `setjmp`/`longjmp` turned out to be
+unnecessary), with a `ctx->raise_active` return-code-propagation flag for a
+`Raise` from inside a called subroutine. `lower_to_js` compiles it into a
+**real JS `try/catch/finally`** and `throw`, which needs no propagation
+bookkeeping at all since JS exceptions natively unwind across function
+calls. See `docs/EXCEPTION_ENGINE.md`'s "native C/JS transpile now support
+this too" section for the full design, `tests/test_native_toc_trycatch.py`
+and `tests/test_native_js_trycatch.py` for verification (including a loop
+inside a try body, and a `break` crossing a try boundary into an enclosing
+loop — the trickiest case for JS specifically, since it lacks `goto`).
+
+**A real, pre-existing bug found along the way**: verifying native C's
+cross-function-raise support against the Python VM as ground truth exposed
+that all three *bytecode* VMs (Python/JS/C interpreter) have a genuine bug
+where `Error.Raise` from inside a called subroutine doesn't unwind
+`vm.call_stack`, leaving a stale return address that gets popped later and
+silently re-executes code that should have been skipped. Native C does not
+have this bug (real C function returns unwind correctly); native JS doesn't
+either (real JS exceptions unwind the actual JS call stack). Flagged as a
+separate, scoped, tracked follow-up — see `docs/EXCEPTION_ENGINE.md`'s
+"A discovered, pre-existing bytecode-VM bug" section — not silently patched
+over or left undocumented.
 
 **Update — fixed this pass.** A prior revision of this file claimed the C VM
 interpreter "shares the `laddr`/handler-stack bytecode contract" without

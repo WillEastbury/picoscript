@@ -207,27 +207,38 @@ def test_lower_to_js_opt_false_and_emit_variants():
         _j_op,
         {},
         {},
+        [0],
     )
-    assert any("_b = -1; continue;" in line for line in func_lines)
+    assert any("= -1; continue" in line for line in func_lines)
 
-    targets = {"L": 1, "D": 2}
+    def resolve_jump(label):
+        idx = {"L": 1, "D": 2}[label]
+        return "_b", idx, "bm1"
+
     funcs = {"sub": "sub_fn"}
+    scope_stack = []
+    tc_counter = [0]
     v = VReg("x")
-    assert "=== 0" in _emit_js_inst(Inst("cmpbr", a=v, b=Imm(0), cond="Z", label="L"), _j_op, _j_name, targets, funcs)[0]
-    assert "!== 0" in _emit_js_inst(Inst("cmpbr", a=v, b=Imm(0), cond="NZ", label="L"), _j_op, _j_name, targets, funcs)[0]
-    assert "false" in _emit_js_inst(Inst("cmpbr", a=v, b=Imm(0), cond="BAD", label="L"), _j_op, _j_name, targets, funcs)[0]
-    assert "|" in _emit_js_inst(Inst("host", dst=v, ns="Bits", method="Or", args=(v, Imm(1))), _j_op, _j_name, targets, funcs)[0]
-    assert "^" in _emit_js_inst(Inst("host", dst=v, ns="Bits", method="Xor", args=(v, Imm(1))), _j_op, _j_name, targets, funcs)[0]
-    assert "~" in _emit_js_inst(Inst("host", dst=v, ns="Bits", method="Not", args=(v,)), _j_op, _j_name, targets, funcs)[0]
-    assert "<<" in _emit_js_inst(Inst("host", dst=v, ns="Bits", method="Shl", args=(v, Imm(1))), _j_op, _j_name, targets, funcs)[0]
-    assert ">>" in _emit_js_inst(Inst("host", dst=v, ns="Bits", method="Sar", args=(v, Imm(1))), _j_op, _j_name, targets, funcs)[0]
-    assert "rt.host" in _emit_js_inst(Inst("host", dst=v, ns="Bits", method="Rol", args=(v, Imm(1))), _j_op, _j_name, targets, funcs)[0]
-    assert "dotLenSet" in _emit_js_inst(Inst("host", ns="Dot8", method="Len", args=(Imm(3),)), _j_op, _j_name, targets, funcs)[0]
-    assert "dot8" in _emit_js_inst(Inst("host", dst=v, ns="Dot8", method="Of", args=(v, Imm(2))), _j_op, _j_name, targets, funcs)[0]
-    assert "rt.load" in _emit_js_inst(Inst("load", dst=v, imm=4), _j_op, _j_name, targets, funcs)[0]
-    assert "rt.netHeader" in _emit_js_inst(Inst("net", method="header"), _j_op, _j_name, targets, funcs)[0]
-    assert "unhandled net" in _emit_js_inst(Inst("net", method="bogus"), _j_op, _j_name, targets, funcs)[0]
-    assert "rt.dsp" in _emit_js_inst(Inst("dsp", dst=v, a=v, b=Imm(2), imm=9), _j_op, _j_name, targets, funcs)[0]
-    assert _emit_js_inst(Inst("wait"), _j_op, _j_name, targets, funcs)[1] is True
-    assert "raise 8" in _emit_js_inst(Inst("raise", imm=8), _j_op, _j_name, targets, funcs)[0]
-    assert "unhandled bogus" in _emit_js_inst(Inst("bogus"), _j_op, _j_name, targets, funcs)[0]
+
+    def emit(ins):
+        lines, term = _emit_js_inst(ins, _j_op, _j_name, resolve_jump, funcs, scope_stack, tc_counter)
+        return "\n".join(lines), term
+
+    assert "=== 0" in emit(Inst("cmpbr", a=v, b=Imm(0), cond="Z", label="L"))[0]
+    assert "!== 0" in emit(Inst("cmpbr", a=v, b=Imm(0), cond="NZ", label="L"))[0]
+    assert "false" in emit(Inst("cmpbr", a=v, b=Imm(0), cond="BAD", label="L"))[0]
+    assert "|" in emit(Inst("host", dst=v, ns="Bits", method="Or", args=(v, Imm(1))))[0]
+    assert "^" in emit(Inst("host", dst=v, ns="Bits", method="Xor", args=(v, Imm(1))))[0]
+    assert "~" in emit(Inst("host", dst=v, ns="Bits", method="Not", args=(v,)))[0]
+    assert "<<" in emit(Inst("host", dst=v, ns="Bits", method="Shl", args=(v, Imm(1))))[0]
+    assert ">>" in emit(Inst("host", dst=v, ns="Bits", method="Sar", args=(v, Imm(1))))[0]
+    assert "rt.host" in emit(Inst("host", dst=v, ns="Bits", method="Rol", args=(v, Imm(1))))[0]
+    assert "dotLenSet" in emit(Inst("host", ns="Dot8", method="Len", args=(Imm(3),)))[0]
+    assert "dot8" in emit(Inst("host", dst=v, ns="Dot8", method="Of", args=(v, Imm(2))))[0]
+    assert "rt.load" in emit(Inst("load", dst=v, imm=4))[0]
+    assert "rt.netHeader" in emit(Inst("net", method="header"))[0]
+    assert "unhandled net" in emit(Inst("net", method="bogus"))[0]
+    assert "rt.dsp" in emit(Inst("dsp", dst=v, a=v, b=Imm(2), imm=9))[0]
+    assert emit(Inst("wait"))[1] is True
+    assert "raise 8" in emit(Inst("raise", imm=8))[0]
+    assert "unhandled bogus" in emit(Inst("bogus"))[0]

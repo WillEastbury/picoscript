@@ -1267,58 +1267,29 @@ class Lowerer:
             self.user_constants[f"{enum_key}.{member_key}"] = cur
 
     def lower_try(self, s: TryExcept):
-        """try/except/finally -> a real exception mechanism using a handler
-        STACK (see docs/EXCEPTION_ENGINE.md and Error.SetHandler's docstring
-        note on picoscript_vm.HostApi._error_handler_stack).
-
-        SetHandler(handler_label's address) is pushed before the try body
-        runs, so both a genuine VM fault (PicoFault, caught by
-        PicoVM.run()) and a script `Raise` (the Error.Raise host op) inside
-        the try body jump straight to handler_label -- bypassing whatever's
-        left of the try body. PopHandler() restores the enclosing try's
-        handler (if any) on every path out of this try (normal completion,
-        or having caught), which is what makes nested try/except correct:
-        the except/finally bodies -- and anything after this try block --
-        run with THIS try's handler no longer registered, so a fault inside
-        them propagates to the next-outer handler (or crashes, if none),
-        never back into this same except block.
+        """try/except/finally -> a structured `trycatch` IL node (see
+        ILBuilder.trycatch / docs/EXCEPTION_ENGINE.md). The actual
+        exception-engine mechanism (a handler STACK, SetHandler/PopHandler/
+        Raise/Clear host ops, laddr for the handler's address) is realized
+        later, per backend:
+          - lower_to_bytecode_safe expands this into the classic flat
+            laddr/Error.SetHandler/label/jmp form (_flatten_trycatch in
+            picoscript_il.py) -- byte-identical to what this method used to
+            emit directly.
+          - lower_to_c/lower_to_js consume the structured try_body/
+            except_body/finally_body directly to emit real goto/return-code
+            propagation (C) or real try/catch/finally (JS) -- no laddr/PC
+            concept needed there at all.
+        Keeping the AST-level nesting intact until each backend decides how
+        to realize it (instead of flattening here, once, for every backend)
+        is what makes native C/JS transpile support possible without
+        pattern-matching flat jump/label soup back into structured form.
         """
-        handler_label = self.b.new_label("except")
-        end_label = self.b.new_label("endtry")
-
-        addr = self.b.vreg()
-        self.b.label_addr(addr, handler_label)
-        set_ok = self.b.vreg()
-        self.b.host("Error", "SetHandler", (addr,), set_ok)
-
-        # try body: runs normally; a fault/raise jumps straight to
-        # handler_label, skipping everything below down to that label.
-        for st in s.try_body:
-            self.stmt(st)
-
-        # Normal completion (no fault): pop our handler, run finally, skip
-        # the except body entirely.
-        pop1 = self.b.vreg()
-        self.b.host("Error", "PopHandler", (), pop1)
-        if s.finally_body:
-            for st in s.finally_body:
-                self.stmt(st)
-        self.b.jmp(end_label)
-
-        # except body: landed here via a fault/raise inside the try body.
-        # Pop first (before running except/finally) so a fault raised WHILE
-        # handling this one propagates outward instead of looping back here.
-        self.b.label(handler_label)
-        pop2 = self.b.vreg()
-        self.b.host("Error", "PopHandler", (), pop2)
-        for st in s.except_body:
-            self.stmt(st)
-        clear = self.b.vreg()
-        self.b.host("Error", "Clear", (), clear)
-        if s.finally_body:
-            for st in s.finally_body:
-                self.stmt(st)
-        self.b.label(end_label)
+        self.b.trycatch(
+            lambda: [self.stmt(st) for st in s.try_body],
+            lambda: [self.stmt(st) for st in s.except_body],
+            (lambda: [self.stmt(st) for st in s.finally_body]) if s.finally_body else None,
+        )
 
     def lower_on_block(self, s: OnBlock):
         """ON Ns.Method: body END ON -> an inline drain-and-dispatch loop over

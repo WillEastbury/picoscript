@@ -188,6 +188,17 @@ struct pv_ctx {
     int32_t   err_resume_pc;
     int32_t   pending_jump;
     uint8_t   pending_jump_set;
+    /* Native-C-transpile (lower_to_c) try/except only: emitted C has no
+     * bytecode PC to redirect (it's real goto/labels within one C function),
+     * so a Raise with no in-function handler sets this flag and returns
+     * immediately instead; every emitted subroutine call site checks it
+     * right after the call and either gotos its own in-function handler (if
+     * any) or propagates by returning too -- unwinding the native C call
+     * stack one frame at a time until a handler is found or the top-level
+     * caller sees it uncaught. err_code/err_detail above double as the
+     * raised value here (same Error.Code()/Detail() read-back semantics as
+     * the bytecode VMs). See docs/EXCEPTION_ENGINE.md. */
+    int32_t   raise_active;
 
     uint32_t  caps;            /* granted binding capabilities (PV_CAP_*); default PV_CAP_ALL */
     int       no_alloc;        /* when set, arena allocation in a hook faults (INV-5 hot path) */

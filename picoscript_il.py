@@ -137,10 +137,22 @@ class Inst:
     text: str = ""        # carried comment / string literal (e.g. Net.Type)
     targets: Tuple[str, ...] = ()   # ordered case labels for a jump table (jmptab)
     pos: int = -1         # INV-25: source byte offset this inst lowered from (-1 = unknown)
+    # op == "trycatch": structured try/except/finally, kept as NESTED instruction
+    # blocks (not flattened into laddr/label/jmp) so backends that can express
+    # real structured control flow (lower_to_c, lower_to_js) don't have to
+    # recover it by pattern-matching. lower_to_bytecode_safe expands this into
+    # the flat laddr/Error.SetHandler/label/jmp form via _flatten_trycatch
+    # before assembly -- see docs/EXCEPTION_ENGINE.md.
+    try_body: Tuple["Inst", ...] = ()
+    except_body: Tuple["Inst", ...] = ()
+    finally_body: Tuple["Inst", ...] = ()
 
     def __repr__(self):
         if self.op == "label":
             return f"{self.label}:"
+        if self.op == "trycatch":
+            return (f"  trycatch try=[{len(self.try_body)}] "
+                    f"except=[{len(self.except_body)}] finally=[{len(self.finally_body)}]")
         parts = [self.op]
         if self.dst is not None:
             parts.append(repr(self.dst))
@@ -263,8 +275,54 @@ class ILBuilder:
         CONST-style multi-word load once the label's PC is known (see
         lower_to_bytecode_safe); always uses the 8-word big-endian form since
         the value isn't known until all label PCs are resolved, and using the
-        2-word small-immediate form would create a circular width dependency."""
+        2-word small-immediate form would create a circular width dependency.
+        Only used internally by _flatten_trycatch now -- frontends build
+        structured `trycatch` nodes (see below) instead of calling this
+        directly."""
         self._emit(Inst("laddr", dst=dst, label=label))
+
+    def begin_capture(self) -> List[Inst]:
+        """Start capturing emitted instructions into a fresh, isolated list
+        (used to build a `trycatch` node's nested try/except/finally blocks
+        without polluting the enclosing instruction stream). Returns the
+        previous list so end_capture can restore it -- nests correctly for
+        try-inside-try, since each call saves whatever list was current
+        (including an in-progress outer capture)."""
+        prev = self.insts
+        self.insts = []
+        return prev
+
+    def end_capture(self, prev: List[Inst]) -> Tuple[Inst, ...]:
+        """Stop capturing, restore the previous instruction list, and return
+        what was captured as an immutable tuple."""
+        captured = tuple(self.insts)
+        self.insts = prev
+        return captured
+
+    def trycatch(self, try_fn, except_fn, finally_fn=None):
+        """Structured try/except/finally -- see docs/EXCEPTION_ENGINE.md.
+        `try_fn`/`except_fn`/`finally_fn` are zero-arg callables that emit
+        their block's statements via this same builder (e.g.
+        `lambda: [self.stmt(st) for st in s.try_body]`); each is captured
+        into its own nested instruction tuple rather than flattened here.
+        `lower_to_bytecode_safe` expands the result into the classic flat
+        laddr/Error.SetHandler/label/jmp form (_flatten_trycatch); lower_to_c/
+        lower_to_js consume the structure directly for real goto/try-catch."""
+        prev = self.begin_capture()
+        try_fn()
+        tb = self.end_capture(prev)
+
+        prev = self.begin_capture()
+        except_fn()
+        eb = self.end_capture(prev)
+
+        fb: Tuple[Inst, ...] = ()
+        if finally_fn is not None:
+            prev = self.begin_capture()
+            finally_fn()
+            fb = self.end_capture(prev)
+
+        self._emit(Inst("trycatch", try_body=tb, except_body=eb, finally_body=fb))
 
     def call(self, label: str):
         self._emit(Inst("call", label=label))
@@ -330,9 +388,20 @@ def optimize(insts: List[Inst]) -> List[Inst]:
 
     Conservative: only rewrites within obviously-safe local windows.  Keeps
     the IL semantically identical while shrinking the lowered footprint.
-    """
+
+    A `trycatch` node's nested try/except/finally blocks are recursively
+    optimized too (this function is only ever reached with a live trycatch
+    node from lower_to_c/lower_to_js -- lower_to_bytecode_safe expands it via
+    _flatten_trycatch before calling optimize, so the bytecode path never
+    sees this branch)."""
     out: List[Inst] = []
     for ins in insts:
+        if ins.op == "trycatch":
+            out.append(Inst("trycatch", pos=ins.pos,
+                             try_body=tuple(optimize(list(ins.try_body))),
+                             except_body=tuple(optimize(list(ins.except_body))),
+                             finally_body=tuple(optimize(list(ins.finally_body)))))
+            continue
         # Constant-fold pure arithmetic on two immediates.
         if ins.op in ARITH and _is_imm(ins.a) and _is_imm(ins.b):
             av, bv = ins.a.value, ins.b.value
@@ -522,6 +591,30 @@ def _operand_vregs(ins: Inst):
     for x in (ins.dst, ins.a, ins.b, *ins.args):
         if isinstance(x, VReg):
             yield x
+    # A `trycatch` node's nested try/except/finally blocks are never seen by
+    # the bytecode path (lower_to_bytecode_safe/lower_to_bytecode expand it
+    # via _flatten_trycatch before any vreg-scanning runs), but lower_to_c/
+    # lower_to_js consume the structured node directly -- their pinned/local
+    # variable collection needs to see vregs used only inside these nested
+    # bodies too, so recurse into them here.
+    if ins.op == "trycatch":
+        for nested in (ins.try_body, ins.except_body, ins.finally_body):
+            for sub in nested:
+                yield from _operand_vregs(sub)
+
+
+def _iter_insts_recursive(insts):
+    """Yield every instruction in `insts`, recursing into any `trycatch`
+    node's nested try/except/finally blocks too. Used by lower_to_c/
+    lower_to_js's whole-program scans (e.g. finding every subroutine CALL
+    target, including one made from inside a try body) -- the bytecode path
+    never needs this since _flatten_trycatch removes all trycatch nodes
+    before any such scan runs."""
+    for ins in insts:
+        yield ins
+        if ins.op == "trycatch":
+            for nested in (ins.try_body, ins.except_body, ins.finally_body):
+                yield from _iter_insts_recursive(nested)
 
 
 def allocate(insts: List[Inst], spill: bool = False) -> Dict[int, int]:
@@ -696,6 +789,7 @@ def lower_to_bytecode(insts: List[Inst], opt: bool = True) -> List[int]:
     register slot (arith with a non-register first operand) are materialized with
     a CONST first by the frontends, so here `a` is always a VReg for arithmetic.
     """
+    insts = _flatten_trycatch(insts)
     if opt:
         insts = optimize(insts)
     insts, mapping = _allocate_or_spill(insts)
@@ -873,6 +967,48 @@ def _emit_const(words: List[int], rd: int, value: int, force_wide: bool = False)
     return 8
 
 
+def _flatten_trycatch(insts: List[Inst], _counter: Optional[List[int]] = None) -> List[Inst]:
+    """Expand every structured `trycatch` node (see ILBuilder.trycatch) into
+    the flat laddr/Error.SetHandler/label/jmp form the bytecode assembler and
+    register allocator understand -- this is exactly the transformation
+    picoscript_basic.py's/picoscript_cfront.py's lower_try used to do inline
+    at Lowerer time; it now happens once, here, shared by every frontend and
+    every bytecode-consuming path (lower_to_bytecode_safe). Native transpile
+    (lower_to_c/lower_to_js) does NOT call this -- it consumes the structured
+    node directly to emit real goto/setjmp or try/catch. See
+    docs/EXCEPTION_ENGINE.md. Recursive: a trycatch nested inside another
+    trycatch's try/except/finally body is flattened too, depth-first."""
+    if _counter is None:
+        _counter = [0]
+    out: List[Inst] = []
+    for ins in insts:
+        if ins.op != "trycatch":
+            out.append(ins)
+            continue
+        _counter[0] += 1
+        n = _counter[0]
+        handler_label = f"__tc_except{n}__"
+        end_label = f"__tc_endtry{n}__"
+        addr = VReg(name="__tc_addr__")
+        set_ok = VReg(name="__tc_setok__")
+        pop1 = VReg(name="__tc_pop1__")
+        pop2 = VReg(name="__tc_pop2__")
+        clr = VReg(name="__tc_clear__")
+        out.append(Inst("laddr", dst=addr, label=handler_label, pos=ins.pos))
+        out.append(Inst("host", ns="Error", method="SetHandler", args=(addr,), dst=set_ok, pos=ins.pos))
+        out.extend(_flatten_trycatch(list(ins.try_body), _counter))
+        out.append(Inst("host", ns="Error", method="PopHandler", args=(), dst=pop1, pos=ins.pos))
+        out.extend(_flatten_trycatch(list(ins.finally_body), _counter))
+        out.append(Inst("jmp", label=end_label, pos=ins.pos))
+        out.append(Inst("label", label=handler_label, pos=ins.pos))
+        out.append(Inst("host", ns="Error", method="PopHandler", args=(), dst=pop2, pos=ins.pos))
+        out.extend(_flatten_trycatch(list(ins.except_body), _counter))
+        out.append(Inst("host", ns="Error", method="Clear", args=(), dst=clr, pos=ins.pos))
+        out.extend(_flatten_trycatch(list(ins.finally_body), _counter))
+        out.append(Inst("label", label=end_label, pos=ins.pos))
+    return out
+
+
 def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True,
                            check_ownership: bool = True,
                            debug: "Optional[dict]" = None) -> List[int]:
@@ -888,6 +1024,7 @@ def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True,
     mapping each emitted bytecode pc -> (src_off, op, ns, method) for every word the
     instruction produced.  The word stream is byte-identical regardless of `debug`;
     the table is a separate symbolication artifact (see symbolize())."""
+    insts = _flatten_trycatch(insts)
     if check_ownership:
         verify_response_ownership(insts)
     if opt:
@@ -1089,7 +1226,7 @@ def lower_to_c(insts: List[Inst], func_name: str = "pico_main", opt: bool = True
         insts = optimize(insts)
 
     module = _c_ident(func_name)
-    call_targets = {ins.label for ins in insts if ins.op == "call"}
+    call_targets = {ins.label for ins in _iter_insts_recursive(insts) if ins.op == "call"}
 
     # Split the linear IL into functions at call-target labels.
     functions: List[Tuple[str, List[Inst]]] = []
@@ -1132,6 +1269,7 @@ def lower_to_c(insts: List[Inst], func_name: str = "pico_main", opt: bool = True
         out.append(f"int64_t {fname}(pv_ctx *ctx);")
     out.append("")
 
+    tc_counter = [0]   # unique __tc_exceptN__/__tc_endtryN__ labels, shared across all functions
     for fname, seg in functions:
         is_main = (fname == module)
         local_ids: Dict[int, VReg] = {}
@@ -1144,8 +1282,9 @@ def lower_to_c(insts: List[Inst], func_name: str = "pico_main", opt: bool = True
             decls = ", ".join(f"v{vid} = 0" for vid in sorted(local_ids))
             out.append(f"    int64_t {decls};")
         out.append("    (void)ctx;")
+        handler_stack: List[str] = []   # active in-function try handler C labels (goto targets)
         for ins in seg:
-            out.append(_emit_c(ins, opnd, name_of, label_to_func, is_main))
+            out.append(_emit_c(ins, opnd, name_of, label_to_func, is_main, handler_stack, tc_counter))
         out.append("    return ctx->retval;")
         out.append("}")
         out.append("")
@@ -1170,8 +1309,13 @@ def lower_to_c(insts: List[Inst], func_name: str = "pico_main", opt: bool = True
     return "\n".join(out)
 
 
-def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool) -> str:
+def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool,
+            handler_stack: Optional[List[str]] = None, tc_counter: Optional[List[int]] = None) -> str:
     op = ins.op
+    if handler_stack is None:
+        handler_stack = []
+    if tc_counter is None:
+        tc_counter = [0]
     if op == "label":
         return f"{_c_ident(ins.label)}:;"
     if op == "const":
@@ -1205,13 +1349,44 @@ def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool) -> str:
         arms = "".join(f" case {k}: goto {_c_ident(t)};" for k, t in enumerate(ins.targets))
         return f"    switch ((int)({sel})) {{{arms} default: goto {_c_ident(ins.label)}; }}"
     if op == "call":
-        return f"    {label_to_func[ins.label]}(ctx);"
+        # After a subroutine call, check whether an unhandled Raise inside it
+        # is still propagating (see pv_ctx.raise_active's docstring in
+        # picovm.h): if this function has an active in-function handler,
+        # deliver it there; otherwise keep propagating by returning too --
+        # unwinding one native C stack frame at a time.
+        lines = [f"    {label_to_func[ins.label]}(ctx);"]
+        lines.append("    if (ctx->raise_active) {")
+        if handler_stack:
+            lines.append("        ctx->raise_active = 0;")
+            lines.append(f"        goto {handler_stack[-1]};")
+        else:
+            lines.append("        return ctx->retval;")
+        lines.append("    }")
+        return "\n".join(lines)
     if op == "ret":
         return "    return ctx->retval;"
     if op == "host":
         dst = f"{name_of(ins.dst)} = " if isinstance(ins.dst, VReg) else ""
         a = opnd(ins.args[0]) if len(ins.args) >= 1 else "0"
         b = opnd(ins.args[1]) if len(ins.args) >= 2 else "0"
+        if ins.ns == "Error" and ins.method == "Raise":
+            # Script-level "throw a value" -- see docs/EXCEPTION_ENGINE.md.
+            # Unlike the bytecode VMs (a runtime handler-PC redirect), this is
+            # a compile-time decision: handler_stack reflects exactly which
+            # try block (if any) lexically encloses this Raise in the SAME
+            # C function. If one does, jump straight there (plain goto, zero
+            # cost, fully portable C); if not, this may still be caught by a
+            # CALLER's handler (this function was invoked from inside a try),
+            # so set raise_active and return -- the call-site check above
+            # unwinds the native C call stack one frame at a time until a
+            # handler is found or it reaches the top uncaught.
+            lines = [f"    ctx->err_code = (int32_t)({a}); ctx->err_detail = 0;"]
+            if handler_stack:
+                lines.append(f"    goto {handler_stack[-1]};")
+            else:
+                lines.append("    ctx->raise_active = 1;")
+                lines.append("    return ctx->retval;")
+            return "\n".join(lines)
         if ins.ns == "Bits" and isinstance(ins.dst, VReg):
             da = f"(uint32_t)({a})"
             db = f"(uint32_t)({b})"
@@ -1277,15 +1452,42 @@ def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool) -> str:
     if op == "raise":
         return f"    pv_raise(ctx, {ins.imm});"
     if op == "laddr":
+        # Unreachable in practice: lower_to_c consumes the structured
+        # `trycatch` node below directly (real goto), so a bare `laddr`
+        # should never reach here -- this is a defensive assertion, not the
+        # normal rejection path it used to be.
         raise ValueError(
-            "lower_to_c: 'laddr' (label-address, used by TryExcept/Raise's "
-            "exception-handler registration) has no equivalent in the native "
-            "C transpile model -- emitted C uses plain goto labels, not "
-            "PC-addressable bytecode, so there is no runtime value to load. "
-            "Native/bare-metal try/except is not yet supported; run this "
-            "program on the Python or JS bytecode VM instead (see "
-            "docs/EXCEPTION_ENGINE.md)."
+            "lower_to_c: unexpected bare 'laddr' outside a trycatch node -- "
+            "this indicates a compiler bug (see docs/EXCEPTION_ENGINE.md)."
         )
+    if op == "trycatch":
+        # Real try/except/finally, compiled directly from the structured
+        # node -- see docs/EXCEPTION_ENGINE.md. Plain goto for the common
+        # case (Raise lexically inside this same C function); raise_active
+        # (see the call-site check above and Error.Raise above) handles a
+        # Raise from inside a called subroutine unwinding back into this
+        # function's handler. finally_body is emitted exactly once, after
+        # either path -- simpler and equally correct vs. the bytecode path's
+        # two-copies-of-finally flattening (_flatten_trycatch), since here
+        # both paths naturally converge at one C label.
+        tc_counter[0] += 1
+        n = tc_counter[0]
+        handler_label = f"__tc_except{n}__"
+        end_label = f"__tc_endtry{n}__"
+        lines = ["    {"]
+        handler_stack.append(handler_label)
+        for sub in ins.try_body:
+            lines.append(_emit_c(sub, opnd, name_of, label_to_func, is_main, handler_stack, tc_counter))
+        handler_stack.pop()
+        lines.append(f"    goto {end_label};")
+        lines.append(f"    {handler_label}:;")
+        for sub in ins.except_body:
+            lines.append(_emit_c(sub, opnd, name_of, label_to_func, is_main, handler_stack, tc_counter))
+        lines.append(f"    {end_label}:;")
+        for sub in ins.finally_body:
+            lines.append(_emit_c(sub, opnd, name_of, label_to_func, is_main, handler_stack, tc_counter))
+        lines.append("    }")
+        return "\n".join(lines)
     return f"    /* unhandled IL op {op} */"
 
 
@@ -1309,7 +1511,7 @@ def lower_to_js(insts: List[Inst], module_name: str = "pico", opt: bool = True) 
         insts = optimize(insts)
     module_name = _c_ident(module_name)
 
-    call_targets = {ins.label for ins in insts if ins.op == "call"}
+    call_targets = {ins.label for ins in _iter_insts_recursive(insts) if ins.op == "call"}
     # split into functions at call-target labels (entry = main)
     functions: List[Tuple[str, List[Inst]]] = []
     cur_name = module_name
@@ -1340,6 +1542,13 @@ def lower_to_js(insts: List[Inst], module_name: str = "pico", opt: bool = True) 
     out.append(provenance)
     out.append("(function (root) {")
     out.append("  'use strict';")
+    out.append("  // Real try/except (see docs/EXCEPTION_ENGINE.md): PicoRaise is a plain")
+    out.append("  // JS exception carrying the raised code, thrown by Raise and caught by the")
+    out.append("  // enclosing trycatch's own real JS try/catch -- unlike native C (no")
+    out.append("  // exceptions), this needs no return-code propagation bookkeeping at all:")
+    out.append("  // a real `throw` naturally unwinds across function calls exactly like a")
+    out.append("  // script-level Raise from inside a called subroutine should.")
+    out.append("  function PicoRaise(code) { this.code = code | 0; }")
     out.append("  function makeRuntime() {")
     out.append("    var _PV = null;")
     out.append("    try { _PV = (typeof module !== 'undefined' && module.exports) ? require('./picovm.js') : (root.PicoVM || null); } catch (e) { _PV = null; }")
@@ -1365,7 +1574,12 @@ def lower_to_js(insts: List[Inst], module_name: str = "pico", opt: bool = True) 
     out.append("        dot8: function (w, a) { return _call(0x57, w, a); },")
     out.append("        dsp: function (s, a, b) { return s===4?(a<0?0:a):(s===3?Math.imul(a,b):(s===9?(a+b|0):0)); },")
     out.append("        host: function (c, a, b) { return (typeof c === 'number') ? _call(c, a, b) : 0; },")
-    out.append("        outputInts: function () { var o=[]; for (var i=0;i+3<this.output.length;i+=4){o.push(((this.output[i]<<24)|(this.output[i+1]<<16)|(this.output[i+2]<<8)|this.output[i+3])|0);} return o; }")
+    out.append("        outputInts: function () { var o=[]; for (var i=0;i+3<this.output.length;i+=4){o.push(((this.output[i]<<24)|(this.output[i+1]<<16)|(this.output[i+2]<<8)|this.output[i+3])|0);} return o; },")
+    out.append("        // Native try/except (see docs/EXCEPTION_ENGINE.md): set the SAME")
+    out.append("        // {code,detail} state Error.Code()/Error.Detail()/Error.Clear() calls")
+    out.append("        // read/write via the shared VM host, so a script's Error.Code() call")
+    out.append("        // inside a catch block sees exactly the value this Raise emitted.")
+    out.append("        errSet: function (code, detail) { if (!hv._errState) hv._errState = { handlerStack: [], code: 0, detail: 0, resumePc: 0 }; hv._errState.code = code | 0; hv._errState.detail = detail | 0; }")
     out.append("      };")
     out.append("    }")
     out.append("    // Standalone fallback: Bits/Memory/Io/Dot8 inline; host namespaces unavailable.")
@@ -1385,7 +1599,12 @@ def lower_to_js(insts: List[Inst], module_name: str = "pico", opt: bool = True) 
     out.append("      dot8: function (w, a) { var n=this.dotLen|0, sz=this.mem.length, s=0, i=0; for(;i<n;i++){var x=this.mem[(w+i)%sz]; if(x>127)x-=256; var y=this.mem[(a+i)%sz]; if(y>127)y-=256; s=(s+x*y)|0;} return s; },")
     out.append("      dsp: function (s, a, b) { return s===4?(a<0?0:a):(s===3?Math.imul(a,b):(s===9?(a+b|0):0)); },")
     out.append("      host: function (c, a, b) { return 0; },")
-    out.append("      outputInts: function () { var o=[]; for (var i=0;i+3<this.output.length;i+=4){o.push(((this.output[i]<<24)|(this.output[i+1]<<16)|(this.output[i+2]<<8)|this.output[i+3])|0);} return o; }")
+    out.append("      outputInts: function () { var o=[]; for (var i=0;i+3<this.output.length;i+=4){o.push(((this.output[i]<<24)|(this.output[i+1]<<16)|(this.output[i+2]<<8)|this.output[i+3])|0);} return o; },")
+    out.append("      // Standalone fallback has no shared VM host at all (Error.Code()/etc")
+    out.append("      // already return 0 unconditionally above, a pre-existing limitation of")
+    out.append("      // this mode) -- still track the value locally for consistency.")
+    out.append("      _errCode: 0, _errDetail: 0,")
+    out.append("      errSet: function (code, detail) { this._errCode = code | 0; this._errDetail = detail | 0; }")
     out.append("    };")
     out.append("  }")
     out.append("")
@@ -1394,8 +1613,9 @@ def lower_to_js(insts: List[Inst], module_name: str = "pico", opt: bool = True) 
         out.append(f"  var {gdecl};")
         out.append("")
 
+    tc_counter = [0]   # unique _bN/bmN names for nested trycatch block machines, shared across all functions
     for fname, seg in functions:
-        out.extend(_emit_js_function(fname, seg, jname, jop, label_to_func, pinned_ids))
+        out.extend(_emit_js_function(fname, seg, jname, jop, label_to_func, pinned_ids, tc_counter))
         out.append("")
 
     out.append(f"  function _reset() {{ {'; '.join(f'g{vid} = 0' for vid in sorted(pinned_ids)) or '/* no globals */'}; }}")
@@ -1410,74 +1630,123 @@ def lower_to_js(insts: List[Inst], module_name: str = "pico", opt: bool = True) 
     return "\n".join(out)
 
 
-def _emit_js_function(fname, seg, jname, jop, label_to_func, pinned_ids) -> List[str]:
-    # local (temp) vregs declared per function
+def _emit_js_function(fname, seg, jname, jop, label_to_func, pinned_ids, tc_counter) -> List[str]:
+    # local (temp) vregs declared per function -- includes vregs used only
+    # inside a nested trycatch body (_operand_vregs recurses into those).
     local_ids: Dict[int, VReg] = {}
     for ins in seg:
         for v in _operand_vregs(ins):
             if not v.pinned:
                 local_ids.setdefault(v.id, v)
 
-    # basic blocks: a new block starts at each label; block 0 is the entry.
+    L: List[str] = []
+    L.append(f"  function {fname}(rt) {{")
+    if local_ids:
+        L.append("    var " + ", ".join(f"v{vid} = 0" for vid in sorted(local_ids)) + ";")
+    scope_stack: List[Tuple[Dict[str, int], str, str]] = []
+    body, _bv, _ll = _emit_js_block_machine(seg, jname, jop, label_to_func, scope_stack, tc_counter, top_level=True)
+    for line in body:
+        L.append("    " + line)
+    L.append("    return rt;")
+    L.append("  }")
+    return L
+
+
+def _emit_js_block_machine(insts: List[Inst], jname, jop, label_to_func, scope_stack, tc_counter,
+                            top_level: bool = False) -> Tuple[List[str], str, str]:
+    """Emit a `var _bN = 0; bmN: while(_bN>=0){switch(_bN){...}}` basic-block
+    state machine for `insts`. A `trycatch` node's try/except/finally bodies
+    each get their OWN independent, recursively-built block machine (wrapped
+    in a real JS try/catch/finally) rather than being folded into this one's
+    block list, since JS has no goto to fall back on for a jump crossing a
+    try boundary the way native C's plain goto handles it for free.
+
+    `scope_stack` is a list of (label_block, b_var, loop_label) for every
+    block machine currently being emitted, outermost (the function itself)
+    first -- so a `break`/`continue`/`jmp` inside a try body that targets a
+    label in an ENCLOSING scope (e.g. breaking out of a while loop that
+    wraps the try) resolves against that outer scope and escapes via a
+    labeled `continue`, not a plain unlabeled one (see resolve_jump).
+
+    Returns (lines, b_var, loop_label) -- the two are unused by the top-level
+    function caller but let a trycatch wrapper reference this body's own
+    loop if ever needed.
+    """
+    tc_counter[0] += 1
+    n = tc_counter[0]
+    b_var = "_b" if top_level else f"_b{n}"
+    loop_label = f"bm{n}"
+
     label_block: Dict[str, int] = {}
     blocks: List[List[Inst]] = [[]]
-    for ins in seg:
+    for ins in insts:
         if ins.op == "label":
             label_block[ins.label] = len(blocks)
             blocks.append([])
         else:
             blocks[-1].append(ins)
 
+    scope_stack.append((label_block, b_var, loop_label))
+
+    def resolve_jump(label: str) -> Tuple[str, int, str]:
+        for lb, bv, ll in reversed(scope_stack):
+            if label in lb:
+                return bv, lb[label], ll
+        raise ValueError(
+            f"lower_to_js: label {label!r} not found in any enclosing scope -- "
+            f"likely a break/continue/jump crossing a try/except boundary in an "
+            f"unsupported way (see docs/EXCEPTION_ENGINE.md)."
+        )
+
     L: List[str] = []
-    L.append(f"  function {fname}(rt) {{")
-    if local_ids:
-        L.append("    var " + ", ".join(f"v{vid} = 0" for vid in sorted(local_ids)) + ";")
-    L.append("    var _b = 0;")
-    L.append("    while (_b >= 0) {")
-    L.append("      switch (_b) {")
+    L.append(f"var {b_var} = 0;")
+    L.append(f"{loop_label}: while ({b_var} >= 0) {{")
+    L.append("  switch (" + b_var + ") {")
     for bi, block in enumerate(blocks):
-        L.append(f"        case {bi}:")
+        L.append(f"    case {bi}:")
         terminated = False
         for ins in block:
-            line, term = _emit_js_inst(ins, jop, jname, label_block, label_to_func)
-            L.append("          " + line)
+            lines, term = _emit_js_inst(ins, jop, jname, resolve_jump, label_to_func, scope_stack, tc_counter)
+            for ln in lines:
+                L.append("      " + ln)
             if term:
                 terminated = True
                 break
         if not terminated:
             nxt = bi + 1
             if nxt < len(blocks):
-                L.append(f"          _b = {nxt}; continue;")
+                L.append(f"      {b_var} = {nxt}; continue {loop_label};")
             else:
-                L.append("          _b = -1; continue;")
-    L.append("      }")
-    L.append("    }")
-    L.append("    return rt;")
+                L.append(f"      {b_var} = -1; continue {loop_label};")
     L.append("  }")
-    return L
+    L.append("}")
+
+    scope_stack.pop()
+    return L, b_var, loop_label
 
 
-def _emit_js_inst(ins: Inst, jop, jname, label_block, label_to_func) -> Tuple[str, bool]:
-    """Return (js_source, is_terminator)."""
+def _emit_js_inst(ins: Inst, jop, jname, resolve_jump, label_to_func,
+                   scope_stack, tc_counter) -> Tuple[List[str], bool]:
+    """Return (js_source_lines, is_terminator)."""
     op = ins.op
     if op == "const":
-        return f"{jname(ins.dst)} = {_to_i32(ins.imm)};", False
+        return [f"{jname(ins.dst)} = {_to_i32(ins.imm)};"], False
     if op == "mov":
-        return f"{jname(ins.dst)} = {jop(ins.a)};", False
+        return [f"{jname(ins.dst)} = {jop(ins.a)};"], False
     if op in ARITH:
         a, b = jop(ins.a), jop(ins.b)
         if op == "add":
-            return f"{jname(ins.dst)} = ({a} + {b}) | 0;", False
+            return [f"{jname(ins.dst)} = ({a} + {b}) | 0;"], False
         if op == "sub":
-            return f"{jname(ins.dst)} = ({a} - {b}) | 0;", False
+            return [f"{jname(ins.dst)} = ({a} - {b}) | 0;"], False
         if op == "mul":
-            return f"{jname(ins.dst)} = Math.imul({a}, {b});", False
-        return f"{jname(ins.dst)} = ({b} !== 0 ? (({a} / {b}) | 0) : 0);", False
+            return [f"{jname(ins.dst)} = Math.imul({a}, {b});"], False
+        return [f"{jname(ins.dst)} = ({b} !== 0 ? (({a} / {b}) | 0) : 0);"], False
     if op == "inc":
-        return f"{jname(ins.dst)} = ({jname(ins.dst)} + 1) | 0;", False
+        return [f"{jname(ins.dst)} = ({jname(ins.dst)} + 1) | 0;"], False
     if op == "cmpbr":
         csym = {"EQ": "===", "NE": "!==", "LT": "<", "GT": ">", "LE": "<=", "GE": ">="}
-        tgt = label_block[ins.label]
+        bv, idx, ll = resolve_jump(ins.label)
         a, b = jop(ins.a), jop(ins.b)
         if ins.cond in csym:
             cond = f"({a} {csym[ins.cond]} {b})"
@@ -1487,17 +1756,57 @@ def _emit_js_inst(ins: Inst, jop, jname, label_block, label_to_func) -> Tuple[st
             cond = f"({a} !== 0)"
         else:
             cond = "false"
-        return f"if ({cond}) {{ _b = {tgt}; continue; }}", False
+        return [f"if ({cond}) {{ {bv} = {idx}; continue {ll}; }}"], False
     if op == "jmp":
-        return f"_b = {label_block[ins.label]}; continue;", True
+        bv, idx, ll = resolve_jump(ins.label)
+        return [f"{bv} = {idx}; continue {ll};"], True
     if op == "call":
-        return f"{label_to_func[ins.label]}(rt);", False
+        return [f"{label_to_func[ins.label]}(rt);"], False
     if op == "ret":
-        return "return rt;", True
+        return ["return rt;"], True
+    if op == "trycatch":
+        # Real try/except/finally, compiled directly from the structured
+        # node using JS's own exceptions -- see docs/EXCEPTION_ENGINE.md and
+        # PicoRaise's docstring above. Each of try_body/except_body/
+        # finally_body gets its own independent, recursively-built block
+        # machine (so nested control flow inside a try body works exactly
+        # like it would anywhere else), wrapped in a real try/catch/finally
+        # so a PicoRaise thrown from ANYWHERE inside the try -- including
+        # from a called subroutine, any number of JS stack frames deep --
+        # is caught here, exactly matching the semantics of a handler stack
+        # without needing to build one.
+        try_lines, _, _ = _emit_js_block_machine(list(ins.try_body), jname, jop, label_to_func,
+                                                  scope_stack, tc_counter)
+        except_lines, _, _ = _emit_js_block_machine(list(ins.except_body), jname, jop, label_to_func,
+                                                     scope_stack, tc_counter)
+        lines = ["try {"]
+        for ln in try_lines:
+            lines.append("  " + ln)
+        lines.append("} catch (__pe__) {")
+        lines.append("  if (__pe__ instanceof PicoRaise) {")
+        lines.append("    rt.errSet(__pe__.code, 0);")
+        for ln in except_lines:
+            lines.append("    " + ln)
+        lines.append("  } else { throw __pe__; }")
+        lines.append("}")
+        if ins.finally_body:
+            finally_lines, _, _ = _emit_js_block_machine(list(ins.finally_body), jname, jop, label_to_func,
+                                                          scope_stack, tc_counter)
+            lines.append("finally {")
+            for ln in finally_lines:
+                lines.append("  " + ln)
+            lines.append("}")
+        return lines, False
     if op == "host":
         dst = f"{jname(ins.dst)} = " if isinstance(ins.dst, VReg) else ""
         a = jop(ins.args[0]) if len(ins.args) >= 1 else "0"
         b = jop(ins.args[1]) if len(ins.args) >= 2 else "0"
+        if ins.ns == "Error" and ins.method == "Raise":
+            # Script-level "throw a value" -- a real JS throw naturally
+            # unwinds to the nearest enclosing trycatch's real try/catch,
+            # whether that's in this same function or several calls up the
+            # JS stack -- no handler-stack bookkeeping needed at all.
+            return [f"throw new PicoRaise({a});"], True
         if ins.ns == "Bits" and isinstance(ins.dst, VReg):
             if ins.method == "And":
                 expr = f"(({a} & {b}) | 0)"
@@ -1516,65 +1825,67 @@ def _emit_js_inst(ins: Inst, jop, jname, label_block, label_to_func) -> Tuple[st
             else:
                 expr = None
             if expr is not None:
-                return f"{jname(ins.dst)} = {expr};", False
+                return [f"{jname(ins.dst)} = {expr};"], False
         if ins.ns == "Memory" and ins.method == "Get" and isinstance(ins.dst, VReg):
-            return f"{jname(ins.dst)} = rt.memGet({a});", False
+            return [f"{jname(ins.dst)} = rt.memGet({a});"], False
         if ins.ns == "Memory" and ins.method == "Set":
-            return f"rt.memSet({a}, {b});", False
+            return [f"rt.memSet({a}, {b});"], False
         if ins.ns == "Io" and ins.method == "WriteByte":
-            return f"rt.ioWrite({a});", False
+            return [f"rt.ioWrite({a});"], False
         if ins.ns == "Dot8" and ins.method == "Len":
-            return f"rt.dotLenSet({a});", False
+            return [f"rt.dotLenSet({a});"], False
         if ins.ns == "Dot8" and ins.method == "Of" and isinstance(ins.dst, VReg):
-            return f"{jname(ins.dst)} = rt.dot8({a}, {b});", False
+            return [f"{jname(ins.dst)} = rt.dot8({a}, {b});"], False
         # First-class native lowering: a direct code-keyed host call (mirrors the
         # toC pv_host2 path). The runtime delegates to the shared JS host (picovm.js)
         # when available, so compiled JS gets full namespace parity, no VM loop.
         code = HOST_HOOK_CODES.get((ins.ns, ins.method))
         if code is not None:
-            return f'{dst}rt.host(0x{code:X}, {a}, {b});', False
-        return f'{dst}rt.host({json.dumps(ins.ns)}, {json.dumps(ins.method)}, {a}, {b});', False
+            return [f'{dst}rt.host(0x{code:X}, {a}, {b});'], False
+        return [f'{dst}rt.host({json.dumps(ins.ns)}, {json.dumps(ins.method)}, {a}, {b});'], False
     if op == "load":
-        return f"{jname(ins.dst)} = rt.load({ins.imm});", False
+        return [f"{jname(ins.dst)} = rt.load({ins.imm});"], False
     if op == "save":
-        return f"rt.save({ins.imm}, {jop(ins.a)});", False
+        return [f"rt.save({ins.imm}, {jop(ins.a)});"], False
     if op == "pipe":
-        return f"rt.pipe({ins.imm}, {jop(ins.a)});", False
+        return [f"rt.pipe({ins.imm}, {jop(ins.a)});"], False
     if op == "net":
         if ins.method == "status":
-            return f"rt.netStatus({ins.imm});", False
+            return [f"rt.netStatus({ins.imm});"], False
         if ins.method == "type":
-            return f'rt.netType({json.dumps(ins.text)});', False
+            return [f'rt.netType({json.dumps(ins.text)});'], False
         if ins.method == "body":
-            return "rt.netBody();", False
+            return ["rt.netBody();"], False
         if ins.method == "close":
-            return "rt.netClose(); return rt;", True
+            return ["rt.netClose(); return rt;"], True
         if ins.method == "header":
-            return "rt.netHeader();", False
+            return ["rt.netHeader();"], False
     if op == "dsp":
         a = jop(ins.a) if isinstance(ins.a, VReg) else "0"
         b = jop(ins.b) if ins.b is not None else "0"
-        return f"{jname(ins.dst)} = rt.dsp({ins.imm}, {a}, {b});", False
+        return [f"{jname(ins.dst)} = rt.dsp({ins.imm}, {a}, {b});"], False
     if op == "wait":
-        return "return rt;", True
+        return ["return rt;"], True
     if op == "raise":
-        return f"/* raise {ins.imm} */", False
+        return [f"/* raise {ins.imm} */"], False
     if op == "laddr":
+        # Unreachable in practice: lower_to_js consumes the structured
+        # `trycatch` node above directly (real try/catch/throw), so a bare
+        # `laddr` should never reach here -- this is a defensive assertion.
         raise ValueError(
-            "lower_to_js: 'laddr' (label-address, used by TryExcept/Raise's "
-            "exception-handler registration) has no equivalent in the native "
-            "JS transpile model yet -- it would need the emitted function's "
-            "block-switch dispatcher wrapped in try/catch to actually catch "
-            "faults, not just a label-address value load. Native/transpiled "
-            "try/except is not yet supported; run this program on the "
-            "Python or JS bytecode VM instead (see docs/EXCEPTION_ENGINE.md)."
+            "lower_to_js: unexpected bare 'laddr' outside a trycatch node -- "
+            "this indicates a compiler bug (see docs/EXCEPTION_ENGINE.md)."
         )
     if op == "jmptab":
         sel = jop(ins.a)
-        arms = " ".join(f"case {k}: {{ _b = {label_block[t]}; continue; }}"
-                        for k, t in enumerate(ins.targets))
-        return f"switch (({sel})|0) {{ {arms} default: {{ _b = {label_block[ins.label]}; continue; }} }}", True
-    return f"/* unhandled {op} */", False
+        arm_parts = []
+        for k, t in enumerate(ins.targets):
+            tbv, tidx, tll = resolve_jump(t)
+            arm_parts.append(f"case {k}: {{ {tbv} = {tidx}; continue {tll}; }}")
+        arms = " ".join(arm_parts)
+        dbv, didx, dll = resolve_jump(ins.label)
+        return [f"switch (({sel})|0) {{ {arms} default: {{ {dbv} = {didx}; continue {dll}; }} }}"], True
+    return [f"/* unhandled {op} */"], False
 
 
 def il_to_text(insts: List[Inst]) -> str:

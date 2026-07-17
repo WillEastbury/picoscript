@@ -795,43 +795,17 @@ class Lowerer:
         return v
 
     def lower_try(self, s: TryCatch):
-        """try { } catch { } [finally { }] -- a real exception mechanism
-        using a handler STACK; see docs/EXCEPTION_ENGINE.md and
-        picoscript_basic.py's lower_try, which this mirrors exactly (cfront
-        has its own, independent AST + Lowerer, but shares the same
-        picoscript_il.ILBuilder -- including label_addr -- and the same
-        Error.SetHandler/PopHandler/Raise host ops, so the underlying
-        mechanism is identical, just re-expressed against cfront's own
-        node/statement dispatch)."""
-        handler_label = self.b.new_label("except")
-        end_label = self.b.new_label("endtry")
-
-        addr = self.b.vreg()
-        self.b.label_addr(addr, handler_label)
-        set_ok = self.b.vreg()
-        self.b.host("Error", "SetHandler", (addr,), set_ok)
-
-        for st in s.try_body:
-            self.stmt(st)
-
-        pop1 = self.b.vreg()
-        self.b.host("Error", "PopHandler", (), pop1)
-        if s.finally_body:
-            for st in s.finally_body:
-                self.stmt(st)
-        self.b.jmp(end_label)
-
-        self.b.label(handler_label)
-        pop2 = self.b.vreg()
-        self.b.host("Error", "PopHandler", (), pop2)
-        for st in s.catch_body:
-            self.stmt(st)
-        clear = self.b.vreg()
-        self.b.host("Error", "Clear", (), clear)
-        if s.finally_body:
-            for st in s.finally_body:
-                self.stmt(st)
-        self.b.label(end_label)
+        """try { } catch { } [finally { }] -- a structured `trycatch` IL node
+        (see ILBuilder.trycatch / docs/EXCEPTION_ENGINE.md), mirroring
+        picoscript_basic.py's lower_try exactly (cfront has its own,
+        independent AST + Lowerer, but shares the same picoscript_il
+        ILBuilder, so the same structured-node mechanism applies here too --
+        just re-expressed against cfront's own node/statement dispatch)."""
+        self.b.trycatch(
+            lambda: [self.stmt(st) for st in s.try_body],
+            lambda: [self.stmt(st) for st in s.catch_body],
+            (lambda: [self.stmt(st) for st in s.finally_body]) if s.finally_body else None,
+        )
 
     def lower_on_block(self, s: OnBlock):
         """on Ns.Method { body } -- an inline drain-and-dispatch loop over

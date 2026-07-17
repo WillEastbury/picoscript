@@ -6,22 +6,27 @@ and documented in `docs/DIALECT_PARITY.md` during the dialect-parity audit.
 
 ## Scope: which execution paths actually support this
 
-**Fully working:** all **three** interpretive bytecode VMs -- **Python**
-(`picoscript_vm.py`), **JavaScript** (`vm/picovm.js`), and **C**
-(`vm/picovm.c`, fixed after this doc originally shipped only claiming the
-first two — see "The C VM interpreter" below) -- for **every** frontend:
-BASIC, Python-style, English, COBOL, Report, Functional (all six sharing
-`picoscript_basic.py`'s `Lowerer`), and C-style (`picoscript_cfront.py`, an
-independent AST + `Lowerer`, but reusing the same
-`picoscript_il.ILBuilder`/`label_addr` and `Error.*` host ops, so the
-underlying mechanism is identical). The JS compiler (`vm/picoc.js`) mirrors
-all of this too -- `BLowerer.lowerTry`/`lowerOnBlock` (shared by the six
-BASIC-family JS parsers) and each frontend's own JS parser grammar were
-ported alongside the Python side, verified byte-identical
-(`tests/test_js_port_exception_eventing.py`,
-`tests/test_js_grammar_all_frontends.py`). This covers the CLI's `run`
-command and the browser Playground's compile-and-run/step debugger for
-every dialect.
+**Fully working on all 5 execution paths**: the three interpretive bytecode
+VMs -- **Python** (`picoscript_vm.py`), **JavaScript** (`vm/picovm.js`), and
+**C** (`vm/picovm.c`, fixed after this doc originally shipped only claiming
+the first two — see "The C VM interpreter" below) -- **and** both native
+transpile backends -- **native C** (`lower_to_c`) and **native JS**
+(`lower_to_js`), fixed by the structured-`trycatch`-IL redesign described
+below, after this doc originally shipped claiming they were a fundamentally
+harder, not-yet-attempted gap -- for **every** frontend: BASIC, Python-style,
+English, COBOL, Report, Functional (all six sharing `picoscript_basic.py`'s
+`Lowerer`), and C-style (`picoscript_cfront.py`, an independent AST +
+`Lowerer`, but reusing the same `picoscript_il.ILBuilder.trycatch` and
+`Error.*` host ops, so the underlying mechanism is identical). The JS
+compiler (`vm/picoc.js`) mirrors all of this too -- `BLowerer.lowerTry`/
+`lowerOnBlock` (shared by the six BASIC-family JS parsers) and each
+frontend's own JS parser grammar were ported alongside the Python side,
+verified byte-identical (`tests/test_js_port_exception_eventing.py`,
+`tests/test_js_grammar_all_frontends.py`), and `CParser`/`CLowerer` (C-style's
+JS mirror) gained the same support too (see "C-style's JS mirror" below).
+This covers the CLI's `run` command and the browser Playground's
+compile-and-run/step debugger for every dialect, plus both native
+C/JS transpile targets.
 
 ### The C VM interpreter (`vm/picovm.c`) — fixed
 
@@ -64,32 +69,99 @@ change affects every program, not just ones using exceptions — a **genuine
 VM fault** (bad computed jump) caught by an active handler, not just a
 script-level `Raise`. See `tests/test_c_vm_error_parity.py`.
 
-**Not supported, and explicitly, loudly rejected rather than silently
-mis-compiled:**
-- **Native C transpile** (`lower_to_c` → `vm/picovm.c` host ABI). Emitted C
-  uses plain `goto` labels, not PC-addressable bytecode -- there is no
-  runtime "program counter" value to load a label's address into, so
-  `Error.SetHandler(pc)`'s whole model doesn't map onto this backend without
-  a fundamentally different mechanism (e.g. `setjmp`/`longjmp`). Compiling a
-  program containing `TryExcept`/`Raise` (any frontend, including C-style)
-  with `--as c` (or `native`) raises a clear `ValueError` at compile time.
-  Note this is a genuinely different problem from the interpreter gap above:
-  emitted native C has no bytecode PC to jump to at all (it's straight-line
-  `goto`-based C), so the "no new opcode needed" trick that fixed the
-  interpreter doesn't apply here.
-- **Native JS transpile** (`lower_to_js`, the "compile straight to a JS
-  function" backend used for embedding compiled output, distinct from the
-  *interpretive* `vm/picovm.js` above). Its block-switch dispatch model
-  *could* represent a label address (a block index), but there's no
-  try/catch wrapped around the dispatcher to actually catch a JS-level fault
-  and redirect it -- that's a separate, not-yet-built piece. Also raises a
-  clear `ValueError`.
+## Update: native C/JS transpile now support this too (structured `trycatch` IL)
 
-If you need exception handling in native/bare-metal *transpiled* deployment
-(as opposed to running bytecode on the C interpreter, which now works), this
-is the gap to close next; it needs its own design (most likely a from-scratch
-`setjmp`/`longjmp`-based C mechanism, and a try/catch-wrapped JS dispatcher),
-not an extension of the bytecode-VM approach here.
+The scope note below (kept for historical context) described native C/JS
+transpile as needing "a fundamentally different mechanism... not an
+extension of the bytecode-VM approach". That diagnosis was right, and the
+fix follows exactly that path: `TryExcept` is no longer flattened into
+`laddr`/`Error.SetHandler`/`label`/`jmp` at `Lowerer` time at all. Instead,
+`ILBuilder.trycatch` builds a **structured** IL node carrying nested
+`try_body`/`except_body`/`finally_body` instruction lists (captured via
+`begin_capture`/`end_capture`), and each consumer decides how to realize it:
+
+- **`lower_to_bytecode_safe`** (and the plain `lower_to_bytecode`) expand it
+  via `_flatten_trycatch` into exactly the classic flat
+  `laddr`/`Error.SetHandler`/`label`/`jmp` form this doc originally
+  described — byte-identical to before this change, verified by the full
+  existing exception-engine test suite.
+- **`lower_to_c`** compiles the structured node directly into **plain
+  `goto`/labels** — no `setjmp`/`longjmp` needed after all, once the
+  structure survives long enough to use it: the handler's C label is known
+  at *compile time* (it's a label in the SAME IL the Lowerer already built),
+  so `Error.SetHandler`'s "load a label's address as a runtime value"
+  problem (the actual reason `laddr` existed) simply doesn't arise for
+  native C. A `Raise` lexically inside its own try's handler range emits
+  `goto handler;` directly. A `Raise` with **no** in-function handler (either
+  truly uncaught, or the handler is in a *caller* — this function was
+  invoked from inside a try) sets `ctx->raise_active` and returns instead;
+  every emitted subroutine call site checks `ctx->raise_active` right after
+  the call and either `goto`s its own in-function handler (if any) or keeps
+  propagating by returning too — unwinding the native C call stack one
+  frame at a time, entirely standard, portable C (no `volatile`/UB concerns
+  `setjmp`/`longjmp` would have brought). See `tests/test_native_toc_trycatch.py`.
+- **`lower_to_js`** compiles the structured node into a **real JS
+  `try { } catch (e) { } finally { }`**, and `Raise` into a real
+  `throw new PicoRaise(code)`. Unlike native C, this needs no return-code
+  propagation at all — a real JS `throw` naturally unwinds across function
+  calls to the nearest enclosing `try`, exactly matching the semantics of a
+  handler stack without building one. The one JS-specific complication:
+  each of `try_body`/`except_body`/`finally_body` gets its **own**
+  independent, recursively-built basic-block state machine (JS has no
+  `goto`, so nested control flow like a `while` loop inside a try body needs
+  its own local dispatcher); a jump that crosses a try boundary into an
+  *enclosing* scope (e.g. a `break` inside a try body targeting a loop that
+  wraps it) resolves against that outer scope and escapes via a labeled
+  `continue` rather than an unlabeled one. See `tests/test_native_js_trycatch.py`
+  (includes both a loop entirely inside a try, and a `break` crossing the
+  try boundary into an enclosing loop).
+
+Both are verified against the same Python-VM reference outputs as the
+bytecode paths, for: try/catch/finally/raise, happy path (no exception),
+nested try/catch, and uncaught raise. Native C additionally verifies a
+cross-function raise (a subroutine call inside a try, where the subroutine
+itself raises) — see "A discovered, pre-existing bytecode-VM bug" below for
+an important caveat found while testing this exact case.
+
+### A discovered, pre-existing bytecode-VM bug: cross-function raise
+
+Testing native C's cross-function-raise support against the Python VM as a
+reference (as this redesign's verification methodology requires) surfaced a
+real, **pre-existing** bug in the interpretive bytecode VMs (Python, JS, and
+the C interpreter — all three share the identical handler-stack/PC-redirect
+mechanism, so all three have it): when `Error.Raise` (or a caught genuine
+fault) jumps straight to a handler's PC from **inside a called subroutine**,
+`vm.call_stack` is never unwound (only `vm.pc` is redirected) — so the stale
+return address pushed by the `CALL` into that subroutine (pointing just past
+the call, i.e. into the middle of the try body that should have been
+skipped) is still sitting on the call stack. Whatever `RETURN` eventually
+executes next (e.g. the implicit one ending the top-level program) pops that
+stale address and resumes execution there instead of wherever it actually
+should — silently re-running code that was supposed to be skipped.
+
+Concretely: `try { x = 1; boom(); x = 999; } catch { x = x + 100; }` where
+`boom()` does `raise 55;` — the **correct** result is `x == 101` (`boom()`
+raises, `x = 999;` is skipped, catch runs). The **current bytecode VMs**
+produce `x == 999` after first emitting a spurious extra `print` of `101`
+(both values get printed — the handler runs once correctly, then the stale
+call-stack entry resumes the try body from where `boom()` was called,
+completing it a second time). Native C's return-code-propagation design does
+**not** have this bug (it unwinds via real C function returns, which
+correctly discard each frame's state), so it is — for this specific case —
+more correct than the current bytecode VMs. Native JS is unaffected for a
+different reason: a real JS `throw` unwinds the actual JS call stack, so
+there's no analogous "stale return address" concept to leak in the first
+place.
+
+This is flagged, not silently worked around: fixing it properly means
+`Error.SetHandler` recording the call-stack depth at push time, and
+`Error.Raise`/a caught fault truncating `vm.call_stack` back to that depth
+before jumping — a real, bounded fix, but a separate one from this redesign
+(which was scoped to native transpile support), tracked as a follow-up. See
+`tests/test_native_toc_trycatch.py`'s cross-function test, which documents
+the current buggy bytecode-VM behavior explicitly (asserting it does NOT
+equal the correct answer, so this comment — and the test — will need
+updating once that follow-up fix lands).
 
 ## Update: C-style's JS mirror (`CParser`/`CLowerer`) — fixed
 

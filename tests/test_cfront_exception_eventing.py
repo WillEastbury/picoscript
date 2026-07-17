@@ -6,22 +6,18 @@ TryCatch/Raise/OnBlock support.
 Part of the full-language-equivalence pass. Unlike the BASIC-family
 frontends (BASIC/Python/English/COBOL/Report/Functional), C-style is a
 fully independent frontend -- its own AST dataclasses and its own
-`Lowerer`, never importing from `picoscript_basic`. It DOES share the same
-`picoscript_il.ILBuilder` (including `label_addr`) and the same
-`Error.SetHandler`/`PopHandler`/`Raise`/`Clear` host ops as the BASIC
-family, so the underlying exception/eventing mechanism (see
-docs/EXCEPTION_ENGINE.md, docs/EVENTING.md) is identical -- just
-re-expressed against cfront's own `TryCatch`/`Raise`/`OnBlock` node classes
-and its own `lower_try`/`lower_on_block` methods.
+`Lowerer`, never importing from `picoscript_basic`. It shares the same
+`picoscript_il.ILBuilder.trycatch` structured node (see
+docs/EXCEPTION_ENGINE.md) as the BASIC family, so the underlying
+exception/eventing mechanism is identical -- just re-expressed against
+cfront's own `TryCatch`/`Raise`/`OnBlock` node classes and its own
+`lower_try`/`lower_on_block` methods.
 
 Verified here as byte-identical bytecode vs. the equivalent BASIC source,
 proving the mechanism really is the same despite the independent AST.
 
-Scope note: the JS mirror of C-style (`CParser`/`CLowerer` in
-`vm/picoc.js`) does NOT have this yet -- porting it would mean a THIRD,
-independent implementation of the same mechanism (BLowerer's JS port was
-the second), which was deliberately not attempted in this pass to avoid
-rushing a third from-scratch implementation. See docs/DIALECT_PARITY.md.
+Update: the JS mirror of C-style (`CParser`/`CLowerer` in `vm/picoc.js`)
+now has this too -- see tests/test_cstyle_js_exception_eventing.py.
 """
 
 import os
@@ -107,12 +103,31 @@ def test_c_on_block_dispatches_matching_event():
     assert _out(PicoVM().run(words)) == [1, 5]
 
 
-def test_c_native_transpile_rejects_try_catch_clearly():
-    """lower_to_c (native transpile) has no PC-addressable model for
-    label_addr -- must reject clearly rather than silently mis-compile,
-    same as for the BASIC family (see docs/EXCEPTION_ENGINE.md)."""
+def test_c_native_transpile_supports_try_catch_finally_raise():
+    """lower_to_c (native transpile) now emits real try/except/finally/raise
+    directly from the structured `trycatch` IL node -- see
+    docs/EXCEPTION_ENGINE.md. `laddr` needs no C opcode at all (it's a pure
+    compile-time IL/bytecode-assembly trick the bytecode path used to need);
+    the C emitter uses plain `goto` for a Raise lexically inside the same
+    function, and a `ctx->raise_active` return-code-propagation flag for a
+    Raise from inside a called subroutine (verified separately in
+    tests/test_native_toc_trycatch.py's cross-function-raise coverage,
+    since that needs an actual ziglang-compiled binary to run)."""
     from picoscript_il import lower_to_c
-    src = "int x = 0;\ntry {\n    raise 1;\n} catch {\n    x = 1;\n}\n"
+    # A raise lexically inside its own try's handler range compiles to a
+    # plain compile-time-known `goto` -- no raise_active bookkeeping needed
+    # (that's only for a Raise that can't resolve to an in-function handler,
+    # e.g. an uncaught raise or one from inside a called subroutine; see
+    # tests/test_native_toc_trycatch.py's cross-function-raise coverage,
+    # which needs an actual ziglang-compiled binary to exercise that path).
+    src = "int x = 0;\ntry {\n    raise 1;\n} catch {\n    x = 1;\n}\nprint(x);\n"
     il = compile_c(src)
-    with pytest.raises(ValueError, match="laddr"):
-        lower_to_c(il)
+    csrc = lower_to_c(il, func_name="pico_tc", emit_main=True)
+    assert "goto" in csrc
+    assert "ctx->err_code" in csrc
+
+    # An uncaught raise (no enclosing try at all) has no compile-time handler
+    # to goto, so it must set raise_active and return instead.
+    src_uncaught = "raise 1;\nprint(1);\n"
+    csrc_uncaught = lower_to_c(compile_c(src_uncaught), func_name="pico_tc2", emit_main=True)
+    assert "raise_active" in csrc_uncaught
