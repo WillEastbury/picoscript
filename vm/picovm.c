@@ -1908,6 +1908,182 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         ((hook >= 0x60 && hook <= 0x6F) || (hook >= 0x1A0 && hook <= 0x1A4))) {
         if (pv_storage_hook(ctx, hook, rd, rs1, rs2)) return;
     }
+    /* Data.* host-bound read: no active server/data context in the reference
+     * runtime, so return a defined empty/0 default (mirrors vm/picovm.js
+     * exactly) and let the authoritative host enforce data-dependent rules. */
+    if (hook >= PV_HOOK_DATA_LOOKUP && hook <= PV_HOOK_DATA_FIELDSTR) {
+        ctx->regs[rd] = (hook == PV_HOOK_DATA_FIELDSTR) ? pv_arena_finish(ctx, 0) : 0;
+        return;
+    }
+    /* Descriptor.*: a pure buffer descriptor (ptr/len/flags handle table),
+     * deliberately kept separate from Span.* (Span is the arena-string-
+     * library view type; Descriptor adds a host/driver-facing `flags` word).
+     * No host state, so real + fully deterministic. Mirrors
+     * picoscript_vm.py's _descriptor / vm/picovm.js's _descriptor exactly. */
+    if (hook == PV_HOOK_DESCRIPTOR_MAKE) {
+        int h;
+        if (ctx->desc_count >= PV_MAX_DESCRIPTORS) { ctx->regs[rd] = 0; return; }
+        h = ctx->desc_count++;
+        ctx->desc_ptr[h] = (uint32_t)ctx->regs[rs1];
+        ctx->desc_len[h] = ctx->regs[rs2] < 0 ? 0 : ctx->regs[rs2];
+        ctx->desc_flags[h] = 0;
+        ctx->desc_used[h] = 1;
+        ctx->regs[rd] = h;
+        return;
+    }
+    if (hook >= PV_HOOK_DESCRIPTOR_SETFLAGS && hook <= PV_HOOK_DESCRIPTOR_COPYBATCH) {
+        int dh = ctx->regs[rs1];
+        int d_ok = (dh > 0 && dh < PV_MAX_DESCRIPTORS && ctx->desc_used[dh]);
+        if (hook == PV_HOOK_DESCRIPTOR_SETFLAGS) {
+            if (d_ok) ctx->desc_flags[dh] = (uint32_t)ctx->regs[rs2];
+            ctx->regs[rd] = d_ok ? 1 : 0;
+            return;
+        }
+        if (hook == PV_HOOK_DESCRIPTOR_GETPTR) { ctx->regs[rd] = d_ok ? (int32_t)ctx->desc_ptr[dh] : 0; return; }
+        if (hook == PV_HOOK_DESCRIPTOR_GETLEN) { ctx->regs[rd] = d_ok ? ctx->desc_len[dh] : 0; return; }
+        if (hook == PV_HOOK_DESCRIPTOR_GETFLAGS) { ctx->regs[rd] = d_ok ? (int32_t)ctx->desc_flags[dh] : 0; return; }
+        if (hook == PV_HOOK_DESCRIPTOR_COPYBATCH) {
+            int dh2 = ctx->regs[rs2];
+            int d2_ok = (dh2 > 0 && dh2 < PV_MAX_DESCRIPTORS && ctx->desc_used[dh2]);
+            int32_t n, i;
+            if (!d_ok || !d2_ok) { ctx->regs[rd] = 0; return; }
+            n = ctx->desc_len[dh] < ctx->desc_len[dh2] ? ctx->desc_len[dh] : ctx->desc_len[dh2];
+            for (i = 0; i < n; i++) {
+                uint32_t sp = ctx->desc_ptr[dh] + (uint32_t)i, dp = ctx->desc_ptr[dh2] + (uint32_t)i;
+                if (ctx->mem && sp < (uint32_t)ctx->mem_size && dp < (uint32_t)ctx->mem_size) ctx->mem[dp] = ctx->mem[sp];
+            }
+            ctx->regs[rd] = n;
+            return;
+        }
+    }
+    /* Lease.*: a generic capability/ownership token over a span + type hint.
+     * Pure in-VM bookkeeping, distinct from Stream.Next's own unrelated
+     * internal per-frame lease concept. Mirrors picoscript_vm.py's
+     * _lease_ns / vm/picovm.js's _leaseNs exactly. */
+    if (hook == PV_HOOK_LEASE_ACQUIRE) {
+        int h;
+        if (ctx->lease_count >= PV_MAX_LEASES) { ctx->regs[rd] = 0; return; }
+        h = ctx->lease_count++;
+        ctx->lease_span[h] = ctx->regs[rs1];
+        ctx->lease_type[h] = ctx->regs[rs2];
+        ctx->lease_valid[h] = 1;
+        ctx->lease_used[h] = 1;
+        ctx->regs[rd] = h;
+        return;
+    }
+    if (hook >= PV_HOOK_LEASE_RELEASE && hook <= PV_HOOK_LEASE_GETTYPEHINT) {
+        int lh = ctx->regs[rs1];
+        int l_ok = (lh > 0 && lh < PV_MAX_LEASES && ctx->lease_used[lh] && ctx->lease_valid[lh]);
+        int l_exists = (lh > 0 && lh < PV_MAX_LEASES && ctx->lease_used[lh]);
+        if (hook == PV_HOOK_LEASE_RELEASE) {
+            if (l_exists) ctx->lease_valid[lh] = 0;
+            ctx->regs[rd] = l_exists ? 1 : 0;
+            return;
+        }
+        if (hook == PV_HOOK_LEASE_VALIDATE || hook == PV_HOOK_LEASE_CACHEDVALIDATE) {
+            /* CachedValidate is a host-optimization hint; the reference VM
+             * has no cache to distinguish, so both give the same answer. */
+            ctx->regs[rd] = l_ok ? 1 : 0;
+            ctx->host_status = l_ok ? 0 : 1;
+            return;
+        }
+        if (hook == PV_HOOK_LEASE_GETSPAN) { ctx->regs[rd] = l_ok ? ctx->lease_span[lh] : pv_arena_finish(ctx, 0); return; }
+        if (hook == PV_HOOK_LEASE_GETTYPEHINT) { ctx->regs[rd] = l_ok ? ctx->lease_type[lh] : 0; return; }
+    }
+    /* Fifo.*: independent named byte-channel FIFOs (Open returns a fresh
+     * channel handle). Distinct from Queue.* (fixed 8-channel int FIFO).
+     * Mirrors picoscript_vm.py's _fifo / vm/picovm.js's _fifo exactly. */
+    if (hook == PV_HOOK_FIFO_OPEN) {
+        int h;
+        if (ctx->fifo_count >= PV_MAX_FIFOS) { ctx->regs[rd] = 0; return; }
+        h = ctx->fifo_count++;
+        ctx->fifo_head[h] = 0; ctx->fifo_tail[h] = 0; ctx->fifo_depth[h] = 0;
+        ctx->fifo_used[h] = 1;
+        ctx->regs[rd] = h;
+        return;
+    }
+    if (hook >= PV_HOOK_FIFO_SEND && hook <= PV_HOOK_FIFO_POLL) {
+        int fh = ctx->regs[rs1];
+        int f_ok = (fh > 0 && fh < PV_MAX_FIFOS && ctx->fifo_used[fh]);
+        if (hook == PV_HOOK_FIFO_SEND) {
+            if (f_ok && ctx->fifo_depth[fh] < PV_FIFO_DEPTH) {
+                ctx->fifo_msg[fh][ctx->fifo_tail[fh]] = ctx->regs[rs2];
+                ctx->fifo_tail[fh] = (ctx->fifo_tail[fh] + 1) % PV_FIFO_DEPTH;
+                ctx->fifo_depth[fh]++;
+            }
+            ctx->regs[rd] = f_ok ? 1 : 0;
+            return;
+        }
+        if (hook == PV_HOOK_FIFO_RECV) {
+            if (f_ok && ctx->fifo_depth[fh] > 0) {
+                ctx->regs[rd] = ctx->fifo_msg[fh][ctx->fifo_head[fh]];
+                ctx->fifo_head[fh] = (ctx->fifo_head[fh] + 1) % PV_FIFO_DEPTH;
+                ctx->fifo_depth[fh]--;
+                ctx->host_status = 0;
+            } else {
+                ctx->regs[rd] = pv_arena_finish(ctx, 0);
+                ctx->host_status = 1;
+            }
+            return;
+        }
+        if (hook == PV_HOOK_FIFO_POLL) { ctx->regs[rd] = f_ok ? ctx->fifo_depth[fh] : 0; return; }
+    }
+    /* Kernel.*: WaitIRQ/WaitSWIRQ reuse the same cooperative-yield halt as the
+     * raw OP_WAIT opcode (no separate log -- this embedded runtime carries no
+     * debug-log list, unlike Python/JS); FireSWIRQ is an ack-only signal for
+     * the same reason. ProfileStart/ProfileEnd/TracePoint (real tracing via
+     * a Log.* table) are a separate, larger addition -- deliberately not
+     * done in this pass; see docs/FEATURE_MATRIX.md. */
+    if (hook == PV_HOOK_KERNEL_WAITIRQ || hook == PV_HOOK_KERNEL_WAITSWIRQ) {
+        ctx->waiting = 1; ctx->halted = 1; return;
+    }
+    if (hook == PV_HOOK_KERNEL_FIRESWIRQ) { ctx->regs[rd] = 1; return; }
+    /* Pack.Use: a lightweight "active pack" selector, independent of
+     * Storage's own pack context (a different namespace/concept). */
+    if (hook == PV_HOOK_PACK_USE) {
+        ctx->active_pack = ctx->regs[rs1];
+        ctx->regs[rd] = ctx->active_pack;
+        return;
+    }
+    /* Thread.YieldCounted: deterministic cooperative-yield counter. */
+    if (hook == PV_HOOK_THREAD_YIELDCOUNTED) {
+        ctx->thread_yield_count++;
+        ctx->regs[rd] = (int32_t)ctx->thread_yield_count;
+        return;
+    }
+    /* Reserved namespaces: genuinely external/host-injected state this
+     * deterministic VM has no way to source itself (identity provider,
+     * physical card reader, live request/connection, OS facts, network
+     * socket, PKI trust store). Every method returns a defined, documented
+     * default (0, or an empty span for text-shaped results) instead of
+     * silently falling through -- so every namespace/method is callable
+     * from every dialect and VM. See docs/FEATURE_MATRIX.md. Mirrors
+     * picoscript_vm.py's _reserved_stub / vm/picovm.js's _reservedStub. */
+    if ((hook >= PV_HOOK_X509_FETCHCERTIFICATE && hook <= PV_HOOK_X509_GETKEYHANDLE) ||
+        (hook >= PV_HOOK_AUTH_GETUSERCREDENTIALS && hook <= PV_HOOK_AUTH_REVOKETOKEN) ||
+        hook == PV_HOOK_CARD_READ || hook == PV_HOOK_CARD_WRITE || hook == PV_HOOK_CARD_ADDRESS ||
+        (hook >= PV_HOOK_ENVIRONMENT_GETOSVERSION && hook <= PV_HOOK_ENVIRONMENT_GETELAPSEDTIME) ||
+        (hook >= PV_HOOK_CONTEXT_GETVERB && hook <= PV_HOOK_CONTEXT_GETTRACEID) ||
+        (hook >= PV_HOOK_NET_LISTEN && hook <= PV_HOOK_NET_REGISTER)) {
+        int is_span =
+            hook == PV_HOOK_X509_FETCHCERTIFICATE || hook == PV_HOOK_X509_GENERATECSR ||
+            hook == PV_HOOK_X509_GENERATEKEYPAIR || hook == PV_HOOK_X509_GETCERTINFO ||
+            hook == PV_HOOK_AUTH_GETUSERCREDENTIALS || hook == PV_HOOK_AUTH_GETUSERPERMISSIONS ||
+            hook == PV_HOOK_AUTH_REQUESTTOKEN || hook == PV_HOOK_AUTH_GETTOKEN ||
+            hook == PV_HOOK_AUTH_REFRESHTOKEN ||
+            hook == PV_HOOK_ENVIRONMENT_GETOSVERSION || hook == PV_HOOK_ENVIRONMENT_GETHOSTNAME ||
+            hook == PV_HOOK_ENVIRONMENT_GETTIMEZONE ||
+            hook == PV_HOOK_CONTEXT_GETVERB || hook == PV_HOOK_CONTEXT_GETPATH ||
+            hook == PV_HOOK_CONTEXT_GETHOST || hook == PV_HOOK_CONTEXT_GETREMOTEADDR ||
+            hook == PV_HOOK_CONTEXT_GETUSER || hook == PV_HOOK_CONTEXT_GETPERMISSIONS ||
+            hook == PV_HOOK_CONTEXT_GETHEADERS || hook == PV_HOOK_CONTEXT_GETQUERYSTRING ||
+            hook == PV_HOOK_CONTEXT_GETBODY || hook == PV_HOOK_CONTEXT_GETREQUESTID ||
+            hook == PV_HOOK_CONTEXT_GETCLIENTCERT || hook == PV_HOOK_CONTEXT_GETTRACEID ||
+            hook == PV_HOOK_NET_READ;
+        ctx->regs[rd] = is_span ? pv_arena_finish(ctx, 0) : 0;
+        ctx->host_status = 1; /* INV-18: NOT_FOUND -- no host binding installed */
+        return;
+    }
     if (hook == PV_HOOK_RANDOM_U32) {
         uint64_t x = ctx->rng_state;
         x ^= (x << 13) & MASK32;
@@ -2349,6 +2525,70 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         ctx->regs[rd] = pv_arena_finish(ctx, k);
         return;
     }
+    if (hook == PV_HOOK_STRING_SPLIT) {
+        /* Real, deterministic multi-value result: the 2-in/1-out host-hook ABI
+         * has no array type, so parts are stored in a fresh Map (int key
+         * 0..N-1 -> string part), reusing Map.*'s already-parity-tested
+         * storage rather than inventing a new container. Allocated directly
+         * (bypassing Map.New's side effect on map_active), so Split/Join
+         * never disturb a map the caller already has open. Mirrors
+         * picoscript_vm.py/picovm.js's String.Split exactly. */
+        int ha = ctx->regs[rs1], hb = ctx->regs[rs2];
+        uint32_t pa = pv_span_p(ctx, ha), pb = pv_span_p(ctx, hb);
+        int32_t la = pv_span_n(ctx, ha), lb = pv_span_n(ctx, hb);
+        int h, part_idx = 0, i = 0;
+        if (ctx->map_nmaps >= PV_MAX_MAPS) { ctx->regs[rd] = 0; return; }
+        h = ctx->map_nmaps++;
+        ctx->map_used[h] = 1; ctx->map_head[h] = -1; ctx->map_tail[h] = -1; ctx->map_count[h] = 0;
+        while (1) {
+            int32_t found = -1, part_end, x, e_ok;
+            uint32_t k2 = 0;
+            int tmp, e;
+            uint32_t off; int32_t len;
+            if (lb > 0) {
+                for (int32_t s = i; s + lb <= la; s++) {
+                    int32_t j = 0;
+                    for (; j < lb; j++) if (pv_arena_get(ctx, pa + (uint32_t)(s + j)) != pv_arena_get(ctx, pb + (uint32_t)j)) break;
+                    if (j == lb) { found = s; break; }
+                }
+            }
+            part_end = (found < 0) ? la : found;
+            for (x = i; x < part_end; x++) pv_arena_put(ctx, &k2, pv_arena_get(ctx, pa + (uint32_t)x));
+            tmp = pv_arena_finish(ctx, k2);
+            e_ok = pv_map_intern(ctx, tmp, &off, &len);
+            if (e_ok) {
+                e = pv_map_new_entry(ctx, h);
+                if (e >= 0) { ctx->me_kk[e] = 0; ctx->me_ki[e] = part_idx; ctx->me_vk[e] = 1; ctx->me_voff[e] = off; ctx->me_vlen[e] = len; }
+            }
+            part_idx++;
+            if (lb == 0 || found < 0) break;
+            i = found + lb;
+        }
+        ctx->regs[rd] = h;
+        return;
+    }
+    if (hook == PV_HOOK_STRING_JOIN) {
+        /* rs1 = separator span (as usual), rs2 = the Map handle returned by a
+         * prior Split (or any int-keyed 0..N-1 string map). */
+        uint32_t ps = pv_span_p(ctx, ctx->regs[rs1]);
+        int32_t ls = pv_span_n(ctx, ctx->regs[rs1]);
+        int mh = ctx->regs[rs2];
+        uint32_t k3 = 0;
+        int32_t idx = 0;
+        if (!(mh > 0 && mh < ctx->map_nmaps && ctx->map_used[mh])) { ctx->regs[rd] = pv_arena_finish(ctx, 0); return; }
+        while (1) {
+            int e = pv_map_find_i(ctx, mh, idx);
+            if (e < 0) break;
+            if (idx > 0) { int32_t j; for (j = 0; j < ls; j++) pv_arena_put(ctx, &k3, pv_arena_get(ctx, ps + (uint32_t)j)); }
+            if (ctx->me_vk[e] == 1) {
+                int32_t j;
+                for (j = 0; j < ctx->me_vlen[e]; j++) pv_arena_put(ctx, &k3, ctx->map_pool[ctx->me_voff[e] + (uint32_t)j]);
+            }
+            idx++;
+        }
+        ctx->regs[rd] = pv_arena_finish(ctx, k3);
+        return;
+    }
 
     /* ---- Number.* (int in, int/span out) ----------------------------- */
     if (hook == PV_HOOK_NUMBER_PARSE) {
@@ -2757,6 +2997,9 @@ void pv_init(pv_ctx *ctx)
     ctx->w_count = 1;           /* Utf8Writer/Json/Xml: handle 0 reserved */
     ctx->r_count = 1;           /* Utf8Reader: handle 0 reserved */
     ctx->map_nmaps = 1;         /* Map.*: handle 0 reserved as the null map */
+    ctx->desc_count = 1;        /* Descriptor.*: handle 0 reserved as null */
+    ctx->lease_count = 1;       /* Lease.*: handle 0 reserved as null */
+    ctx->fifo_count = 1;        /* Fifo.*: handle 0 reserved as null */
     ctx->host = pv_default_host;
     ctx->cur_pc = 0;
 }

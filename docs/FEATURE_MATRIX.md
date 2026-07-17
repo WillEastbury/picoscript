@@ -61,7 +61,7 @@ language-equivalence pass. All v1 bytecode still executes on the **same**
 |---|:-:|:-:|
 | Python VM (bytecode) | Y — real, nested-safe (`docs/EXCEPTION_ENGINE.md`) | Y (`docs/EVENTING.md`) |
 | JS VM (bytecode, `vm/picovm.js`) | Y — byte-identical to Python | Y — byte-identical to Python |
-| C VM (bytecode, `vm/picovm.c`) | Y (shares the `laddr`/handler-stack bytecode contract) | Y |
+| C VM (bytecode, `vm/picovm.c`) | **N — found this pass** (see below) | Y |
 | Native C transpile (`lower_to_c`) | **N — explicitly rejected** at compile time (`ValueError`), not silently mis-compiled | N (same reason) |
 | Native JS transpile (`lower_to_js`) | **N — explicitly rejected** at compile time | N (same reason) |
 
@@ -70,54 +70,68 @@ PC-addressable/fault-catching equivalent in straight-line native C/JS output —
 a real architectural limitation, documented in `docs/EXCEPTION_ENGINE.md`'s
 scope section, not an oversight.
 
+**Correction found this pass**: an earlier revision of this file claimed the
+C VM interpreter "shares the `laddr`/handler-stack bytecode contract" — that
+was never actually verified and is **wrong**. Direct inspection of
+`vm/picovm.c` found neither the `laddr` opcode nor any `Error.*` host-hook
+dispatch branch at all (`PV_HOOK_ERROR_*` is registered in `HOST_HOOK_CODES`
+but never referenced in `picovm.c`). `OnBlock`/`Event.*` are unaffected (pure
+host hooks, no `laddr` dependency) and remain correct on the C VM. `Error.*`
+on the C VM is a real, scoped-out follow-up (needs a new opcode in the
+decoder, not just a host hook) — see section 3's `Error` row.
+
 ## 3. Host namespaces by runtime (Python VM / JS VM+native-JS / C VM+native-C)
 
 70 namespaces are registered in `HOST_HOOK_CODES`. Status below was verified
 directly (grep for each runtime's actual dispatch branches — `if ns == "X"` in
 `picoscript_vm.py`, `name.indexOf("X.")` in `vm/picovm.js`, hook-code-range
-checks in `vm/picovm.c`), not inferred from documentation claims.
+checks in `vm/picovm.c`), not inferred from documentation claims. **Updated
+this pass**: every namespace that was previously a silent "unknown hook"
+fallthrough now either has a real, deterministic implementation, or an
+explicit, documented default (0 / empty span) on all three runtimes — see
+"What changed this pass" below.
 
 | Namespace | Methods | Python VM | JS VM (+native JS) | C VM (+native C) | Notes |
 |---|:-:|:-:|:-:|:-:|---|
 | Arena | 3 | Y | Y | Y | |
 | Assert | 5 | Y | Y | Y | |
 | Attention | 4 | Y | Y | Y | |
-| **Auth** | 10 | **N** | **N** | **N** | Host-injected by design — needs identity provider/trust store + entropy |
+| Auth | 10 | Stub | Stub | Stub | Host-injected by design — needs identity provider/trust store + entropy. Every method now returns a defined 0/empty-span default (previously silently fell through). |
 | Base64 | 4 | Y | Y | Y | |
 | Binary | 6 | Y | Y | Y | PSC1/BSO1 card <-> Map |
 | BitLinear | 8 | Y | Y | Y | |
 | Bits | 7 | Y | Y | Y | |
 | Capability | 3 | Y | Y | Y | |
 | Capsule | 5 | Y | Y | Y | |
-| **Card** | 3 | **N** | **N** | **N** | Reserved/hardware-injected, not wired in any reference runtime |
+| Card | 3 | Stub | Stub | Stub | Reserved/hardware-injected (physical card reader). Defined 0 default on all 3 runtimes. |
 | Compress | 8 | Y | Y | Y | Pico/Brotli/Gzip/Deflate |
-| **Context** | 15 | **N** | **N** | **N** | Host-injected by design — live request/connection state |
-| **Data** | 3 | **N** (silent no-op, `rd` untouched) | **Y** (explicit stub: 0 / empty span) | **N** | **Asymmetry found this audit** — see note below |
+| Context | 15 | Stub | Stub | Stub | Host-injected by design — live request/connection state (overlaps conceptually with `Req.*`, which IS host-fed). Defined 0/empty-span default on all 3 runtimes. |
+| Data | 3 | **Y (fixed)** | Y | **Y (fixed)** | Was a Python/C asymmetry (JS explicit stub, Python/C silent fallthrough) — now an explicit, matching 0/empty-span default on all 3 runtimes. |
 | DateTime | 15 | Partial | Partial | Partial | `Now`/`UtcNow` host-injected (wall clock); rest pure and implemented |
-| **Descriptor** | 6 | **N** | **N** | **N** | Reserved/hardware-injected |
+| **Descriptor** | 6 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: a pure buffer descriptor (ptr/len/flags handle table), no host state — real and deterministic on all 3 runtimes. |
 | Encoding | 12 | Y | Y | Y | ASCII/UTF-8/UTF-16/UTF-7/Hex |
 | Env | 4 | Y | Y | Y | |
-| **Environment** | 9 | **N** | **N** | **N** | Host-injected by design — OS/host facts |
-| Error | 8 | Y | Y | Y | Handler stack, `Raise`/`PopHandler` (this session) |
+| Environment | 9 | Stub | Stub | Stub | Host-injected by design — OS/host facts. Defined 0/empty-span default on all 3 runtimes. |
+| Error | 8 | Y | Y | **N (gap found)** | Handler stack, `Raise`/`PopHandler` — **fully working on Python + JS VMs only**. Not implemented in the C VM interpreter at all (needs the `laddr` opcode, which the C decoder doesn't recognize) — a real gap this audit found in a previous claim; see below. |
 | Event | 10 | Y | Y | Y | FIFO queue + `OnBlock` dispatch |
-| **Fifo** | 4 | **N** | **N** | **N** | Reserved/hardware-injected |
+| **Fifo** | 4 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: independent named byte-channel FIFOs (distinct from `Queue.*`'s fixed 8-channel int FIFO). No host state — real and deterministic. |
 | Gpio | 7 | Y | Y | Y | Reference emulator; PIOS injects real driver |
 | Html | 10 | Partial | Partial | Partial | `Encode`/`Decode` implemented; DOM tree ops (`CreateNode`/`QuerySelector`/…) not built |
 | Http | 12 | Partial | Partial | Partial | `ParseQuery/ParseForm/ParseJson/EncodeJson` implemented (pure); `ReadHeader/ReadBody/GenerateHeaders/GenerateResponse` host-injected (live connection) |
 | Io | 2 | Y | Y | Y | |
 | Json | 11 | Y | Y | Y | |
-| **Kernel** | 6 | **N** | **N** | **N** | `WaitIRQ`/`FireSWIRQ`/`ProfileStart`/`ProfileEnd`/`TracePoint` unimplemented as a namespace; underlying wait/raise capability exists only via raw opcodes `OP_WAIT`/`OP_RAISE`, not this call surface |
+| Kernel | 6 | Partial | Partial | Partial | `WaitIRQ`/`WaitSWIRQ`/`FireSWIRQ` are now real on all 3 runtimes (reuse the same halt/ack semantics as the raw `OP_WAIT`/`OP_RAISE` opcodes). `ProfileStart`/`ProfileEnd`/`TracePoint` (real tracing via the `Log.*` table) are implemented on Python + JS only — **not yet on the C VM** (needs a new fixed-size Log table there; scoped-out follow-up). |
 | Kv | 12 | Y | Y | Y | |
-| **Lease** | 6 | **N** | **N** | **N** | Reserved/hardware-injected |
+| **Lease** | 6 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: a generic capability/ownership token over a span + type hint, no host state — real and deterministic. Distinct from `Stream.Next`'s own unrelated internal per-frame lease concept. |
 | Locale | 7 | Y | Y | Y | Needs `tzdata` on Windows for non-empty `zoneinfo` — see note below |
-| Log | 5 | Y | Y | Y | Real `Log.*` subsystem (this session) |
+| Log | 5 | Y | Y | **N (gap found)** | Real `Log.*` subsystem — **Python + JS VM only**. Not implemented in the C VM interpreter (needs a new fixed-size handle table there) — a real gap this audit found in a previous claim; scoped-out follow-up, not attempted this pass. |
 | Map | 27 | Y | Y | Y | |
 | Maths | 12 | Partial | Partial | Partial | `Sin/Cos/Tan/Log/Log10/Exp` (Q16.16 CORDIC), `Power/Sqrt/Clamp/Lerp` implemented; `Random`/`RandomRange` host-injected (entropy) |
 | Memory | 9 | Y | Y | Y | |
 | Model | 12 | Y | Y | Y | |
-| **Net** | 7 | **N** | **N** | **N** | Reserved/hardware-injected |
+| Net | 7 | Stub | Stub | Stub | Reserved/hardware-injected (network socket). Defined 0/empty-span default on all 3 runtimes. |
 | Number | 11 | Y | Y | Y | |
-| **Pack** | 1 | **N** | **N** | **N** | Reserved/hardware-injected |
+| **Pack** | 1 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: a lightweight "active pack" selector, no host state — real and deterministic. |
 | Principal | 3 | Y | Y | Y | |
 | Process | 8 | Y | Y | Y | |
 | Quant | 5 | Y | Y | Y | |
@@ -134,62 +148,87 @@ checks in `vm/picovm.c`), not inferred from documentation claims.
 | Status | 1 | Y | Y | Y | |
 | Storage | 21 | Y | Y | Y | Card-store; host-injected persistence backend, in-VM logic is pure |
 | Stream | 8 | Y | Y | Y | |
-| String | 14 | **Y (fixed this session — see below)** | Y | Y | `Split`/`Join` registered codes, unimplemented on **every** runtime (pre-existing gap, not part of the regression — see note below) |
+| String | 14 | Y | Y | Y | `Split`/`Join` are **new, real implementations this pass** (see below) — Map-backed multi-value result, byte-identical on all 3 runtimes. |
 | Template | 2 | Y | Y | Y | |
 | Tensor | 12 | Y | Y | Y | |
 | TextRender | 9 | Y | Y | Y | |
-| **Thread** | 1 | **N** | **N** | **N** | Reserved/hardware-injected (distinct from v1's `THREAD.*` opcode-level compiler sugar, which is unrelated) |
+| **Thread** | 1 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: `YieldCounted` is a deterministic cooperative-yield counter, no host state — real on all 3 runtimes. Distinct from v1's `THREAD.*` opcode-level compiler sugar (unrelated). |
 | Timer | 4 | Y | Y | Y | |
 | Tokenizer | 7 | Y | Y | Y | |
 | Ui | 12 | Y | Y | Y | |
 | Utf8Reader | 8 | Y | Y | Y | |
 | Utf8Writer | 7 | Y | Y | Y | |
-| **X509** | 8 | **N** | **N** | **N** | Host-injected by design — needs a trust store + entropy |
+| X509 | 8 | Stub | Stub | Stub | Host-injected by design — needs a trust store + entropy. Defined 0/empty-span default on all 3 runtimes. |
 
-**13 namespaces are unimplemented on all three runtimes** (`Auth`, `Card`,
-`Context`, `Descriptor`, `Environment`, `Fifo`, `Kernel`, `Lease`, `Net`,
-`Pack`, `Thread`, `X509`, and — see below — `Data` on Python/C). All 13 are
-either genuinely external/nondeterministic state that must be host-injected
-by design (`Auth`, `Context`, `Environment`, `X509` need a clock/OS/entropy/
-trust-store/identity-provider the deterministic VM deliberately doesn't have),
-or reserved/hardware-facing primitives (`Card`, `Descriptor`, `Fifo`, `Lease`,
-`Net`, `Pack`, `Thread`) not yet wired into any of the three reference
-runtimes. Verified by checking `pv_cap_for_hook` in `vm/picovm.c`: it
-capability-gates hook-code ranges for `Kernel`/`Context`/`X509`/`Auth` but no
-runtime dispatches them — confirming these are deliberately reserved, not
-silently broken.
+**"Stub" means**: every method in that namespace is fully callable, from
+every dialect, on every VM, and returns a well-defined, documented default (0
+for numeric/boolean-shaped results, an empty span for text-shaped results) —
+**never** a crash and **never** an undefined/stale register value. This is a
+deliberate, explicit design choice (not a gap to be "fixed" further) for
+namespaces that need external state this deterministic VM cannot source
+itself (identity, physical hardware, live network, PKI, OS facts) — the real
+capability must be supplied by the host/PIOS kernel, exactly the same
+principle already established for `Req.*`/`DateTime.Now`/`Maths.Random`.
 
-### Found during this audit: `Data.*` Python/C vs JS asymmetry
+## What changed this pass
 
-`Data.Lookup`/`FieldNum`/`FieldStr` (read-only host-bound data binding) is
-**explicitly stubbed in JS** (`vm/picovm.js`, intentional: "the browser has no
-server data, so return empty/0 and let the authoritative server enforce
-data-dependent rules" — sets `rd` to `0` or an empty span). **Python
-(`picoscript_vm.py`) and C (`vm/picovm.c`) have no `Data.*` branch at all** —
-calls fall through to the generic "unknown hook: record and continue" path,
-which does **not** write `rd`, leaving whatever value was already in that
-register. Functionally this rarely matters (scripts should not read an
-uninitialized register), but it is a real, verified inconsistency: JS
-guarantees a defined `0`/empty result, Python/C do not. Not fixed as part of
-this pass (flagged, not silently left as "already Y") — a good small follow-up
-if `Data.*` is exercised by any real program.
+Prompted by "start making them work and equal... even if returning null":
 
-### `String.*` — fixed this session, one sub-gap remains
+1. **`Data.*` Python/C asymmetry fixed** — `picoscript_vm.py` and `vm/picovm.c`
+   now explicitly default `Data.Lookup`/`FieldNum`/`FieldStr` to 0/empty span,
+   matching `vm/picovm.js`'s always-correct behavior exactly (previously they
+   silently fell through, leaving a stale register value).
+2. **Four new real, pure, deterministic primitives** (no host state needed,
+   so implemented properly rather than stubbed) added identically to all
+   three runtimes, byte-identical output verified end-to-end (Python VM ==
+   JS VM == C VM):
+   - `Descriptor.*` — a buffer descriptor (ptr/len/flags handle table).
+   - `Lease.*` — a generic capability/ownership token over a span + type hint.
+   - `Fifo.*` — independent named byte-channel FIFOs.
+   - `Pack.Use` / `Thread.YieldCounted` — a pack selector and a deterministic
+     yield counter.
+   - `Kernel.WaitIRQ`/`WaitSWIRQ`/`FireSWIRQ` — real, reusing the same
+     halt/ack semantics as the raw `OP_WAIT`/`OP_RAISE` opcodes.
+3. **`String.Split`/`String.Join` implemented for real** (previously
+   registered but unimplemented on every runtime) — parts are stored in a
+   fresh `Map` (int key 0..N-1 → string part), reusing `Map.*`'s already-
+   parity-tested storage rather than inventing a new container, and without
+   disturbing the caller's active map. Byte-identical on all 3 runtimes.
+4. **Nine genuinely host-injected namespaces converted from silent
+   fallthrough to explicit, documented stubs**: `Auth`, `Card`, `Context`,
+   `Environment`, `Net`, `X509` (plus `Data` above) now return a defined
+   0/empty-span default on every runtime instead of silently logging an
+   "unknown hook" and leaving the destination register untouched.
+5. **A real gap found and honestly documented, not silently left mis-stated**:
+   this pass discovered that `Error.*` (the exception-engine handler stack)
+   and `Log.*` (the tracing/audit subsystem) — both previously documented
+   elsewhere in this repo as working on "all runtimes" — are **not actually
+   implemented in the C VM interpreter (`vm/picovm.c`) at all**. Python and
+   JS VMs are unaffected and fully correct; this was a real inaccuracy in
+   prior documentation (this file's own earlier revision included), now
+   corrected. `Error.*` additionally needs the `laddr` opcode (not just a
+   host hook) to work at all, which the C decoder doesn't recognize —
+   architecturally the same class of gap already documented for native-C/JS
+   *transpile* in `docs/EXCEPTION_ENGINE.md`, just also true of the
+   interpretive C VM. `Log.*` needs a new fixed-size handle table in the
+   embedded-style `pv_ctx` struct (same pattern as `Descriptor`/`Lease`/`Fifo`
+   above, just not attempted in this already-large pass). Both are real,
+   scoped, documented follow-ups — not silently claimed as done.
+6. **`Kernel.ProfileStart`/`ProfileEnd`/`TracePoint`** are real on Python + JS
+   (reusing the `Log.*` table) but depend on the same missing C-VM `Log.*`
+   table, so remain unimplemented on the C VM for the same reason as #5.
 
-`String.*` was **completely broken in the Python VM** (`AttributeError`,
-every method) due to a real regression: commit `644acd1` overwrote the
-`_stringlib` method body with the unrelated `_parse_hook` while leaving the
-dispatcher's call site intact. Fixed (see commit `485d7d4`) by restoring the
-original implementation verbatim, verified byte-identical to `vm/picovm.js`'s
-always-intact version. Full regression suite: 50 failures -> 2 (see below).
+### `String.*` — the earlier `_stringlib` regression (separate from #3 above)
 
-`String.Split`/`String.Join` are registered `HOST_HOOK_CODES` entries but
-**were never implemented on any runtime**, before or after this fix (not part
-of the `_stringlib` regression — checked the pre-regression implementation
-too, both methods were always absent). Left unimplemented deliberately rather
-than inventing unverified semantics under time pressure and risking a new
-Python/JS asymmetry — a real, pre-existing, low-priority gap, not a bug
-introduced or missed by this fix.
+`String.*` was **completely broken in the Python VM** earlier this session
+(`AttributeError`, every method) due to a real regression: commit `644acd1`
+overwrote the `_stringlib` method body with the unrelated `_parse_hook` while
+leaving the dispatcher's call site intact. Fixed (see commit `485d7d4`) by
+restoring the original implementation verbatim, verified byte-identical to
+`vm/picovm.js`'s always-intact version. Full regression suite at the time:
+50 failures -> 2. `String.Split`/`Join` were **not** part of that regression
+— they were never implemented on any runtime even before `644acd1` — and are
+now implemented for real as described in #3 above.
 
 ## 4. Test-environment dependency: `tzdata`
 

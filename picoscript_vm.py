@@ -1176,6 +1176,26 @@ class HostApi:
         self._capsule_modules: Dict[int, dict] = {}  # handle -> {pack, card, bytecode}
         self._capsule_seq = 0
         self._capsule_schedules: List[dict] = []     # [{pack, card, eventType}]
+        # -- Descriptor.*: pure buffer descriptor (ptr/len/flags), no host state.
+        self.descriptors: Dict[int, dict] = {}
+        self._descriptor_seq = 0
+        # -- Lease.*: generic capability/ownership token over a span (distinct
+        # from Stream's own internal per-frame "leases" dict above, which is a
+        # different, unrelated concept that predates this namespace).
+        self.lease_tokens: Dict[int, dict] = {}
+        self._lease_token_seq = 0
+        # -- Kernel.*: ProfileStart/ProfileEnd/TracePoint reuse the Log.* table
+        # (see self.logs above) so they are deterministic and script-visible
+        # via the same mechanism, not a separate wall-clock profiler.
+        # -- Thread.YieldCounted: deterministic cooperative-yield counter.
+        self._thread_yield_count = 0
+        # -- Pack.Use: a lightweight "active pack" selector, independent of
+        # Storage's own cur_pack (a different namespace/concept).
+        self._active_pack = 0
+        # -- Fifo.*: independent named byte-channel FIFOs (distinct from the
+        # single 8-channel Queue.* int FIFO above).
+        self.fifo_channels: Dict[int, dict] = {}
+        self._fifo_seq = 0
 
     @property
     def store(self):
@@ -1378,6 +1398,12 @@ class HostApi:
         if ns == "Storage":
             if self._storage(vm, method, rd, rs1, rs2):
                 return
+        # Data.* host-bound read: no active server/data context in the reference
+        # VM, so return a defined empty/0 default (mirrors vm/picovm.js exactly)
+        # and let the authoritative host enforce data-dependent rules.
+        if ns == "Data":
+            vm.regs[rd] = self._new_span_bytes(vm, b"") if method == "FieldStr" else 0
+            return
         if ns == "Gpio":
             if self._gpio(vm, method, rd, rs1, rs2):
                 return
@@ -1477,6 +1503,29 @@ class HostApi:
         if ns == "Req" and method in ("Param", "ParamCount"):
             if self._req_param(vm, method, rd, rs1, rs2):  # pragma: no branch
                 return
+        if ns == "Descriptor":
+            if self._descriptor(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Lease":
+            if self._lease_ns(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Fifo":
+            if self._fifo(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Pack" and method == "Use":
+            self._active_pack = vm.regs[rs1] & MASK32
+            vm.regs[rd] = self._active_pack
+            return
+        if ns == "Kernel":
+            if self._kernel(vm, method, rd, rs1, rs2):
+                return
+        if ns == "Thread" and method == "YieldCounted":
+            self._thread_yield_count += 1
+            vm.regs[rd] = self._thread_yield_count & MASK32
+            return
+        if ns in self._RESERVED_NS:
+            self._reserved_stub(vm, ns, method, rd, rs1, rs2)
+            return
         # Unknown hook: record and continue (host-fillable primitive).
         self.log.append(f"host {ns}.{method} rd=R{rd} rs1=R{rs1} rs2=R{rs2} imm={imm16:#06x}")
 
@@ -1736,38 +1785,6 @@ class HostApi:
             return True
         return False
 
-        R = vm.regs
-        a = self._span_raw(vm, R[rs1])
-        if method == "Length":
-            R[rd] = len(a); return True
-        if method == "Concat":
-            R[rd] = self._new_span_bytes(vm, a + self._span_raw(vm, R[rs2])); return True
-        if method == "Substring":
-            start = max(0, _sx32(R[rs2]))
-            R[rd] = self._new_span_bytes(vm, a[start:]); return True
-        if method == "IndexOf":
-            idx = a.find(self._span_raw(vm, R[rs2]))
-            self.host_status = 0 if idx >= 0 else 1     # INV-18: NOT_FOUND
-            R[rd] = idx & MASK32; return True
-        if method == "StartsWith":
-            R[rd] = 1 if a.startswith(self._span_raw(vm, R[rs2])) else 0; return True
-        if method == "EndsWith":
-            R[rd] = 1 if a.endswith(self._span_raw(vm, R[rs2])) else 0; return True
-        if method == "Eq":
-            R[rd] = 1 if a == self._span_raw(vm, R[rs2]) else 0; return True
-        if method == "ToUpper":
-            R[rd] = self._new_span_bytes(vm, bytes(c - 32 if 97 <= c <= 122 else c for c in a)); return True
-        if method == "ToLower":
-            R[rd] = self._new_span_bytes(vm, bytes(c + 32 if 65 <= c <= 90 else c for c in a)); return True
-        if method == "Trim":
-            R[rd] = self._new_span_bytes(vm, a.strip(b" \t\r\n")); return True
-        if method == "SetReplace":
-            vm._str_repl = a; return True
-        if method == "Replace":
-            repl = getattr(vm, "_str_repl", b"")
-            R[rd] = self._new_span_bytes(vm, a.replace(self._span_raw(vm, R[rs2]), repl)); return True
-        return False
-
     def _stringlib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
         R = vm.regs
         a = self._span_raw(vm, R[rs1])
@@ -1799,6 +1816,40 @@ class HostApi:
         if method == "Replace":
             repl = getattr(vm, "_str_repl", b"")
             R[rd] = self._new_span_bytes(vm, a.replace(self._span_raw(vm, R[rs2]), repl)); return True
+        if method == "Split":
+            # Real, deterministic multi-value result: the 2-in/1-out host-hook
+            # ABI has no array type, so parts are stored in a fresh Map (int
+            # key 0..N-1 -> string part), reusing Map.*'s already-parity-tested
+            # storage rather than inventing a new container. Allocated
+            # directly (bypassing Map.New's side effect on self.active_map),
+            # so Split/Join never disturb a map the caller already has open.
+            if not hasattr(self, "maps"):
+                self.maps = [None]
+                self.active_map = 0
+            delim = self._span_raw(vm, R[rs2])
+            parts = a.split(delim) if delim else [a]
+            self.maps.append({("i", i & MASK32): ("i", i & MASK32, None, "s", 0, part)
+                               for i, part in enumerate(parts)})
+            R[rd] = len(self.maps) - 1
+            return True
+        if method == "Join":
+            # rs1 = separator span (already decoded into `a` above), rs2 = the
+            # Map handle returned by a prior Split (or any int-keyed 0..N-1
+            # string map) to join back into a single span.
+            if not hasattr(self, "maps"):
+                self.maps = [None]
+                self.active_map = 0
+            mh = R[rs2] & MASK32
+            m = self.maps[mh] if (0 < mh < len(self.maps) and self.maps[mh] is not None) else None
+            if m is None:
+                R[rd] = self._new_span_bytes(vm, b""); return True
+            n = sum(1 for k in m if k[0] == "i")
+            parts = []
+            for i in range(n):
+                e = m.get(("i", i & MASK32))
+                parts.append(e[5] if (e and e[3] == "s") else b"")
+            R[rd] = self._new_span_bytes(vm, a.join(parts))
+            return True
         return False
 
     def _numberlib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
@@ -3860,6 +3911,167 @@ class HostApi:
             vm.regs[rd] = 1
             return True
         return False
+
+    # -- Descriptor.*: a pure buffer descriptor (ptr/len/flags handle table),
+    # deliberately kept separate from Span.* (Span is the arena-string-library
+    # view type; Descriptor adds a host/driver-facing `flags` word alongside
+    # ptr/len, e.g. for DMA/IO-buffer metadata) -- no host state, so it is a
+    # real, fully deterministic primitive on every runtime, unlike the
+    # host-injected namespaces below. 2-in/1-out ABI: `SetFlags` is a
+    # separate call from `Make` (same 2-call pattern as `String.SetReplace`).
+    def _descriptor(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "Make":
+            self._descriptor_seq += 1
+            h = self._descriptor_seq
+            self.descriptors[h] = {"ptr": vm.regs[rs1] & MASK32, "len": max(0, _sx32(vm.regs[rs2])), "flags": 0}
+            vm.regs[rd] = h
+            return True
+        d = self.descriptors.get(vm.regs[rs1] & MASK32)
+        if method == "SetFlags":
+            if d is not None:
+                d["flags"] = vm.regs[rs2] & MASK32
+            vm.regs[rd] = 1 if d is not None else 0
+            return True
+        if method == "GetPtr":
+            vm.regs[rd] = d["ptr"] if d else 0
+            return True
+        if method == "GetLen":
+            vm.regs[rd] = d["len"] if d else 0
+            return True
+        if method == "GetFlags":
+            vm.regs[rd] = d["flags"] if d else 0
+            return True
+        if method == "CopyBatch":
+            # rs1 = source descriptor handle, rs2 = destination descriptor handle;
+            # copies min(src.len, dst.len) bytes src.ptr -> dst.ptr in the shared
+            # arena (memcpy semantics, same convention as Span.Materialize) and
+            # returns the byte count actually copied.
+            src = d
+            dst = self.descriptors.get(vm.regs[rs2] & MASK32)
+            if not src or not dst:
+                vm.regs[rd] = 0
+                return True
+            n = min(src["len"], dst["len"])
+            vm.mem[dst["ptr"]:dst["ptr"] + n] = vm.mem[src["ptr"]:src["ptr"] + n]
+            vm.regs[rd] = n
+            return True
+        return False
+
+    # -- Lease.*: a generic capability/ownership token over a span + type hint.
+    # Pure in-VM bookkeeping (acquire/release/validate), no host state -- a
+    # real, deterministic primitive distinct from Stream.*'s own internal,
+    # unrelated per-frame "leases" dict (self.leases/`_lease_seq` above),
+    # which predates this namespace and is not exposed to scripts directly.
+    def _lease_ns(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "Acquire":
+            self._lease_token_seq += 1
+            h = self._lease_token_seq
+            self.lease_tokens[h] = {"span": vm.regs[rs1] & MASK32, "type": vm.regs[rs2] & MASK32, "valid": True}
+            vm.regs[rd] = h
+            return True
+        t = self.lease_tokens.get(vm.regs[rs1] & MASK32)
+        if method == "Release":
+            if t is not None:
+                t["valid"] = False
+            vm.regs[rd] = 1 if t is not None else 0
+            return True
+        if method in ("Validate", "CachedValidate"):
+            # CachedValidate is a host-optimization hint (a real host may memoize
+            # the check); the reference VM has no cache to distinguish, so both
+            # give the same correct, deterministic answer.
+            vm.regs[rd] = 1 if (t is not None and t["valid"]) else 0
+            self.host_status = 0 if (t is not None and t["valid"]) else 1
+            return True
+        if method == "GetSpan":
+            vm.regs[rd] = t["span"] if (t and t["valid"]) else self._new_span_bytes(vm, b"")
+            return True
+        if method == "GetTypeHint":
+            vm.regs[rd] = t["type"] if (t and t["valid"]) else 0
+            return True
+        return False
+
+    # -- Fifo.*: independent named byte-channel FIFOs (Open returns a fresh
+    # channel handle so a program can have many concurrent FIFOs). Distinct
+    # from Queue.* (a single fixed 8-channel int FIFO indexed by rs1 & 7) --
+    # Fifo carries byte spans, not raw ints, and channels are dynamically
+    # allocated. Pure in-VM deque, no host state -- deterministic everywhere.
+    def _fifo(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "Open":
+            self._fifo_seq += 1
+            h = self._fifo_seq
+            self.fifo_channels[h] = {"q": []}
+            vm.regs[rd] = h
+            return True
+        ch = self.fifo_channels.get(vm.regs[rs1] & MASK32)
+        if method == "Send":
+            if ch is not None:
+                ch["q"].append(self._span_raw(vm, vm.regs[rs2]))
+            vm.regs[rd] = 1 if ch is not None else 0
+            return True
+        if method == "Recv":
+            if ch is not None and ch["q"]:
+                vm.regs[rd] = self._new_span_bytes(vm, ch["q"].pop(0))
+                self.host_status = 0
+            else:
+                vm.regs[rd] = self._new_span_bytes(vm, b"")
+                self.host_status = 1  # NOT_FOUND -- channel empty/unknown
+            return True
+        if method == "Poll":
+            vm.regs[rd] = len(ch["q"]) if ch is not None else 0
+            return True
+        return False
+
+    # -- Kernel.*: WaitIRQ/WaitSWIRQ reuse the VM's own cooperative-yield halt
+    # (identical to the raw OP_WAIT opcode); FireSWIRQ reuses the same
+    # software-IRQ log line as the raw OP_RAISE opcode; ProfileStart/
+    # ProfileEnd/TracePoint reuse the Log.* table (see docs/LOGGING.md) so
+    # tracing is deterministic and script-visible, not a wall-clock profiler.
+    def _kernel(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method in ("WaitIRQ", "WaitSWIRQ"):
+            vm.waiting = True
+            raise Halt()
+        if method == "FireSWIRQ":
+            self.log.append(f"raise swirq channel={vm.regs[rs1] & MASK32}")
+            vm.regs[rd] = 1
+            return True
+        if method in ("ProfileStart", "ProfileEnd", "TracePoint"):
+            self._log_seq += 1
+            lid = self._log_seq
+            level = {"ProfileStart": 100, "ProfileEnd": 101, "TracePoint": 102}[method]
+            self.logs[lid] = {"level": level, "span": vm.regs[rs1] & MASK32}
+            vm.regs[rd] = lid
+            return True
+        return False
+
+    # -- Reserved namespaces: genuinely external/host-injected state this
+    # deterministic VM has no way to source itself (identity provider,
+    # physical card reader, live request/connection, OS facts, network
+    # socket, PKI trust store). Every method still returns a defined,
+    # documented default (0, or an empty span for text-shaped results)
+    # instead of silently falling through to the generic "unknown hook"
+    # log-and-continue path -- so every namespace/method is callable from
+    # every dialect and VM, even where the real capability must be supplied
+    # by the host/PIOS kernel. See docs/FEATURE_MATRIX.md.
+    _RESERVED_NS = {"Auth", "Card", "Context", "Environment", "Net", "X509"}
+    _RESERVED_SPAN_METHODS = {
+        ("Auth", "GetUserCredentials"), ("Auth", "GetUserPermissions"), ("Auth", "RequestToken"),
+        ("Auth", "GetToken"), ("Auth", "RefreshToken"),
+        ("Context", "GetVerb"), ("Context", "GetPath"), ("Context", "GetHost"),
+        ("Context", "GetRemoteAddr"), ("Context", "GetUser"), ("Context", "GetPermissions"),
+        ("Context", "GetHeaders"), ("Context", "GetQueryString"), ("Context", "GetBody"),
+        ("Context", "GetRequestId"), ("Context", "GetClientCert"), ("Context", "GetTraceId"),
+        ("Environment", "GetOsVersion"), ("Environment", "GetHostname"), ("Environment", "GetTimeZone"),
+        ("Net", "Read"),
+        ("X509", "FetchCertificate"), ("X509", "GenerateCSR"), ("X509", "GenerateKeyPair"),
+        ("X509", "GetCertInfo"),
+    }
+
+    def _reserved_stub(self, vm: "PicoVM", ns: str, method: str, rd, rs1, rs2):
+        if (ns, method) in self._RESERVED_SPAN_METHODS:
+            vm.regs[rd] = self._new_span_bytes(vm, b"")
+        else:
+            vm.regs[rd] = 0
+        self.host_status = 1  # INV-18: NOT_FOUND -- no host binding installed
 
     # -- Ui.* retained scene tree + PicoWire serialize ----------------------
     # A clean, minimal remote-windowing model (RDP/X spirit, tiny): build a

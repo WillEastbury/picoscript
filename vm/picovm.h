@@ -36,6 +36,18 @@
 #define PV_MAP_POOL   8192      /* byte pool for map key/value spans */
 #endif
 #define PV_JSON_DEPTH  32       /* nested object/array depth per writer */
+#ifndef PV_MAX_DESCRIPTORS
+#define PV_MAX_DESCRIPTORS 64   /* Descriptor.* table: handle = 1-based index, 0 = null */
+#endif
+#ifndef PV_MAX_LEASES
+#define PV_MAX_LEASES 64        /* Lease.* table: handle = 1-based index, 0 = null */
+#endif
+#ifndef PV_MAX_FIFOS
+#define PV_MAX_FIFOS  16        /* Fifo.* channel table: handle = 1-based index, 0 = null */
+#endif
+#ifndef PV_FIFO_DEPTH
+#define PV_FIFO_DEPTH 16        /* max buffered messages per Fifo channel */
+#endif
 
 /* ---- 16 core opcodes (bits [31:28]) ---------------------------------- */
 enum {
@@ -223,6 +235,36 @@ struct pv_ctx {
     uint32_t  map_pool_top;
     uint8_t   bso1_key[64];                 /* BSO1 HMAC-SHA256 signing key (Binary.SetKey) */
     int       bso1_key_len;
+
+    int       active_pack;                  /* Pack.Use: a lightweight "active pack" selector */
+    uint32_t  thread_yield_count;           /* Thread.YieldCounted: deterministic yield counter */
+
+    /* Descriptor.*: a pure buffer descriptor (ptr/len/flags), no host state --
+     * a real, deterministic primitive, distinct from Span.* (the arena-
+     * string-library view type). 1-based handle; 0 = null. */
+    uint32_t  desc_ptr[PV_MAX_DESCRIPTORS];
+    int32_t   desc_len[PV_MAX_DESCRIPTORS];
+    uint32_t  desc_flags[PV_MAX_DESCRIPTORS];
+    uint8_t   desc_used[PV_MAX_DESCRIPTORS];
+    int       desc_count;
+
+    /* Lease.*: a generic capability/ownership token over a span + type hint.
+     * Pure in-VM bookkeeping, distinct from the stream-frame lease concept
+     * used internally by Stream.Next (a different, unrelated mechanism). */
+    int32_t   lease_span[PV_MAX_LEASES];
+    int32_t   lease_type[PV_MAX_LEASES];
+    uint8_t   lease_valid[PV_MAX_LEASES];
+    uint8_t   lease_used[PV_MAX_LEASES];
+    int       lease_count;
+
+    /* Fifo.*: independent named byte-channel FIFOs (Open returns a fresh
+     * channel handle). Distinct from Queue.* (fixed 8-channel int FIFO). */
+    int32_t   fifo_msg[PV_MAX_FIFOS][PV_FIFO_DEPTH];   /* span handles, FIFO order */
+    int       fifo_head[PV_MAX_FIFOS];
+    int       fifo_tail[PV_MAX_FIFOS];
+    int       fifo_depth[PV_MAX_FIFOS];
+    uint8_t   fifo_used[PV_MAX_FIFOS];
+    int       fifo_count;
 
     pv_host_fn host;
 };

@@ -1,5 +1,11 @@
 # Namespace status — what's implemented, and the hard reasons for the rest
 
+> **See `docs/FEATURE_MATRIX.md` for the current, complete per-namespace x
+> per-runtime status table** (all 70 namespaces, Python/JS/C VM parity,
+> verified by direct dispatch-code inspection). This document predates that
+> full audit and covers only the namespaces implemented in one earlier
+> session; kept for historical context on *why* each gap existed at the time.
+
 This session moved most "planned" namespaces to implemented. For the remainder,
 each entry below gives the **actual reason** it isn't a self-contained VM
 primitive — not an excuse. The recurring theme: the PicoScript VM is

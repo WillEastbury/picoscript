@@ -20,19 +20,19 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Thread.YieldCounted() | 0x0070 | |
+| Thread.YieldCounted() | 0x0070 | Deterministic cooperative-yield counter; increments and returns a per-VM sequence number. Real on all 3 runtimes. |
 
 ### Net.* (7 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Net.Listen() | 0x02E0 | |
-| Net.Accept() | 0x02E1 | |
-| Net.Read() | 0x02E2 | |
-| Net.Write() | 0x02E3 | |
-| Net.Shutdown() | 0x02E4 | |
-| Net.PoolSize() | 0x02E5 | |
-| Net.Register() | 0x02E6 | |
+| Net.Listen() | 0x02E0 | Reserved/host-injected (network socket). Returns 0 on every runtime until a host binds a real implementation. |
+| Net.Accept() | 0x02E1 | Reserved/host-injected. Returns 0. |
+| Net.Read() | 0x02E2 | Reserved/host-injected. Returns an empty span. |
+| Net.Write() | 0x02E3 | Reserved/host-injected. Returns 0. |
+| Net.Shutdown() | 0x02E4 | Reserved/host-injected. Returns 0. |
+| Net.PoolSize() | 0x02E5 | Reserved/host-injected. Returns 0. |
+| Net.Register() | 0x02E6 | Reserved/host-injected. Returns 0. |
 
 ---
 
@@ -66,12 +66,12 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Descriptor.Make() | 0x0050 | |
-| Descriptor.SetFlags() | 0x0051 | |
-| Descriptor.GetPtr() | 0x0052 | |
-| Descriptor.GetLen() | 0x0053 | |
-| Descriptor.GetFlags() | 0x0054 | |
-| Descriptor.CopyBatch() | 0x0055 | |
+| Descriptor.Make() | 0x0050 | Creates a pure buffer descriptor (ptr, len; flags=0) and returns a handle. No host state -- real, deterministic on all 3 runtimes. |
+| Descriptor.SetFlags() | 0x0051 | Sets the driver-facing flags word on an existing descriptor (2-call ABI pattern, like String.SetReplace). |
+| Descriptor.GetPtr() | 0x0052 | Returns the descriptor's arena pointer. |
+| Descriptor.GetLen() | 0x0053 | Returns the descriptor's length. |
+| Descriptor.GetFlags() | 0x0054 | Returns the descriptor's flags word. |
+| Descriptor.CopyBatch() | 0x0055 | memcpy's min(src.len, dst.len) bytes from one descriptor's buffer to another's (same convention as Span.Materialize). |
 
 ### Arena.* (3 hooks)
 
@@ -85,12 +85,12 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Lease.Acquire() | 0x0058 | |
-| Lease.Release() | 0x0059 | |
-| Lease.Validate() | 0x005A | |
-| Lease.CachedValidate() | 0x005B | |
-| Lease.GetSpan() | 0x005C | |
-| Lease.GetTypeHint() | 0x005D | |
+| Lease.Acquire() | 0x0058 | Creates a generic capability/ownership token over a span + type hint; returns a handle. No host state -- real, deterministic. Distinct from Stream.Next's own unrelated internal per-frame lease concept. |
+| Lease.Release() | 0x0059 | Marks a lease token invalid. |
+| Lease.Validate() | 0x005A | Returns 1 if the lease handle is valid (acquired and not released), else 0. |
+| Lease.CachedValidate() | 0x005B | A host-optimization hint (a real host may memoize the check); the reference VM has no cache to distinguish, so it gives the same answer as Validate. |
+| Lease.GetSpan() | 0x005C | Returns the span associated with a valid lease (empty span if invalid). |
+| Lease.GetTypeHint() | 0x005D | Returns the type hint associated with a valid lease (0 if invalid). |
 
 ### Dot8.* (2 hooks)
 
@@ -220,6 +220,14 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | Query.BuildLookupFilter() | 0x01C0 | |
 | Query.BuildManyToManyMap() | 0x01C1 | |
 
+### Data.* (3 hooks)
+
+| Method | Code | Description |
+|--------|------|-------------|
+| Data.Lookup() | 0x0300 | Host-bound read: no active server/data context in the reference VM, so returns 0 -- a defined default, identical on all 3 runtimes, until a host injects a real data binding. |
+| Data.FieldNum() | 0x0301 | Same: returns 0. |
+| Data.FieldStr() | 0x0302 | Same: returns an empty span. |
+
 ### Search.* (28 hooks)
 
 | Method | Code | Description |
@@ -325,21 +333,21 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Context.GetVerb() | 0x00E0 | |
-| Context.GetPath() | 0x00E1 | |
-| Context.GetHost() | 0x00E2 | |
-| Context.GetPort() | 0x00E3 | |
-| Context.GetRemoteAddr() | 0x00E4 | |
-| Context.GetUser() | 0x00E5 | |
-| Context.GetPermissions() | 0x00E6 | |
-| Context.GetHeaders() | 0x00E7 | |
-| Context.GetQueryString() | 0x00E8 | |
-| Context.GetBody() | 0x00E9 | |
-| Context.SetScratchValue() | 0x00EA | |
-| Context.GetScratchValue() | 0x00EB | |
-| Context.GetRequestId() | 0x00EC | |
-| Context.GetClientCert() | 0x00ED | |
-| Context.GetTraceId() | 0x00EE | |
+| Context.GetVerb() | 0x00E0 | Reserved/host-injected (live request/connection state, akin to Req.Method). Returns an empty span outside a real request context. |
+| Context.GetPath() | 0x00E1 | Reserved/host-injected. Returns an empty span. |
+| Context.GetHost() | 0x00E2 | Reserved/host-injected. Returns an empty span. |
+| Context.GetPort() | 0x00E3 | Reserved/host-injected. Returns 0. |
+| Context.GetRemoteAddr() | 0x00E4 | Reserved/host-injected. Returns an empty span. |
+| Context.GetUser() | 0x00E5 | Reserved/host-injected. Returns an empty span. |
+| Context.GetPermissions() | 0x00E6 | Reserved/host-injected. Returns an empty span. |
+| Context.GetHeaders() | 0x00E7 | Reserved/host-injected. Returns an empty span. |
+| Context.GetQueryString() | 0x00E8 | Reserved/host-injected. Returns an empty span. |
+| Context.GetBody() | 0x00E9 | Reserved/host-injected. Returns an empty span. |
+| Context.SetScratchValue() | 0x00EA | Reserved/host-injected. Returns 0. |
+| Context.GetScratchValue() | 0x00EB | Reserved/host-injected. Returns 0. |
+| Context.GetRequestId() | 0x00EC | Reserved/host-injected. Returns an empty span. |
+| Context.GetClientCert() | 0x00ED | Reserved/host-injected. Returns an empty span. |
+| Context.GetTraceId() | 0x00EE | Reserved/host-injected. Returns an empty span. |
 
 ---
 
@@ -357,8 +365,8 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | String.ToUpper() | 0x0085 | |
 | String.ToLower() | 0x0086 | |
 | String.Trim() | 0x0087 | |
-| String.Split() | 0x0088 | |
-| String.Join() | 0x0089 | |
+| String.Split() | 0x0088 | Splits a span by a delimiter span into a fresh Map (int key 0..N-1 -> string part), reusing Map.* storage since the 2-in/1-out ABI has no array type. Returns the Map handle. Does not disturb the caller's active map. |
+| String.Join() | 0x0089 | Joins the int-keyed 0..N-1 string parts of a Map (e.g. one returned by Split) with a separator span. Returns the joined span. |
 | String.StartsWith() | 0x008A | |
 | String.EndsWith() | 0x008B | |
 | String.SetReplace() | 0x008C | |
@@ -464,29 +472,29 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Method | Code | Description |
 |--------|------|-------------|
-| X509.FetchCertificate() | 0x0110 | |
-| X509.StoreCertificate() | 0x0111 | |
-| X509.GenerateCSR() | 0x0112 | |
-| X509.GenerateKeyPair() | 0x0113 | |
-| X509.VerifyCertChain() | 0x0114 | |
-| X509.GetCertInfo() | 0x0115 | |
-| X509.IsCertValid() | 0x0116 | |
-| X509.GetKeyHandle() | 0x0117 | |
+| X509.FetchCertificate() | 0x0110 | Reserved/host-injected (needs a PKI trust store + entropy). Returns an empty span. |
+| X509.StoreCertificate() | 0x0111 | Reserved/host-injected. Returns 0. |
+| X509.GenerateCSR() | 0x0112 | Reserved/host-injected. Returns an empty span. |
+| X509.GenerateKeyPair() | 0x0113 | Reserved/host-injected. Returns an empty span. |
+| X509.VerifyCertChain() | 0x0114 | Reserved/host-injected. Returns 0. |
+| X509.GetCertInfo() | 0x0115 | Reserved/host-injected. Returns an empty span. |
+| X509.IsCertValid() | 0x0116 | Reserved/host-injected. Returns 0. |
+| X509.GetKeyHandle() | 0x0117 | Reserved/host-injected. Returns 0. |
 
 ### Auth.* (10 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Auth.GetUserCredentials() | 0x0120 | |
-| Auth.ValidateCredentials() | 0x0121 | |
-| Auth.SwitchUserContext() | 0x0122 | |
-| Auth.GetUserPermissions() | 0x0123 | |
-| Auth.RequestToken() | 0x0124 | |
-| Auth.GetToken() | 0x0125 | |
-| Auth.ValidateToken() | 0x0126 | |
-| Auth.SwitchTokenContext() | 0x0127 | |
-| Auth.RefreshToken() | 0x0128 | |
-| Auth.RevokeToken() | 0x0129 | |
+| Auth.GetUserCredentials() | 0x0120 | Reserved/host-injected (needs an identity provider). Returns an empty span. |
+| Auth.ValidateCredentials() | 0x0121 | Reserved/host-injected. Returns 0. |
+| Auth.SwitchUserContext() | 0x0122 | Reserved/host-injected. Returns 0. |
+| Auth.GetUserPermissions() | 0x0123 | Reserved/host-injected. Returns an empty span. |
+| Auth.RequestToken() | 0x0124 | Reserved/host-injected. Returns an empty span. |
+| Auth.GetToken() | 0x0125 | Reserved/host-injected. Returns an empty span. |
+| Auth.ValidateToken() | 0x0126 | Reserved/host-injected. Returns 0. |
+| Auth.SwitchTokenContext() | 0x0127 | Reserved/host-injected. Returns 0. |
+| Auth.RefreshToken() | 0x0128 | Reserved/host-injected. Returns an empty span. |
+| Auth.RevokeToken() | 0x0129 | Reserved/host-injected. Returns 0. |
 
 ### Principal.* (3 hooks)
 
@@ -535,12 +543,12 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Kernel.WaitIRQ() | 0x0001 | |
-| Kernel.WaitSWIRQ() | 0x0002 | |
-| Kernel.FireSWIRQ() | 0x0003 | |
-| Kernel.ProfileStart() | 0x0004 | |
-| Kernel.ProfileEnd() | 0x0005 | |
-| Kernel.TracePoint() | 0x0006 | |
+| Kernel.WaitIRQ() | 0x0001 | Real: reuses the same cooperative-yield halt as the raw OP_WAIT opcode, on all 3 runtimes. |
+| Kernel.WaitSWIRQ() | 0x0002 | Real: same mechanism as WaitIRQ. |
+| Kernel.FireSWIRQ() | 0x0003 | Real: signals a software IRQ (ack-only on the embedded C runtime, which carries no debug-log list; Python/JS also append a log line). |
+| Kernel.ProfileStart() | 0x0004 | Python/JS: real, reuses the Log.* table (deterministic, sequence-ordered). **Not yet implemented in the C VM** -- a separate, larger addition (new fixed-size Log table); see docs/FEATURE_MATRIX.md. |
+| Kernel.ProfileEnd() | 0x0005 | Same status as ProfileStart. |
+| Kernel.TracePoint() | 0x0006 | Same status as ProfileStart. |
 
 ### Queue.* (5 hooks)
 
@@ -600,24 +608,24 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Pack.Use() | 0x0160 | |
+| Pack.Use() | 0x0160 | Real: a lightweight "active pack" selector (independent of Storage's own pack context), on all 3 runtimes. |
 
 ### Card.* (3 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Card.Read() | 0x0161 | |
-| Card.Write() | 0x0162 | |
-| Card.Address() | 0x0163 | |
+| Card.Read() | 0x0161 | Reserved/host-injected (physical card reader hardware). Returns 0. |
+| Card.Write() | 0x0162 | Reserved/host-injected. Returns 0. |
+| Card.Address() | 0x0163 | Reserved/host-injected. Returns 0. |
 
 ### Fifo.* (4 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Fifo.Open() | 0x0164 | |
-| Fifo.Send() | 0x0165 | |
-| Fifo.Recv() | 0x0166 | |
-| Fifo.Poll() | 0x0167 | |
+| Fifo.Open() | 0x0164 | Real: opens an independent named byte-channel FIFO, returns a fresh channel handle. No host state -- deterministic on all 3 runtimes. Distinct from Queue.* (fixed 8-channel int FIFO). |
+| Fifo.Send() | 0x0165 | Real: pushes a span onto the channel. |
+| Fifo.Recv() | 0x0166 | Real: pops the oldest span off the channel (empty span if empty/unknown). |
+| Fifo.Poll() | 0x0167 | Real: returns the number of buffered messages on the channel. |
 
 ### Capsule.* (5 hooks)
 
@@ -818,16 +826,25 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 |--------|------|-------------|
 | Scheduler.Tick() | 0x0294 | |
 
-### Error.* (6 hooks)
+### Error.* (8 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Error.SetHandler() | 0x02B0 | |
-| Error.HasHandler() | 0x02B1 | |
-| Error.Code() | 0x02B2 | |
-| Error.Detail() | 0x02B3 | |
-| Error.Resume() | 0x02B4 | |
-| Error.Clear() | 0x02B5 | |
+| Error.SetHandler() | 0x02B0 | Pushes a handler PC onto the exception-handler stack (real try/except mechanism -- see docs/EXCEPTION_ENGINE.md). Python VM + JS VM only. |
+| Error.HasHandler() | 0x02B1 | Returns 1 if a handler is active (checks the top of the handler stack's truthiness). Python VM + JS VM only. |
+| Error.Code() | 0x02B2 | Returns the last fault/raise code. Python VM + JS VM only. |
+| Error.Detail() | 0x02B3 | Returns the last fault/raise detail. Python VM + JS VM only. |
+| Error.Resume() | 0x02B4 | Returns the PC to resume at after a caught fault. Python VM + JS VM only. |
+| Error.Clear() | 0x02B5 | Clears the last fault/raise state. Python VM + JS VM only. |
+| Error.Raise() | 0x02B6 | Raises to the nearest handler (or propagates as an uncaught fault). Python VM + JS VM only. |
+| Error.PopHandler() | 0x02B7 | Pops the handler stack (restores the enclosing try's handler, if any). Python VM + JS VM only. |
+
+**Not implemented in the C VM (`vm/picovm.c`) interpreter or native-C transpile** -- this
+requires the `laddr` (load-label-address) bytecode instruction, which the C decoder does
+not yet recognize at all; a scoped-out follow-up, not an oversight (see
+docs/FEATURE_MATRIX.md and docs/EXCEPTION_ENGINE.md's scope section, which already
+documents this same `laddr` limitation for native-C/JS *transpile* -- the interpretive C
+VM shares the identical gap for the same underlying reason).
 
 ---
 
@@ -837,15 +854,15 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Environment.GetOsVersion() | 0x00D0 | |
-| Environment.GetCpuCount() | 0x00D1 | |
-| Environment.GetMemoryTotal() | 0x00D2 | |
-| Environment.GetMemoryFree() | 0x00D3 | |
-| Environment.GetHostname() | 0x00D4 | |
-| Environment.GetTimeZone() | 0x00D5 | |
-| Environment.GetProcessId() | 0x00D6 | |
-| Environment.GetThreadId() | 0x00D7 | |
-| Environment.GetElapsedTime() | 0x00D8 | |
+| Environment.GetOsVersion() | 0x00D0 | Reserved/host-injected (OS/host facts). Returns an empty span. |
+| Environment.GetCpuCount() | 0x00D1 | Reserved/host-injected. Returns 0. |
+| Environment.GetMemoryTotal() | 0x00D2 | Reserved/host-injected. Returns 0. |
+| Environment.GetMemoryFree() | 0x00D3 | Reserved/host-injected. Returns 0. |
+| Environment.GetHostname() | 0x00D4 | Reserved/host-injected. Returns an empty span. |
+| Environment.GetTimeZone() | 0x00D5 | Reserved/host-injected. Returns an empty span. |
+| Environment.GetProcessId() | 0x00D6 | Reserved/host-injected. Returns 0. |
+| Environment.GetThreadId() | 0x00D7 | Reserved/host-injected. Returns 0. |
+| Environment.GetElapsedTime() | 0x00D8 | Reserved/host-injected. Returns 0. |
 
 ### Status.* (1 hooks)
 

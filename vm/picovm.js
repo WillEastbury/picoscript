@@ -550,6 +550,20 @@
     if (name.indexOf("Locale.") === 0) { if (this._localeHook(name.slice(7), rd, rs1, rs2)) return; }
     if (name.indexOf("Log.") === 0) { if (this._logHook(name.slice(4), rd, rs1, rs2)) return; }
     if (name === "Req.Param" || name === "Req.ParamCount") { if (this._reqParam(name.slice(4), rd, rs1, rs2)) return; }
+    if (name.indexOf("Descriptor.") === 0) { if (this._descriptor(name.slice(11), rd, rs1, rs2)) return; }
+    if (name.indexOf("Lease.") === 0) { if (this._leaseNs(name.slice(6), rd, rs1, rs2)) return; }
+    if (name.indexOf("Fifo.") === 0) { if (this._fifo(name.slice(5), rd, rs1, rs2)) return; }
+    if (name === "Pack.Use") { this.activePack = this.regs[rs1] | 0; this.regs[rd] = this.activePack; return; }
+    if (name.indexOf("Kernel.") === 0) { if (this._kernel(name.slice(7), rd, rs1, rs2)) return; }
+    if (name === "Thread.YieldCounted") {
+      this.threadYieldCount = (this.threadYieldCount || 0) + 1;
+      this.regs[rd] = this.threadYieldCount | 0;
+      return;
+    }
+    if (PicoVM.RESERVED_NS.indexOf(name.slice(0, name.indexOf("."))) >= 0) {
+      this._reservedStub(name, rd);
+      return;
+    }
     this.log.push("host " + name + " R" + rd + " R" + rs1);
   };
 
@@ -869,6 +883,53 @@
         else { out.push(a[k]); k++; }
       }
       this.regs[rd] = this._newSpanBytes(out); return true;
+    }
+    if (method === "Split") {
+      // Real, deterministic multi-value result: the 2-in/1-out host-hook ABI
+      // has no array type, so parts are stored in a fresh Map (int key
+      // 0..N-1 -> string part), reusing Map.*'s already-parity-tested
+      // storage rather than inventing a new container. Allocated directly
+      // (bypassing Map.New's side effect on activeMap), so Split/Join never
+      // disturb a map the caller already has open. Mirrors picoscript_vm.py
+      // _stringlib's Split exactly.
+      if (!this.maps) { this.maps = [null]; this.activeMap = 0; }
+      var delim = this._spanBytes(this.regs[rs2]);
+      var parts;
+      if (delim.length === 0) { parts = [a]; }
+      else {
+        parts = [];
+        var rem = a, idx;
+        while ((idx = _bfind(rem, delim)) >= 0) {
+          parts.push(rem.slice(0, idx));
+          rem = rem.slice(idx + delim.length);
+        }
+        parts.push(rem);
+      }
+      var mm = new Map();
+      for (var pi = 0; pi < parts.length; pi++) {
+        mm.set('i' + pi, { kk: 'i', ki: pi, kb: null, vk: 's', vi: 0, vb: parts[pi] });
+      }
+      this.maps.push(mm);
+      this.regs[rd] = this.maps.length - 1;
+      return true;
+    }
+    if (method === "Join") {
+      // rs1 = separator span (already decoded into `a` above), rs2 = the Map
+      // handle returned by a prior Split (or any int-keyed 0..N-1 string map).
+      if (!this.maps) { this.maps = [null]; this.activeMap = 0; }
+      var mh = this.regs[rs2] | 0;
+      var jm = (mh > 0 && mh < this.maps.length) ? this.maps[mh] : null;
+      if (!jm) { this.regs[rd] = this._newSpanBytes([]); return true; }
+      var n = 0;
+      jm.forEach(function (v, k) { if (k.charAt(0) === 'i') n++; });
+      var out2 = [];
+      for (var ji = 0; ji < n; ji++) {
+        var je = jm.get('i' + ji);
+        if (ji > 0) out2 = out2.concat(a);
+        out2 = out2.concat(je && je.vk === 's' ? je.vb : []);
+      }
+      this.regs[rd] = this._newSpanBytes(out2);
+      return true;
     }
     return false;
   };
@@ -2616,6 +2677,132 @@
     if (method === "Message") { this.regs[rd] = e ? e.span : 0; return true; }
     if (method === "Clear") { this._logs = {}; this.regs[rd] = 1; return true; }
     return false;
+  };
+
+  // -- Descriptor.*: a pure buffer descriptor (ptr/len/flags handle table),
+  // deliberately kept separate from Span.* (Span is the arena-string-library
+  // view type; Descriptor adds a host/driver-facing `flags` word alongside
+  // ptr/len). No host state, so it is real + fully deterministic on every
+  // runtime. Mirrors picoscript_vm.py's _descriptor exactly.
+  PicoVM.prototype._descriptor = function (method, rd, rs1, rs2) {
+    if (!this._descriptors) { this._descriptors = {}; this._descriptorSeq = 0; }
+    if (method === "Make") {
+      this._descriptorSeq++;
+      var h = this._descriptorSeq;
+      this._descriptors[h] = { ptr: this.regs[rs1] >>> 0, len: Math.max(0, this.regs[rs2] | 0), flags: 0 };
+      this.regs[rd] = h;
+      return true;
+    }
+    var d = this._descriptors[this.regs[rs1] >>> 0];
+    if (method === "SetFlags") { if (d) d.flags = this.regs[rs2] >>> 0; this.regs[rd] = d ? 1 : 0; return true; }
+    if (method === "GetPtr") { this.regs[rd] = d ? d.ptr : 0; return true; }
+    if (method === "GetLen") { this.regs[rd] = d ? d.len : 0; return true; }
+    if (method === "GetFlags") { this.regs[rd] = d ? d.flags : 0; return true; }
+    if (method === "CopyBatch") {
+      var dst = this._descriptors[this.regs[rs2] >>> 0];
+      if (!d || !dst) { this.regs[rd] = 0; return true; }
+      var n = Math.min(d.len, dst.len);
+      for (var i = 0; i < n; i++) this.mem[dst.ptr + i] = this.mem[d.ptr + i];
+      this.regs[rd] = n;
+      return true;
+    }
+    return false;
+  };
+
+  // -- Lease.*: a generic capability/ownership token over a span + type hint.
+  // Pure in-VM bookkeeping, distinct from Stream.*'s own unrelated internal
+  // per-frame lease table. Mirrors picoscript_vm.py's _lease_ns exactly.
+  PicoVM.prototype._leaseNs = function (method, rd, rs1, rs2) {
+    if (!this._leaseTokens) { this._leaseTokens = {}; this._leaseTokenSeq = 0; }
+    if (method === "Acquire") {
+      this._leaseTokenSeq++;
+      var h = this._leaseTokenSeq;
+      this._leaseTokens[h] = { span: this.regs[rs1] >>> 0, type: this.regs[rs2] >>> 0, valid: true };
+      this.regs[rd] = h;
+      return true;
+    }
+    var t = this._leaseTokens[this.regs[rs1] >>> 0];
+    if (method === "Release") { if (t) t.valid = false; this.regs[rd] = t ? 1 : 0; return true; }
+    if (method === "Validate" || method === "CachedValidate") {
+      // CachedValidate is a host-optimization hint; the reference VM has no
+      // cache to distinguish, so both give the same correct answer.
+      var ok = !!(t && t.valid);
+      this.regs[rd] = ok ? 1 : 0;
+      this.hostStatus = ok ? 0 : 1;
+      return true;
+    }
+    if (method === "GetSpan") { this.regs[rd] = (t && t.valid) ? t.span : this._newSpanBytes([]); return true; }
+    if (method === "GetTypeHint") { this.regs[rd] = (t && t.valid) ? t.type : 0; return true; }
+    return false;
+  };
+
+  // -- Fifo.*: independent named byte-channel FIFOs (Open returns a fresh
+  // channel handle). Distinct from Queue.* (fixed 8-channel int FIFO).
+  // Mirrors picoscript_vm.py's _fifo exactly.
+  PicoVM.prototype._fifo = function (method, rd, rs1, rs2) {
+    if (!this._fifoChannels) { this._fifoChannels = {}; this._fifoSeq = 0; }
+    if (method === "Open") {
+      this._fifoSeq++;
+      var h = this._fifoSeq;
+      this._fifoChannels[h] = [];
+      this.regs[rd] = h;
+      return true;
+    }
+    var ch = this._fifoChannels[this.regs[rs1] >>> 0];
+    if (method === "Send") { if (ch) ch.push(this._spanBytes(this.regs[rs2])); this.regs[rd] = ch ? 1 : 0; return true; }
+    if (method === "Recv") {
+      if (ch && ch.length) { this.regs[rd] = this._newSpanBytes(ch.shift()); this.hostStatus = 0; }
+      else { this.regs[rd] = this._newSpanBytes([]); this.hostStatus = 1; }
+      return true;
+    }
+    if (method === "Poll") { this.regs[rd] = ch ? ch.length : 0; return true; }
+    return false;
+  };
+
+  // -- Kernel.*: WaitIRQ/WaitSWIRQ reuse the same cooperative-yield halt as
+  // the raw OP.WAIT opcode; FireSWIRQ logs the same software-IRQ line as the
+  // raw OP.RAISE opcode; ProfileStart/ProfileEnd/TracePoint reuse the Log.*
+  // table so tracing is deterministic and script-visible, not a wall-clock
+  // profiler. Mirrors picoscript_vm.py's _kernel exactly.
+  PicoVM.prototype._kernel = function (method, rd, rs1, rs2) {
+    if (method === "WaitIRQ" || method === "WaitSWIRQ") { this.waiting = true; this.halted = true; return true; }
+    if (method === "FireSWIRQ") { this.log.push("raise swirq channel=" + (this.regs[rs1] >>> 0)); this.regs[rd] = 1; return true; }
+    if (method === "ProfileStart" || method === "ProfileEnd" || method === "TracePoint") {
+      if (!this._logs) { this._logs = {}; this._logSeq = 0; }
+      this._logSeq++;
+      var lid = this._logSeq;
+      var level = { ProfileStart: 100, ProfileEnd: 101, TracePoint: 102 }[method];
+      this._logs[lid] = { level: level, span: this.regs[rs1] >>> 0 };
+      this.regs[rd] = lid;
+      return true;
+    }
+    return false;
+  };
+
+  // -- Reserved namespaces: genuinely external/host-injected state this
+  // deterministic VM has no way to source itself (identity provider,
+  // physical card reader, live request/connection, OS facts, network
+  // socket, PKI trust store). Every method returns a defined, documented
+  // default (0, or an empty span for text-shaped results) instead of
+  // silently falling through to the generic unknown-hook log-and-continue
+  // path. See docs/FEATURE_MATRIX.md. Mirrors picoscript_vm.py's
+  // _reserved_stub/_RESERVED_NS/_RESERVED_SPAN_METHODS exactly.
+  PicoVM.RESERVED_NS = ["Auth", "Card", "Context", "Environment", "Net", "X509"];
+  PicoVM.RESERVED_SPAN_METHODS = {
+    "Auth.GetUserCredentials": 1, "Auth.GetUserPermissions": 1, "Auth.RequestToken": 1,
+    "Auth.GetToken": 1, "Auth.RefreshToken": 1,
+    "Context.GetVerb": 1, "Context.GetPath": 1, "Context.GetHost": 1,
+    "Context.GetRemoteAddr": 1, "Context.GetUser": 1, "Context.GetPermissions": 1,
+    "Context.GetHeaders": 1, "Context.GetQueryString": 1, "Context.GetBody": 1,
+    "Context.GetRequestId": 1, "Context.GetClientCert": 1, "Context.GetTraceId": 1,
+    "Environment.GetOsVersion": 1, "Environment.GetHostname": 1, "Environment.GetTimeZone": 1,
+    "Net.Read": 1,
+    "X509.FetchCertificate": 1, "X509.GenerateCSR": 1, "X509.GenerateKeyPair": 1,
+    "X509.GetCertInfo": 1
+  };
+  PicoVM.prototype._reservedStub = function (name, rd) {
+    this.regs[rd] = PicoVM.RESERVED_SPAN_METHODS[name] ? this._newSpanBytes([]) : 0;
+    this.hostStatus = 1; // INV-18: NOT_FOUND -- no host binding installed
   };
 
   // -- Capsule.* inter-card module switching (mirrors HostApi._capsule_exec) ----

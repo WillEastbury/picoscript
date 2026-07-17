@@ -23,6 +23,20 @@ every dialect.
 
 **Not supported, and explicitly, loudly rejected rather than silently
 mis-compiled:**
+- **The interpretive C VM itself** (`vm/picovm.c`, the bytecode interpreter,
+  not just the "native C transpile" target described below). Verified
+  directly this pass (`docs/FEATURE_MATRIX.md`): the C decoder has no
+  `laddr` opcode at all, and `picovm.c` has no `Error.*` host-hook dispatch
+  branch (`PV_HOOK_ERROR_*` is registered in `HOST_HOOK_CODES` but never
+  referenced there). A program using `TryExcept`/`Raise` compiled to
+  bytecode and run on the C interpreter (`vm/picovm_run.c`) will therefore
+  hit an unrecognized/no-op instruction rather than working correctly --
+  this is a real, currently-open gap, not yet guarded with a clear compile-
+  time error the way the two transpile backends below are. A good next
+  step: either add `laddr` + the handler-stack host ops to `picovm.c` (real
+  fix), or make bytecode-safe-lowering reject `laddr` for the C interpreter
+  target the same way it already does for the two transpile backends
+  (clear failure instead of silent wrong behavior).
 - **Native C transpile** (`lower_to_c` → `vm/picovm.c` host ABI). Emitted C
   uses plain `goto` labels, not PC-addressable bytecode -- there is no
   runtime "program counter" value to load a label's address into, so
