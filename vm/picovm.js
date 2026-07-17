@@ -224,6 +224,10 @@
           this._errState.code = ex.fault;
           this._errState.detail = ex.detail || 0;
           this._errState.resumePc = (ex.pc || 0) + 1;
+          // See _errorHook's Raise -- same call-stack truncation applies to
+          // a genuine fault caught mid-subroutine.
+          var cd = this._errState.callDepth;
+          this.callStack.length = cd[cd.length - 1];
           this.pc = handlerPc;
         } else {
           throw ex;
@@ -2636,11 +2640,20 @@
 
   // -- Error.* global error handler + fault inspection (mirrors HostApi._error_hook) ----
   PicoVM.prototype._errorHook = function (method, rd, rs1, rs2) {
-    if (!this._errState) this._errState = { handlerStack: [], code: 0, detail: 0, resumePc: 0 };
+    if (!this._errState) this._errState = { handlerStack: [], callDepth: [], code: 0, detail: 0, resumePc: 0 };
     var es = this._errState;
-    if (method === "SetHandler") { es.handlerStack.push(this.regs[rs1] >>> 0); this.regs[rd] = 1; return true; }
+    if (method === "SetHandler") {
+      es.handlerStack.push(this.regs[rs1] >>> 0);
+      // Record how deep the call stack was at registration time, so Raise
+      // (and a genuine fault -- see run()) can discard any return addresses
+      // pushed by subroutines called *after* this handler was armed. Without
+      // this, a raise inside a called function leaves a stale return address
+      // that a later RETURN pops, resuming skipped try-body code.
+      es.callDepth.push(this.callStack.length);
+      this.regs[rd] = 1; return true;
+    }
     if (method === "PopHandler") {
-      if (es.handlerStack.length) { es.handlerStack.pop(); this.regs[rd] = 1; } else { this.regs[rd] = 0; }
+      if (es.handlerStack.length) { es.handlerStack.pop(); es.callDepth.pop(); this.regs[rd] = 1; } else { this.regs[rd] = 0; }
       return true;
     }
     if (method === "HasHandler") { this.regs[rd] = this._activeHandlerPc() ? 1 : 0; return true; }
@@ -2664,6 +2677,7 @@
       var handlerPc = this._activeHandlerPc();
       if (handlerPc) {
         es.code = code; es.detail = 0; es.resumePc = this.pc;   // step() already advanced pc
+        this.callStack.length = es.callDepth[es.callDepth.length - 1];
         this.pc = handlerPc;
         this.regs[rd] = 1;
       } else {

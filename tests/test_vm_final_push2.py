@@ -320,6 +320,7 @@ def test_error_handler_redirect():
     vm = PicoVM()
     vm.regs[0] = 9999  # bad target
     vm.host._error_handler_stack = [1]  # redirect to instruction 1 = return
+    vm.host._error_handler_call_depth = [0]
     vm.run([bad_jump, ret])
     assert vm.halted
     assert vm.host._error_code == PV_FAULT_BAD_JUMP

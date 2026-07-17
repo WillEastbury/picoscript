@@ -88,17 +88,24 @@ and `tests/test_native_js_trycatch.py` for verification (including a loop
 inside a try body, and a `break` crossing a try boundary into an enclosing
 loop — the trickiest case for JS specifically, since it lacks `goto`).
 
-**A real, pre-existing bug found along the way**: verifying native C's
-cross-function-raise support against the Python VM as ground truth exposed
-that all three *bytecode* VMs (Python/JS/C interpreter) have a genuine bug
-where `Error.Raise` from inside a called subroutine doesn't unwind
-`vm.call_stack`, leaving a stale return address that gets popped later and
-silently re-executes code that should have been skipped. Native C does not
-have this bug (real C function returns unwind correctly); native JS doesn't
-either (real JS exceptions unwind the actual JS call stack). Flagged as a
-separate, scoped, tracked follow-up — see `docs/EXCEPTION_ENGINE.md`'s
-"A discovered, pre-existing bytecode-VM bug" section — not silently patched
-over or left undocumented.
+**A real, pre-existing bug found along the way — since fixed**: verifying
+native C's cross-function-raise support against the Python VM as ground
+truth exposed that all three *bytecode* VMs (Python/JS/C interpreter) had a
+genuine bug where `Error.Raise` from inside a called subroutine didn't
+unwind `vm.call_stack`, leaving a stale return address that got popped later
+and silently re-executed code that should have been skipped. Native C didn't
+have this bug (real C function returns unwind correctly); native JS didn't
+either (real JS exceptions unwind the actual JS call stack). Fixed in all
+three bytecode VMs by recording the call-stack depth at `Error.SetHandler`
+time (a parallel array: `picoscript_vm.py`'s `_error_handler_call_depth`,
+`vm/picovm.js`'s `_errState.callDepth`, `vm/picovm.c`'s
+`ctx->err_call_depth[]`) and truncating the call stack back to that depth
+whenever `Error.Raise`/a caught genuine fault redirects to a handler — see
+`docs/EXCEPTION_ENGINE.md`'s "Cross-function raise: a call-stack-unwinding
+bug, found and fixed" section for the full story, and
+`tests/test_c_vm_error_parity.py`, `tests/test_exception_engine.py`,
+`tests/test_native_toc_trycatch.py` for regression coverage across all 3
+bytecode VMs plus native C/JS.
 
 **Update — fixed this pass.** A prior revision of this file claimed the C VM
 interpreter "shares the `laddr`/handler-stack bytecode contract" without

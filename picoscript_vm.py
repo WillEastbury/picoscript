@@ -1169,6 +1169,18 @@ class HostApi:
         # for its own body; on normal completion or once its except/finally
         # has run, PopHandler restores the enclosing try's handler, if any).
         self._error_handler_stack: List[int] = []
+        # Parallel to _error_handler_stack: vm.call_stack's depth at the
+        # moment each handler was pushed. A Raise/caught fault must truncate
+        # vm.call_stack back to this depth before jumping to the handler --
+        # otherwise a Raise from inside a called subroutine leaves a stale
+        # return address on the call stack (pointing just past the CALL,
+        # into the middle of the try body that should have been skipped),
+        # which a LATER, unrelated RETURN pops and silently resumes there,
+        # re-executing code that should never run again. Found via native-C
+        # transpile's cross-function-raise test needing a ground truth to
+        # compare against -- see docs/EXCEPTION_ENGINE.md's "discovered,
+        # pre-existing bytecode-VM bug" section.
+        self._error_handler_call_depth: List[int] = []
         self._error_code: int = 0        # last fault code (0=none)
         self._error_detail: int = 0      # last fault detail
         self._error_resume_pc: int = 0   # pc to resume from after fault
@@ -4404,12 +4416,17 @@ class HostApi:
             # a legitimate "register a no-op handler" call (matches the
             # pre-existing "0 = unset" convention) -- HasHandler/Raise below
             # look at the top entry's truthiness, not just stack depth.
+            # Also records vm.call_stack's CURRENT depth (see
+            # _error_handler_call_depth's declaration) so a Raise/caught
+            # fault can truncate back to it before jumping.
             self._error_handler_stack.append(vm.regs[rs1] & MASK32)
+            self._error_handler_call_depth.append(len(vm.call_stack))
             vm.regs[rd] = 1
             return True
         if method == "PopHandler":
             if self._error_handler_stack:
                 self._error_handler_stack.pop()
+                self._error_handler_call_depth.pop()
                 vm.regs[rd] = 1
             else:
                 vm.regs[rd] = 0
@@ -4457,6 +4474,13 @@ class HostApi:
                 self._error_code = code
                 self._error_detail = 0
                 self._error_resume_pc = vm.pc   # _step() already advanced pc past this call
+                # Truncate the call stack back to what it was when this
+                # handler was registered -- a Raise from inside a called
+                # subroutine must discard that subroutine's (and any deeper
+                # nested calls') now-abandoned return addresses, or a LATER
+                # RETURN would pop one of them and resume in the middle of
+                # the try body that this jump is meant to skip entirely.
+                del vm.call_stack[self._error_handler_call_depth[-1]:]
                 vm.pc = handler_pc
                 vm.regs[rd] = 1
             else:
@@ -4946,6 +4970,11 @@ class PicoVM:
                         self.host._error_code = pf.code
                         self.host._error_detail = pf.detail
                         self.host._error_resume_pc = pf.pc + 1
+                        # Same call-stack truncation Error.Raise applies (see
+                        # _error_hook) -- a genuine fault inside a called
+                        # subroutine must discard that subroutine's abandoned
+                        # return address too, for the identical reason.
+                        del self.call_stack[self.host._error_handler_call_depth[-1]:]
                         self.pc = handler_pc
                     else:
                         raise

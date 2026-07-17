@@ -118,50 +118,59 @@ fix follows exactly that path: `TryExcept` is no longer flattened into
 
 Both are verified against the same Python-VM reference outputs as the
 bytecode paths, for: try/catch/finally/raise, happy path (no exception),
-nested try/catch, and uncaught raise. Native C additionally verifies a
-cross-function raise (a subroutine call inside a try, where the subroutine
-itself raises) — see "A discovered, pre-existing bytecode-VM bug" below for
-an important caveat found while testing this exact case.
+nested try/catch, uncaught raise, and a cross-function raise (a subroutine
+call inside a try, where the subroutine itself raises) — see "Cross-function
+raise: a call-stack-unwinding bug, found and fixed" below for the story of
+how this last case surfaced a real, pre-existing bug in all three bytecode
+VMs, since fixed.
 
-### A discovered, pre-existing bytecode-VM bug: cross-function raise
+### Cross-function raise: a call-stack-unwinding bug, found and fixed
 
 Testing native C's cross-function-raise support against the Python VM as a
 reference (as this redesign's verification methodology requires) surfaced a
-real, **pre-existing** bug in the interpretive bytecode VMs (Python, JS, and
-the C interpreter — all three share the identical handler-stack/PC-redirect
-mechanism, so all three have it): when `Error.Raise` (or a caught genuine
+real, pre-existing bug in the interpretive bytecode VMs (Python, JS, and the
+C interpreter — all three shared the identical handler-stack/PC-redirect
+mechanism, so all three had it): when `Error.Raise` (or a caught genuine
 fault) jumps straight to a handler's PC from **inside a called subroutine**,
-`vm.call_stack` is never unwound (only `vm.pc` is redirected) — so the stale
-return address pushed by the `CALL` into that subroutine (pointing just past
-the call, i.e. into the middle of the try body that should have been
-skipped) is still sitting on the call stack. Whatever `RETURN` eventually
-executes next (e.g. the implicit one ending the top-level program) pops that
-stale address and resumes execution there instead of wherever it actually
-should — silently re-running code that was supposed to be skipped.
+`vm.call_stack` was never unwound (only `vm.pc` was redirected) — so the
+stale return address pushed by the `CALL` into that subroutine (pointing
+just past the call, i.e. into the middle of the try body that should have
+been skipped) was still sitting on the call stack. Whatever `RETURN`
+eventually executed next (e.g. the implicit one ending the top-level
+program) popped that stale address and resumed execution there instead of
+wherever it actually should — silently re-running code that was supposed to
+be skipped.
 
 Concretely: `try { x = 1; boom(); x = 999; } catch { x = x + 100; }` where
 `boom()` does `raise 55;` — the **correct** result is `x == 101` (`boom()`
-raises, `x = 999;` is skipped, catch runs). The **current bytecode VMs**
-produce `x == 999` after first emitting a spurious extra `print` of `101`
-(both values get printed — the handler runs once correctly, then the stale
-call-stack entry resumes the try body from where `boom()` was called,
-completing it a second time). Native C's return-code-propagation design does
-**not** have this bug (it unwinds via real C function returns, which
-correctly discard each frame's state), so it is — for this specific case —
-more correct than the current bytecode VMs. Native JS is unaffected for a
-different reason: a real JS `throw` unwinds the actual JS call stack, so
-there's no analogous "stale return address" concept to leak in the first
-place.
+raises, `x = 999;` is skipped, catch runs). The **pre-fix bytecode VMs**
+produced `x == 999` after first emitting a spurious extra `print` of `101`
+(both values got printed — the handler ran once correctly, then the stale
+call-stack entry resumed the try body from where `boom()` was called,
+completing it a second time). Native C's return-code-propagation design never
+had this bug (it unwinds via real C function returns, which correctly
+discard each frame's state); native JS is unaffected for a different reason —
+a real JS `throw` unwinds the actual JS call stack, so there's no analogous
+"stale return address" concept to leak in the first place.
 
-This is flagged, not silently worked around: fixing it properly means
-`Error.SetHandler` recording the call-stack depth at push time, and
-`Error.Raise`/a caught fault truncating `vm.call_stack` back to that depth
-before jumping — a real, bounded fix, but a separate one from this redesign
-(which was scoped to native transpile support), tracked as a follow-up. See
-`tests/test_native_toc_trycatch.py`'s cross-function test, which documents
-the current buggy bytecode-VM behavior explicitly (asserting it does NOT
-equal the correct answer, so this comment — and the test — will need
-updating once that follow-up fix lands).
+**The fix** (applied to all three bytecode VMs): `Error.SetHandler` now
+records the call-stack depth at push time in a parallel array —
+`picoscript_vm.py`'s `_error_handler_call_depth`, `vm/picovm.js`'s
+`_errState.callDepth`, `vm/picovm.c`'s `ctx->err_call_depth[]` (parallel to
+`_error_handler_stack`/`_errState.handlerStack`/`ctx->err_stack[]`
+respectively). `Error.Raise` and the genuine-fault-catch path (both the
+in-band host-hook path and `PicoVM.run()`'s/`picovm.js`'s `run()`'s/
+`pv_set_fault`'s main-loop fault handler) now truncate the call stack back to
+that recorded depth immediately before redirecting `pc` to the handler —
+discarding any return addresses pushed by subroutines called after the
+handler was armed. `Error.PopHandler` pops the parallel depth entry too, to
+stay in sync. Verified: the cross-function-raise example above now produces
+`x == 101` identically across Python VM, JS VM (`vm/picovm.js`), and the C VM
+interpreter (`vm/picovm.c`) — matching native C/JS. See
+`tests/test_c_vm_error_parity.py::check_cross_function_raise_unwinds_call_stack`,
+`tests/test_exception_engine.py::test_js_bytecode_vm_cross_function_raise_unwinds_call_stack`,
+and `tests/test_native_toc_trycatch.py`'s cross-function test (now asserting
+equality across all paths, no longer documenting a discrepancy).
 
 ## Update: C-style's JS mirror (`CParser`/`CLowerer`) — fixed
 

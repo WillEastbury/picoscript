@@ -144,6 +144,34 @@ def check_genuine_vm_fault_caught_by_handler_stack():
     assert c == py
 
 
+def check_cross_function_raise_unwinds_call_stack():
+    """Regression test: Error.Raise inside a called subroutine, caught by a
+    try in the CALLER, must unwind the call stack back to its depth at
+    Error.SetHandler time -- otherwise the stale return address left by the
+    subroutine call gets popped by a later, unrelated RETURN and resumes
+    execution mid-try-body, re-running code that should have been skipped
+    (discovered while adding native C transpile trycatch support; see
+    docs/EXCEPTION_ENGINE.md). Fixed via a parallel call-stack-depth array
+    recorded at SetHandler time in all 3 bytecode VMs (picoscript_vm.py's
+    _error_handler_call_depth, vm/picovm.js's _errState.callDepth,
+    vm/picovm.c's ctx->err_call_depth)."""
+    check(
+        "int x = 0;\n"
+        "void boom() {\n"
+        "    raise 55;\n"
+        "}\n"
+        "try {\n"
+        "    x = 1;\n"
+        "    boom();\n"
+        "    x = 999;\n"     # must NOT execute -- would if call stack weren't unwound
+        "} catch {\n"
+        "    x = x + 100;\n"
+        "}\n"
+        "print(x);\n",
+        (101).to_bytes(4, "big"),
+    )
+
+
 def main():
     build_c_vm()
     try:
@@ -152,6 +180,7 @@ def main():
         check_nested_try_catch()
         check_uncaught_raise_reports_fault_identically()
         check_genuine_vm_fault_caught_by_handler_stack()
+        check_cross_function_raise_unwinds_call_stack()
         print("PASS: Error.*/try-except byte-identical, Python VM == C VM interpreter")
     finally:
         if os.path.exists(VM_EXE):

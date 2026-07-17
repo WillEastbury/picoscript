@@ -37,6 +37,11 @@ static void pv_set_fault(pv_ctx *ctx, int code, int pc, int detail)
         ctx->err_code = code;
         ctx->err_detail = detail;
         ctx->err_resume_pc = pc + 1;
+        /* Truncate the call stack back to its depth when this handler was
+         * registered (Error.SetHandler) -- discards any return address left
+         * by a subroutine called since then, so a later RETURN can't pop it
+         * and resume skipped try-body code. See err_call_depth in picovm.h. */
+        ctx->call_sp = ctx->err_call_depth[ctx->err_sp - 1];
         ctx->pending_jump = handler_pc;
         ctx->pending_jump_set = 1;
         return;
@@ -2052,7 +2057,11 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
      * _emit_const), which this interpreter already executes; the only real
      * gap was this dispatch + the handler-stack/pending-jump mechanism. */
     if (hook == PV_HOOK_ERROR_SETHANDLER) {
-        if (ctx->err_sp < PV_MAX_ERR_HANDLERS) ctx->err_stack[ctx->err_sp++] = ctx->regs[rs1];
+        if (ctx->err_sp < PV_MAX_ERR_HANDLERS) {
+            ctx->err_stack[ctx->err_sp] = ctx->regs[rs1];
+            ctx->err_call_depth[ctx->err_sp] = ctx->call_sp;
+            ctx->err_sp++;
+        }
         ctx->regs[rd] = 1;
         return;
     }
@@ -2097,6 +2106,9 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
             ctx->err_code = code;
             ctx->err_detail = 0;
             ctx->err_resume_pc = ctx->cur_pc + 1;
+            /* See pv_set_fault's identical comment: discard any return
+             * addresses pushed since this handler was registered. */
+            ctx->call_sp = ctx->err_call_depth[ctx->err_sp - 1];
             ctx->pending_jump = handler_pc;
             ctx->pending_jump_set = 1;
             ctx->regs[rd] = 1;

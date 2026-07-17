@@ -183,6 +183,15 @@ struct pv_ctx {
      * the C loop's pc is a local, so this is the channel back to it. */
     int32_t   err_stack[PV_MAX_ERR_HANDLERS];
     int       err_sp;
+    /* Parallel to err_stack: call_sp recorded at the moment each handler was
+     * pushed (Error.SetHandler). A Raise (or a genuine fault caught via
+     * pv_set_fault) truncates call_stack back to err_call_depth[err_sp-1]
+     * before redirecting pc -- otherwise a raise inside a called subroutine
+     * leaves that subroutine's return address on call_stack, and a later
+     * RETURN pops it and resumes skipped try-body code. Mirrors the
+     * identical fix in picoscript_vm.py's _error_handler_call_depth and
+     * vm/picovm.js's _errState.callDepth. */
+    int       err_call_depth[PV_MAX_ERR_HANDLERS];
     int32_t   err_code;
     int32_t   err_detail;
     int32_t   err_resume_pc;

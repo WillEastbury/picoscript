@@ -117,6 +117,7 @@ def test_genuine_vm_fault_caught_by_try_except():
     vm = PicoVM()
     vm.regs[0] = 9999          # out-of-range computed jump target
     vm.host._error_handler_stack.append(1)   # handler at pc 1 (the RETURN)
+    vm.host._error_handler_call_depth.append(0)   # call_stack depth at "SetHandler" time
     vm.run([bad_jump, ret])
     assert vm.halted is True
     assert vm.host._error_code == 3   # PV_FAULT_BAD_JUMP
@@ -205,3 +206,51 @@ def test_js_bytecode_vm_matches_python_for_try_except_raise():
     assert r.returncode == 0, r.stderr
     js_out = json.loads(r.stdout.strip())
     assert js_out == [1101]
+
+
+@pytest.mark.skipif(not _node_available(), reason="node not available")
+def test_js_bytecode_vm_cross_function_raise_unwinds_call_stack():
+    """Regression test (mirrors test_c_vm_error_parity.py's check_cross_
+    function_raise_unwinds_call_stack): a Raise from inside a GOSUB'd
+    subroutine, caught by a try in the caller, must unwind vm.callStack
+    back to its depth at Error.SetHandler time -- otherwise the stale
+    return address left by the GOSUB call gets popped by a later,
+    unrelated RETURN and resumes mid-try-body, re-running code that
+    should have been skipped. Fixed via vm/picovm.js's
+    _errState.callDepth (parallel to _errState.handlerStack)."""
+    src = (
+        "LET x = 0\n"
+        "TRY\n"
+        "    LET x = 1\n"
+        "    GOSUB BOOM\n"
+        "    LET x = 999\n"   # must NOT execute
+        "EXCEPT\n"
+        "    LET x = x + 100\n"
+        "ENDTRY\n"
+        "PRINT x\n"
+        "RETURN\n"
+        "SUB BOOM\n"
+        "    RAISE 55\n"
+        "ENDSUB\n"
+    )
+    words = lower_to_bytecode_safe(compile_basic(src))
+    py_out = _out(PicoVM().run(list(words)))
+    assert py_out == [101], py_out
+    script = f"""
+    var VM = require('./vm/picovm.js');
+    var hooks = require('./vm/pico_hooks.js');
+    var vm = new VM({{hooks: hooks}});
+    var words = {json.dumps(words)};
+    vm.run(words);
+    var out = [];
+    for (var i = 0; i < vm.output.length; i += 4) {{
+      var v = (vm.output[i]<<24 | vm.output[i+1]<<16 | vm.output[i+2]<<8 | vm.output[i+3]) >>> 0;
+      out.push(v | 0);
+    }}
+    console.log(JSON.stringify(out));
+    """
+    r = subprocess.run(["node", "-e", script], capture_output=True, text=True,
+                        cwd=ROOT, timeout=30)
+    assert r.returncode == 0, r.stderr
+    js_out = json.loads(r.stdout.strip())
+    assert js_out == [101], js_out

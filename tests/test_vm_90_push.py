@@ -49,6 +49,7 @@ def test_error_handler_recovery():
     vm = PicoVM()
     # Install an error handler that sets a flag
     vm.host._error_handler_stack = [1]  # Any non-zero PC -> recovery path
+    vm.host._error_handler_call_depth = [0]  # call_stack depth when "registered"
     # Now trigger a fault
     E = isa.encode_instruction
     # Try to read from out-of-range PC (bad jump) - this triggers PicoFault

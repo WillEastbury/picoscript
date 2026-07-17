@@ -114,19 +114,19 @@ def main():
         assert c_out == b"", f"native C should not have printed anything, got {c_out!r}"
 
         # Cross-function raise: Raise from inside a called subroutine, caught
-        # by a try in the CALLER. Note: this exposed a real, PRE-EXISTING bug
-        # in the interpretive bytecode VMs (Python/JS/C) -- Error.Raise jumps
-        # straight to the handler PC without unwinding vm.call_stack, so a
-        # stale return address (pointing just past the subroutine call, i.e.
-        # into the middle of the try body) gets popped by a LATER, unrelated
-        # RETURN and resumes execution there, re-running code that should
-        # have been skipped. Native C's return-code-propagation approach
-        # does NOT have this bug (it unwinds via real C function returns),
-        # so it is intentionally MORE correct here than the current bytecode
-        # VMs -- this test asserts the CORRECT (native C) behavior and
-        # documents the bytecode-VM bug via the `xfail`-style assertion
-        # below rather than silently asserting the buggy behavior as
-        # "expected". See the follow-up fix tracked for the bytecode VMs.
+        # by a try in the CALLER. This used to expose a real, pre-existing
+        # bug in the interpretive bytecode VMs (Python/JS/C): Error.Raise
+        # jumped straight to the handler PC without unwinding vm.call_stack,
+        # so a stale return address (pointing just past the subroutine call,
+        # i.e. into the middle of the try body) got popped by a LATER,
+        # unrelated RETURN and resumed execution there, re-running code that
+        # should have been skipped. That bug is now fixed in all 3 bytecode
+        # VMs (picoscript_vm.py's _error_handler_call_depth, vm/picovm.js's
+        # _errState.callDepth, vm/picovm.c's ctx->err_call_depth): the call
+        # stack is truncated back to its depth at Error.SetHandler time
+        # whenever a Raise or genuine fault redirects to a handler. Native
+        # C's return-code-propagation approach never had this bug (it
+        # unwinds via real C function returns) -- both now agree.
         prog2 = (
             "int x = 0;\n"
             "void boom() {\n"
@@ -147,15 +147,13 @@ def main():
             f"55, caught -> x=101, x=999 correctly skipped), got {c_out2!r}"
         )
         py_out2 = _py_out(prog2)
-        assert py_out2 != (101).to_bytes(4, "big"), (
-            "if this now equals 101, the bytecode VM call-stack-unwinding bug "
-            "has been fixed -- update this test to assert equality instead "
-            "of documenting the discrepancy"
+        assert py_out2 == (101).to_bytes(4, "big"), (
+            f"Python VM cross-function raise: expected 101 (call-stack-"
+            f"unwinding fix), got {py_out2!r}"
         )
 
         print("PASS: native C transpile try/except/finally/raise, "
-              "byte-identical to Python VM for all cases except the "
-              "known, pre-existing cross-function bytecode-VM bug")
+              "byte-identical to Python VM for all cases")
     finally:
         import shutil
         shutil.rmtree(BUILD, ignore_errors=True)
