@@ -33,12 +33,13 @@ from typing import List, Optional, Tuple, Union, Dict
 
 from picoscript_il import ILBuilder, VReg, Imm, COND, COND_NEGATE, canon_host
 from picoscript_lang import encode_card_addr, resolve_named_constant
+from picoscript_basic import event_type_hash
 
 # ── tokens ──────────────────────────────────────────────────────────────────
 
 KEYWORDS = {"int", "var", "void", "if", "else", "while", "for", "return",
             "break", "continue", "switch", "case", "default", "do", "goto",
-            "dispatch", "const", "enum"}
+            "dispatch", "const", "enum", "try", "catch", "finally", "raise", "on"}
 
 # C-frontend aliases: libc-style spellings -> canonical (ns, method). Pure frontend
 # sugar -- resolves to the same host call, so bytecode/output is identical on all five
@@ -212,6 +213,15 @@ class Label:
 class ExprStmt:
     expr: object
 @dataclass
+class TryCatch:
+    try_body: list; catch_body: list; finally_body: Optional[list] = None
+@dataclass
+class Raise:
+    value: object = None
+@dataclass
+class OnBlock:
+    event_ns: str; event_method: str; body: list   # on Ns.Method { body }
+@dataclass
 class Func:
     name: str; body: list; params: list = None   # params = parameter names (None = legacy)
 
@@ -343,6 +353,15 @@ class Parser:
                 self.next(); self.expect(";"); return Break()
             if t.value == "continue":
                 self.next(); self.expect(";"); return Continue()
+            if t.value == "try":
+                return self.parse_try()
+            if t.value == "raise":
+                self.next()
+                if self.accept(";"):
+                    return Raise(None)
+                v = self.parse_expr(); self.expect(";"); return Raise(v)
+            if t.value == "on":
+                return self.parse_on_block()
         # Server.Main { ... } -- server-entry wrapper (transparent: body is the entry).
         if (t.kind == "id" and t.value == "Server" and self.i + 3 < len(self.toks)
                 and self.toks[self.i + 1].value == "." and self.toks[self.i + 2].value == "Main"
@@ -544,6 +563,30 @@ class Parser:
         self.expect(")"); self.expect(";")
         return DoWhile(cond, False, body)
 
+    def parse_try(self) -> TryCatch:
+        """try { ... } catch { ... } [finally { ... }] (C-brace style,
+        mirrors picoscript_python.py's try/except/finally at the AST level)."""
+        self.next()                              # try
+        try_body = self.parse_block()
+        if not (self.peek().kind == "kw" and self.peek().value == "catch"):
+            raise SyntaxError(f"line {self.peek().line}: expected 'catch' after try block")
+        self.next()                              # catch
+        catch_body = self.parse_block()
+        finally_body = None
+        if self.peek().kind == "kw" and self.peek().value == "finally":
+            self.next()
+            finally_body = self.parse_block()
+        return TryCatch(try_body, catch_body, finally_body)
+
+    def parse_on_block(self) -> OnBlock:
+        """on Ns.Method { ... } (mirrors picoscript_basic.py's parse_on_block)."""
+        self.next()                              # on
+        ns = self.next().value
+        self.expect(".")
+        method = self.next().value
+        body = self.parse_block()
+        return OnBlock(ns, method, body)
+
     def parse_decl_noeat_semicolon(self) -> Decl:
         self.next()
         name = self.next().value
@@ -732,8 +775,97 @@ class Lowerer:
         elif isinstance(s, ServerMain):
             for st in s.body:
                 self.stmt(st)
+        elif isinstance(s, TryCatch):
+            self.lower_try(s)
+        elif isinstance(s, Raise):
+            # See docs/EXCEPTION_ENGINE.md: Error.Raise(code) jumps to the
+            # nearest Error.SetHandler'd handler (an enclosing lower_try), or
+            # propagates as a real uncaught PicoFault if none is active.
+            v = self.eval(s.value) if s.value is not None else self._const(0)
+            ok = self.b.vreg()
+            self.b.host("Error", "Raise", (v,), ok)
+        elif isinstance(s, OnBlock):
+            self.lower_on_block(s)
         else:
             raise SyntaxError(f"cannot lower statement {s}")
+
+    def _const(self, value: int) -> VReg:
+        v = self.b.vreg()
+        self.b.const(v, value)
+        return v
+
+    def lower_try(self, s: TryCatch):
+        """try { } catch { } [finally { }] -- a real exception mechanism
+        using a handler STACK; see docs/EXCEPTION_ENGINE.md and
+        picoscript_basic.py's lower_try, which this mirrors exactly (cfront
+        has its own, independent AST + Lowerer, but shares the same
+        picoscript_il.ILBuilder -- including label_addr -- and the same
+        Error.SetHandler/PopHandler/Raise host ops, so the underlying
+        mechanism is identical, just re-expressed against cfront's own
+        node/statement dispatch)."""
+        handler_label = self.b.new_label("except")
+        end_label = self.b.new_label("endtry")
+
+        addr = self.b.vreg()
+        self.b.label_addr(addr, handler_label)
+        set_ok = self.b.vreg()
+        self.b.host("Error", "SetHandler", (addr,), set_ok)
+
+        for st in s.try_body:
+            self.stmt(st)
+
+        pop1 = self.b.vreg()
+        self.b.host("Error", "PopHandler", (), pop1)
+        if s.finally_body:
+            for st in s.finally_body:
+                self.stmt(st)
+        self.b.jmp(end_label)
+
+        self.b.label(handler_label)
+        pop2 = self.b.vreg()
+        self.b.host("Error", "PopHandler", (), pop2)
+        for st in s.catch_body:
+            self.stmt(st)
+        clear = self.b.vreg()
+        self.b.host("Error", "Clear", (), clear)
+        if s.finally_body:
+            for st in s.finally_body:
+                self.stmt(st)
+        self.b.label(end_label)
+
+    def lower_on_block(self, s: OnBlock):
+        """on Ns.Method { body } -- an inline drain-and-dispatch loop over
+        pending Event.* queue entries; see docs/EVENTING.md and
+        picoscript_basic.py's lower_on_block, which this mirrors exactly
+        (same event_type_hash, imported from picoscript_basic rather than
+        re-derived, so the SAME compile-time hash matches an ON block
+        declared in ANY frontend, including this one)."""
+        type_code = event_type_hash(s.event_ns, s.event_method)
+        idx = self.b.vreg("__on_i__")
+        cnt = self.b.vreg("__on_cnt__")
+        self.b.host("Event", "Count", (), cnt)
+        self.b.const(idx, 0)
+        top = self.b.new_label("on"); cont = self.b.new_label("oncont")
+        end = self.b.new_label("endon")
+        self.b.label(top)
+        self.b.cmpbr("GE", idx, cnt, end)
+        evid = self.var("__event__")
+        self.b.host("Event", "Next", (), evid)
+        skip = self.b.new_label("onskip")
+        etype = self.b.vreg("__on_type__")
+        self.b.host("Event", "Type", (evid,), etype)
+        typeconst = self.b.vreg("__on_typeconst__")
+        self.b.const(typeconst, type_code)
+        self.b.cmpbr("NE", etype, typeconst, skip)
+        self.loop_stack.append((cont, end))
+        for st in s.body:
+            self.stmt(st)
+        self.loop_stack.pop()
+        self.b.label(skip)
+        self.b.label(cont)
+        self.b.inc(idx)
+        self.b.jmp(top)
+        self.b.label(end)
 
     def _resolve_constant(self, name: str):
         key = str(name).strip().upper()
