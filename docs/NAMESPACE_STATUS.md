@@ -88,14 +88,19 @@ implemented; the 64-bit ones are deferred for this reason.
   whose output browser/zlib decoders accept. `Gzip`/`Deflate` are kept for
   outside-world interop. All are parity-tested across the runtime paths that
   implement them; see `docs/COMPRESS.md`.
-- **HTML DOM + HTTP parsing** — `Html.CreateNode/SetAttribute/QuerySelector/
-  ParseTree/Serialize` need a mutable tree model + parser. The pure HTTP parsers
-  **are implemented**: `Http.ParseQuery/ParseForm` (URL-decode -> `key=value`
-  Template model), `Http.EncodeJson` (model -> JSON object with escaping) and
-  `Http.ParseJson` (JSON -> dotted-path model, so nested JSON feeds `{{#each}}`).
-  Only `Http.ReadHeader/ReadBody/GenerateHeaders/GenerateResponse` remain — they
-  read/write the host connection (host-injected). `Html.Encode/Decode` (pure) are
-  implemented.
+- **HTML DOM (now implemented) + HTTP parsing** — `Html.CreateNode/
+  AddChildNode/RemoveChildNode/SetAttribute/GetAttribute/ParseTree/Serialize/
+  QuerySelector` are now a real, pure, deterministic mutable node table + a
+  minimal permissive HTML parser (no host state needed) — see
+  `docs/FEATURE_MATRIX.md`'s "Html.* DOM tree ops — from stub to real"
+  section and `tests/test_html_dom.py`; verified byte-identical on all five
+  execution paths. The pure HTTP parsers **are implemented**:
+  `Http.ParseQuery/ParseForm` (URL-decode -> `key=value` Template model),
+  `Http.EncodeJson` (model -> JSON object with escaping) and
+  `Http.ParseJson` (JSON -> dotted-path model, so nested JSON feeds
+  `{{#each}}`). Only `Http.ReadHeader/ReadBody/GenerateHeaders/
+  GenerateResponse` remain — they read/write the host connection (host-
+  injected). `Html.Encode/Decode` (pure) are implemented.
 - **Asymmetric / symmetric crypto** — `Crypto.Sign/Verify/Encrypt/Decrypt/
   GenerateKeyPair/DeriveKey`, `X509.*`, `Auth.*`. Large security-sensitive
   primitives (RSA/EC/AES) + key management; signing/keygen also need entropy

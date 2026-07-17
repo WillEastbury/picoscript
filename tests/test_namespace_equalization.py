@@ -286,11 +286,14 @@ Io.Write(a); Io.Write(b); Io.Write(c); Io.Write(d);
 
 
 # -- Partial namespaces: unbuilt sub-features return defined defaults --------
-# (Html.* DOM tree ops, Http.* live-connection ops -- these namespaces are
-# otherwise real: Html.Encode/Decode and Http.ParseQuery/ParseForm/ParseJson/
-# EncodeJson all work. Only the unbuilt/host-injected pieces are stubbed.)
+# (Http.* live-connection ops are host-injected by design and remain stubbed.
+# Html.* DOM tree ops used to be stubbed here too, but are now a real, pure
+# primitive -- see tests/test_html_dom.py for full CreateNode/AddChildNode/
+# RemoveChildNode/SetAttribute/GetAttribute/ParseTree/Serialize/QuerySelector
+# coverage across all five execution paths. This test now verifies the real
+# behavior of the exact same call sequence instead of stub defaults.)
 
-def test_html_dom_ops_return_defined_defaults():
+def test_html_dom_ops_now_do_real_work():
     vm = run("""
 int a = 0;
 int h = Html.CreateNode(a, a);
@@ -300,7 +303,17 @@ int html = Html.Serialize(h);
 Io.Write(attr); Io.Write(html);
 print(h); print(ok);
 """)
-    assert vm.output == [b"", b"", (0).to_bytes(4, "big"), (0).to_bytes(4, "big")]
+    # h = CreateNode(tag=span 0 -- the null/empty span) allocates a real,
+    # non-zero node handle (1, first node in a fresh VM) -- no longer the old
+    # stubbed 0. ok = AddChildNode(h, child=0) is correctly rejected (handle
+    # 0 is never a valid node, same null convention as every other handle
+    # table) -- still 0, but now because the child handle is genuinely
+    # invalid, not because the whole namespace was unbuilt. attr = empty (no
+    # attributes exist on a freshly created node) and html = empty (an
+    # empty-tag node with no children serializes as a transparent, empty
+    # fragment) -- both correctly empty for genuinely different, real
+    # reasons than the old "unbuilt" stub.
+    assert vm.output == [b"", b"", (1).to_bytes(4, "big"), (0).to_bytes(4, "big")]
 
 
 def test_http_live_connection_ops_return_defined_defaults():

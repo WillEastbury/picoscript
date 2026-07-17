@@ -1283,6 +1283,8 @@
     return false;
   };
 
+  var HTML_MAX_DEPTH = 32;   // matches picoscript_vm.py's HTML_MAX_DEPTH exactly
+
   PicoVM.prototype._htmllib = function (method, rd, rs1, rs2) {
     var s = _keystr(this._spanBytes(this.regs[rs1]));
     if (method === "Encode") {
@@ -1293,15 +1295,201 @@
       s = s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
       this.regs[rd] = this._newSpanBytes(_strBytes(s)); return true;
     }
-    // DOM tree ops are not built -- explicit 0/empty-span default (never
-    // leave rd untouched), matching picoscript_vm.py's _htmllib exactly.
-    if (method === "GetAttribute" || method === "Serialize") { this.regs[rd] = this._newSpanBytes([]); return true; }
-    if (method === "CreateNode" || method === "AddChildNode" || method === "RemoveChildNode" ||
-        method === "SetAttribute" || method === "ParseTree" || method === "QuerySelector") {
-      this.regs[rd] = 0; return true;
+    // -- DOM tree ops: a real, pure, deterministic node table (no host state
+    // needed -- mirrors picoscript_vm.py's _htmllib exactly). Node = {tag:
+    // span handle, attrs: {key string: span handle}, children: [handle,...]}.
+    // A node is a *text* node iff attrs has reserved key "#text" (its value
+    // span is the text content); an empty tag with no "#text" is a
+    // transparent fragment/wrapper (used for ParseTree's synthetic root).
+    if (!this._htmlNodes) { this._htmlNodes = {}; this._htmlNodeSeq = 0; }
+    if (method === "CreateNode") {
+      this._htmlNodeSeq++;
+      var h = this._htmlNodeSeq;
+      this._htmlNodes[h] = { tag: this.regs[rs1] >>> 0, attrs: {}, children: [] };
+      this.regs[rd] = h; return true;
+    }
+    if (method === "AddChildNode") {
+      var p = this._htmlNodes[this.regs[rs1] >>> 0];
+      var c = this.regs[rs2] >>> 0;
+      var ok = !!(p && this._htmlNodes[c]);
+      if (ok) p.children.push(c);
+      this.regs[rd] = ok ? 1 : 0; return true;
+    }
+    if (method === "RemoveChildNode") {
+      var p2 = this._htmlNodes[this.regs[rs1] >>> 0];
+      var c2 = this.regs[rs2] >>> 0;
+      var ok2 = false;
+      if (p2) {
+        var idx = p2.children.indexOf(c2);
+        if (idx >= 0) { p2.children.splice(idx, 1); ok2 = true; }
+      }
+      this.regs[rd] = ok2 ? 1 : 0; return true;
+    }
+    if (method === "SetAttribute") {
+      // rs2 packs "key=value" into a single span (2-in/1-out ABI has no 3rd
+      // argument register -- see docs/NAMESPACE_STATUS.md's "3-argument ops").
+      var n = this._htmlNodes[this.regs[rs1] >>> 0];
+      if (n) {
+        var kv = _keystr(this._spanBytes(this.regs[rs2]));
+        var eq = kv.indexOf("=");
+        var k = eq >= 0 ? kv.slice(0, eq) : kv;
+        var v = eq >= 0 ? kv.slice(eq + 1) : "";
+        n.attrs[k] = this._newSpanBytes(_strBytes(v));
+      }
+      this.regs[rd] = n ? 1 : 0; return true;
+    }
+    if (method === "GetAttribute") {
+      var n2 = this._htmlNodes[this.regs[rs1] >>> 0];
+      var k2 = _keystr(this._spanBytes(this.regs[rs2]));
+      var v2 = n2 ? n2.attrs[k2] : undefined;
+      if (v2 !== undefined) { this.regs[rd] = v2; this.hostStatus = 0; }
+      else { this.regs[rd] = this._newSpanBytes([]); this.hostStatus = 1; }  // INV-18: NOT_FOUND
+      return true;
+    }
+    if (method === "ParseTree") { this.regs[rd] = this._htmlParse(s); return true; }
+    if (method === "Serialize") { this.regs[rd] = this._newSpanBytes(_strBytes(this._htmlSerialize(this.regs[rs1], 0))); return true; }
+    if (method === "QuerySelector") {
+      var sel = _keystr(this._spanBytes(this.regs[rs2]));
+      this.regs[rd] = this._htmlQuery(this.regs[rs1], sel, 0); return true;
     }
     return false;
   };
+
+  var HTML_VOID = { br: 1, img: 1, hr: 1, input: 1, meta: 1, link: 1, area: 1,
+                     base: 1, col: 1, embed: 1, source: 1, track: 1, wbr: 1 };
+
+  PicoVM.prototype._htmlNewNode = function (tagSpan) {
+    this._htmlNodeSeq++;
+    var h = this._htmlNodeSeq;
+    this._htmlNodes[h] = { tag: tagSpan, attrs: {}, children: [] };
+    return h;
+  };
+
+  // Minimal, permissive HTML parser (not full HTML5 conformance -- see
+  // docs/NAMESPACE_STATUS.md), mirroring picoscript_vm.py's _html_parse.
+  PicoVM.prototype._htmlParse = function (src) {
+    var emptyTag = this._newSpanBytes([]);
+    var root = this._htmlNewNode(emptyTag);
+    var stack = [root];
+    var i = 0, n = src.length;
+    var self = this;
+    function curParent() { return self._htmlNodes[stack[stack.length - 1]]; }
+    while (i < n) {
+      var lt = src.indexOf("<", i);
+      if (lt < 0) {
+        if (i < n && stack.length < HTML_MAX_DEPTH) {
+          var txt = this._htmlNewNode(emptyTag);
+          this._htmlNodes[txt].attrs["#text"] = this._newSpanBytes(_strBytes(src.slice(i)));
+          curParent().children.push(txt);
+        }
+        break;
+      }
+      if (lt > i && stack.length < HTML_MAX_DEPTH) {
+        var txt2 = this._htmlNewNode(emptyTag);
+        this._htmlNodes[txt2].attrs["#text"] = this._newSpanBytes(_strBytes(src.slice(i, lt)));
+        curParent().children.push(txt2);
+      }
+      var gt = src.indexOf(">", lt + 1);
+      if (gt < 0) break;                                  // unterminated tag: stop (permissive)
+      var tagSrc = src.slice(lt + 1, gt);
+      i = gt + 1;
+      if (tagSrc.charAt(0) === "/") {                      // closing tag
+        if (stack.length > 1) stack.pop();
+        continue;
+      }
+      var selfClose = tagSrc.charAt(tagSrc.length - 1) === "/";
+      if (selfClose) tagSrc = tagSrc.slice(0, -1);
+      var sp = tagSrc.search(/\s/);
+      var name = sp >= 0 ? tagSrc.slice(0, sp) : tagSrc;
+      var rest = sp >= 0 ? tagSrc.slice(sp + 1) : "";
+      if (!name) continue;
+      var elem = this._htmlNewNode(this._newSpanBytes(_strBytes(name)));
+      if (stack.length < HTML_MAX_DEPTH) curParent().children.push(elem);
+      if (rest) this._htmlParseAttrs(elem, rest);
+      if (!selfClose && !HTML_VOID[name.toLowerCase()] && stack.length < HTML_MAX_DEPTH) stack.push(elem);
+    }
+    return root;
+  };
+
+  PicoVM.prototype._htmlParseAttrs = function (nodeHandle, text) {
+    var node = this._htmlNodes[nodeHandle];
+    var i = 0, n = text.length;
+    while (i < n) {
+      while (i < n && /\s/.test(text.charAt(i))) i++;
+      var start = i;
+      while (i < n && !/\s/.test(text.charAt(i)) && text.charAt(i) !== "=") i++;
+      var key = text.slice(start, i);
+      if (!key) break;
+      while (i < n && /\s/.test(text.charAt(i))) i++;
+      var val = "";
+      if (i < n && text.charAt(i) === "=") {
+        i++;
+        while (i < n && /\s/.test(text.charAt(i))) i++;
+        var q = text.charAt(i);
+        if (q === '"' || q === "'") {
+          i++; var vs = i;
+          var end = text.indexOf(q, i);
+          if (end < 0) end = n;
+          val = text.slice(vs, end);
+          i = end + 1;
+        } else {
+          var vs2 = i;
+          while (i < n && !/\s/.test(text.charAt(i))) i++;
+          val = text.slice(vs2, i);
+        }
+      }
+      node.attrs[key] = this._newSpanBytes(_strBytes(val));
+    }
+  };
+
+  PicoVM.prototype._htmlSerialize = function (handle, depth) {
+    var n = this._htmlNodes[handle];
+    if (!n || depth >= HTML_MAX_DEPTH) return "";
+    if (n.attrs["#text"] !== undefined) {
+      var txt = _keystr(this._spanBytes(n.attrs["#text"]));
+      return txt.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+    var tag = _keystr(this._spanBytes(n.tag));
+    var kids = "";
+    for (var i = 0; i < n.children.length; i++) kids += this._htmlSerialize(n.children[i], depth + 1);
+    if (!tag) return kids;                                 // transparent fragment wrapper
+    var attrs = "";
+    for (var k in n.attrs) {
+      if (!Object.prototype.hasOwnProperty.call(n.attrs, k)) continue;
+      var v = _keystr(this._spanBytes(n.attrs[k])).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+      attrs += " " + k + '="' + v + '"';
+    }
+    return "<" + tag + attrs + ">" + kids + "</" + tag + ">";
+  };
+
+  PicoVM.prototype._htmlQuery = function (handle, sel, depth) {
+    var n = this._htmlNodes[handle];
+    if (!n || depth >= HTML_MAX_DEPTH) return 0;
+    if (this._htmlMatches(n, sel)) return handle;
+    for (var i = 0; i < n.children.length; i++) {
+      var m = this._htmlQuery(n.children[i], sel, depth + 1);
+      if (m) return m;
+    }
+    return 0;
+  };
+
+  PicoVM.prototype._htmlMatches = function (n, sel) {
+    if (!sel) return false;
+    if (sel.charAt(0) === "#") {
+      return this._htmlAttrRaw(n, "id") === sel.slice(1);
+    }
+    if (sel.charAt(0) === ".") {
+      var cls = this._htmlAttrRaw(n, "class").split(/\s+/);
+      return cls.indexOf(sel.slice(1)) >= 0;
+    }
+    return _keystr(this._spanBytes(n.tag)) === sel;
+  };
+
+  PicoVM.prototype._htmlAttrRaw = function (n, key) {
+    var h = n.attrs[key];
+    return h !== undefined ? _keystr(this._spanBytes(h)) : "";
+  };
+
 
   function _urldecode(b) {
     var out = [], i = 0;

@@ -54,6 +54,19 @@
 #ifndef PV_MAX_ERR_HANDLERS
 #define PV_MAX_ERR_HANDLERS 32  /* Error.* handler stack depth (nested try/except) */
 #endif
+#ifndef PV_MAX_HTML_NODES
+#define PV_MAX_HTML_NODES 64    /* Html.* DOM node table: handle = 1-based index, 0 = null */
+#endif
+#ifndef PV_HTML_MAX_ATTRS
+#define PV_HTML_MAX_ATTRS 8     /* max attributes per Html.* node */
+#endif
+#ifndef PV_HTML_MAX_CHILDREN
+#define PV_HTML_MAX_CHILDREN 16 /* max children per Html.* node */
+#endif
+#ifndef PV_HTML_MAX_DEPTH
+#define PV_HTML_MAX_DEPTH 32    /* Serialize/QuerySelector/ParseTree tree-walk bound --
+                                 * matches picoscript_vm.py's HTML_MAX_DEPTH exactly */
+#endif
 
 /* ---- 16 core opcodes (bits [31:28]) ---------------------------------- */
 enum {
@@ -308,6 +321,25 @@ struct pv_ctx {
     int       fifo_depth[PV_MAX_FIFOS];
     uint8_t   fifo_used[PV_MAX_FIFOS];
     int       fifo_count;
+
+    /* Html.*: a real, pure, deterministic DOM node table (no host state
+     * needed -- see docs/NAMESPACE_STATUS.md's "HTML DOM + HTTP parsing"
+     * section). 1-based handle; 0 = null. A node is a *text* node iff its
+     * attrs contain reserved key "#text" (attr_key stores its span, and the
+     * matching attr_val is the text content span) -- CreateNode+SetAttribute
+     * alone can build one, and ParseTree's internal builder uses the exact
+     * same convention. An empty tag (0) with no "#text" attr is a
+     * transparent fragment/wrapper (ParseTree's synthetic multi-root
+     * wrapper, also usable directly by scripts). Bounded (fixed-size),
+     * consistent with this embedded runtime's other handle tables. */
+    int32_t   html_tag[PV_MAX_HTML_NODES];                          /* span handle */
+    int32_t   html_attr_key[PV_MAX_HTML_NODES][PV_HTML_MAX_ATTRS];   /* span handles */
+    int32_t   html_attr_val[PV_MAX_HTML_NODES][PV_HTML_MAX_ATTRS];   /* span handles */
+    uint8_t   html_attr_count[PV_MAX_HTML_NODES];
+    int32_t   html_child[PV_MAX_HTML_NODES][PV_HTML_MAX_CHILDREN];   /* node handles */
+    uint8_t   html_child_count[PV_MAX_HTML_NODES];
+    uint8_t   html_used[PV_MAX_HTML_NODES];
+    int       html_count;
 
     /* Log.*: deterministic, script-visible tracing/audit log (see
      * docs/LOGGING.md) -- an append-only table of {level, span}, keyed by a

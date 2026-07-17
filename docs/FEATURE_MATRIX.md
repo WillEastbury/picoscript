@@ -163,7 +163,7 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Event | 10 | Y | Y | Y | FIFO queue + `OnBlock` dispatch |
 | **Fifo** | 4 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: independent named byte-channel FIFOs (distinct from `Queue.*`'s fixed 8-channel int FIFO). No host state — real and deterministic. |
 | Gpio | 7 | Y | Y | Y | Reference emulator; PIOS injects real driver |
-| Html | 10 | Partial | Partial | Partial | `Encode`/`Decode` implemented; DOM tree ops (`CreateNode`/`AddChildNode`/`RemoveChildNode`/`SetAttribute`/`GetAttribute`/`ParseTree`/`Serialize`/`QuerySelector`) not built, but now return an explicit 0/empty-span default on all 3 runtimes (fixed this pass — were silently falling through, leaving `rd` untouched) |
+| Html | 10 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: a real, pure DOM tree (CreateNode/AddChildNode/RemoveChildNode/SetAttribute/GetAttribute/ParseTree/Serialize/QuerySelector), no host state needed -- see "HTML DOM: from stub to real" below. `Encode`/`Decode` unchanged (already real). |
 | Http | 12 | Partial | Partial | Partial | `ParseQuery/ParseForm/ParseJson/EncodeJson` implemented (pure); `ReadHeader/ReadBody/GenerateHeaders/GenerateResponse/Request/RespStatus/RespHeaders/RespBody` host-injected (live connection), now return an explicit default on all 3 runtimes (fixed this pass — same silent-fallthrough bug as `Data.*`; note `Request`/`RespStatus`/`RespHeaders`/`RespBody` were previously undocumented gaps, found during this fix) |
 | Io | 2 | Y | Y | Y | |
 | Json | 11 | Y | Y | Y | |
@@ -334,14 +334,73 @@ verified byte-identical across Python VM / JS VM / C VM. `Request`/
 (this file's own earlier revision only mentioned `ReadHeader`/`ReadBody`/
 `GenerateHeaders`/`GenerateResponse`) — found and closed together. See
 `tests/test_namespace_equalization.py`'s
-`test_html_dom_ops_return_defined_defaults`/
-`test_http_live_connection_ops_return_defined_defaults`.
+`test_html_dom_ops_now_do_real_work` (Html.* has since moved from stub to
+real -- see the next section; this test now verifies the real values the
+exact same call sequence produces) and
+`test_http_live_connection_ops_return_defined_defaults` (Http.* remains
+genuinely host-injected).
 
-This does **not** build the DOM tree model or a live HTTP connection — those
-remain genuinely separate, larger features (a full parser + mutable tree for
-Html; an actual host-injected socket for Http) — it only closes the "silent
-fallthrough leaves a stale register" bug, which is the specific thing the
-namespace-equalization pass set out to fix everywhere.
+This does **not** build a live HTTP connection — an actual host-injected
+socket for Http remains a genuinely separate, larger feature — it only
+closes the "silent fallthrough leaves a stale register" bug for `Http.*`'s
+live-connection ops, which is the specific thing the namespace-equalization
+pass set out to fix everywhere. (`Html.*`'s DOM tree ops, listed above as
+part of the same fix, have since been built for real -- see the next
+section.)
+
+## Follow-up: `Html.*` DOM tree ops — from stub to real
+
+Unlike `Http.*`'s live-connection ops (genuinely host-injected — no VM can
+source a real network socket itself), `Html.*`'s DOM tree ops
+(`CreateNode`/`AddChildNode`/`RemoveChildNode`/`SetAttribute`/`GetAttribute`/
+`ParseTree`/`Serialize`/`QuerySelector`) need **no host state at all** — a
+mutable node table + a parser is entirely implementable in-VM, the same
+category as `Descriptor`/`Lease`/`Fifo`/`Pack`/`Thread` earlier this pass.
+Reviewing `docs/NAMESPACE_STATUS.md`'s "Scope/effort" section (which had
+already flagged this as "doable... need a mutable tree model + parser", not
+a hard blocker) turned this from a documented stub into a real
+implementation:
+
+- **Node model**: `{tag: span handle, attrs: {key: span handle}, children:
+  [handle, ...]}`. A node is a *text* node iff its `attrs` has reserved key
+  `"#text"` (its value span is the text content) — `CreateNode`+
+  `SetAttribute` alone build one (no separate `CreateTextNode` needed), and
+  `ParseTree`'s internal builder uses the exact same convention for text
+  runs it parses. An empty tag with no `"#text"` is a transparent fragment/
+  wrapper (used for `ParseTree`'s synthetic multi-root wrapper).
+- **`SetAttribute`** packs `"key=value"` into a single span (the 2-in/1-out
+  host-hook ABI has no 3rd argument register — see
+  `docs/NAMESPACE_STATUS.md`'s "3-argument ops" section) rather than adding a
+  new host hook or a stateful 2-call pattern.
+- **`ParseTree`** is a minimal, permissive HTML parser (not full HTML5
+  conformance): tokenizes `<tag k="v" k2='v2'>`, `</tag>` (closes the
+  innermost open element regardless of name match), self-closing `<tag/>`,
+  and a fixed void-element list (`br`/`img`/`hr`/`input`/`meta`/`link`/
+  `area`/`base`/`col`/`embed`/`source`/`track`/`wbr`). Always returns a
+  synthetic fragment-root handle so multi-root/bare-text input has a single
+  handle to return.
+- **`QuerySelector`** supports exactly 3 minimal forms (not a full CSS
+  selector engine, documented as an intentional simplification): a bare tag
+  name, `#id` (exact `id` attribute match), or `.class` (whitespace-token
+  match against the `class` attribute) — first match in pre-order,
+  root-included.
+- **Bounded tree-walk depth** (`HTML_MAX_DEPTH`/`PV_HTML_MAX_DEPTH` = 32,
+  matching the existing `TPL_MAXDEPTH` convention) on `Serialize`/
+  `QuerySelector`/`ParseTree` protects against a script-constructed cycle
+  (`AddChildNode` has no cycle check — the same simplicity/determinism-over-
+  defensiveness tradeoff already accepted for every other handle-table
+  namespace); stops descending rather than faulting, identically on all 3
+  runtimes.
+- **C VM**: fixed-size tables (`PV_MAX_HTML_NODES=64`, `PV_HTML_MAX_ATTRS=8`,
+  `PV_HTML_MAX_CHILDREN=16` in `vm/picovm.h`), consistent with this embedded
+  runtime's other handle tables (`Map`/`Descriptor`/`Lease`/`Fifo`/`Log`) — a
+  bounded, deterministic difference from Python/JS's unbounded dict-backed
+  version, not a behavioral divergence at any realistic scale.
+- Verified byte-identical on **all five** execution paths: Python VM, JS VM,
+  C VM interpreter, native C transpile, and native JS transpile — the last
+  two just forward generically to the same runtime dispatch (see this file's
+  introduction), so there was no separate implementation to write for them,
+  only to verify. See `tests/test_html_dom.py`.
 
 ### `String.*` — the earlier `_stringlib` regression (separate from #3 above)
 

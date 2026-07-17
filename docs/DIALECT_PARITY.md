@@ -267,13 +267,12 @@ for loading a label's address as a value). Scope actually delivered:
   same underlying `picoscript_il.ILBuilder` (including `label_addr`) and the
   same `Error.SetHandler`/`PopHandler`/`Raise`/`Clear` host ops as the BASIC
   family — the mechanism is identical, just re-expressed against cfront's
-  own AST/Lowerer rather than the shared one. **Not yet ported to the JS
-  mirror** (`CParser`/`CLowerer` in `vm/picoc.js`) — that would be a THIRD,
-  independent implementation of the same mechanism (the BASIC family's JS
-  `BLowerer` port was the second), deliberately not attempted in this pass
-  to avoid rushing a third from-scratch implementation without adequate
-  time to verify it as carefully as the first two. A legitimate, explicitly
-  scoped-out follow-up, not an oversight.
+  own AST/Lowerer rather than the shared one. **Also ported to the JS
+  mirror** (`CParser`/`CLowerer` in `vm/picoc.js`) — a third, independent
+  implementation of the same mechanism (the BASIC family's JS `BLowerer`
+  port was the second), verified byte-identical bytecode vs. the Python
+  cfront compiler and byte-identical runtime output on the JS VM vs the
+  Python VM (`tests/test_cstyle_js_exception_eventing.py`).
 - **v1** remains architecturally separate and fully excluded from this
   equivalence pass by design — a frozen, stable bytecode ISA
   ("Each statement compiles 1:1 to a single 32-bit instruction. No

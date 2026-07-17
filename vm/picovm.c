@@ -273,6 +273,309 @@ static int pv_arena_match(pv_ctx *ctx, uint32_t at, int32_t avail, const char *s
     return 1;
 }
 
+/* ---- Html.* helpers: a real, pure, deterministic DOM node table (no host
+ * state needed -- mirrors picoscript_vm.py's _htmllib exactly). Fixed-size
+ * (PV_MAX_HTML_NODES/PV_HTML_MAX_ATTRS/PV_HTML_MAX_CHILDREN), consistent
+ * with this embedded runtime's other handle tables (Map/Descriptor/Lease/
+ * Fifo/Log) -- a bounded, deterministic difference from Python/JS's
+ * unbounded dict-backed version, not a behavioral divergence at any
+ * realistic scale (a genuine HTML document over ~64 nodes/16 children-per-
+ * node/8 attrs-per-node would need a raised constant, same tradeoff already
+ * accepted for every other table here). ------------------------------- */
+static int pv_span_eq(pv_ctx *ctx, int ha, int hb)
+{
+    int32_t la = pv_span_n(ctx, ha), lb = pv_span_n(ctx, hb);
+    if (la != lb) return 0;
+    uint32_t pa = pv_span_p(ctx, ha), pb = pv_span_p(ctx, hb);
+    for (int32_t i = 0; i < la; i++)
+        if (pv_arena_get(ctx, pa + (uint32_t)i) != pv_arena_get(ctx, pb + (uint32_t)i)) return 0;
+    return 1;
+}
+static int pv_span_eq_lit(pv_ctx *ctx, int h, const char *s)
+{
+    int32_t n = 0; while (s[n]) n++;
+    if (pv_span_n(ctx, h) != n) return 0;
+    uint32_t p = pv_span_p(ctx, h);
+    for (int32_t i = 0; i < n; i++)
+        if (pv_arena_get(ctx, p + (uint32_t)i) != (uint8_t)s[i]) return 0;
+    return 1;
+}
+static int pv_html_valid(pv_ctx *ctx, int h)
+{
+    return h > 0 && h < ctx->html_count && ctx->html_used[h];
+}
+static int pv_html_new_node(pv_ctx *ctx, int32_t tag_span)
+{
+    if (ctx->html_count >= PV_MAX_HTML_NODES) return 0;   /* table full: null handle (bounded, see above) */
+    int h = ctx->html_count++;
+    ctx->html_tag[h] = tag_span;
+    ctx->html_attr_count[h] = 0;
+    ctx->html_child_count[h] = 0;
+    ctx->html_used[h] = 1;
+    return h;
+}
+static int pv_html_attr_get(pv_ctx *ctx, int h, int key_span, int *out_val)
+{
+    if (!pv_html_valid(ctx, h)) return 0;
+    for (int i = 0; i < ctx->html_attr_count[h]; i++)
+        if (pv_span_eq(ctx, ctx->html_attr_key[h][i], key_span)) { *out_val = ctx->html_attr_val[h][i]; return 1; }
+    return 0;
+}
+static int pv_html_attr_get_lit(pv_ctx *ctx, int h, const char *key, int *out_val)
+{
+    if (!pv_html_valid(ctx, h)) return 0;
+    for (int i = 0; i < ctx->html_attr_count[h]; i++)
+        if (pv_span_eq_lit(ctx, ctx->html_attr_key[h][i], key)) { *out_val = ctx->html_attr_val[h][i]; return 1; }
+    return 0;
+}
+static void pv_html_attr_set(pv_ctx *ctx, int h, int key_span, int val_span)
+{
+    if (!pv_html_valid(ctx, h)) return;
+    for (int i = 0; i < ctx->html_attr_count[h]; i++) {
+        if (pv_span_eq(ctx, ctx->html_attr_key[h][i], key_span)) { ctx->html_attr_val[h][i] = val_span; return; }
+    }
+    if (ctx->html_attr_count[h] < PV_HTML_MAX_ATTRS) {
+        int i = ctx->html_attr_count[h]++;
+        ctx->html_attr_key[h][i] = key_span;
+        ctx->html_attr_val[h][i] = val_span;
+    }
+}
+/* full=1: escape &<>"' (text content, matches Html.Encode). full=0: escape
+ * &" only (attribute-value quoting -- matches the interpreters' Serialize). */
+static void pv_html_put_escaped(pv_ctx *ctx, uint32_t *k, uint32_t p, int32_t l, int full)
+{
+    for (int32_t i = 0; i < l; i++) {
+        uint8_t c = pv_arena_get(ctx, p + (uint32_t)i);
+        if (c == '&') pv_arena_puts(ctx, k, "&amp;");
+        else if (full && c == '<') pv_arena_puts(ctx, k, "&lt;");
+        else if (full && c == '>') pv_arena_puts(ctx, k, "&gt;");
+        else if (c == '"') pv_arena_puts(ctx, k, "&quot;");
+        else if (full && c == 0x27) pv_arena_puts(ctx, k, "&#39;");
+        else pv_arena_put(ctx, k, c);
+    }
+}
+static void pv_html_serialize_rec(pv_ctx *ctx, int h, int depth, uint32_t *k)
+{
+    if (!pv_html_valid(ctx, h) || depth >= PV_HTML_MAX_DEPTH) return;
+    int text_val;
+    if (pv_html_attr_get_lit(ctx, h, "#text", &text_val)) {
+        pv_html_put_escaped(ctx, k, pv_span_p(ctx, text_val), pv_span_n(ctx, text_val), 1);
+        return;
+    }
+    int32_t tag_h = ctx->html_tag[h];
+    int32_t tl = pv_span_n(ctx, tag_h);
+    if (tl == 0) {                                        /* transparent fragment wrapper */
+        for (int i = 0; i < ctx->html_child_count[h]; i++)
+            pv_html_serialize_rec(ctx, ctx->html_child[h][i], depth + 1, k);
+        return;
+    }
+    uint32_t tp = pv_span_p(ctx, tag_h);
+    pv_arena_put(ctx, k, '<');
+    for (int32_t i = 0; i < tl; i++) pv_arena_put(ctx, k, pv_arena_get(ctx, tp + (uint32_t)i));
+    for (int a = 0; a < ctx->html_attr_count[h]; a++) {
+        int kh = ctx->html_attr_key[h][a], vh = ctx->html_attr_val[h][a];
+        uint32_t kp = pv_span_p(ctx, kh); int32_t kl = pv_span_n(ctx, kh);
+        pv_arena_put(ctx, k, ' ');
+        for (int32_t i = 0; i < kl; i++) pv_arena_put(ctx, k, pv_arena_get(ctx, kp + (uint32_t)i));
+        pv_arena_puts(ctx, k, "=\"");
+        pv_html_put_escaped(ctx, k, pv_span_p(ctx, vh), pv_span_n(ctx, vh), 0);
+        pv_arena_put(ctx, k, '"');
+    }
+    pv_arena_put(ctx, k, '>');
+    for (int i = 0; i < ctx->html_child_count[h]; i++)
+        pv_html_serialize_rec(ctx, ctx->html_child[h][i], depth + 1, k);
+    pv_arena_puts(ctx, k, "</");
+    for (int32_t i = 0; i < tl; i++) pv_arena_put(ctx, k, pv_arena_get(ctx, tp + (uint32_t)i));
+    pv_arena_put(ctx, k, '>');
+}
+static int pv_html_matches(pv_ctx *ctx, int h, uint32_t sel_p, int32_t sel_l)
+{
+    if (sel_l <= 0) return 0;
+    uint8_t c0 = pv_arena_get(ctx, sel_p);
+    if (c0 == '#') {
+        int idv;
+        if (!pv_html_attr_get_lit(ctx, h, "id", &idv)) return 0;
+        int32_t il = pv_span_n(ctx, idv);
+        if (il != sel_l - 1) return 0;
+        uint32_t ip = pv_span_p(ctx, idv);
+        for (int32_t i = 0; i < il; i++)
+            if (pv_arena_get(ctx, ip + (uint32_t)i) != pv_arena_get(ctx, sel_p + 1 + (uint32_t)i)) return 0;
+        return 1;
+    }
+    if (c0 == '.') {
+        int clv;
+        if (!pv_html_attr_get_lit(ctx, h, "class", &clv)) return 0;
+        uint32_t cp = pv_span_p(ctx, clv); int32_t cl = pv_span_n(ctx, clv);
+        int32_t want_l = sel_l - 1; uint32_t want_p = sel_p + 1;
+        int32_t i = 0;
+        while (i < cl) {
+            while (i < cl && pv_arena_get(ctx, cp + (uint32_t)i) <= ' ') i++;
+            int32_t start = i;
+            while (i < cl && pv_arena_get(ctx, cp + (uint32_t)i) > ' ') i++;
+            int32_t tok_l = i - start;
+            if (tok_l == want_l) {
+                int ok = 1;
+                for (int32_t j = 0; j < tok_l; j++)
+                    if (pv_arena_get(ctx, cp + (uint32_t)(start + j)) != pv_arena_get(ctx, want_p + (uint32_t)j)) { ok = 0; break; }
+                if (ok) return 1;
+            }
+        }
+        return 0;
+    }
+    int32_t tag_h = ctx->html_tag[h];
+    int32_t tl = pv_span_n(ctx, tag_h);
+    if (tl != sel_l) return 0;
+    uint32_t tp = pv_span_p(ctx, tag_h);
+    for (int32_t i = 0; i < tl; i++)
+        if (pv_arena_get(ctx, tp + (uint32_t)i) != pv_arena_get(ctx, sel_p + (uint32_t)i)) return 0;
+    return 1;
+}
+static int pv_html_query_rec(pv_ctx *ctx, int h, uint32_t sel_p, int32_t sel_l, int depth)
+{
+    if (!pv_html_valid(ctx, h) || depth >= PV_HTML_MAX_DEPTH) return 0;
+    if (pv_html_matches(ctx, h, sel_p, sel_l)) return h;
+    for (int i = 0; i < ctx->html_child_count[h]; i++) {
+        int m = pv_html_query_rec(ctx, ctx->html_child[h][i], sel_p, sel_l, depth + 1);
+        if (m) return m;
+    }
+    return 0;
+}
+static void pv_html_parse_attrs(pv_ctx *ctx, int node_h, uint32_t p, int32_t l)
+{
+    int32_t i = 0;
+    while (i < l) {
+        while (i < l && pv_arena_get(ctx, p + (uint32_t)i) <= ' ') i++;
+        int32_t start = i;
+        while (i < l) {
+            uint8_t c = pv_arena_get(ctx, p + (uint32_t)i);
+            if (c <= ' ' || c == '=') break;
+            i++;
+        }
+        if (i == start) break;
+        int32_t key_l = i - start;
+        uint32_t key_p = p + (uint32_t)start;
+        while (i < l && pv_arena_get(ctx, p + (uint32_t)i) <= ' ') i++;
+        uint32_t kk = 0;
+        for (int32_t j = 0; j < key_l; j++) pv_arena_put(ctx, &kk, pv_arena_get(ctx, key_p + (uint32_t)j));
+        int key_span = pv_arena_finish(ctx, kk);
+        int val_span;
+        if (i < l && pv_arena_get(ctx, p + (uint32_t)i) == '=') {
+            i++;
+            while (i < l && pv_arena_get(ctx, p + (uint32_t)i) <= ' ') i++;
+            uint8_t q = (i < l) ? pv_arena_get(ctx, p + (uint32_t)i) : 0;
+            uint32_t vk = 0;
+            if (q == '"' || q == 0x27) {
+                i++;
+                int32_t vs = i;
+                while (i < l && pv_arena_get(ctx, p + (uint32_t)i) != q) i++;
+                for (int32_t j = vs; j < i; j++) pv_arena_put(ctx, &vk, pv_arena_get(ctx, p + (uint32_t)j));
+                if (i < l) i++;                            /* skip closing quote */
+            } else {
+                int32_t vs = i;
+                while (i < l && pv_arena_get(ctx, p + (uint32_t)i) > ' ') i++;
+                for (int32_t j = vs; j < i; j++) pv_arena_put(ctx, &vk, pv_arena_get(ctx, p + (uint32_t)j));
+            }
+            val_span = pv_arena_finish(ctx, vk);
+        } else {
+            val_span = pv_arena_finish(ctx, 0);
+        }
+        pv_html_attr_set(ctx, node_h, key_span, val_span);
+    }
+}
+static int pv_html_is_void(pv_ctx *ctx, uint32_t p, int32_t l)
+{
+    static const char *VOID_TAGS[] = {"br", "img", "hr", "input", "meta", "link", "area",
+                                       "base", "col", "embed", "source", "track", "wbr", 0};
+    for (int vi = 0; VOID_TAGS[vi]; vi++) {
+        const char *s = VOID_TAGS[vi];
+        int32_t n = 0; while (s[n]) n++;
+        if (n != l) continue;
+        int ok = 1;
+        for (int32_t i = 0; i < l; i++) {
+            uint8_t c = pv_arena_get(ctx, p + (uint32_t)i);
+            if (c >= 'A' && c <= 'Z') c = (uint8_t)(c - 'A' + 'a');
+            if (c != (uint8_t)s[i]) { ok = 0; break; }
+        }
+        if (ok) return 1;
+    }
+    return 0;
+}
+static int pv_html_find_char(pv_ctx *ctx, uint32_t p, int32_t l, int32_t from, uint8_t ch)
+{
+    for (int32_t i = from; i < l; i++)
+        if (pv_arena_get(ctx, p + (uint32_t)i) == ch) return i;
+    return -1;
+}
+/* Minimal, permissive HTML parser (not full HTML5 conformance -- see
+ * docs/NAMESPACE_STATUS.md), mirroring picoscript_vm.py's _html_parse
+ * exactly: tokenizes `<tag k="v" k2='v2'>`, `</tag>` (closes the innermost
+ * open element regardless of name match -- permissive), self-closing
+ * `<tag/>`, and a fixed void-element list. Everything else is a text run.
+ * Always returns a synthetic fragment-root handle (empty tag, no "#text"
+ * attr) whose children are the top-level parsed nodes. */
+static int pv_html_parse(pv_ctx *ctx, uint32_t p, int32_t l)
+{
+    int empty_tag = pv_arena_finish(ctx, 0);
+    int root = pv_html_new_node(ctx, empty_tag);
+    int stack[PV_HTML_MAX_DEPTH];
+    int sp = 0; stack[sp++] = root;
+    int32_t i = 0;
+    while (i < l) {
+        int32_t lt = pv_html_find_char(ctx, p, l, i, '<');
+        if (lt < 0) {
+            if (i < l && sp < PV_HTML_MAX_DEPTH) {
+                uint32_t k = 0;
+                for (int32_t j = i; j < l; j++) pv_arena_put(ctx, &k, pv_arena_get(ctx, p + (uint32_t)j));
+                int txt_span = pv_arena_finish(ctx, k);
+                int txt = pv_html_new_node(ctx, empty_tag);
+                pv_html_attr_set(ctx, txt, pv_span_from_cbytes(ctx, "#text", 5), txt_span);
+                int par = stack[sp - 1];
+                if (ctx->html_child_count[par] < PV_HTML_MAX_CHILDREN)
+                    ctx->html_child[par][ctx->html_child_count[par]++] = txt;
+            }
+            break;
+        }
+        if (lt > i && sp < PV_HTML_MAX_DEPTH) {
+            uint32_t k = 0;
+            for (int32_t j = i; j < lt; j++) pv_arena_put(ctx, &k, pv_arena_get(ctx, p + (uint32_t)j));
+            int txt_span = pv_arena_finish(ctx, k);
+            int txt = pv_html_new_node(ctx, empty_tag);
+            pv_html_attr_set(ctx, txt, pv_span_from_cbytes(ctx, "#text", 5), txt_span);
+            int par = stack[sp - 1];
+            if (ctx->html_child_count[par] < PV_HTML_MAX_CHILDREN)
+                ctx->html_child[par][ctx->html_child_count[par]++] = txt;
+        }
+        int32_t gt = pv_html_find_char(ctx, p, l, lt + 1, '>');
+        if (gt < 0) break;                                /* unterminated tag: stop (permissive) */
+        int32_t ts = lt + 1, te = gt;
+        i = gt + 1;
+        if (ts < te && pv_arena_get(ctx, p + (uint32_t)ts) == '/') {   /* closing tag */
+            if (sp > 1) sp--;
+            continue;
+        }
+        int self_close = (te > ts && pv_arena_get(ctx, p + (uint32_t)(te - 1)) == '/');
+        if (self_close) te--;
+        int32_t ns = ts;
+        while (ns < te && pv_arena_get(ctx, p + (uint32_t)ns) > ' ') ns++;
+        int32_t name_l = ns - ts;
+        if (name_l <= 0) continue;
+        uint32_t name_p = p + (uint32_t)ts;
+        uint32_t nk = 0;
+        for (int32_t j = 0; j < name_l; j++) pv_arena_put(ctx, &nk, pv_arena_get(ctx, name_p + (uint32_t)j));
+        int tag_span = pv_arena_finish(ctx, nk);
+        int elem = pv_html_new_node(ctx, tag_span);
+        if (sp < PV_HTML_MAX_DEPTH) {
+            int par = stack[sp - 1];
+            if (ctx->html_child_count[par] < PV_HTML_MAX_CHILDREN)
+                ctx->html_child[par][ctx->html_child_count[par]++] = elem;
+        }
+        if (ns < te) pv_html_parse_attrs(ctx, elem, p + (uint32_t)ns, te - ns);
+        int is_void = pv_html_is_void(ctx, pv_span_p(ctx, tag_span), pv_span_n(ctx, tag_span));
+        if (!self_close && !is_void && sp < PV_HTML_MAX_DEPTH) stack[sp++] = elem;
+    }
+    return root;
+}
+
 /* ---- Http.* helpers (pure string parsing, byte-exact with the interpreters) - */
 static int pv_ishex(uint8_t c)
 {
@@ -2930,16 +3233,85 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         ctx->regs[rd] = 0;
         return;
     }
-    /* Html.* DOM tree ops are not built -- explicit default, matching
-     * picoscript_vm.py's _htmllib exactly. */
-    if (hook == PV_HOOK_HTML_GETATTRIBUTE || hook == PV_HOOK_HTML_SERIALIZE) {
-        ctx->regs[rd] = pv_arena_finish(ctx, 0);
+    /* Html.* DOM tree ops: a real, pure, deterministic node table -- see the
+     * pv_html_* helpers above (mirrors picoscript_vm.py's _htmllib exactly). */
+    if (hook == PV_HOOK_HTML_CREATENODE) {
+        ctx->regs[rd] = pv_html_new_node(ctx, ctx->regs[rs1]);
         return;
     }
-    if (hook == PV_HOOK_HTML_CREATENODE || hook == PV_HOOK_HTML_ADDCHILDNODE ||
-        hook == PV_HOOK_HTML_REMOVECHILDNODE || hook == PV_HOOK_HTML_SETATTRIBUTE ||
-        hook == PV_HOOK_HTML_PARSETREE || hook == PV_HOOK_HTML_QUERYSELECTOR) {
-        ctx->regs[rd] = 0;
+    if (hook == PV_HOOK_HTML_ADDCHILDNODE) {
+        int ph = ctx->regs[rs1], ch = ctx->regs[rs2];
+        int ok = pv_html_valid(ctx, ph) && pv_html_valid(ctx, ch) && ctx->html_child_count[ph] < PV_HTML_MAX_CHILDREN;
+        if (ok) ctx->html_child[ph][ctx->html_child_count[ph]++] = ch;
+        ctx->regs[rd] = ok ? 1 : 0;
+        return;
+    }
+    if (hook == PV_HOOK_HTML_REMOVECHILDNODE) {
+        int ph = ctx->regs[rs1], ch = ctx->regs[rs2];
+        int ok = 0;
+        if (pv_html_valid(ctx, ph)) {
+            int cnt = ctx->html_child_count[ph];
+            for (int i = 0; i < cnt; i++) {
+                if (ctx->html_child[ph][i] == ch) {
+                    for (int j = i; j < cnt - 1; j++) ctx->html_child[ph][j] = ctx->html_child[ph][j + 1];
+                    ctx->html_child_count[ph] = (uint8_t)(cnt - 1);
+                    ok = 1;
+                    break;
+                }
+            }
+        }
+        ctx->regs[rd] = ok ? 1 : 0;
+        return;
+    }
+    if (hook == PV_HOOK_HTML_SETATTRIBUTE) {
+        /* rs2 packs "key=value" into a single span (2-in/1-out ABI has no 3rd
+         * argument register -- see docs/NAMESPACE_STATUS.md's "3-argument
+         * ops" section). No '=' present -> whole span is the key, empty value. */
+        int nh = ctx->regs[rs1];
+        if (pv_html_valid(ctx, nh)) {
+            uint32_t p = pv_span_p(ctx, ctx->regs[rs2]);
+            int32_t l = pv_span_n(ctx, ctx->regs[rs2]);
+            int32_t eq = pv_html_find_char(ctx, p, l, 0, '=');
+            int32_t klen = (eq >= 0) ? eq : l;
+            uint32_t kk = 0;
+            for (int32_t i = 0; i < klen; i++) pv_arena_put(ctx, &kk, pv_arena_get(ctx, p + (uint32_t)i));
+            int key_span = pv_arena_finish(ctx, kk);
+            int val_span;
+            if (eq >= 0) {
+                uint32_t vk = 0;
+                for (int32_t i = eq + 1; i < l; i++) pv_arena_put(ctx, &vk, pv_arena_get(ctx, p + (uint32_t)i));
+                val_span = pv_arena_finish(ctx, vk);
+            } else {
+                val_span = pv_arena_finish(ctx, 0);
+            }
+            pv_html_attr_set(ctx, nh, key_span, val_span);
+            ctx->regs[rd] = 1;
+        } else {
+            ctx->regs[rd] = 0;
+        }
+        return;
+    }
+    if (hook == PV_HOOK_HTML_GETATTRIBUTE) {
+        int val = 0;
+        int found = pv_html_attr_get(ctx, ctx->regs[rs1], ctx->regs[rs2], &val);
+        ctx->host_status = found ? 0 : 1;   /* INV-18: NOT_FOUND */
+        ctx->regs[rd] = found ? val : pv_arena_finish(ctx, 0);
+        return;
+    }
+    if (hook == PV_HOOK_HTML_PARSETREE) {
+        int h = ctx->regs[rs1];
+        ctx->regs[rd] = pv_html_parse(ctx, pv_span_p(ctx, h), pv_span_n(ctx, h));
+        return;
+    }
+    if (hook == PV_HOOK_HTML_SERIALIZE) {
+        uint32_t k = 0;
+        pv_html_serialize_rec(ctx, ctx->regs[rs1], 0, &k);
+        ctx->regs[rd] = pv_arena_finish(ctx, k);
+        return;
+    }
+    if (hook == PV_HOOK_HTML_QUERYSELECTOR) {
+        int sh = ctx->regs[rs2];
+        ctx->regs[rd] = pv_html_query_rec(ctx, ctx->regs[rs1], pv_span_p(ctx, sh), pv_span_n(ctx, sh), 0);
         return;
     }
 
@@ -3163,6 +3535,7 @@ void pv_init(pv_ctx *ctx)
     ctx->lease_count = 1;       /* Lease.*: handle 0 reserved as null */
     ctx->fifo_count = 1;        /* Fifo.*: handle 0 reserved as null */
     ctx->log_count = 1;         /* Log.*: handle 0 reserved as null */
+    ctx->html_count = 1;        /* Html.*: handle 0 reserved as null */
     ctx->host = pv_default_host;
     ctx->cur_pc = 0;
 }

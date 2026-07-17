@@ -68,6 +68,12 @@ for _k, _v in NAMED_CONSTANTS.items():
 
 MASK32 = 0xFFFFFFFF
 ARENA_BYTES = 520 * 1024                  # PicoVM data arena = RP2350 (Pico 2) 520 KB SRAM
+HTML_MAX_DEPTH = 32                       # Html.* DOM tree walk bound (matches template TPL_MAXDEPTH
+                                           # convention) -- protects Serialize/QuerySelector against a
+                                           # script-constructed cycle (AddChildNode has no cycle check,
+                                           # same simplicity/determinism-over-defensiveness tradeoff as
+                                           # every other handle-table namespace); stops descending rather
+                                           # than faulting, identically on all 3 runtimes.
 
 PV_FAULT_NONE = 0
 PV_FAULT_STEP_BUDGET = 1
@@ -1208,6 +1214,17 @@ class HostApi:
         # single 8-channel Queue.* int FIFO above).
         self.fifo_channels: Dict[int, dict] = {}
         self._fifo_seq = 0
+        # -- Html.* DOM tree: pure in-VM node table, no host state, so it is a
+        # real, fully deterministic primitive (see docs/NAMESPACE_STATUS.md's
+        # "HTML DOM + HTTP parsing" section and _htmllib below for the full
+        # design). Node = {"tag": span handle, "attrs": {bytes: span handle},
+        # "children": [handle, ...]}. A node is a *text* node iff its attrs
+        # dict has the reserved key b"#text" (its value span is the text
+        # content) -- this needs no separate flag, and lets scripts build
+        # text nodes with the same CreateNode+SetAttribute primitives used
+        # for elements. Handle 0 = null, matching every other handle table.
+        self.html_nodes: Dict[int, dict] = {}
+        self._html_node_seq = 0
 
     @property
     def store(self):
@@ -2015,19 +2032,215 @@ class HostApi:
             out = (src.replace(b"&lt;", b"<").replace(b"&gt;", b">").replace(b"&quot;", b'"')
                       .replace(b"&#39;", b"'").replace(b"&amp;", b"&"))
             vm.regs[rd] = self._new_span_bytes(vm, out); return True
-        # DOM tree ops (CreateNode/AddChildNode/RemoveChildNode/SetAttribute/
-        # GetAttribute/ParseTree/Serialize/QuerySelector) are not built -- a
-        # full mutable tree model + HTML parser is a separate, much larger
-        # feature (see docs/NAMESPACE_STATUS.md). Until then, return a
-        # defined 0/empty-span default (never leave `rd` untouched) so every
-        # method is at least safely callable -- same convention as the
-        # reserved/host-injected namespaces (see docs/FEATURE_MATRIX.md).
-        if method in ("GetAttribute", "Serialize"):
-            vm.regs[rd] = self._new_span_bytes(vm, b""); return True
-        if method in ("CreateNode", "AddChildNode", "RemoveChildNode", "SetAttribute",
-                      "ParseTree", "QuerySelector"):
-            vm.regs[rd] = 0; return True
+        # -- DOM tree ops: a real, pure, deterministic node table (no host
+        # state needed -- see docs/NAMESPACE_STATUS.md's "HTML DOM + HTTP
+        # parsing" section and self.html_nodes above for the full design).
+        # Node = {"tag": span handle, "attrs": {bytes: span handle},
+        # "children": [handle, ...]}. A node is a *text* node iff its attrs
+        # dict has reserved key b"#text" (its value span is the text
+        # content) -- CreateNode+SetAttribute alone can build one (no
+        # separate "CreateTextNode" needed), and ParseTree's internal
+        # builder uses the exact same convention for text runs it parses.
+        # An empty tag with no "#text" attr is a transparent fragment/
+        # wrapper (used for ParseTree's synthetic multi-root wrapper, and
+        # available to scripts building their own fragments the same way).
+        if method == "CreateNode":
+            self._html_node_seq += 1
+            h = self._html_node_seq
+            self.html_nodes[h] = {"tag": vm.regs[rs1], "attrs": {}, "children": []}
+            vm.regs[rd] = h; return True
+        if method == "AddChildNode":
+            p = self.html_nodes.get(vm.regs[rs1])
+            c = vm.regs[rs2]
+            ok = p is not None and c in self.html_nodes
+            if ok:
+                p["children"].append(c)
+            vm.regs[rd] = 1 if ok else 0; return True
+        if method == "RemoveChildNode":
+            p = self.html_nodes.get(vm.regs[rs1])
+            c = vm.regs[rs2]
+            ok = False
+            if p is not None and c in p["children"]:
+                p["children"].remove(c)
+                ok = True
+            vm.regs[rd] = 1 if ok else 0; return True
+        if method == "SetAttribute":
+            # rs2 packs "key=value" into a single span (the 2-in/1-out ABI
+            # has no 3rd argument register -- same convention documented in
+            # docs/NAMESPACE_STATUS.md's "3-argument ops" section). No '='
+            # present -> the whole span is the key, value is empty.
+            n = self.html_nodes.get(vm.regs[rs1])
+            if n is not None:
+                kv = self._span_raw(vm, vm.regs[rs2])
+                if b"=" in kv:
+                    k, v = kv.split(b"=", 1)
+                else:
+                    k, v = kv, b""
+                n["attrs"][k] = self._new_span_bytes(vm, v)
+            vm.regs[rd] = 1 if n is not None else 0; return True
+        if method == "GetAttribute":
+            n = self.html_nodes.get(vm.regs[rs1])
+            k = self._span_raw(vm, vm.regs[rs2])
+            v = n["attrs"].get(k) if n is not None else None
+            if v is not None:
+                vm.regs[rd] = v; self.host_status = 0
+            else:
+                vm.regs[rd] = self._new_span_bytes(vm, b""); self.host_status = 1  # INV-18: NOT_FOUND
+            return True
+        if method == "ParseTree":
+            vm.regs[rd] = self._html_parse(vm, src); return True
+        if method == "Serialize":
+            out = self._html_serialize(vm, vm.regs[rs1], 0)
+            vm.regs[rd] = self._new_span_bytes(vm, out); return True
+        if method == "QuerySelector":
+            sel = self._span_raw(vm, vm.regs[rs2])
+            vm.regs[rd] = self._html_query(vm, vm.regs[rs1], sel, 0); return True
         return False
+
+    def _html_new_node(self, tag_span: int) -> int:
+        self._html_node_seq += 1
+        h = self._html_node_seq
+        self.html_nodes[h] = {"tag": tag_span, "attrs": {}, "children": []}
+        return h
+
+    def _html_parse(self, vm: "PicoVM", src: bytes) -> int:
+        """Minimal, permissive HTML parser (not full HTML5 conformance --
+        see docs/NAMESPACE_STATUS.md): tokenizes `<tag k="v" k2='v2'>`,
+        `</tag>` (closes the innermost open element regardless of name
+        match -- permissive), self-closing `<tag/>`, and a fixed void-
+        element list. Everything else is a text run. Always returns a
+        synthetic fragment-root handle (empty tag, no "#text" attr) whose
+        children are the top-level parsed nodes, so multi-root/bare-text
+        input always has a single handle to return."""
+        VOID = {b"br", b"img", b"hr", b"input", b"meta", b"link", b"area",
+                b"base", b"col", b"embed", b"source", b"track", b"wbr"}
+        empty_tag = self._new_span_bytes(vm, b"")
+        root = self._html_new_node(empty_tag)
+        stack = [root]
+        i, n = 0, len(src)
+
+        def cur_parent():
+            return self.html_nodes[stack[-1]]
+
+        while i < n:
+            lt = src.find(b"<", i)
+            if lt < 0:
+                if i < n and len(stack) < HTML_MAX_DEPTH:
+                    txt = self._html_new_node(empty_tag)
+                    self.html_nodes[txt]["attrs"][b"#text"] = self._new_span_bytes(vm, src[i:])
+                    cur_parent()["children"].append(txt)
+                break
+            if lt > i:
+                if len(stack) < HTML_MAX_DEPTH:
+                    txt = self._html_new_node(empty_tag)
+                    self.html_nodes[txt]["attrs"][b"#text"] = self._new_span_bytes(vm, src[i:lt])
+                    cur_parent()["children"].append(txt)
+            gt = src.find(b">", lt + 1)
+            if gt < 0:
+                break                                    # unterminated tag: stop (permissive)
+            tag_src = src[lt + 1:gt]
+            i = gt + 1
+            if tag_src.startswith(b"/"):                  # closing tag
+                if len(stack) > 1:
+                    stack.pop()
+                continue
+            self_close = tag_src.endswith(b"/")
+            if self_close:
+                tag_src = tag_src[:-1]
+            parts = tag_src.split(None, 1)
+            if not parts:
+                continue
+            name = parts[0]
+            elem = self._html_new_node(self._new_span_bytes(vm, name))
+            if len(stack) < HTML_MAX_DEPTH:
+                cur_parent()["children"].append(elem)
+            if len(parts) > 1:
+                self._html_parse_attrs(vm, elem, parts[1])
+            if not self_close and name.lower() not in VOID and len(stack) < HTML_MAX_DEPTH:
+                stack.append(elem)
+        return root
+
+    def _html_parse_attrs(self, vm: "PicoVM", node_handle: int, text: bytes) -> None:
+        node = self.html_nodes[node_handle]
+        i, n = 0, len(text)
+        while i < n:
+            while i < n and text[i:i + 1].isspace():
+                i += 1
+            start = i
+            while i < n and not text[i:i + 1].isspace() and text[i] != 0x3D:  # not '='
+                i += 1
+            key = text[start:i]
+            if not key:
+                break
+            while i < n and text[i:i + 1].isspace():
+                i += 1
+            val = b""
+            if i < n and text[i] == 0x3D:                 # '='
+                i += 1
+                while i < n and text[i:i + 1].isspace():
+                    i += 1
+                if i < n and text[i] in (0x22, 0x27):      # quote/apostrophe
+                    q = text[i]; i += 1; vs = i
+                    end = text.find(bytes([q]), i)
+                    if end < 0:
+                        end = n
+                    val = text[vs:end]
+                    i = end + 1
+                else:
+                    vs = i
+                    while i < n and not text[i:i + 1].isspace():
+                        i += 1
+                    val = text[vs:i]
+            node["attrs"][key] = self._new_span_bytes(vm, val)
+
+    def _html_serialize(self, vm: "PicoVM", handle: int, depth: int) -> bytes:
+        n = self.html_nodes.get(handle)
+        if n is None or depth >= HTML_MAX_DEPTH:
+            return b""
+        if b"#text" in n["attrs"]:
+            txt = self._span_raw(vm, n["attrs"][b"#text"])
+            return (txt.replace(b"&", b"&amp;").replace(b"<", b"&lt;").replace(b">", b"&gt;")
+                       .replace(b'"', b"&quot;").replace(b"'", b"&#39;"))
+        tag = self._span_raw(vm, n["tag"])
+        kids = b"".join(self._html_serialize(vm, c, depth + 1) for c in n["children"])
+        if not tag:
+            return kids                                    # transparent fragment wrapper
+        attrs = b"".join(
+            b' ' + k + b'="' + (self._span_raw(vm, v).replace(b"&", b"&amp;").replace(b'"', b"&quot;")) + b'"'
+            for k, v in n["attrs"].items()
+        )
+        return b"<" + tag + attrs + b">" + kids + b"</" + tag + b">"
+
+    def _html_query(self, vm: "PicoVM", handle: int, sel: bytes, depth: int) -> int:
+        n = self.html_nodes.get(handle)
+        if n is None or depth >= HTML_MAX_DEPTH:
+            return 0
+        if self._html_matches(vm, n, sel):
+            return handle
+        for c in n["children"]:
+            m = self._html_query(vm, c, sel, depth + 1)
+            if m:
+                return m
+        return 0
+
+    def _html_matches(self, vm: "PicoVM", n: dict, sel: bytes) -> bool:
+        if not sel:
+            return False
+        if sel[0:1] == b"#":
+            v = self._html_attr_raw(vm, n, b"id")
+            return v == sel[1:]
+        if sel[0:1] == b".":
+            v = self._html_attr_raw(vm, n, b"class")
+            return sel[1:] in v.split()
+        return self._html_tag_raw(vm, n) == sel
+
+    def _html_attr_raw(self, vm: "PicoVM", n: dict, key: bytes) -> bytes:
+        h = n["attrs"].get(key)
+        return self._span_raw(vm, h) if h is not None else b""
+
+    def _html_tag_raw(self, vm: "PicoVM", n: dict) -> bytes:
+        return self._span_raw(vm, n["tag"])
+
 
     @staticmethod
     def _urldecode(b: bytes) -> bytes:
