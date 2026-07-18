@@ -254,6 +254,75 @@ def _q16_fixdiv(a: int, b: int) -> int:
     return _sx32(-q if (num < 0) != (b < 0) else q)
 
 
+# ---- Decimal.*: string <-> Q16.16 conversion (see HostApi._decimallib) ------
+Q16_FRAC_DIGITS = 5   # 2**16 distinct fractions -> up to ~4.8 decimal digits
+
+
+def _parse_q16(raw: str) -> Optional[int]:
+    """Parse a decimal literal ("1000.25", "-3.5", "1000", "1000.") into a
+    Q16.16 fixed-point value (round-half-up on the fractional part beyond 16
+    bits of precision). Returns None if `raw` isn't a recognizable
+    integer/decimal literal (same acceptance rules as _parse_int_tolerant,
+    generalized to keep the fraction instead of truncating it away)."""
+    raw = raw.strip()
+    if not raw:
+        return None
+    neg = raw[:1] == "-"
+    if raw[:1] in ("+", "-"):
+        raw = raw[1:]
+    int_part, _, frac_part = raw.partition(".") if "." in raw else (raw, "", "")
+    int_part = int_part or "0"
+    if not int_part.isdigit() or not (frac_part == "" or frac_part.isdigit()):
+        return None
+    ipart = int(int_part)
+    if frac_part:
+        fnum = int(frac_part)
+        fden = 10 ** len(frac_part)
+        fscaled = (fnum * Q16_ONE + fden // 2) // fden   # round-half-up
+    else:
+        fscaled = 0
+    v = (ipart << 16) + fscaled
+    return -v if neg else v
+
+
+def _q16_format_fixed(v: int, digits: int) -> str:
+    """Render v (Q16.16, already sign-extended) to exactly `digits` decimal
+    places, round-half-up (no trailing-zero trimming -- see _q16_to_str)."""
+    neg = v < 0
+    v = -v if neg else v
+    ip, frac = v >> 16, v & 0xFFFF
+    scale = 10 ** digits
+    fdigits = (frac * scale + Q16_ONE // 2) // Q16_ONE
+    if fdigits >= scale:      # rounding carried into the integer part
+        ip += 1
+        fdigits -= scale
+    s = str(ip)
+    if digits:
+        s += "." + str(fdigits).zfill(digits)
+    return ("-" + s) if (neg and (ip or fdigits)) else s
+
+
+def _q16_to_str(v: int) -> str:
+    """Render a Q16.16 value back to the SHORTEST decimal string that parses
+    back to the exact same value (same "shortest round-trip" approach as
+    Python's repr(float) / JS's Number.prototype.toString() for IEEE754 --
+    tries 0, 1, 2, ... decimal digits and returns the first that round-trips).
+
+    This matters in practice: a naive fixed-precision render at full Q16.16
+    precision shows binary-fraction noise on very common values, e.g.
+    "19.99" -> nearest Q16.16 -> a naive render as "19.99001" (0.01 isn't
+    exactly representable in binary, the same reason 0.1+0.2 != 0.3 in
+    IEEE754 float) even though "19.99" itself round-trips perfectly at 2
+    digits. The shortest-round-trip search finds that "19.99" directly.
+    Guarantees _parse_q16(_q16_to_str(x)) == x for every representable value."""
+    v = _sx32(v)
+    for digits in range(0, Q16_FRAC_DIGITS + 1):
+        s = _q16_format_fixed(v, digits)
+        if _parse_q16(s) == v:
+            return s
+    return _q16_format_fixed(v, Q16_FRAC_DIGITS)  # pragma: no cover - always found by full precision
+
+
 def _q16_exp(z: int) -> int:
     """e^z in Q16.16 (range-reduced by ln2, Taylor on the remainder)."""
     if z >= Q16_EXP_MAX_Z:
@@ -1254,6 +1323,77 @@ class HostApi:
         # for elements. Handle 0 = null, matching every other handle table.
         self.html_nodes: Dict[int, dict] = {}
         self._html_node_seq = 0
+        # -- Fast O(1) namespace dispatch (microcode/superinstruction-style
+        # dispatch table) for every namespace that resolves to exactly ONE
+        # handler regardless of `method` -- see call()'s use of
+        # self._ns_dispatch below. This replaces what was previously a ~40-
+        # entry sequential if/elif string-comparison chain in call() with a
+        # single dict lookup for the common case. Deliberately EXCLUDES any
+        # namespace with compound/split routing that this dict-first design
+        # could change the behavior of if included naively:
+        #   - "Json": also handled earlier by _parse_hook for method=="Parse"
+        #     (shared with "Binary"), and only falls through to _textio for
+        #     other methods -- putting "Json" in this dict would skip the
+        #     _parse_hook attempt entirely.
+        #   - "Req": has a SECOND, method-specific handler (_req_param) below
+        #     for Param/ParamCount that _req() itself doesn't cover.
+        #   - Random.U32, Queue.*, Bits, Dot8, Memory.*, Span.*, Arena, Data,
+        #     Io.*, Pack.Use, Thread.YieldCounted: small inline single-method
+        #     handlers, not worth the indirection, left in the chain as-is.
+        # For these excluded cases, a dict miss just falls through to the
+        # unchanged, original chain below -- zero behavior change either way.
+        self._ns_dispatch: Dict[str, Callable] = {
+            "Map": self._map_hook,
+            "Tensor": self._tensor,
+            "BitLinear": self._bitlinear,
+            "Quant": self._quant,
+            "Attention": self._attention,
+            "Tokenizer": self._tokenizer,
+            "Model": self._model,
+            "Kv": self._kv,
+            "Sampling": self._sampling,
+            "Resp": self._resp,
+            "Query": self._query_helpers,
+            "Search": self._search,
+            "Storage": self._storage,
+            "Gpio": self._gpio,
+            "Device": self._device,
+            "Stream": self._stream,
+            "Assert": self._assert,
+            "Event": self._event,
+            "Ui": self._ui,
+            "String": self._stringlib,
+            "Number": self._numberlib,
+            "Decimal": self._decimallib,
+            "Template": self._templatelib,
+            "Maths": self._mathslib,
+            "Compress": self._compresslib,
+            "Crypto": self._cryptolib,
+            "Html": self._htmllib,
+            "Http": self._httplib,
+            "TextRender": self._textrender,
+            "Error": self._error_hook,
+            "Capsule": self._capsule_exec,
+            "Base64": self._base64,
+            "Encoding": self._encoding,
+            "DateTime": self._datetime,
+            "Locale": self._locale,
+            "Log": self._log_hook,
+            "Descriptor": self._descriptor,
+            "Lease": self._lease_ns,
+            "Fifo": self._fifo,
+            "Kernel": self._kernel,
+            "Utf8Writer": lambda vm, method, rd, rs1, rs2: self._textio(vm, "Utf8Writer", method, rd, rs1, rs2),
+            "Utf8Reader": lambda vm, method, rd, rs1, rs2: self._textio(vm, "Utf8Reader", method, rd, rs1, rs2),
+            "Xml": lambda vm, method, rd, rs1, rs2: self._textio(vm, "Xml", method, rd, rs1, rs2),
+            "Process": lambda vm, method, rd, rs1, rs2: self._process_env(vm, "Process", method, rd, rs1, rs2),
+            "Env": lambda vm, method, rd, rs1, rs2: self._process_env(vm, "Env", method, rd, rs1, rs2),
+            "Timer": lambda vm, method, rd, rs1, rs2: self._timer_scheduler(vm, "Timer", method, rd, rs1, rs2),
+            "Scheduler": lambda vm, method, rd, rs1, rs2: self._timer_scheduler(vm, "Scheduler", method, rd, rs1, rs2),
+            "Principal": lambda vm, method, rd, rs1, rs2: self._principal_cap(vm, "Principal", method, rd, rs1, rs2),
+            "Capability": lambda vm, method, rd, rs1, rs2: self._principal_cap(vm, "Capability", method, rd, rs1, rs2),
+            "Sandbox": lambda vm, method, rd, rs1, rs2: self._principal_cap(vm, "Sandbox", method, rd, rs1, rs2),
+        }
 
     @property
     def store(self):
@@ -1279,9 +1419,12 @@ class HostApi:
         fn = self.handlers.get((ns, method))
         if fn is not None:
             return fn(vm, rd, rs1, rs2, imm16)
-        # Map.* first-class dictionary (active-handle model; see docs/MAP.md).
-        if ns == "Map":
-            if self._map_hook(vm, method, rd, rs1, rs2):
+        # Fast O(1) dispatch for every namespace resolving to exactly one
+        # handler regardless of method -- see self._ns_dispatch (built once
+        # in __init__) for the exact inclusion/exclusion rules.
+        ns_handler = self._ns_dispatch.get(ns)
+        if ns_handler is not None:
+            if ns_handler(vm, method, rd, rs1, rs2):
                 return
         # Parsers: Json.Parse / Binary.* (PSC1 card + BSO1 entity) -> Map.
         if (ns == "Json" and method == "Parse") or ns == "Binary":
@@ -1359,30 +1502,6 @@ class HostApi:
                     acc += (w - 256 if w > 127 else w) * (a - 256 if a > 127 else a)
                 vm.regs[rd] = acc & MASK32
                 return
-        if ns == "Tensor":
-            if self._tensor(vm, method, rd, rs1, rs2):
-                return
-        if ns == "BitLinear":
-            if self._bitlinear(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Quant":
-            if self._quant(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Attention":
-            if self._attention(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Tokenizer":
-            if self._tokenizer(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Model":
-            if self._model(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Kv":
-            if self._kv(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Sampling":
-            if self._sampling(vm, method, rd, rs1, rs2):
-                return
         # Memory + span / slice / materialize.
         if ns == "Memory" and method == "Set":
             a = vm.regs[rs1] % vm.arena_bytes
@@ -1454,72 +1573,13 @@ class HostApi:
         if ns == "Req":
             if self._req(vm, method, rd, rs1, rs2):
                 return
-        if ns == "Resp":
-            if self._resp(vm, method, rd, rs1, rs2):
-                return
         # Program-level card store: Storage.* over a PicoStore (text via byte-spans).
-        if ns == "Query":
-            if self._query_helpers(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Search":
-            if self._search(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Storage":
-            if self._storage(vm, method, rd, rs1, rs2):
-                return
         # Data.* host-bound read: no active server/data context in the reference
         # VM, so return a defined empty/0 default (mirrors vm/picovm.js exactly)
         # and let the authoritative host enforce data-dependent rules.
         if ns == "Data":
             vm.regs[rd] = self._new_span_bytes(vm, b"") if method == "FieldStr" else 0
             return
-        if ns == "Gpio":
-            if self._gpio(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Device":
-            if self._device(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Stream":
-            if self._stream(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Assert":
-            if self._assert(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Event":
-            if self._event(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Ui":
-            if self._ui(vm, method, rd, rs1, rs2):
-                return
-        # String.* arena string library.
-        if ns == "String":
-            if self._stringlib(vm, method, rd, rs1, rs2):
-                return
-        # Number.* integer/format library.
-        if ns == "Number":
-            if self._numberlib(vm, method, rd, rs1, rs2):
-                return
-        # Template.* (AOT compile-at-save + render).
-        if ns == "Template":
-            if self._templatelib(vm, method, rd, rs1, rs2):
-                return
-        # Maths.* pure-integer ops (Power/Sqrt).
-        if ns == "Maths":
-            if self._mathslib(vm, method, rd, rs1, rs2):
-                return
-        # Compress.* (PicoCompress RLE), Crypto.* (Sha256), Html.* (entity escape).
-        if ns == "Compress":
-            if self._compresslib(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Crypto":
-            if self._cryptolib(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Html":
-            if self._htmllib(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Http":
-            if self._httplib(vm, method, rd, rs1, rs2):
-                return
         # Io: write raw bytes (UTF-8 strings) to the output buffer.
         if ns == "Io" and method == "Write":
             h = vm.regs[rs1]
@@ -1534,60 +1594,15 @@ class HostApi:
         if ns in ("Utf8Writer", "Utf8Reader", "Json", "Xml"):
             if self._textio(vm, ns, method, rd, rs1, rs2):
                 return
-        if ns == "TextRender":
-            if self._textrender(vm, method, rd, rs1, rs2):
-                return
         # OS-worker: Process/Env, Timer/Scheduler, Principal/Capability/Sandbox,
         # Error handling, Capsule execution.
-        if ns in ("Process", "Env"):
-            if self._process_env(vm, ns, method, rd, rs1, rs2):
-                return
-        if ns in ("Timer", "Scheduler"):
-            if self._timer_scheduler(vm, ns, method, rd, rs1, rs2):
-                return
-        if ns in ("Principal", "Capability", "Sandbox"):
-            if self._principal_cap(vm, ns, method, rd, rs1, rs2):
-                return
-        if ns == "Error":
-            if self._error_hook(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Capsule":
-            if self._capsule_exec(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Base64":
-            if self._base64(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Encoding":
-            if self._encoding(vm, method, rd, rs1, rs2):
-                return
-        if ns == "DateTime":
-            if self._datetime(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Locale":
-            if self._locale(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Log":
-            if self._log_hook(vm, method, rd, rs1, rs2):
-                return
         if ns == "Req" and method in ("Param", "ParamCount"):
             if self._req_param(vm, method, rd, rs1, rs2):  # pragma: no branch
-                return
-        if ns == "Descriptor":
-            if self._descriptor(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Lease":
-            if self._lease_ns(vm, method, rd, rs1, rs2):
-                return
-        if ns == "Fifo":
-            if self._fifo(vm, method, rd, rs1, rs2):
                 return
         if ns == "Pack" and method == "Use":
             self._active_pack = vm.regs[rs1] & MASK32
             vm.regs[rd] = self._active_pack
             return
-        if ns == "Kernel":
-            if self._kernel(vm, method, rd, rs1, rs2):
-                return
         if ns == "Thread" and method == "YieldCounted":
             self._thread_yield_count += 1
             vm.regs[rd] = self._thread_yield_count & MASK32
@@ -1945,6 +1960,36 @@ class HostApi:
             R[rd] = self._new_span_bytes(vm, format(a & MASK32, "o").encode()); return True
         if method == "ToBinary":
             R[rd] = self._new_span_bytes(vm, format(a & MASK32, "b").encode()); return True
+        return False
+
+    def _decimallib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
+        """Decimal.*: Q16.16 fixed-point fractional numeric library (a real
+        fractional value in a plain 32-bit register, byte-identical across
+        Python/JS VMs -- the same encoding Maths.Sin/Cos/Exp/Log already use).
+        Unlike Number.Parse (32-bit-integer only, truncates any fraction),
+        this preserves the fractional part -- intended for callers that need
+        exact currency/decimal arithmetic rather than integer truncation."""
+        R = vm.regs
+        if method == "Parse":
+            raw = self._span_raw(vm, R[rs1]).decode("ascii", "replace")
+            v = _parse_q16(raw)
+            self.host_status = 0 if v is not None else 2  # INV-18: PARSE_ERROR
+            R[rd] = (v if v is not None else 0) & MASK32; return True
+        if method == "ToString":
+            R[rd] = self._new_span_bytes(vm, _q16_to_str(_sx32(R[rs1])).encode()); return True
+        if method == "ToInt":
+            R[rd] = _q16_idiv(_sx32(R[rs1]), Q16_ONE) & MASK32; return True  # truncate towards zero
+        a, b = _sx32(R[rs1]), _sx32(R[rs2])
+        if method == "Add":
+            R[rd] = (a + b) & MASK32; return True
+        if method == "Sub":
+            R[rd] = (a - b) & MASK32; return True
+        if method == "Mul":
+            R[rd] = _q16_fixmul(a, b) & MASK32; return True
+        if method == "Div":
+            R[rd] = (_q16_fixdiv(a, b) if b != 0 else 0) & MASK32; return True
+        if method == "Compare":
+            R[rd] = (0 if a == b else (1 if a > b else -1)) & MASK32; return True
         return False
 
     def _mathslib(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
@@ -5184,8 +5229,7 @@ class PicoVM:
         (register/indexed jumps are dynamic -> runtime-checked in _step)."""
         n = len(self.program)
         for i, word in enumerate(self.program):
-            d = isa.decode_instruction(word)
-            op, rs2, imm16 = d["opcode"], d["rs2"], d["imm16"]
+            op, _rd, _rs1, rs2, imm16 = isa.decode_instruction_fast(word)
             if op == isa.OP_JUMP and rs2 == 0:
                 tgt = imm16
             elif op == isa.OP_CALL:
@@ -5238,8 +5282,7 @@ class PicoVM:
     # -- core ------------------------------------------------------------
     def _step(self):
         word = self.program[self.pc]
-        d = isa.decode_instruction(word)
-        op, rd, rs1, rs2, imm16 = d["opcode"], d["rd"], d["rs1"], d["rs2"], d["imm16"]
+        op, rd, rs1, rs2, imm16 = isa.decode_instruction_fast(word)
         cur = self.pc
         self.cur_pc = cur
         self.pc += 1

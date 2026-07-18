@@ -1063,6 +1063,20 @@ HOST_HOOK_CODES = {
     ("Encoding", "Utf7Decode"): 0x0319,
     ("Encoding", "HexEncode"):  0x031A,
     ("Encoding", "HexDecode"):  0x031B,
+    # Decimal.* (0x0350-0x0357): Q16.16 fixed-point fractional numeric library,
+    # same encoding already used by Maths.Sin/Cos/Exp/Log (see _q16_* helpers
+    # in picoscript_vm.py) -- a real fractional value in a plain 32-bit
+    # register, byte-identical across the Python/JS VMs. Complements
+    # Number.Parse's integer-truncating decimal tolerance: use Decimal.* when
+    # the fractional part must actually be preserved (e.g. currency amounts).
+    ("Decimal", "Parse"):        0x0350,   # rs1=span "1000.25"           rd=Q16.16
+    ("Decimal", "ToString"):     0x0351,   # rs1=Q16.16                   rd=span "1000.25"
+    ("Decimal", "Add"):          0x0352,   # rs1,rs2=Q16.16                rd=Q16.16
+    ("Decimal", "Sub"):          0x0353,   # rs1,rs2=Q16.16                rd=Q16.16
+    ("Decimal", "Mul"):          0x0354,   # rs1,rs2=Q16.16                rd=Q16.16
+    ("Decimal", "Div"):          0x0355,   # rs1,rs2=Q16.16                rd=Q16.16 (0 if rs2==0)
+    ("Decimal", "Compare"):      0x0356,   # rs1,rs2=Q16.16                rd=-1/0/1
+    ("Decimal", "ToInt"):        0x0357,   # rs1=Q16.16                    rd=int (truncate towards zero)
     # DateTime extended (0xBB-0xBE): pure given input.
     ("DateTime", "DiffDays"):    0xBB,     # rs1=millis_a rs2=millis_b    rd=days
     ("DateTime", "Year"):        0xBC,     # rs1=millis                   rd=year

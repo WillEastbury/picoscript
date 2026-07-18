@@ -1454,6 +1454,95 @@ static int32_t pv_q16_log(int32_t x)
     return (2 * acc) + e * PV_Q16_LN2;
 }
 
+/* ── Decimal.*: Q16.16 fixed-point fractional numeric library ────────────
+ * Mirrors picoscript_vm.py's HostApi._decimallib / vm/picovm.js's
+ * _decimallib exactly. Unlike Number.Parse (32-bit-integer only, truncates
+ * any fraction), this preserves it as a Q16.16 fixed-point value in a plain
+ * 32-bit register -- the same encoding pv_q16_sincos/pv_q16_exp/pv_q16_log
+ * already use above. */
+#define PV_Q16_FRAC_DIGITS 5
+
+static int pv_q16_parse_bytes(const uint8_t *b, int32_t len, int32_t *out)
+{
+    int32_t i = 0, e = len;
+    while (i < e && (b[i] == 0x20 || b[i] == 0x09 || b[i] == 0x0d || b[i] == 0x0a)) i++;
+    while (e > i && (b[e - 1] == 0x20 || b[e - 1] == 0x09 || b[e - 1] == 0x0d || b[e - 1] == 0x0a)) e--;
+    if (i >= e) return 0;
+    int neg = 0;
+    if (b[i] == '+' || b[i] == '-') { neg = (b[i] == '-'); i++; }
+    int32_t int_start = i, j = i;
+    uint32_t ipart = 0;
+    for (; j < e; j++) {
+        if (b[j] < '0' || b[j] > '9') break;
+        ipart = ipart * 10u + (uint32_t)(b[j] - '0');
+    }
+    if (j == int_start) return 0;   /* at least one integer digit required */
+    uint32_t fscaled = 0;
+    if (j < e) {
+        if (b[j] != '.') return 0;
+        int32_t k = j + 1, flen = 0;
+        uint32_t fnum = 0, fden = 1;
+        for (; k < e; k++) {
+            if (b[k] < '0' || b[k] > '9') return 0;
+            /* Cap accumulated fractional digits well under 32 bits; extra
+             * digits beyond 9 add no real Q16.16 precision (2**-16 ~= 1.5e-5)
+             * anyway. */
+            if (flen < 9) { fnum = fnum * 10u + (uint32_t)(b[k] - '0'); fden *= 10u; flen++; }
+        }
+        if (flen > 0) fscaled = (uint32_t)(((uint64_t)fnum * PV_Q16_ONE + fden / 2) / fden);
+    }
+    {
+        uint32_t v = (ipart << 16) + fscaled;
+        *out = neg ? (int32_t)(0u - v) : (int32_t)v;
+    }
+    return 1;
+}
+
+static int32_t pv_q16_format_fixed(int32_t v, int digits, uint8_t *buf)
+{
+    int neg = v < 0;
+    uint32_t uv = neg ? (uint32_t)(0 - (int64_t)v) : (uint32_t)v;
+    uint32_t ip = uv >> 16, frac = uv & 0xFFFFu;
+    uint32_t scale = 1; int di;
+    for (di = 0; di < digits; di++) scale *= 10u;
+    uint32_t fdigits = (uint32_t)(((uint64_t)frac * scale + PV_Q16_ONE / 2) / PV_Q16_ONE);
+    if (fdigits >= scale) { ip += 1; fdigits -= scale; }
+    uint8_t tmp[16]; int t = 0;
+    uint32_t x = ip;
+    if (x == 0) tmp[t++] = '0';
+    while (x) { tmp[t++] = (uint8_t)('0' + (x % 10u)); x /= 10u; }
+    int32_t n = 0;
+    if (neg && (ip != 0 || fdigits != 0)) buf[n++] = '-';
+    while (t > 0) buf[n++] = tmp[--t];
+    if (digits > 0) {
+        uint8_t ftmp[16]; int ft = 0;
+        uint32_t fx = fdigits;
+        buf[n++] = '.';
+        for (di = 0; di < digits; di++) { ftmp[ft++] = (uint8_t)('0' + (fx % 10u)); fx /= 10u; }
+        while (ft > 0) buf[n++] = ftmp[--ft];
+    }
+    return n;
+}
+
+/* Shortest decimal string that parses back to the exact same Q16.16 value
+ * (mirrors picoscript_vm.py's _q16_to_str / vm/picovm.js's q16ToStr -- same
+ * "shortest round-trip" technique as repr(float)/Number.toString() for
+ * IEEE754, avoiding binary-fraction noise on common values like "19.99"). */
+static int32_t pv_q16_to_str(int32_t v, uint8_t *buf)
+{
+    int digits;
+    for (digits = 0; digits <= PV_Q16_FRAC_DIGITS; digits++) {
+        uint8_t tmp[24];
+        int32_t n = pv_q16_format_fixed(v, digits, tmp);
+        int32_t rt;
+        if (pv_q16_parse_bytes(tmp, n, &rt) && rt == v) {
+            int32_t bi; for (bi = 0; bi < n; bi++) buf[bi] = tmp[bi];
+            return n;
+        }
+    }
+    return pv_q16_format_fixed(v, PV_Q16_FRAC_DIGITS, buf);
+}
+
 /* ── AES-256-CTR (Crypto.Encrypt/Decrypt). Tables + algorithm byte-identical with
  * picoscript_vm.py and vm/picovm.js; CTR is symmetric so encrypt == decrypt. ── */
 static const uint8_t PV_AES_SBOX[256] = {
@@ -3050,12 +3139,35 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         while (e > i) { uint8_t c = pv_arena_get(ctx, pa + (uint32_t)(e - 1)); if (c==0x20||c==0x09||c==0x0d||c==0x0a) e--; else break; }
         int neg = 0;
         if (i < e) { uint8_t c = pv_arena_get(ctx, pa + (uint32_t)i); if (c=='+'||c=='-') { neg = (c=='-'); i++; } }
-        int valid = (i < e);
+        int32_t int_start = i, j = i;
         uint32_t val = 0;
-        for (; i < e; i++) {
-            uint8_t c = pv_arena_get(ctx, pa + (uint32_t)i);
-            if (c < '0' || c > '9') { valid = 0; break; }
+        for (; j < e; j++) {
+            uint8_t c = pv_arena_get(ctx, pa + (uint32_t)j);
+            if (c < '0' || c > '9') break;
             val = val * 10u + (uint32_t)(c - '0');
+        }
+        int valid = (j > int_start);   /* at least one integer digit required */
+        if (valid && j < e) {
+            uint8_t c = pv_arena_get(ctx, pa + (uint32_t)j);
+            if (c == '.') {
+                /* Tolerate a decimal-point numeric string (e.g. "1000.0",
+                 * "-3.75", "5.") by truncating the fractional part towards
+                 * zero -- mirrors picoscript_vm.py's _parse_int_tolerant /
+                 * vm/picovm.js's Number.Parse (same acceptance rule: exactly
+                 * one dot, digits-only fraction, which may be empty). Number
+                 * is 32-bit-integer only; a trailing fraction is numerically
+                 * valid input that merely isn't integer-formatted, so this
+                 * avoids a silent PARSE_ERROR/0 for it (e.g. a host
+                 * language's default float-to-string of a whole currency
+                 * amount, such as Python's str(1000.0) == "1000.0"). */
+                int32_t k;
+                for (k = j + 1; k < e; k++) {
+                    uint8_t fc = pv_arena_get(ctx, pa + (uint32_t)k);
+                    if (fc < '0' || fc > '9') { valid = 0; break; }
+                }
+            } else {
+                valid = 0;   /* trailing garbage after the integer digits */
+            }
         }
         if (!valid) val = 0;
         ctx->host_status = valid ? 0 : 2;          /* INV-18: PARSE_ERROR */
@@ -3105,6 +3217,56 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         uint32_t k = 0;
         while (t > 0) pv_arena_put(ctx, &k, tmp[--t]);
         ctx->regs[rd] = pv_arena_finish(ctx, k);
+        return;
+    }
+
+    /* ---- Decimal.* (Q16.16 fixed-point; see pv_q16_parse_bytes/pv_q16_to_str above) --- */
+    if (hook == PV_HOOK_DECIMAL_PARSE) {
+        int ha = ctx->regs[rs1];
+        uint32_t pa = pv_span_p(ctx, ha);
+        int32_t la = pv_span_n(ctx, ha);
+        uint8_t buf[64];
+        int32_t v = 0; int ok = 0;
+        if (la >= 0 && la <= (int32_t)sizeof(buf)) {
+            int32_t bi;
+            for (bi = 0; bi < la; bi++) buf[bi] = pv_arena_get(ctx, pa + (uint32_t)bi);
+            ok = pv_q16_parse_bytes(buf, la, &v);
+        }
+        ctx->host_status = ok ? 0 : 2;          /* INV-18: PARSE_ERROR */
+        ctx->regs[rd] = ok ? v : 0;
+        return;
+    }
+    if (hook == PV_HOOK_DECIMAL_TOSTRING) {
+        uint8_t buf[32];
+        int32_t n = pv_q16_to_str(ctx->regs[rs1], buf);
+        uint32_t k = 0; int32_t bi;
+        for (bi = 0; bi < n; bi++) pv_arena_put(ctx, &k, buf[bi]);
+        ctx->regs[rd] = pv_arena_finish(ctx, k);
+        return;
+    }
+    if (hook == PV_HOOK_DECIMAL_TOINT) {
+        ctx->regs[rd] = pv_q16_idiv(ctx->regs[rs1], PV_Q16_ONE);   /* truncate towards zero */
+        return;
+    }
+    if (hook == PV_HOOK_DECIMAL_ADD) {
+        ctx->regs[rd] = (int32_t)((uint32_t)ctx->regs[rs1] + (uint32_t)ctx->regs[rs2]);
+        return;
+    }
+    if (hook == PV_HOOK_DECIMAL_SUB) {
+        ctx->regs[rd] = (int32_t)((uint32_t)ctx->regs[rs1] - (uint32_t)ctx->regs[rs2]);
+        return;
+    }
+    if (hook == PV_HOOK_DECIMAL_MUL) {
+        ctx->regs[rd] = pv_q16_fixmul(ctx->regs[rs1], ctx->regs[rs2]);
+        return;
+    }
+    if (hook == PV_HOOK_DECIMAL_DIV) {
+        ctx->regs[rd] = (ctx->regs[rs2] != 0) ? pv_q16_fixdiv(ctx->regs[rs1], ctx->regs[rs2]) : 0;
+        return;
+    }
+    if (hook == PV_HOOK_DECIMAL_COMPARE) {
+        int32_t a = ctx->regs[rs1], b = ctx->regs[rs2];
+        ctx->regs[rd] = (a == b) ? 0 : (a > b ? 1 : -1);
         return;
     }
 
