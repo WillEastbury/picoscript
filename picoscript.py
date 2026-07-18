@@ -210,6 +210,20 @@ def decode_instruction(word):
     return {"opcode": opcode, "rd": rd, "rs1": rs1, "rs2": rs2, "imm16": imm16}
 
 
+def decode_instruction_fast(word):
+    """Decode a 32-bit PicoScript instruction as a plain tuple, not a dict.
+
+    Same bit layout as decode_instruction, for the VM's per-instruction hot
+    loop (PicoVM._step, called once per executed instruction -- potentially
+    millions of times in a loop-heavy program). decode_instruction allocates
+    a fresh dict every call and requires 5 dict-key lookups to unpack it,
+    which is pure overhead in a hot path; a tuple has no such allocation/
+    lookup cost. Kept as a separate function (rather than changing
+    decode_instruction's return type) so the dict-based API is preserved for
+    existing callers (the disassembler, metrics tooling, tests)."""
+    return ((word >> 28) & 0xF, (word >> 24) & 0xF, (word >> 20) & 0xF, (word >> 16) & 0xF, word & 0xFFFF)
+
+
 def encode_card_addr(card, folder, file):
     """Encode card/folder/file into 16-bit address."""
     assert 0 <= card <= 63, f"card {card} out of range (0-63 in 16-bit mode)"
