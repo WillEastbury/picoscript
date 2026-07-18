@@ -108,6 +108,35 @@ def _sx32(v: int) -> int:
     return v - 0x100000000 if v & 0x80000000 else v
 
 
+def _parse_int_tolerant(raw: str) -> "tuple[bool, int]":
+    """Parse `raw` as an integer, tolerating a trailing decimal fraction by
+    truncating it towards zero (e.g. "1000.0" -> 1000, "-3.75" -> -3, "5." -> 5).
+
+    PicoScript's Number type is 32-bit-integer only (see PicoHost._mathslib:
+    transcendentals are fixed-point Q16.16, not float), so any exact fractional
+    value is necessarily lossy on Parse -- this mirrors the already-established
+    "Floor/Ceiling/Round: integer values: identity" convention rather than
+    failing closed on an input that is numerically valid, just not integer-
+    formatted. This case is common in practice: callers that serialize a
+    currency/decimal value via a host language's default float-to-string (e.g.
+    Python's str(1000.0) == "1000.0") previously got a silent PARSE_ERROR and a
+    value of 0 for every such string, even whole numbers.
+
+    Returns (True, value) on success, (False, 0) if `raw` isn't a recognizable
+    integer or decimal literal at all (unchanged behavior for garbage input).
+    """
+    try:
+        return True, int(raw)
+    except ValueError:
+        pass
+    if "." in raw:
+        int_part, _, frac_part = raw.partition(".")
+        digits = int_part[1:] if int_part[:1] in ("+", "-") else int_part
+        if digits and digits.isdigit() and (frac_part == "" or frac_part.isdigit()):
+            return True, int(int_part)
+    return False, 0
+
+
 def _default_locale_tag() -> str:
     import locale as _locale
     tag = _locale.getlocale()[0] or _locale.getdefaultlocale()[0]  # type: ignore[attr-defined]
@@ -1896,12 +1925,8 @@ class HostApi:
         R = vm.regs
         if method == "Parse":
             raw = self._span_raw(vm, R[rs1]).decode("ascii", "replace").strip()
-            try:
-                v = int(raw)                  # empty/non-numeric -> ValueError (status 2), value 0
-                self.host_status = 0
-            except ValueError:
-                v = 0
-                self.host_status = 2          # INV-18: PARSE_ERROR
+            ok, v = _parse_int_tolerant(raw)  # empty/non-numeric -> (False, 0), status 2
+            self.host_status = 0 if ok else 2  # INV-18: PARSE_ERROR
             R[rd] = v & MASK32; return True
         a, b = _sx32(R[rs1]), _sx32(R[rs2])
         if method == "Abs":

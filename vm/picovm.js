@@ -956,8 +956,20 @@
       var bb = this._spanBytes(this.regs[rs1]);
       var str = String.fromCharCode.apply(null, bb).trim();
       var ok = /^[+-]?\d+$/.test(str);
+      var v = ok ? parseInt(str, 10) : 0;
+      if (!ok) {
+        // Tolerate a decimal-point numeric string (e.g. "1000.0", "-3.75",
+        // "5.") by truncating the fractional part towards zero -- mirrors
+        // picoscript_vm.py's _parse_int_tolerant. Number is 32-bit-integer
+        // only (see Floor/Ceiling/Round "integer values: identity" below),
+        // so this avoids a silent PARSE_ERROR/0 for numerically valid input
+        // that merely isn't integer-formatted (e.g. a host language's
+        // default float-to-string of a whole currency amount).
+        var m = /^([+-]?\d+)\.(\d*)$/.exec(str);
+        if (m) { ok = true; v = parseInt(m[1], 10); }
+      }
       this.hostStatus = ok ? 0 : 2;            // INV-18: PARSE_ERROR
-      this.regs[rd] = (ok ? parseInt(str, 10) : 0) | 0;
+      this.regs[rd] = (ok ? v : 0) | 0;
       return true;
     }
     var a = this.regs[rs1] | 0, b = this.regs[rs2] | 0;
