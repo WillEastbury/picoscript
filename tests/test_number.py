@@ -24,9 +24,12 @@ r = Number.ToString(42); Io.Write(r);       // "42"
 r = Number.ToHex(255);   Io.Write(r);       // "ff"
 Memory.Set(2000, 49); Memory.Set(2001, 50); Memory.Set(2002, 51);  // "123"
 r = Number.Parse(Span.Make(2000, 3)); Io.WriteByte(r);   // 123
+r = Number.Parse("1000.0"); Io.Write(Number.ToString(r));  // "1000" (decimal-tolerant)
+r = Number.Parse("-3.75"); Io.Write(Number.ToString(r));   // "-3" (truncate towards zero)
+r = Number.Parse("notanumber"); Io.WriteByte(r);           // 0 (still fails closed)
 """
 
-EXPECTED = [7, 3, 5] + [52, 50] + [102, 102] + [123]
+EXPECTED = [7, 3, 5] + [52, 50] + [102, 102] + [123] + [49, 48, 48, 48] + [45, 51] + [0]
 
 
 def run_js_vm(words):
