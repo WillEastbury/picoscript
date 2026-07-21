@@ -563,4 +563,11 @@
 #define PV_HOOK_DECIMAL_COMPARE                  0x356
 #define PV_HOOK_DECIMAL_TOINT                    0x357
 
+/* Highest defined host-hook code. The compiler never emits a code above
+ * this, so pv_default_host uses it to tell a defined-but-unbound host-
+ * fillable primitive (INV-18 default: 0 / NOT_FOUND, mirroring
+ * picoscript_vm.py / picovm.js) from a genuinely unknown hook id in
+ * malformed bytecode, which fails closed (PV_FAULT_BAD_HOOK). */
+#define PV_HOOK_CODE_MAX 0x357
+
 #endif

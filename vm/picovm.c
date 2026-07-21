@@ -3647,7 +3647,25 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
     /* Utf8Writer / Utf8Reader / Json / Xml (arena-backed text/binary builders). */
     if (pv_textio(ctx, hook, rd, rs1, rs2)) return;
 
-    /* unknown host-fillable primitive: ignore (host supplies on real target) */
+    /* A defined host-fillable primitive whose binding this default runtime does
+     * not implement (the host supplies it on a real target). Return the
+     * documented INV-18 default -- 0 with host_status = NOT_FOUND -- exactly
+     * like the reserved-namespace stub above and picoscript_vm.py / picovm.js,
+     * so every dialect and VM stay byte-parity. This is a *defined* default that
+     * returns here, never a silent fall-through leaving regs[rd] stale. A real
+     * target overrides by installing ctx->host. */
+    if (hook >= 1 && hook <= PV_HOOK_CODE_MAX) {
+        ctx->regs[rd] = 0;
+        ctx->host_status = 1; /* INV-18: NOT_FOUND -- no host binding installed */
+        return;
+    }
+
+    /* Out-of-range / genuinely unknown hook id: the compiler never emits a code
+     * outside the defined space, so this is only reachable from malformed or
+     * hand-crafted bytecode. Fail closed (fault deterministically) instead of
+     * silently returning and leaving regs[rd] stale -- the default runtime must
+     * not fabricate success for a hook that does not exist. */
+    pv_set_fault(ctx, PV_FAULT_BAD_HOOK, ctx->cur_pc, hook);
 }
 
 /* Value-based host entry: the SAME implementation as the interpreter, callable
