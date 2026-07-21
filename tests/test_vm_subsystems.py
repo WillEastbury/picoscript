@@ -149,6 +149,32 @@ def test_number_parse_negative():
     assert out_ints(run(src)) == [-42]
 
 
+def test_number_parse_decimal_truncates_towards_zero():
+    """Number.Parse tolerates a decimal-point numeric string (e.g. a host
+    language's default str(float) of a whole currency amount) by truncating
+    the fractional part towards zero, instead of silently returning 0. See
+    _parse_int_tolerant in picoscript_vm.py."""
+    src = (
+        'int a = "1000.0"; print(Number.Parse(a));'
+        'int b = "-3.75"; print(Number.Parse(b));'
+        'int c = "5."; print(Number.Parse(c));'
+    )
+    assert out_ints(run(src)) == [1000, -3, 5]
+
+
+def test_number_parse_still_rejects_garbage_and_scientific_notation():
+    """Non-numeric input, and forms this tolerant parse deliberately does not
+    special-case (scientific notation, multiple dots, no leading digits),
+    still parse-fail to 0/status=2 -- unchanged from before this fix."""
+    src = (
+        'int a = "notanumber"; print(Number.Parse(a));'
+        'int b = "1e10"; print(Number.Parse(b));'
+        'int c = "1.2.3"; print(Number.Parse(c));'
+        'int d = ".5"; print(Number.Parse(d));'
+    )
+    assert out_ints(run(src)) == [0, 0, 0, 0]
+
+
 def test_number_min_max():
     """Number.Min and Max in sequence."""
     src = """

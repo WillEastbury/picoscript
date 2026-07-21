@@ -129,7 +129,8 @@ same code), and — the architecturally riskiest case — a **genuine VM fault**
 
 ## 3. Host namespaces by runtime (Python VM / JS VM+native-JS / C VM+native-C)
 
-70 namespaces are registered in `HOST_HOOK_CODES`. Status below was verified
+71 namespaces are registered in `HOST_HOOK_CODES` (70 verified in an earlier
+pass; `Decimal` added since — see its row below). Status below was verified
 directly (grep for each runtime's actual dispatch branches — `if ns == "X"` in
 `picoscript_vm.py`, `name.indexOf("X.")` in `vm/picovm.js`, hook-code-range
 checks in `vm/picovm.c`), not inferred from documentation claims. **Updated
@@ -155,6 +156,7 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Context | 15 | Stub | Stub | Stub | Host-injected by design — live request/connection state (overlaps conceptually with `Req.*`, which IS host-fed). Defined 0/empty-span default on all 3 runtimes. |
 | Data | 3 | **Y (fixed)** | Y | **Y (fixed)** | Was a Python/C asymmetry (JS explicit stub, Python/C silent fallthrough) — now an explicit, matching 0/empty-span default on all 3 runtimes. |
 | DateTime | 15 | Partial | Partial | Partial | `Now`/`UtcNow` host-injected (wall clock); rest pure and implemented |
+| **Decimal** | 8 | **Y (real)** | **Y (real)** | **Y (real)** | New: Q16.16 fixed-point fractional numeric library (`Parse/ToString/Add/Sub/Mul/Div/Compare/ToInt`), same encoding as `Maths.Sin/Cos/Exp/Log`. Unlike `Number.Parse` (32-bit-integer only, truncates any fraction), preserves it — for callers needing exact currency/decimal arithmetic. `ToString` renders the shortest round-trip decimal (no binary-fraction noise on values like "19.99"). No host state — real and deterministic on all 3 runtimes + both native transpiles (`tests/test_native_toc.py`). |
 | **Descriptor** | 6 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: a pure buffer descriptor (ptr/len/flags handle table), no host state — real and deterministic on all 3 runtimes. |
 | Encoding | 12 | Y | Y | Y | ASCII/UTF-8/UTF-16/UTF-7/Hex |
 | Env | 4 | Y | Y | Y | |
@@ -177,7 +179,7 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Memory | 9 | Y | Y | Y | |
 | Model | 12 | Y | Y | Y | |
 | Net | 7 | Stub | Stub | Stub | Reserved/hardware-injected (network socket). Defined 0/empty-span default on all 3 runtimes. |
-| Number | 11 | Y | Y | Y | |
+| Number | 11 | **Y (fixed)** | **Y (fixed)** | **Y (fixed)** | `Parse` now tolerates a trailing decimal fraction (e.g. "1000.0" -> 1000, truncating towards zero) instead of silently failing to 0/PARSE_ERROR — fixed on all 3 runtimes. See `Decimal.*` for exact (non-truncating) fractional arithmetic. |
 | **Pack** | 1 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: a lightweight "active pack" selector, no host state — real and deterministic. |
 | Principal | 3 | Y | Y | Y | |
 | Process | 8 | Y | Y | Y | |

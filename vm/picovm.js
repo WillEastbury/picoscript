@@ -338,12 +338,53 @@
     // body / header / genuine noop: nothing
   };
 
+  // Fast O(1) dispatch for every namespace resolving to exactly one handler
+  // regardless of method (mirrors picoscript_vm.py's HostApi._ns_dispatch --
+  // same inclusion/exclusion rules: namespaces with compound/split routing,
+  // e.g. Json+Binary parse or Req's two entry points, are deliberately
+  // excluded and stay in the original chain below). Built lazily once, since
+  // by the time _host is ever invoked every PicoVM.prototype._xxx referenced
+  // here has already been assigned (whole module loads before any VM runs).
+  function nsWrap(fn, nsName) {
+    return function (method, rd, rs1, rs2) { return fn.call(this, nsName, method, rd, rs1, rs2); };
+  }
+  function nsDispatchTable() {
+    var T = PicoVM._NS_DISPATCH_TABLE;
+    if (!T) {
+      var P = PicoVM.prototype;
+      T = PicoVM._NS_DISPATCH_TABLE = {
+        "Map": P._mapHook, "Tensor": P._tensor, "BitLinear": P._bitlinear, "Quant": P._quant,
+        "Attention": P._attention, "Tokenizer": P._tokenizer, "Model": P._model, "Kv": P._kv,
+        "Sampling": P._sampling, "Resp": P._resp, "Query": P._queryHelpers, "Search": P._search,
+        "Storage": P._storage, "Gpio": P._gpio, "Device": P._device, "Stream": P._stream,
+        "Assert": P._assert, "Event": P._event, "Ui": P._ui, "String": P._stringlib,
+        "Number": P._numberlib, "Decimal": P._decimallib, "Template": P._templatelib,
+        "Maths": P._mathslib, "Compress": P._compresslib, "Crypto": P._cryptolib,
+        "Html": P._htmllib, "Http": P._httplib, "TextRender": P._textrender,
+        "Error": P._errorHook, "Capsule": P._capsuleExec, "Base64": P._base64,
+        "Encoding": P._encoding, "DateTime": P._datetime, "Locale": P._localeHook,
+        "Log": P._logHook, "Descriptor": P._descriptor, "Lease": P._leaseNs, "Fifo": P._fifo,
+        "Kernel": P._kernel,
+        "Utf8Writer": nsWrap(P._textio, "Utf8Writer"), "Utf8Reader": nsWrap(P._textio, "Utf8Reader"),
+        "Xml": nsWrap(P._textio, "Xml"),
+        "Process": nsWrap(P._processEnv, "Process"), "Env": nsWrap(P._processEnv, "Env"),
+        "Timer": nsWrap(P._timerScheduler, "Timer"), "Scheduler": nsWrap(P._timerScheduler, "Scheduler"),
+        "Principal": nsWrap(P._principalCap, "Principal"), "Capability": nsWrap(P._principalCap, "Capability"),
+        "Sandbox": nsWrap(P._principalCap, "Sandbox")
+      };
+    }
+    return T;
+  }
+
   PicoVM.prototype._host = function (code, rd, rs1, rs2, imm) {
     var name = (this.hooks.BY_CODE && this.hooks.BY_CODE[code]) || ("hook_" + code);
     // INV-17: bindings are not ambient -- deny the hook unless its class is granted.
     var need = hookCap(name);
     if (need && !(this.caps & need)) throw picoFault(FAULT.CAPABILITY, this.curPc, code, "capability denied: " + name);
     if (name === "Status.Last") { this.regs[rd] = this.hostStatus | 0; return; }   // INV-18
+    var _dot = name.indexOf(".");
+    var _nsHandler = nsDispatchTable()[name.slice(0, _dot)];
+    if (_nsHandler) { if (_nsHandler.call(this, name.slice(_dot + 1), rd, rs1, rs2)) return; }
     if (name === "Random.U32") {
       var x = this.rng >>> 0;
       x ^= (x << 13); x >>>= 0;
@@ -404,16 +445,11 @@
       return;
     }
     if (name === "Arena.Reset") { this.arenaTop = 0x8000; this.spans = [null]; return; }
-    // ---- Map.* first-class dictionary (active-handle model; see docs/MAP.md) ---
-    if (name.indexOf("Map.") === 0) { if (this._mapHook(name.slice(4), rd, rs1, rs2)) return; }
     // ---- parsers: Json.Parse / Binary.ParseCard|SerializeCard -> Map -----------
     if (name === "Json.Parse" || name.indexOf("Binary.") === 0) { if (this._parseHook(name, rd, rs1, rs2)) return; }
     // ---- EL0-facing PIOS request/response hooks ---------------------------
     if (name.indexOf("Req.") === 0) {
       if (this._req(name.slice(4), rd, rs1, rs2)) return;
-    }
-    if (name.indexOf("Resp.") === 0) {
-      if (this._resp(name.slice(5), rd, rs1, rs2)) return;
     }
     if (name === "Queue.Enqueue") {
       (this.queues[rs1] = this.queues[rs1] || []).push(this.regs[rd] | 0);
@@ -467,70 +503,13 @@
         return;
       }
     }
-    if (name.indexOf("Tensor.") === 0) { if (this._tensor(name.slice(7), rd, rs1, rs2)) return; }
-    if (name.indexOf("BitLinear.") === 0) { if (this._bitlinear(name.slice(10), rd, rs1, rs2)) return; }
-    if (name.indexOf("Quant.") === 0) { if (this._quant(name.slice(6), rd, rs1, rs2)) return; }
-    if (name.indexOf("Attention.") === 0) { if (this._attention(name.slice(10), rd, rs1, rs2)) return; }
-    if (name.indexOf("Tokenizer.") === 0) { if (this._tokenizer(name.slice(10), rd, rs1, rs2)) return; }
-    if (name.indexOf("Model.") === 0) { if (this._model(name.slice(6), rd, rs1, rs2)) return; }
-    if (name.indexOf("Kv.") === 0) { if (this._kv(name.slice(3), rd, rs1, rs2)) return; }
-    if (name.indexOf("Sampling.") === 0) { if (this._sampling(name.slice(9), rd, rs1, rs2)) return; }
-    if (name.indexOf("Query.") === 0) { if (this._queryHelpers(name.slice(6), rd, rs1, rs2)) return; }
-    if (name.indexOf("Search.") === 0) { if (this._search(name.slice(7), rd, rs1, rs2)) return; }
     // ---- program-level card store: Storage.* over a PicoStore --------------
-    if (name.indexOf("Storage.") === 0) {
-      if (this._storage(name.slice(8), rd, rs1, rs2)) return;
-    }
     // ---- Data.* host-bound read: the browser has no server data, so return
     //      empty/0 and let the authoritative server enforce data-dependent rules.
     if (name.indexOf("Data.") === 0) {
       this.regs[rd] = (name.slice(5) === "FieldStr") ? this._strSpan("") : 0;
       return;
     }
-    // ---- program-level GPIO emulator: Gpio.* (reference; PIOS injects real driver)
-    if (name.indexOf("Gpio.") === 0) {
-      if (this._gpio(name.slice(5), rd, rs1, rs2)) return;
-    }
-    // ---- Device.*/Stream.* reference DMA-ring emulator ---------------------
-    if (name.indexOf("Device.") === 0) {
-      if (this._device(name.slice(7), rd, rs1, rs2)) return;
-    }
-    if (name.indexOf("Stream.") === 0) {
-      if (this._stream(name.slice(7), rd, rs1, rs2)) return;
-    }
-    // ---- Assert.* PSUnit assertion counters --------------------------------
-    if (name.indexOf("Assert.") === 0) {
-      if (this._assert(name.slice(7), rd, rs1, rs2)) return;
-    }
-    // ---- Event.* reactive event queue --------------------------------------
-    if (name.indexOf("Event.") === 0) {
-      if (this._event(name.slice(6), rd, rs1, rs2)) return;
-    }
-    // ---- Ui.* retained scene tree / remote windowing -----------------------
-    if (name.indexOf("Ui.") === 0) {
-      if (this._ui(name.slice(3), rd, rs1, rs2)) return;
-    }
-    // ---- String.* arena string library -------------------------------------
-    if (name.indexOf("String.") === 0) {
-      if (this._stringlib(name.slice(7), rd, rs1, rs2)) return;
-    }
-    // ---- Number.* integer/format library -----------------------------------
-    if (name.indexOf("Number.") === 0) {
-      if (this._numberlib(name.slice(7), rd, rs1, rs2)) return;
-    }
-    // ---- Template.* (AOT compile-at-save + render) -------------------------
-    if (name.indexOf("Template.") === 0) {
-      if (this._templatelib(name.slice(9), rd, rs1, rs2)) return;
-    }
-    // ---- Maths.* pure-integer ops (Power/Sqrt) -----------------------------
-    if (name.indexOf("Maths.") === 0) {
-      if (this._mathslib(name.slice(6), rd, rs1, rs2)) return;
-    }
-    // ---- Compress.* (RLE) / Crypto.* (Sha256) / Html.* (entities) ----------
-    if (name.indexOf("Compress.") === 0) { if (this._compresslib(name.slice(9), rd, rs1, rs2)) return; }
-    if (name.indexOf("Crypto.") === 0) { if (this._cryptolib(name.slice(7), rd, rs1, rs2)) return; }
-    if (name.indexOf("Html.") === 0) { if (this._htmllib(name.slice(5), rd, rs1, rs2)) return; }
-    if (name.indexOf("Http.") === 0) { if (this._httplib(name.slice(5), rd, rs1, rs2)) return; }
     // ---- Io: write raw bytes (UTF-8 strings) to the output buffer ----------
     if (name === "Io.Write") {
       var sw = this.spans[this.regs[rs1]];
@@ -548,28 +527,9 @@
       var dot = name.indexOf(".");
       if (this._textio(name.slice(0, dot), name.slice(dot + 1), rd, rs1, rs2)) return;
     }
-    if (name.indexOf("TextRender.") === 0) { if (this._textrender(name.slice(11), rd, rs1, rs2)) return; }
     // ---- OS-worker: Process/Env, Timer/Scheduler, Principal/Capability/Sandbox, Error, Capsule ----
-    if (name.indexOf("Process.") === 0) { if (this._processEnv("Process", name.slice(8), rd, rs1, rs2)) return; }
-    if (name.indexOf("Env.") === 0) { if (this._processEnv("Env", name.slice(4), rd, rs1, rs2)) return; }
-    if (name.indexOf("Timer.") === 0) { if (this._timerScheduler("Timer", name.slice(6), rd, rs1, rs2)) return; }
-    if (name.indexOf("Scheduler.") === 0) { if (this._timerScheduler("Scheduler", name.slice(10), rd, rs1, rs2)) return; }
-    if (name.indexOf("Principal.") === 0) { if (this._principalCap("Principal", name.slice(10), rd, rs1, rs2)) return; }
-    if (name.indexOf("Capability.") === 0) { if (this._principalCap("Capability", name.slice(11), rd, rs1, rs2)) return; }
-    if (name.indexOf("Sandbox.") === 0) { if (this._principalCap("Sandbox", name.slice(8), rd, rs1, rs2)) return; }
-    if (name.indexOf("Error.") === 0) { if (this._errorHook(name.slice(6), rd, rs1, rs2)) return; }
-    if (name.indexOf("Capsule.") === 0) { if (this._capsuleExec(name.slice(8), rd, rs1, rs2)) return; }
-    if (name.indexOf("Base64.") === 0) { if (this._base64(name.slice(7), rd, rs1, rs2)) return; }
-    if (name.indexOf("Encoding.") === 0) { if (this._encoding(name.slice(9), rd, rs1, rs2)) return; }
-    if (name.indexOf("DateTime.") === 0) { if (this._datetime(name.slice(9), rd, rs1, rs2)) return; }
-    if (name.indexOf("Locale.") === 0) { if (this._localeHook(name.slice(7), rd, rs1, rs2)) return; }
-    if (name.indexOf("Log.") === 0) { if (this._logHook(name.slice(4), rd, rs1, rs2)) return; }
     if (name === "Req.Param" || name === "Req.ParamCount") { if (this._reqParam(name.slice(4), rd, rs1, rs2)) return; }
-    if (name.indexOf("Descriptor.") === 0) { if (this._descriptor(name.slice(11), rd, rs1, rs2)) return; }
-    if (name.indexOf("Lease.") === 0) { if (this._leaseNs(name.slice(6), rd, rs1, rs2)) return; }
-    if (name.indexOf("Fifo.") === 0) { if (this._fifo(name.slice(5), rd, rs1, rs2)) return; }
     if (name === "Pack.Use") { this.activePack = this.regs[rs1] | 0; this.regs[rd] = this.activePack; return; }
-    if (name.indexOf("Kernel.") === 0) { if (this._kernel(name.slice(7), rd, rs1, rs2)) return; }
     if (name === "Thread.YieldCounted") {
       this.threadYieldCount = (this.threadYieldCount || 0) + 1;
       this.regs[rd] = this.threadYieldCount | 0;
@@ -956,8 +916,20 @@
       var bb = this._spanBytes(this.regs[rs1]);
       var str = String.fromCharCode.apply(null, bb).trim();
       var ok = /^[+-]?\d+$/.test(str);
+      var v = ok ? parseInt(str, 10) : 0;
+      if (!ok) {
+        // Tolerate a decimal-point numeric string (e.g. "1000.0", "-3.75",
+        // "5.") by truncating the fractional part towards zero -- mirrors
+        // picoscript_vm.py's _parse_int_tolerant. Number is 32-bit-integer
+        // only (see Floor/Ceiling/Round "integer values: identity" below),
+        // so this avoids a silent PARSE_ERROR/0 for numerically valid input
+        // that merely isn't integer-formatted (e.g. a host language's
+        // default float-to-string of a whole currency amount).
+        var m = /^([+-]?\d+)\.(\d*)$/.exec(str);
+        if (m) { ok = true; v = parseInt(m[1], 10); }
+      }
       this.hostStatus = ok ? 0 : 2;            // INV-18: PARSE_ERROR
-      this.regs[rd] = (ok ? parseInt(str, 10) : 0) | 0;
+      this.regs[rd] = (ok ? v : 0) | 0;
       return true;
     }
     var a = this.regs[rs1] | 0, b = this.regs[rs2] | 0;
@@ -969,6 +941,83 @@
     if (method === "ToHex") { this.regs[rd] = this._newSpanBytes(_strBytes((a >>> 0).toString(16))); return true; }
     if (method === "ToOctal") { this.regs[rd] = this._newSpanBytes(_strBytes((a >>> 0).toString(8))); return true; }
     if (method === "ToBinary") { this.regs[rd] = this._newSpanBytes(_strBytes((a >>> 0).toString(2))); return true; }
+    return false;
+  };
+
+  // ── Decimal.*: Q16.16 fixed-point fractional numeric library ────────────────
+  // A real fractional value in a plain 32-bit register, byte-identical with
+  // the Python VM (see picoscript_vm.py's HostApi._decimallib) -- the same
+  // encoding Maths.Sin/Cos/Exp/Log already use below. Unlike Number.Parse
+  // (32-bit-integer only, truncates any fraction), this preserves it.
+  var Q16_FRAC_DIGITS = 5;   // 2**16 distinct fractions -> up to ~4.8 decimal digits
+
+  function parseQ16(raw) {
+    raw = raw.trim();
+    if (!raw) return null;
+    var neg = raw.charAt(0) === "-";
+    if (raw.charAt(0) === "+" || raw.charAt(0) === "-") raw = raw.slice(1);
+    var dot = raw.indexOf("."), intPart, fracPart;
+    if (dot >= 0) { intPart = raw.slice(0, dot); fracPart = raw.slice(dot + 1); }
+    else { intPart = raw; fracPart = ""; }
+    if (intPart === "") intPart = "0";
+    if (!/^\d+$/.test(intPart) || !(fracPart === "" || /^\d+$/.test(fracPart))) return null;
+    var ipart = parseInt(intPart, 10);
+    var fscaled = 0;
+    if (fracPart) {
+      var fnum = parseInt(fracPart, 10);
+      var fden = Math.pow(10, fracPart.length);
+      fscaled = Math.floor((fnum * Q16_ONE + fden / 2) / fden);   // round-half-up
+    }
+    var v = (ipart * Q16_ONE + fscaled) | 0;
+    return neg ? (-v | 0) : v;
+  }
+
+  function q16FormatFixed(v, digits) {
+    var neg = v < 0;
+    v = neg ? -v : v;
+    var ip = (v >>> 16), frac = v & 0xFFFF;
+    var scale = Math.pow(10, digits);
+    var fdigits = Math.floor((frac * scale + Q16_ONE / 2) / Q16_ONE);
+    if (fdigits >= scale) { ip += 1; fdigits -= scale; }
+    var s = String(ip);
+    if (digits) {
+      var fs = String(fdigits);
+      while (fs.length < digits) fs = "0" + fs;
+      s += "." + fs;
+    }
+    return (neg && (ip || fdigits)) ? ("-" + s) : s;
+  }
+
+  // Shortest decimal string that parses back to the exact same Q16.16 value
+  // (mirrors picoscript_vm.py's _q16_to_str -- same "shortest round-trip"
+  // technique as Python's repr(float)/JS's Number.toString() for IEEE754,
+  // avoiding binary-fraction noise on common values like "19.99").
+  function q16ToStr(v) {
+    v = v | 0;
+    for (var digits = 0; digits <= Q16_FRAC_DIGITS; digits++) {
+      var s = q16FormatFixed(v, digits);
+      if (parseQ16(s) === v) return s;
+    }
+    return q16FormatFixed(v, Q16_FRAC_DIGITS);
+  }
+
+  PicoVM.prototype._decimallib = function (method, rd, rs1, rs2) {
+    if (method === "Parse") {
+      var bb = this._spanBytes(this.regs[rs1]);
+      var raw = String.fromCharCode.apply(null, bb);
+      var v = parseQ16(raw);
+      this.hostStatus = (v !== null) ? 0 : 2;      // INV-18: PARSE_ERROR
+      this.regs[rd] = (v !== null ? v : 0) | 0;
+      return true;
+    }
+    if (method === "ToString") { this.regs[rd] = this._newSpanBytes(_strBytes(q16ToStr(this.regs[rs1] | 0))); return true; }
+    if (method === "ToInt") { this.regs[rd] = q16Idiv(this.regs[rs1] | 0, Q16_ONE) | 0; return true; }  // truncate towards zero
+    var da = this.regs[rs1] | 0, db = this.regs[rs2] | 0;
+    if (method === "Add") { this.regs[rd] = (da + db) | 0; return true; }
+    if (method === "Sub") { this.regs[rd] = (da - db) | 0; return true; }
+    if (method === "Mul") { this.regs[rd] = q16Fixmul(da, db) | 0; return true; }
+    if (method === "Div") { this.regs[rd] = (db !== 0 ? q16Fixdiv(da, db) : 0) | 0; return true; }
+    if (method === "Compare") { this.regs[rd] = (da === db ? 0 : (da > db ? 1 : -1)) | 0; return true; }
     return false;
   };
 

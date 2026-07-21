@@ -153,6 +153,23 @@ def main():
               "int ts = Number.ToString(q); Io.Write(ts);")
         check(nm, bytes([255]) + b"ff|255", "number")
 
+        # Number.Parse decimal-point tolerance (truncate towards zero instead
+        # of silently failing to 0 -- see _parse_int_tolerant/pv_q16-adjacent
+        # PV_HOOK_NUMBER_PARSE fix in picovm.c).
+        ndec = ('int a = Number.Parse("1000.0"); Io.Write(Number.ToString(a)); Io.WriteByte(124);'
+                'int b = Number.Parse("-3.75"); Io.Write(Number.ToString(b)); Io.WriteByte(124);'
+                'int c = Number.Parse("notanumber"); Io.WriteByte(c);')
+        check(ndec, b"1000|-3|" + bytes([0]), "number_decimal_tolerant")
+
+        # Decimal.* : Q16.16 fixed-point Parse/ToString/Add/Sub/Mul/Div/Compare/ToInt.
+        dc = ('int a = Decimal.ToString(Decimal.Parse("19.99")); Io.Write(a); Io.WriteByte(124);'
+              'int b = Decimal.ToString(Decimal.Add(Decimal.Parse("1000.25"), Decimal.Parse("0.10"))); Io.Write(b); Io.WriteByte(124);'
+              'int c = Decimal.ToString(Decimal.Mul(Decimal.Parse("2.5"), Decimal.Parse("4"))); Io.Write(c); Io.WriteByte(124);'
+              'int d = Decimal.ToString(Decimal.Div(Decimal.Parse("10"), Decimal.Parse("4"))); Io.Write(d); Io.WriteByte(124);'
+              'int e = Decimal.Compare(Decimal.Parse("5000.0"), Decimal.Parse("1000.0")); Io.WriteByte(e + 1);'
+              'int f = Decimal.ToInt(Decimal.Parse("-3.75")); Io.WriteByte(f);')
+        check(dc, b"19.99|1000.35|10|2.5|" + bytes([2, 253]), "decimal")
+
         # Maths.Power / Sqrt.
         ma = ("int b = 2; int e = 10; int p = Maths.Power(b, e); Io.WriteByte(Number.Abs(0));"
               "int n = 144; int s = Maths.Sqrt(n); Io.WriteByte(s);"

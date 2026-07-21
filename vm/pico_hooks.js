@@ -560,6 +560,14 @@
       0x344: "Binary.SerializeEntity",
       0x345: "Binary.SetKey",
       0x346: "Binary.Verify",
+      0x350: "Decimal.Parse",
+      0x351: "Decimal.ToString",
+      0x352: "Decimal.Add",
+      0x353: "Decimal.Sub",
+      0x354: "Decimal.Mul",
+      0x355: "Decimal.Div",
+      0x356: "Decimal.Compare",
+      0x357: "Decimal.ToInt",
     }
   };
   function _canonConstant(name) {
