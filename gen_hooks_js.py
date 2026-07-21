@@ -164,6 +164,13 @@ for (ns, m), code in sorted(HOST_HOOK_CODES.items(), key=lambda kv: kv[1]):
     name = ("PV_HOOK_%s_%s" % (ns, m)).upper()
     H.append("#define %-41s0x%02X" % (name, code))
 H.append("")
+H.append("/* Highest defined host-hook code. The compiler never emits a code above")
+H.append(" * this, so pv_default_host uses it to tell a defined-but-unbound host-")
+H.append(" * fillable primitive (INV-18 default: 0 / NOT_FOUND, mirroring")
+H.append(" * picoscript_vm.py / picovm.js) from a genuinely unknown hook id in")
+H.append(" * malformed bytecode, which fails closed (PV_FAULT_BAD_HOOK). */")
+H.append("#define PV_HOOK_CODE_MAX 0x%02X" % max(HOST_HOOK_CODES.values()))
+H.append("")
 H.append("#endif")
 hpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vm", "pico_hooks.h")
 with open(hpath, "w", encoding="utf-8") as f:
