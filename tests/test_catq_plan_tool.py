@@ -76,16 +76,21 @@ def test_qwen35_plan_emits_executable_picoscript(tmp_path):
     assert compile_result.returncode == 0, compile_result.stderr + compile_result.stdout
 
 
-def test_gpt_oss_plan_rejects_mxfp4_expert_blocks(tmp_path):
+def test_gpt_oss_plan_pairs_mxfp4_blocks_and_scales(tmp_path):
     tool = build_tool(tmp_path)
     model_dir = tmp_path / "gpt-oss"
     model_dir.mkdir()
     name = "model.layers.0.mlp.experts.gate_up_proj_blocks"
-    write_index(model_dir, {name: "model-00000.safetensors"})
+    scale = "model.layers.0.mlp.experts.gate_up_proj_scales"
+    write_index(
+        model_dir,
+        {name: "model-00000.safetensors", scale: "model-00000.safetensors"},
+    )
     manifest = tmp_path / "activations.tsv"
     output = tmp_path / "plan.pc"
     manifest.write_text(
-        f"{name}\tcalibration.safetensors\tlayer0.expert\tout.safetensors\n",
+        f"{name}\tcalibration.safetensors\tlayer0.expert\tout.safetensors\t"
+        "row_start=0;row_count=2880\n",
         encoding="utf-8",
     )
     run = subprocess.run(
@@ -93,5 +98,18 @@ def test_gpt_oss_plan_rejects_mxfp4_expert_blocks(tmp_path):
         capture_output=True,
         text=True,
     )
-    assert run.returncode == 6
-    assert "MXFP4 tensor requires dequantization" in run.stderr
+    assert run.returncode == 0, run.stderr
+    source = output.read_text(encoding="utf-8")
+    assert f"mxfp4_blocks={name};mxfp4_scales={scale}" in source
+    assert "row_start=0;row_count=2880" in source
+    compile_result = subprocess.run(
+        [
+            sys.executable, os.path.join(ROOT, "picoscript_build.py"),
+            "emit", str(output), "--as", "bytecode", "--hex",
+            "-o", str(tmp_path / "gpt-plan.hex"),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert compile_result.returncode == 0, compile_result.stderr + compile_result.stdout

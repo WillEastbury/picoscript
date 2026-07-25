@@ -47,6 +47,25 @@ def read_safetensor(path):
     return header, data
 
 
+def write_raw_safetensors(path, tensors):
+    header = {}
+    payload = bytearray()
+    for name, dtype, shape, data in tensors:
+        start = len(payload)
+        payload.extend(data)
+        header[name] = {
+            "dtype": dtype,
+            "shape": shape,
+            "data_offsets": [start, len(payload)],
+        }
+    encoded = json.dumps(header, separators=(",", ":")).encode()
+    encoded += b" " * ((-len(encoded)) % 8)
+    with open(path, "wb") as stream:
+        stream.write(struct.pack("<Q", len(encoded)))
+        stream.write(encoded)
+        stream.write(payload)
+
+
 def pico_path(path):
     return str(path).replace("\\", "/")
 
@@ -202,3 +221,51 @@ int main(void) {
     loss = float(run.stdout.strip())
     assert math.isfinite(loss)
     assert loss < 0.01
+
+
+def test_native_mxfp4_dequantization(tmp_path):
+    source_shard = tmp_path / "mxfp4.safetensors"
+    output_shard = tmp_path / "dequantized.safetensors"
+    source = tmp_path / "dequantize.pc"
+    executable = tmp_path / "dequantize.exe"
+    blocks_name = "model.layers.0.mlp.experts.gate_up_proj_blocks"
+    scales_name = "model.layers.0.mlp.experts.gate_up_proj_scales"
+    packed = bytes([0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE] * 2)
+    write_raw_safetensors(
+        source_shard,
+        [
+            (blocks_name, "U8", [1, 1, 16], packed),
+            (scales_name, "U8", [1, 1], bytes([127])),
+        ],
+    )
+    source.write_text(
+        f'''
+int shard = Shard.Load("{pico_path(source_shard)}", "mmap");
+int tensor = Tensor.Map(shard, "mxfp4_blocks={blocks_name};mxfp4_scales={scales_name}");
+if (tensor == 0) {{ raise 4001; }}
+int saved = Shard.Save(tensor, "{pico_path(output_shard)}");
+if (saved == 0) {{ raise 4002; }}
+return saved;
+''',
+        encoding="utf-8",
+    )
+    build = subprocess.run(
+        [
+            sys.executable, os.path.join(ROOT, "picoscript_build.py"),
+            "native", str(source), "--provider", "catq", "-o", str(executable),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert build.returncode == 0, build.stderr + build.stdout
+    run = subprocess.run([str(executable)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr + run.stdout
+    header, data = read_safetensor(output_shard)
+    assert header["tensor"]["shape"] == [1, 32]
+    values = struct.unpack("<32f", data)
+    expected = (
+        0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+        -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+    ) * 2
+    assert values == expected

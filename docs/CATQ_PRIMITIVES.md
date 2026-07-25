@@ -128,10 +128,11 @@ Build the dependency-free planner:
 python -m ziglang cc -std=c99 -O2 tools\catq_plan.c -o catq_plan.exe
 ```
 
-The activation manifest is tab-separated:
+The activation manifest is tab-separated; `view_spec` is optional and is useful
+for selecting one expert from a folded MoE tensor:
 
 ```text
-weight_name<TAB>calibration_shard<TAB>calibration_tensor<TAB>output_shard
+weight_name<TAB>calibration_shard<TAB>calibration_tensor<TAB>output_shard<TAB>view_spec
 ```
 
 Generate and compile a Qwen3.5 plan:
@@ -146,7 +147,14 @@ The Qwen3.5 adapter includes language-model projection matrices and excludes
 layer norms, biases, convolution state, routing gates, embeddings, the vision
 tower, and other tensors that should not be ternarized.
 
-The GPT-OSS adapter accepts ordinary FP16/BF16 attention projections but rejects
-`*_blocks`/`*_scales` expert tensors because those are already MXFP4. Converting
-those tensors requires an explicit MXFP4 dequantization stage; silently treating
-the packed blocks as high-precision weights would produce an invalid CAT-Q model.
+The GPT-OSS adapter accepts ordinary FP16/BF16 attention projections and pairs
+`*_blocks` with their matching `*_scales` tensors for dependency-free MXFP4
+dequantization. The native provider implements OpenAI's format directly:
+32 E2M1 values per block, two values per byte, with an unsigned E8M0 exponent
+scale biased by 127. For MoE tensors, use `view_spec` such as
+`row_start=0;row_count=2880` together with expert-routed calibration activations.
+
+GPT-OSS conversion is necessarily MXFP4 -> float reconstruction -> ternary,
+rather than CAT-Q directly from the unavailable original high-precision expert
+weights. The generated model should therefore be evaluated independently for
+compound quantization loss.

@@ -350,57 +350,140 @@ static int pv_catq_json_numbers(const char *start, const char *end, const char *
     return count;
 }
 
-static pv_catq_tensor *pv_catq_load_safetensor(const char *path, const char *name)
+typedef struct {
+    uint8_t *data;
+    size_t bytes;
+    uint64_t shape[PV_CATQ_MAX_DIMS];
+    int dims;
+    char dtype[16];
+} pv_catq_raw_tensor;
+
+static void pv_catq_raw_free(pv_catq_raw_tensor *tensor)
+{
+    free(tensor->data);
+    memset(tensor, 0, sizeof(*tensor));
+}
+
+static int pv_catq_load_raw_safetensor(const char *path, const char *name,
+                                       pv_catq_raw_tensor *out)
 {
     FILE *file = fopen(path, "rb");
     uint8_t len_bytes[8];
-    uint64_t header_len, offsets[2], shape[PV_CATQ_MAX_DIMS];
-    char *header = 0, dtype[16];
+    uint64_t header_len, offsets[2];
+    char *header = 0;
     const char *entry, *entry_end;
-    int dims, rows, cols;
-    size_t count, bytes, i;
-    uint8_t *raw = 0;
-    pv_catq_tensor *tensor = 0;
+    int ok = 0;
+    memset(out, 0, sizeof(*out));
     if (!file || fread(len_bytes, 1, 8, file) != 8) goto done;
     header_len = pv_catq_u64le(len_bytes);
     if (header_len == 0 || header_len > 64u * 1024u * 1024u) goto done;
     header = (char *)malloc((size_t)header_len + 1);
-    if (!header || fread(header, 1, (size_t)header_len, file) != header_len) goto done;
+    if (!header || fread(header, 1, (size_t)header_len, file) != (size_t)header_len) goto done;
     header[header_len] = '\0';
     entry = pv_catq_json_key(header, header + header_len, name);
     if (!entry || !(entry = strchr(entry, '{'))) goto done;
     entry_end = strchr(entry, '}');
-    if (!entry_end) goto done;
-    if (!pv_catq_json_string(entry, entry_end, "dtype", dtype, sizeof(dtype))) goto done;
-    if (pv_catq_json_numbers(entry, entry_end, "data_offsets", offsets, 2) != 2) goto done;
-    dims = pv_catq_json_numbers(entry, entry_end, "shape", shape, PV_CATQ_MAX_DIMS);
-    if (dims <= 0) goto done;
-    count = 1;
-    for (i = 0; i < (size_t)dims; i++) count *= (size_t)shape[i];
-    rows = dims == 1 ? 1 : (int)shape[dims - 2];
-    cols = (int)shape[dims - 1];
-    bytes = (size_t)(offsets[1] - offsets[0]);
-    raw = (uint8_t *)malloc(bytes ? bytes : 1);
-    if (!raw || fseek(file, (long)(8 + header_len + offsets[0]), SEEK_SET) != 0 ||
-        fread(raw, 1, bytes, file) != bytes)
+    if (!entry_end ||
+        !pv_catq_json_string(entry, entry_end, "dtype", out->dtype, sizeof(out->dtype)) ||
+        pv_catq_json_numbers(entry, entry_end, "data_offsets", offsets, 2) != 2)
         goto done;
+    out->dims = pv_catq_json_numbers(
+        entry, entry_end, "shape", out->shape, PV_CATQ_MAX_DIMS);
+    if (out->dims <= 0) goto done;
+    out->bytes = (size_t)(offsets[1] - offsets[0]);
+    out->data = (uint8_t *)malloc(out->bytes ? out->bytes : 1);
+    if (!out->data ||
+        fseek(file, (long)(8 + header_len + offsets[0]), SEEK_SET) != 0 ||
+        fread(out->data, 1, out->bytes, file) != out->bytes)
+        goto done;
+    ok = 1;
+done:
+    if (!ok) pv_catq_raw_free(out);
+    free(header);
+    if (file) fclose(file);
+    return ok;
+}
+
+static pv_catq_tensor *pv_catq_load_safetensor(const char *path, const char *name)
+{
+    pv_catq_raw_tensor raw;
+    pv_catq_tensor *tensor = 0;
+    size_t count = 1, i;
+    int rows, cols;
+    if (!pv_catq_load_raw_safetensor(path, name, &raw)) return 0;
+    for (i = 0; i < (size_t)raw.dims; i++) count *= (size_t)raw.shape[i];
+    cols = (int)raw.shape[raw.dims - 1];
+    rows = cols > 0 ? (int)(count / (size_t)cols) : 0;
     tensor = pv_catq_tensor_new(count, rows, cols);
     if (!tensor) goto done;
-    if (strcmp(dtype, "F32") == 0 && bytes >= count * 4) {
-        memcpy(tensor->data, raw, count * 4);
-    } else if (strcmp(dtype, "BF16") == 0 && bytes >= count * 2) {
+    if (strcmp(raw.dtype, "F32") == 0 && raw.bytes >= count * 4) {
+        memcpy(tensor->data, raw.data, count * 4);
+    } else if (strcmp(raw.dtype, "BF16") == 0 && raw.bytes >= count * 2) {
         for (i = 0; i < count; i++)
-            tensor->data[i] = pv_catq_bf16((uint16_t)(raw[i * 2] | raw[i * 2 + 1] << 8));
-    } else if (strcmp(dtype, "F16") == 0 && bytes >= count * 2) {
+            tensor->data[i] = pv_catq_bf16(
+                (uint16_t)(raw.data[i * 2] | raw.data[i * 2 + 1] << 8));
+    } else if (strcmp(raw.dtype, "F16") == 0 && raw.bytes >= count * 2) {
         for (i = 0; i < count; i++)
-            tensor->data[i] = pv_catq_f16((uint16_t)(raw[i * 2] | raw[i * 2 + 1] << 8));
+            tensor->data[i] = pv_catq_f16(
+                (uint16_t)(raw.data[i * 2] | raw.data[i * 2 + 1] << 8));
     } else {
         free(tensor->data); free(tensor); tensor = 0;
     }
 done:
-    free(raw);
-    free(header);
-    if (file) fclose(file);
+    pv_catq_raw_free(&raw);
+    return tensor;
+}
+
+static pv_catq_tensor *pv_catq_load_mxfp4(const char *path,
+                                          const char *blocks_name,
+                                          const char *scales_name)
+{
+    static const float fp4[16] = {
+        0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f,
+        -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -3.0f, -4.0f, -6.0f
+    };
+    pv_catq_raw_tensor blocks, scales;
+    pv_catq_tensor *tensor = 0;
+    size_t rows = 1, scale_count = 1, row, group, byte;
+    size_t groups, bytes_per_group, cols;
+    if (!pv_catq_load_raw_safetensor(path, blocks_name, &blocks)) return 0;
+    if (!pv_catq_load_raw_safetensor(path, scales_name, &scales)) {
+        pv_catq_raw_free(&blocks);
+        return 0;
+    }
+    if (strcmp(blocks.dtype, "U8") != 0 || strcmp(scales.dtype, "U8") != 0 ||
+        blocks.dims < 2 || scales.dims != blocks.dims - 1)
+        goto done;
+    groups = (size_t)blocks.shape[blocks.dims - 2];
+    bytes_per_group = (size_t)blocks.shape[blocks.dims - 1];
+    cols = groups * bytes_per_group * 2;
+    for (row = 0; row < (size_t)blocks.dims - 2; row++)
+        rows *= (size_t)blocks.shape[row];
+    for (row = 0; row < (size_t)scales.dims; row++)
+        scale_count *= (size_t)scales.shape[row];
+    if (scale_count != rows * groups ||
+        blocks.bytes < rows * groups * bytes_per_group ||
+        scales.bytes < scale_count)
+        goto done;
+    tensor = pv_catq_tensor_new(rows * cols, (int)rows, (int)cols);
+    if (!tensor) goto done;
+    for (row = 0; row < rows; row++) {
+        for (group = 0; group < groups; group++) {
+            int exponent = (int)scales.data[row * groups + group] - 127;
+            size_t block_base = (row * groups + group) * bytes_per_group;
+            size_t output_base = row * cols + group * bytes_per_group * 2;
+            for (byte = 0; byte < bytes_per_group; byte++) {
+                uint8_t packed = blocks.data[block_base + byte];
+                tensor->data[output_base + byte * 2] =
+                    ldexpf(fp4[packed & 0x0f], exponent);
+                tensor->data[output_base + byte * 2 + 1] =
+                    ldexpf(fp4[packed >> 4], exponent);
+            }
+        }
+    }
+done:
+    pv_catq_raw_free(&blocks);
+    pv_catq_raw_free(&scales);
     return tensor;
 }
 
@@ -763,14 +846,20 @@ static pv_catq_packed *pv_catq_pack(const pv_catq_ternary *ternary)
 
 static int pv_catq_tensor_map(pv_ctx *ctx, int source, int options_handle)
 {
-    char options[PV_CATQ_OPTION_BYTES], value[256];
+    char options[PV_CATQ_OPTION_BYTES], value[256], scales[256];
     pv_catq_tensor *tensor = 0;
     pv_catq_object *shard_object = pv_catq_object_get(source, PV_CATQ_SHARD);
     pv_catq_span_text(ctx, options_handle, options, sizeof(options));
     if (shard_object) {
         pv_catq_shard *shard = (pv_catq_shard *)shard_object->value;
-        if (!pv_catq_option(options, "tensor", value, sizeof(value))) return 0;
-        tensor = pv_catq_load_safetensor(shard->path, value);
+        if (pv_catq_option(options, "mxfp4_blocks", value, sizeof(value))) {
+            if (!pv_catq_option(options, "mxfp4_scales", scales, sizeof(scales)))
+                return 0;
+            tensor = pv_catq_load_mxfp4(shard->path, value, scales);
+        } else {
+            if (!pv_catq_option(options, "tensor", value, sizeof(value))) return 0;
+            tensor = pv_catq_load_safetensor(shard->path, value);
+        }
     } else {
         const uint8_t *raw;
         int32_t len;
