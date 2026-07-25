@@ -75,6 +75,7 @@ PicoScript runs inside picoweb/PIOS as deterministic, bounded userland logic for
 | `picoscript_workflow.py` | **Workflow** frontend (visual-workflow step-list JSON → English → PicoIL; `--lang workflow`; see [docs/WORKFLOW_DIALECT.md](docs/WORKFLOW_DIALECT.md)) |
 | `picoscript_vm.py` | **PicoVM**: Python reference runtime for the 16-opcode ISA |
 | `picoscript_build.py` | unified driver: source → `run` / `emit il\|bytecode\|c\|js` / `native` / `stats` |
+| `tools/catq_plan.c` | dependency-free Qwen3.5/GPT-OSS tensor+activation manifest compiler → executable C-PicoScript CAT-Q plan |
 | `picoscript_metrics.py` | IL/bytecode size, opcode histogram, static + (profiled) dynamic cycle estimates, C/JS backend sizes |
 | `vm/picovm.h` `vm/picovm.c` | portable **C VM** for bare metal (RP2354B/PIOS); freestanding-clean. Native `Req.*`/`Resp.*`, `pv_storage_hook` |
 | `vm/picovm_pool.c` `vm/picovm_pool.h` | thread-pooled **native HTTP server** runtime (accept loop, HTTP parse, per-worker arena). See `docs/NATIVE_HTTP_SERVER.md` |
