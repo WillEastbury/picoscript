@@ -119,6 +119,9 @@ def main():
         # A literal used inside a loop body reuses its stable address each iteration.
         check_c('int n = 0; while (n < 3) { Io.Write("ab"); n = n + 1; }', b"ababab", "loop")
 
+        # C escapes decode to bytes identically in Python/JS/C and native lowerers.
+        check_c(r'Io.Write("a\r\nb\t\"c\"\\");', b'a\r\nb\t"c"\\', "escapes")
+
         # BASIC frontend literals still work after the same const-pool fix.
         bwords = lower_to_bytecode_safe(compile_basic('PRINT "hi"\n'))
         bpy = b"".join(PicoVM().run(bwords).output)

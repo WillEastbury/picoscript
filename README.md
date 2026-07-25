@@ -160,6 +160,9 @@ python picoscript_build.py native examples/catq_quantize.pc --provider catq -o c
 
 # Download Qwen3-0.6B if needed and run an end-to-end CAT-Q smoke conversion
 pwsh -File tools/run_catq_smoke.ps1
+
+# Send a factual Paris prompt from compiled PicoScript to Qwen3-0.6B
+pwsh -File tools/run_llm_paris_demo.ps1
 ```
 
 The same four lines above (`.pc`, `.pbas`, `.ppy`, `.eng`) compile to **byte-for-byte

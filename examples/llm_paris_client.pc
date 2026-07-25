@@ -1,0 +1,44 @@
+// A real LLM request issued by C-syntax PicoScript over Net.* primitives.
+// Start the local model daemon on 127.0.0.1:8765 before running.
+
+int body = "{\"model\":\"C:\\\\source\\\\Qwen3-0.6B-Instruct\",";
+body = String.Concat(body, "\"temperature\":0.2,\"max_tokens\":64,");
+body = String.Concat(body, "\"messages\":[");
+body = String.Concat(
+    body,
+    "{\"role\":\"system\",\"content\":\"You are a factual assistant. "
+);
+body = String.Concat(body, "Answer in one short sentence.\"},");
+body = String.Concat(
+    body,
+    "{\"role\":\"user\",\"content\":\"What is the capital of France? "
+);
+body = String.Concat(
+    body,
+    "Include one well-known landmark in that city.\"}]}"
+);
+
+int contentLength = Number.ToString(Span.Len(body));
+int request = "POST /v1/chat/completions HTTP/1.1\r\n";
+request = String.Concat(request, "Host: 127.0.0.1:8765\r\n");
+request = String.Concat(request, "Content-Type: application/json\r\n");
+request = String.Concat(request, "Connection: close\r\n");
+request = String.Concat(request, "Content-Length: ");
+request = String.Concat(request, contentLength);
+request = String.Concat(request, "\r\n\r\n");
+request = String.Concat(request, body);
+
+int connection = Net.Connect("127.0.0.1", 8765);
+if (connection == 0) { raise 6001; }
+
+int sent = Net.SendSpan(connection, request);
+if (sent != Span.Len(request)) { raise 6002; }
+
+int chunk = Net.RecvSpan(connection, 8192);
+while (Span.Len(chunk) > 0) {
+    Io.Write(chunk);
+    chunk = Net.RecvSpan(connection, 8192);
+}
+
+Net.Shutdown(connection);
+return 1;

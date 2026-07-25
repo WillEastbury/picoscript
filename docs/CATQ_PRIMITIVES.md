@@ -136,6 +136,20 @@ builds it with the native CAT-Q provider, executes it, and validates:
 Use `-Epochs 60 -CalibrationRows 512 -BatchSize 3` only with meaningful captured
 activations; the defaults are intentionally a fast wiring test.
 
+### LLM output through PicoScript networking
+
+`examples/llm_paris_client.pc` is a compiled C-PicoScript HTTP client using
+`Net.Connect`, `Net.SendSpan`, and `Net.RecvSpan`. With the official
+Qwen3-0.6B instruct checkpoint available locally, run:
+
+```powershell
+pwsh -File tools\run_llm_paris_demo.ps1
+```
+
+The runner starts a local OpenAI-compatible model server when needed, builds the
+PicoScript client with the native socket provider, decodes the exact bytes emitted
+by PicoScript, and checks that the answer identifies Paris and the Eiffel Tower.
+
 ## Model-wide plan generation
 
 CAT-Q requires the activation tensor that actually enters each quantized weight;

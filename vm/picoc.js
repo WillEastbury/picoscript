@@ -552,7 +552,7 @@
       if (c === " " || c === "\t" || c === "\r" || c === "\n") { i++; continue; }
       if (c === "/" && src[i + 1] === "/") { while (i < n && src[i] !== "\n") i++; continue; }
       if (c === "/" && src[i + 1] === "*") { i += 2; while (i + 1 < n && !(src[i] === "*" && src[i + 1] === "/")) i++; i += 2; continue; }
-      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { if (src[j] === "\\" && j + 1 < n) { b += src[j + 1]; j += 2; continue; } b += src[j]; j++; } push("str", b, start); i = j + 1; continue; }
+      if (c === '"') { var j = i + 1, b = ""; while (j < n && src[j] !== '"') { if (src[j] === "\\" && j + 1 < n) { var nx = src[j + 1]; b += ({ n: "\n", r: "\r", t: "\t", "\\": "\\", '"': '"', "'": "'" }[nx] || nx); j += 2; continue; } b += src[j]; j++; } push("str", b, start); i = j + 1; continue; }
       if (isDigit(c)) { var j2 = i; if (c === "0" && (src[j2 + 1] === "x" || src[j2 + 1] === "X")) { j2 += 2; while (j2 < n && /[0-9a-fA-F]/.test(src[j2])) j2++; } else { while (j2 < n && isDigit(src[j2])) j2++; } push("num", src.slice(i, j2), start); i = j2; continue; }
       if (isAlpha(c)) { var j3 = i; while (j3 < n && isAlnum(src[j3])) j3++; var w = src.slice(i, j3); var low = w.toLowerCase(); if (C_KW[low]) push("kw", low, start); else push("id", w, start); i = j3; continue; }
       var two = src.slice(i, i + 2);

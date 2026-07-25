@@ -95,7 +95,13 @@ def tokenize(src: str) -> List[Tok]:
             buf = []
             while j < n and src[j] != '"':
                 if src[j] == "\\" and j + 1 < n:
-                    buf.append(src[j + 1]); j += 2; continue
+                    escaped = src[j + 1]
+                    buf.append({
+                        "n": "\n", "r": "\r", "t": "\t",
+                        "\\": "\\", '"': '"', "'": "'",
+                    }.get(escaped, escaped))
+                    j += 2
+                    continue
                 buf.append(src[j]); j += 1
             toks.append(Tok("str", "".join(buf), i))
             i = j + 1
