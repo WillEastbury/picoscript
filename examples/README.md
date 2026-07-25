@@ -39,6 +39,7 @@ asserting. See [`docs/PSUNIT.md`](../docs/PSUNIT.md).
 | `filter.pico` | v1 | branching |
 | `selfhost_emit.pc` / `selfhost_asm.pc` | C-syntax | PicoScript emitting runnable PicoScript |
 | `bitnet_ternary_matvec.pc` / `bitnet_k_matvec.pc` / `bitnet_int8_matvec.pc` | C-syntax | quantized BitNet kernels (`Dot8` → NEON SDOT / Cortex-M33 SMLAD) |
+| `catq_quantize.pc` | C-syntax | executable shard → CAT-Q optimize → ternary pack → shard workflow over the native C provider |
 
 ## Running a program on each path
 
