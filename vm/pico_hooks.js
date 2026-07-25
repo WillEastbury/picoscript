@@ -560,6 +560,23 @@
       0x344: "Binary.SerializeEntity",
       0x345: "Binary.SetKey",
       0x346: "Binary.Verify",
+      0x370: "Tensor.Map",
+      0x371: "Tensor.View",
+      0x372: "Tensor.Gemm",
+      0x373: "Tensor.Reduce",
+      0x374: "Tensor.Elementwise",
+      0x375: "CatQ.Calibrate",
+      0x376: "CatQ.Optimize",
+      0x377: "CatQ.Ternarize",
+      0x378: "CatQ.Pack",
+      0x379: "Async.Submit",
+      0x37A: "Async.Wait",
+      0x37B: "Async.Result",
+      0x37C: "Shard.Load",
+      0x37D: "Shard.Save",
+      0x37E: "Net.Connect",
+      0x37F: "Net.SendSpan",
+      0x380: "Net.RecvSpan",
     }
   };
   function _canonConstant(name) {

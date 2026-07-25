@@ -29,6 +29,8 @@ _CAP_BY_NS = {
     "Pack": "CAPSULE", "Card": "CAPSULE", "Fifo": "CAPSULE",
     "Device": "DEVICE", "Stream": "DMA",
     "Event": "EVENT", "Ui": "UI",
+    "CatQ": "DEVICE", "Async": "DEVICE",
+    "Shard": "STORAGE",
 }
 
 _HOOK_RE = re.compile(r'0x([0-9A-Fa-f]+):\s*"([^"]+)"')
@@ -120,6 +122,8 @@ _ALLOCATING_HOOKS = frozenset({
     "Card.Address",
     "Fifo.Recv",
     "Stream.Span",
+    "Net.Read",
+    "Net.RecvSpan",
 })
 
 _ALLOCATING_NAMESPACES = frozenset({"Compress", "Json", "Xml"})
@@ -144,6 +148,8 @@ def _capability_for(ns, method):
         return "RANDOM"
     if ns == "Http" and method in ("ReadHeader", "ReadBody", "GenerateHeaders", "GenerateResponse"):
         return "NET"
+    if ns == "Tensor" and method in ("Map", "View", "Gemm", "Reduce", "Elementwise"):
+        return "DEVICE"
     return _CAP_BY_NS.get(ns, "pure")
 
 

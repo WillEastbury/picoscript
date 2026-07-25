@@ -13,6 +13,7 @@ This document provides a comprehensive reference for all PicoScript methods, org
 
 ## Table of Contents
 
+- [Async](#async)
 - [Attention](#attention)
 - [Auth](#auth)
 - [Base64](#base64)
@@ -21,6 +22,7 @@ This document provides a comprehensive reference for all PicoScript methods, org
 - [Bits](#bits)
 - [Capability](#capability)
 - [Capsule](#capsule)
+- [CatQ](#catq)
 - [Compress](#compress)
 - [Context](#context)
 - [Crypto](#crypto)
@@ -41,6 +43,7 @@ This document provides a comprehensive reference for all PicoScript methods, org
 - [Kv](#kv)
 - [Lease](#lease)
 - [Locale](#locale)
+- [Log](#log)
 - [Map](#map)
 - [Math](#math)
 - [Maths](#maths)
@@ -58,6 +61,7 @@ This document provides a comprehensive reference for all PicoScript methods, org
 - [Sandbox](#sandbox)
 - [Scheduler](#scheduler)
 - [Search](#search)
+- [Shard](#shard)
 - [Span](#span)
 - [Storage](#storage)
 - [String](#string)
@@ -73,6 +77,19 @@ This document provides a comprehensive reference for all PicoScript methods, org
 - [Xml](#xml)
 
 ---
+
+## Async
+
+**Conformance Level:** L0  
+**Methods:** 3
+
+Host-backed submission and completion of coarse accelerator jobs.
+
+| Method | Opcode | Hook Code | v2 Example |
+|--------|--------|-----------|----------|
+| Result | 0x00 | 0x737B | `Async.Result(...)` |
+| Submit | 0x00 | 0x7379 | `Async.Submit(...)` |
+| Wait | 0x00 | 0x737A | `Async.Wait(...)` |
 
 ## Attention
 
@@ -184,6 +201,20 @@ This document provides a comprehensive reference for all PicoScript methods, org
 | LoadModule | 0x00 | 0x72C3 | `Capsule.LoadModule(...)` |
 | RunModule | 0x00 | 0x72C4 | `Capsule.RunModule(...)` |
 | Schedule | 0x00 | 0x72C1 | `Capsule.Schedule(...)` |
+
+## CatQ
+
+**Conformance Level:** L0  
+**Methods:** 4
+
+Host-backed CAT-Q calibration, optimization, ternarization, and packing.
+
+| Method | Opcode | Hook Code | v2 Example |
+|--------|--------|-----------|----------|
+| Calibrate | 0x00 | 0x7375 | `CatQ.Calibrate(...)` |
+| Optimize | 0x00 | 0x7376 | `CatQ.Optimize(...)` |
+| Pack | 0x00 | 0x7378 | `CatQ.Pack(...)` |
+| Ternarize | 0x00 | 0x7377 | `CatQ.Ternarize(...)` |
 
 ## Compress
 
@@ -382,7 +413,7 @@ System: env vars, time, memory/CPU load, hostname, version.
 ## Error
 
 **Conformance Level:** L0  
-**Methods:** 6
+**Methods:** 8
 
 | Method | Opcode | Hook Code | v2 Example |
 |--------|--------|-----------|----------|
@@ -390,6 +421,8 @@ System: env vars, time, memory/CPU load, hostname, version.
 | Code | 0x00 | 0x72B2 | `Error.Code(...)` |
 | Detail | 0x00 | 0x72B3 | `Error.Detail(...)` |
 | HasHandler | 0x00 | 0x72B1 | `Error.HasHandler(...)` |
+| PopHandler | 0x00 | 0x72B7 | `Error.PopHandler(...)` |
+| Raise | 0x00 | 0x72B6 | `Error.Raise(...)` |
 | Resume | 0x00 | 0x72B4 | `Error.Resume(...)` |
 | SetHandler | 0x00 | 0x72B0 | `Error.SetHandler(...)` |
 
@@ -543,6 +576,19 @@ Locale management: get/set, format/parse, language/region.
 | SetLocale | 0x00 | 0x70C1 | `Locale.SetLocale(...)` |
 | Translate | 0x00 | 0x70C6 | `Locale.Translate(...)` |
 
+## Log
+
+**Conformance Level:** L0  
+**Methods:** 5
+
+| Method | Opcode | Hook Code | v2 Example |
+|--------|--------|-----------|----------|
+| Clear | 0x00 | 0x72F4 | `Log.Clear(...)` |
+| Count | 0x00 | 0x72F1 | `Log.Count(...)` |
+| Level | 0x00 | 0x72F2 | `Log.Level(...)` |
+| Message | 0x00 | 0x72F3 | `Log.Message(...)` |
+| Write | 0x00 | 0x72F0 | `Log.Write(...)` |
+
 ## Map
 
 **Conformance Level:** L0  
@@ -656,20 +702,23 @@ Arena allocation and lease-based typed access primitives.
 ## Net
 
 **Conformance Level:** L1  
-**Methods:** 12
+**Methods:** 15
 
-HTTP response framing: status, headers, body, close.
+HTTP response framing plus host-backed raw server/client sockets and span transport.
 
 | Method | Opcode | Hook Code | v2 Example |
 |--------|--------|-----------|----------|
 | Accept | 0x00 | 0x72E1 | `Net.Accept(...)` |
 | Body | 0x00 | - | `Net.Body(...)` |
 | Close | 0x00 | - | `Net.Close(...)` |
+| Connect | 0x00 | 0x737E | `Net.Connect(...)` |
 | Header | 0x00 | - | `Net.Header(...)` |
 | Listen | 0x00 | 0x72E0 | `Net.Listen(...)` |
 | PoolSize | 0x00 | 0x72E5 | `Net.PoolSize(...)` |
 | Read | 0x00 | 0x72E2 | `Net.Read(...)` |
+| RecvSpan | 0x00 | 0x7380 | `Net.RecvSpan(...)` |
 | Register | 0x00 | 0x72E6 | `Net.Register(...)` |
+| SendSpan | 0x00 | 0x737F | `Net.SendSpan(...)` |
 | Shutdown | 0x00 | 0x72E4 | `Net.Shutdown(...)` |
 | Status | 0x00 | - | `Net.Status(...)` |
 | Type | 0x00 | - | `Net.Type(...)` |
@@ -838,6 +887,18 @@ Cryptographically-seeded randomness from host startup.
 | SetVector | 0x00 | 0x71D5 | `Search.SetVector(...)` |
 | UpsertText | 0x00 | 0x71D1 | `Search.UpsertText(...)` |
 
+## Shard
+
+**Conformance Level:** L0  
+**Methods:** 2
+
+Host-backed model shard loading and saving.
+
+| Method | Opcode | Hook Code | v2 Example |
+|--------|--------|-----------|----------|
+| Load | 0x00 | 0x737C | `Shard.Load(...)` |
+| Save | 0x00 | 0x737D | `Shard.Save(...)` |
+
 ## Span
 
 **Conformance Level:** L4  
@@ -923,22 +984,29 @@ String manipulation: concat, substring, split, trim, case conversion.
 ## Tensor
 
 **Conformance Level:** L0  
-**Methods:** 12
+**Methods:** 17
+
+Deterministic inference operations plus host-backed mapped tensor superinstructions.
 
 | Method | Opcode | Hook Code | v2 Example |
 |--------|--------|-----------|----------|
 | AddI32 | 0x00 | 0x71E3 | `Tensor.AddI32(...)` |
 | ArgMaxI32 | 0x00 | 0x71EA | `Tensor.ArgMaxI32(...)` |
 | DotI8 | 0x00 | 0x71E1 | `Tensor.DotI8(...)` |
+| Elementwise | 0x00 | 0x7374 | `Tensor.Elementwise(...)` |
+| Gemm | 0x00 | 0x7372 | `Tensor.Gemm(...)` |
 | HasAccel | 0x00 | 0x71EB | `Tensor.HasAccel(...)` |
+| Map | 0x00 | 0x7370 | `Tensor.Map(...)` |
 | MatVecI8 | 0x00 | 0x71E2 | `Tensor.MatVecI8(...)` |
 | MulI32 | 0x00 | 0x71E4 | `Tensor.MulI32(...)` |
+| Reduce | 0x00 | 0x7373 | `Tensor.Reduce(...)` |
 | ReluI32 | 0x00 | 0x71E6 | `Tensor.ReluI32(...)` |
 | RmsNormI32 | 0x00 | 0x71E7 | `Tensor.RmsNormI32(...)` |
 | RoPEI32 | 0x00 | 0x71E8 | `Tensor.RoPEI32(...)` |
 | ScaleI32 | 0x00 | 0x71E5 | `Tensor.ScaleI32(...)` |
 | SetShape | 0x00 | 0x71E0 | `Tensor.SetShape(...)` |
 | SoftmaxI32 | 0x00 | 0x71E9 | `Tensor.SoftmaxI32(...)` |
+| View | 0x00 | 0x7371 | `Tensor.View(...)` |
 
 ## TextRender
 
@@ -1064,8 +1132,11 @@ Thread preemption hints and cooperative yielding.
 
 ## Summary by Conformance Level
 
-### L0: 297 methods
+### L0: 318 methods
 
+- Async.Result (0x737B)
+- Async.Submit (0x7379)
+- Async.Wait (0x737A)
 - Attention.Attend (0x7253)
 - Attention.Mix (0x7252)
 - Attention.Scores (0x7251)
@@ -1113,6 +1184,10 @@ Thread preemption hints and cooperative yielding.
 - Capsule.LoadModule (0x72C3)
 - Capsule.RunModule (0x72C4)
 - Capsule.Schedule (0x72C1)
+- CatQ.Calibrate (0x7375)
+- CatQ.Optimize (0x7376)
+- CatQ.Pack (0x7378)
+- CatQ.Ternarize (0x7377)
 - Compress.BrotliCompress (0x7100)
 - Compress.BrotliDecompress (0x7101)
 - Compress.DeflateCompress (0x7106)
@@ -1159,6 +1234,8 @@ Thread preemption hints and cooperative yielding.
 - Error.Code (0x72B2)
 - Error.Detail (0x72B3)
 - Error.HasHandler (0x72B1)
+- Error.PopHandler (0x72B7)
+- Error.Raise (0x72B6)
 - Error.Resume (0x72B4)
 - Error.SetHandler (0x72B0)
 - Html.AddChildNode (0x7141)
@@ -1208,6 +1285,11 @@ Thread preemption hints and cooperative yielding.
 - Kv.WriteKH (0x7238)
 - Kv.WriteV (0x7232)
 - Kv.WriteVH (0x7239)
+- Log.Clear (0x72F4)
+- Log.Count (0x72F1)
+- Log.Level (0x72F2)
+- Log.Message (0x72F3)
+- Log.Write (0x72F0)
 - Map.Clear (0x7322)
 - Map.Count (0x7323)
 - Map.DelI (0x7328)
@@ -1299,20 +1381,27 @@ Thread preemption hints and cooperative yielding.
 - Search.SetSemanticWeight (0x71DA)
 - Search.SetVector (0x71D5)
 - Search.UpsertText (0x71D1)
+- Shard.Load (0x737C)
+- Shard.Save (0x737D)
 - Template.Compile (0x707A)
 - Template.Render (0x707B)
 - Tensor.AddI32 (0x71E3)
 - Tensor.ArgMaxI32 (0x71EA)
 - Tensor.DotI8 (0x71E1)
+- Tensor.Elementwise (0x7374)
+- Tensor.Gemm (0x7372)
 - Tensor.HasAccel (0x71EB)
+- Tensor.Map (0x7370)
 - Tensor.MatVecI8 (0x71E2)
 - Tensor.MulI32 (0x71E4)
+- Tensor.Reduce (0x7373)
 - Tensor.ReluI32 (0x71E6)
 - Tensor.RmsNormI32 (0x71E7)
 - Tensor.RoPEI32 (0x71E8)
 - Tensor.ScaleI32 (0x71E5)
 - Tensor.SetShape (0x71E0)
 - Tensor.SoftmaxI32 (0x71E9)
+- Tensor.View (0x7371)
 - TextRender.Attr (0x7263)
 - TextRender.Br (0x7268)
 - TextRender.Close (0x7265)
@@ -1364,7 +1453,7 @@ Thread preemption hints and cooperative yielding.
 - Xml.OpenEnd (0x7076)
 - Xml.Text (0x7077)
 
-### L1: 21 methods
+### L1: 24 methods
 
 - Flow.Branch (core)
 - Flow.Call (core)
@@ -1378,11 +1467,14 @@ Thread preemption hints and cooperative yielding.
 - Net.Accept (0x72E1)
 - Net.Body (core)
 - Net.Close (core)
+- Net.Connect (0x737E)
 - Net.Header (core)
 - Net.Listen (0x72E0)
 - Net.PoolSize (0x72E5)
 - Net.Read (0x72E2)
+- Net.RecvSpan (0x7380)
 - Net.Register (0x72E6)
+- Net.SendSpan (0x737F)
 - Net.Shutdown (0x72E4)
 - Net.Status (core)
 - Net.Type (core)
@@ -1591,7 +1683,7 @@ Host hooks use reserved imm16 range 0x7000-0x7FFF:
 | 0x70E0-0x70EE | Context | 15 | Context |
 | 0x70F0-0x70FE | Crypto | 15 | Crypto |
 
-**Total:** 480 methods across 58 namespaces.
+**Total:** 504 methods across 62 namespaces.
 
 ## IDE Code Completion
 

@@ -137,6 +137,17 @@ typedef void (*pv_host_fn)(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int 
 typedef int (*pv_storage_fn)(pv_ctx *ctx, int hook, int rd, int rs1, int rs2);
 extern pv_storage_fn pv_storage_hook;
 
+/* Optional coarse compute provider for mapped tensors, CAT-Q transforms,
+ * asynchronous jobs, and model-shard I/O. The provider owns all opaque handles
+ * and may dispatch to CUDA, QPU, NEON, CPU, or another accelerator backend. */
+typedef int (*pv_compute_fn)(pv_ctx *ctx, int hook, int rd, int rs1, int rs2);
+extern pv_compute_fn pv_compute_hook;
+
+/* Optional raw socket provider for Net.Listen/Connect/Accept/Read/Write and
+ * span-oriented aliases. Servers and clients remain host-owned capabilities. */
+typedef int (*pv_net_fn)(pv_ctx *ctx, int hook, int rd, int rs1, int rs2);
+extern pv_net_fn pv_net_hook;
+
 struct pv_ctx {
     int32_t   regs[PV_NUM_REGS];
 

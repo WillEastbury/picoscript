@@ -1705,8 +1705,10 @@ class Lowerer:
             elif m == "HEADER":
                 self.b.net("header")
             else:
-                raise SyntaxError(f"unknown Net.{method}")
-            return None
+                # Raw/client Net methods lower through the generic host-hook ABI.
+                pass
+            if m in ("STATUS", "TYPE", "BODY", "CLOSE", "HEADER"):
+                return None
         if ns is not None and ns.upper() == "STORAGE" and method.upper() in ("LOAD", "SAVE", "PIPE"):
             addr = encode_card_addr(_intlit(c.args[0]), _intlit(c.args[1]), _intlit(c.args[2]))
             reg = self.eval(c.args[3])

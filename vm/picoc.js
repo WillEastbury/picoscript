@@ -1221,8 +1221,8 @@
         else if (M === "BODY") this.b.net("body");
         else if (M === "CLOSE") this.b.net("close");
         else if (M === "HEADER") this.b.net("header");
-        else throw new Error("unknown Net." + m);
-        return null;
+        else M = "";
+        if (M) return null;
       }
       if (ns.toUpperCase() === "STORAGE" && ["LOAD", "SAVE", "PIPE"].indexOf(m.toUpperCase()) >= 0) {
         var addr = encodeCardAddr(intlit(c.args[0]), intlit(c.args[1]), intlit(c.args[2]));
@@ -2074,8 +2074,8 @@
         else if (M === "BODY") this.b.net("body");
         else if (M === "CLOSE") this.b.net("close");
         else if (M === "HEADER") this.b.net("header");
-        else throw new Error("unknown Net." + m);
-        return null;
+        else M = "";
+        if (M) return null;
       }
       if (ns != null && ns.toUpperCase() === "STORAGE" && ["LOAD", "SAVE", "PIPE"].indexOf(m.toUpperCase()) >= 0) {
         var addr = encodeCardAddr(intlit(c.args[0]), intlit(c.args[1]), intlit(c.args[2]));

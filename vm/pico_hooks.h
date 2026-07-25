@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0xC550A559
+#define PV_HOOK_TABLE_VERSION 0x603EC00B
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -554,5 +554,22 @@
 #define PV_HOOK_BINARY_SERIALIZEENTITY           0x344
 #define PV_HOOK_BINARY_SETKEY                    0x345
 #define PV_HOOK_BINARY_VERIFY                    0x346
+#define PV_HOOK_TENSOR_MAP                       0x370
+#define PV_HOOK_TENSOR_VIEW                      0x371
+#define PV_HOOK_TENSOR_GEMM                      0x372
+#define PV_HOOK_TENSOR_REDUCE                    0x373
+#define PV_HOOK_TENSOR_ELEMENTWISE               0x374
+#define PV_HOOK_CATQ_CALIBRATE                   0x375
+#define PV_HOOK_CATQ_OPTIMIZE                    0x376
+#define PV_HOOK_CATQ_TERNARIZE                   0x377
+#define PV_HOOK_CATQ_PACK                        0x378
+#define PV_HOOK_ASYNC_SUBMIT                     0x379
+#define PV_HOOK_ASYNC_WAIT                       0x37A
+#define PV_HOOK_ASYNC_RESULT                     0x37B
+#define PV_HOOK_SHARD_LOAD                       0x37C
+#define PV_HOOK_SHARD_SAVE                       0x37D
+#define PV_HOOK_NET_CONNECT                      0x37E
+#define PV_HOOK_NET_SENDSPAN                     0x37F
+#define PV_HOOK_NET_RECVSPAN                     0x380
 
 #endif

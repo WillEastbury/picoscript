@@ -191,6 +191,8 @@ static uint8_t pv_arena_get(pv_ctx *ctx, uint32_t a)
  * NULL by default; a native deployment sets this to compile in its own
  * pack/card store. Return non-zero if the hook was handled. */
 pv_storage_fn pv_storage_hook = 0;
+pv_compute_fn pv_compute_hook = 0;
+pv_net_fn pv_net_hook = 0;
 static int pv_span_make(pv_ctx *ctx, uint32_t ptr, int32_t len)
 {
     if (len < 0) len = 0;
@@ -1350,6 +1352,9 @@ uint32_t pv_hook_cap(int hook)
     if ((hook >= 0x180 && hook <= 0x186) || (hook >= 0x1B3 && hook <= 0x1B5)) return PV_CAP_EVENT;   /* Event.* */
     if (hook >= 0x188 && hook <= 0x193) return PV_CAP_UI;      /* Ui.* */
     if ((hook >= 0x1D0 && hook <= 0x1DF) || (hook >= 0x200 && hook <= 0x20B)) return PV_CAP_STORAGE; /* Search.* over card packs */
+    if (hook >= 0x370 && hook <= 0x37B) return PV_CAP_DEVICE;  /* Tensor host/CatQ/Async */
+    if (hook >= 0x37C && hook <= 0x37D) return PV_CAP_STORAGE; /* Shard.* */
+    if ((hook >= 0x2E0 && hook <= 0x2E6) || (hook >= 0x37E && hook <= 0x380)) return PV_CAP_NET; /* Net.* */
     return 0;                                                /* pure: String/Number/Maths/Span/... */
 }
 
@@ -2490,6 +2495,20 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         ctx->regs[rd] = (int32_t)ctx->thread_yield_count;
         return;
     }
+    if (hook >= PV_HOOK_TENSOR_MAP && hook <= PV_HOOK_SHARD_SAVE) {
+        if (pv_compute_hook && pv_compute_hook(ctx, hook, rd, rs1, rs2)) return;
+        ctx->regs[rd] = 0;
+        ctx->host_status = 1;
+        return;
+    }
+    if ((hook >= PV_HOOK_NET_LISTEN && hook <= PV_HOOK_NET_REGISTER) ||
+        (hook >= PV_HOOK_NET_CONNECT && hook <= PV_HOOK_NET_RECVSPAN)) {
+        if (pv_net_hook && pv_net_hook(ctx, hook, rd, rs1, rs2)) return;
+        ctx->regs[rd] = (hook == PV_HOOK_NET_READ || hook == PV_HOOK_NET_RECVSPAN)
+            ? pv_arena_finish(ctx, 0) : 0;
+        ctx->host_status = 1;
+        return;
+    }
     /* Reserved namespaces: genuinely external/host-injected state this
      * deterministic VM has no way to source itself (identity provider,
      * physical card reader, live request/connection, OS facts, network
@@ -2502,8 +2521,7 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         (hook >= PV_HOOK_AUTH_GETUSERCREDENTIALS && hook <= PV_HOOK_AUTH_REVOKETOKEN) ||
         hook == PV_HOOK_CARD_READ || hook == PV_HOOK_CARD_WRITE || hook == PV_HOOK_CARD_ADDRESS ||
         (hook >= PV_HOOK_ENVIRONMENT_GETOSVERSION && hook <= PV_HOOK_ENVIRONMENT_GETELAPSEDTIME) ||
-        (hook >= PV_HOOK_CONTEXT_GETVERB && hook <= PV_HOOK_CONTEXT_GETTRACEID) ||
-        (hook >= PV_HOOK_NET_LISTEN && hook <= PV_HOOK_NET_REGISTER)) {
+        (hook >= PV_HOOK_CONTEXT_GETVERB && hook <= PV_HOOK_CONTEXT_GETTRACEID)) {
         int is_span =
             hook == PV_HOOK_X509_FETCHCERTIFICATE || hook == PV_HOOK_X509_GENERATECSR ||
             hook == PV_HOOK_X509_GENERATEKEYPAIR || hook == PV_HOOK_X509_GETCERTINFO ||
@@ -2517,8 +2535,7 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
             hook == PV_HOOK_CONTEXT_GETUSER || hook == PV_HOOK_CONTEXT_GETPERMISSIONS ||
             hook == PV_HOOK_CONTEXT_GETHEADERS || hook == PV_HOOK_CONTEXT_GETQUERYSTRING ||
             hook == PV_HOOK_CONTEXT_GETBODY || hook == PV_HOOK_CONTEXT_GETREQUESTID ||
-            hook == PV_HOOK_CONTEXT_GETCLIENTCERT || hook == PV_HOOK_CONTEXT_GETTRACEID ||
-            hook == PV_HOOK_NET_READ;
+            hook == PV_HOOK_CONTEXT_GETCLIENTCERT || hook == PV_HOOK_CONTEXT_GETTRACEID;
         ctx->regs[rd] = is_span ? pv_arena_finish(ctx, 0) : 0;
         ctx->host_status = 1; /* INV-18: NOT_FOUND -- no host binding installed */
         return;

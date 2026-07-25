@@ -37,6 +37,10 @@ conformance_map = {
     'Flow': 'L1',
     'Dsp': 'L0',
     'Net': 'L1',
+    'Tensor': 'L0',
+    'CatQ': 'L0',
+    'Async': 'L0',
+    'Shard': 'L0',
 }
 
 # Generate markdown
@@ -89,7 +93,11 @@ for ns_name in sorted(ns_map.keys()):
         'Math': "Mathematical ALU operations: add, subtract, multiply, divide.",
         'Flow': "Control flow: jumps, branches, function calls, returns.",
         'Dsp': "Digital signal processing: neural network ops, matrix operations.",
-        'Net': "HTTP response framing: status, headers, body, close.",
+        'Net': "HTTP response framing plus host-backed raw server/client sockets and span transport.",
+        'Tensor': "Deterministic inference operations plus host-backed mapped tensor superinstructions.",
+        'CatQ': "Host-backed CAT-Q calibration, optimization, ternarization, and packing.",
+        'Async': "Host-backed submission and completion of coarse accelerator jobs.",
+        'Shard': "Host-backed model shard loading and saving.",
         'Maths': "Mathematical functions: sqrt, trig, log, GCD, LCM.",
         'DateTime': "Date/time: current, components, timestamp, formatting.",
         'Locale': "Locale management: get/set, format/parse, language/region.",
