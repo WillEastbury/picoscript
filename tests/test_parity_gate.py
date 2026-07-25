@@ -48,6 +48,9 @@ ALLOWLISTED_NAMESPACES = {
     "Assert",       # PSUnit assertion counters -- host-injected test-harness state.
     "Event",        # Reactive event queue -- host-injected (UI/timer/IRQ sources).
     "Ui",           # Retained scene tree / remote windowing -- host-rendered client.
+    "CatQ",         # Host accelerator owns calibration/optimisation/packing.
+    "Async",        # Host scheduler owns submitted accelerator jobs.
+    "Shard",        # Host storage maps and writes model shards.
 }
 
 

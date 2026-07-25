@@ -143,12 +143,14 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Arena | 3 | Y | Y | Y | |
 | Assert | 5 | Y | Y | Y | |
 | Attention | 4 | Y | Y | Y | |
+| Async | 3 | Provider | Provider | Provider | Host scheduler for coarse accelerator jobs; defined 0/NOT_FOUND fallback when unbound. |
 | Auth | 10 | Stub | Stub | Stub | Host-injected by design — needs identity provider/trust store + entropy. Every method now returns a defined 0/empty-span default (previously silently fell through). |
 | Base64 | 4 | Y | Y | Y | |
 | Binary | 6 | Y | Y | Y | PSC1/BSO1 card <-> Map |
 | BitLinear | 8 | Y | Y | Y | |
 | Bits | 7 | Y | Y | Y | |
 | Capability | 3 | Y | Y | Y | |
+| CatQ | 4 | Provider | Provider | Provider | Coarse calibration/optimization/ternarization/packing superinstructions; backend owns gradients and hardware dispatch. |
 | Capsule | 5 | Y | Y | Y | |
 | Card | 3 | Stub | Stub | Stub | Reserved/hardware-injected (physical card reader). Defined 0 default on all 3 runtimes. |
 | Compress | 8 | Y | Y | Y | Pico/Brotli/Gzip/Deflate |
@@ -176,7 +178,7 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Maths | 12 | Partial | Partial | Partial | `Sin/Cos/Tan/Log/Log10/Exp` (Q16.16 CORDIC), `Power/Sqrt/Clamp/Lerp` implemented; `Random`/`RandomRange` host-injected (entropy) |
 | Memory | 9 | Y | Y | Y | |
 | Model | 12 | Y | Y | Y | |
-| Net | 7 | Stub | Stub | Stub | Reserved/hardware-injected (network socket). Defined 0/empty-span default on all 3 runtimes. |
+| Net | 10 | Provider | Provider | Provider | Raw server/client sockets plus span transport. Python ships `SocketNetworkProvider`; native C ships `vm/picovm_net.c`; JS accepts an injected provider. |
 | Number | 11 | Y | Y | Y | |
 | **Pack** | 1 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: a lightweight "active pack" selector, no host state — real and deterministic. |
 | Principal | 3 | Y | Y | Y | |
@@ -191,13 +193,14 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Sandbox | 1 | Y | Y | Y | |
 | Scheduler | 1 | Y | Y | Y | |
 | Search | 28 | Y | Y | Y | |
+| Shard | 2 | Provider | Provider | Provider | Host-backed model-shard load/save using opaque handles. |
 | Span | 5 | Y | Y | Y | |
 | Status | 1 | Y | Y | Y | |
 | Storage | 21 | Y | Y | Y | Card-store; host-injected persistence backend, in-VM logic is pure |
 | Stream | 8 | Y | Y | Y | |
 | String | 14 | Y | Y | Y | `Split`/`Join` are **new, real implementations this pass** (see below) — Map-backed multi-value result, byte-identical on all 3 runtimes. |
 | Template | 2 | Y | Y | Y | |
-| Tensor | 12 | Y | Y | Y | |
+| Tensor | 17 | Y + Provider | Y + Provider | Y + Provider | Existing deterministic INT8/I32 inference primitives plus host-backed map/view/GEMM/reduce/elementwise operations. |
 | TextRender | 9 | Y | Y | Y | |
 | **Thread** | 1 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: `YieldCounted` is a deterministic cooperative-yield counter, no host state — real on all 3 runtimes. Distinct from v1's `THREAD.*` opcode-level compiler sugar (unrelated). |
 | Timer | 4 | Y | Y | Y | |

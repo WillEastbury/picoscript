@@ -23,7 +23,8 @@ native binary).
 |------|------|
 | `vm/picovm.c` / `picovm.h` | Core C VM + host hooks. Implements native `Req.*` and `Resp.*`, and the `pv_storage_hook` extension point. |
 | `vm/picovm_pool.c` / `picovm_pool.h` | Thread-pooled native runtime: socket accept loop, per-worker `pv_ctx`+arena, `pv_http_parse_request`, HTTP response framing. |
-| `vm/pico_hooks.h` | Host-hook codes (`Net.*` `0x02E0–0x02E6`, `Req.*`, `Resp.*`). |
+| `vm/pico_hooks.h` | Host-hook codes (`Net.*`, `Req.*`, `Resp.*`). |
+| `vm/picovm_net.c` / `picovm_net.h` | Optional synchronous raw-socket provider for PicoScript servers and clients. |
 
 The application provides: the compiled handler(s) (the router), and optionally a
 storage backend (`pv_storage_hook`) and a static-file/dispatch shim.
@@ -81,9 +82,11 @@ bump-allocate in the worker's arena, which is rewound after each request.
 ### `Net.*` — raw sockets / pool (host-injected)
 
 `Net.Listen 0x02E0`, `Net.Accept 0x02E1`, `Net.Read 0x02E2`, `Net.Write 0x02E3`,
-`Net.Shutdown 0x02E4`, `Net.PoolSize 0x02E5`, `Net.Register 0x02E6`. The pool
-runtime uses these internally; the `ON Net.Connection:` block lowers to an
-`Net.Register` + a labelled handler sub.
+`Net.Shutdown 0x02E4`, `Net.PoolSize 0x02E5`, `Net.Register 0x02E6`,
+`Net.Connect 0x037E`, `Net.SendSpan 0x037F`, and `Net.RecvSpan 0x0380`.
+The pool runtime uses the server operations internally; `vm/picovm_net.c`
+provides a linkable raw server/client implementation, while other hosts install
+their own `pv_net_hook`.
 
 ---
 

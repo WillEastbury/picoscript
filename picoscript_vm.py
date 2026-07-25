@@ -687,6 +687,8 @@ _CAP_BY_NS = {
     "Timer": CAP_TIMER, "Scheduler": CAP_TIMER,
     "Principal": CAP_PRINCIPAL, "Capability": CAP_PRINCIPAL, "Sandbox": CAP_PRINCIPAL,
     "Capsule": CAP_CAPSULE_EXEC,
+    "CatQ": CAP_DEVICE, "Async": CAP_DEVICE,
+    "Shard": CAP_STORAGE,
 }
 
 
@@ -701,6 +703,8 @@ def hook_cap(ns: str, method: str) -> int:
         return CAP_CRYPTO
     if ns == "Http" and method in ("ReadHeader", "ReadBody", "GenerateHeaders", "GenerateResponse"):
         return CAP_NET
+    if ns == "Tensor" and method in ("Map", "View", "Gemm", "Reduce", "Elementwise"):
+        return CAP_DEVICE
     return _CAP_BY_NS.get(ns, 0)
 
 
@@ -1041,6 +1045,89 @@ def _bso1_verify(b, key):
     return 1
 
 
+class SocketNetworkProvider:
+    """Synchronous socket provider for PicoScript's host-backed Net.* hooks."""
+
+    def __init__(self, bind_host: str = "127.0.0.1"):
+        self.bind_host = bind_host
+        self._next_handle = 1
+        self._sockets: Dict[int, object] = {}
+
+    def _put(self, sock) -> int:
+        handle = self._next_handle
+        self._next_handle += 1
+        self._sockets[handle] = sock
+        return handle
+
+    def local_port(self, handle: int) -> int:
+        sock = self._sockets.get(handle)
+        return int(sock.getsockname()[1]) if sock is not None else 0
+
+    def close_all(self) -> None:
+        for sock in list(self._sockets.values()):
+            sock.close()
+        self._sockets.clear()
+
+    def call(self, namespace, method, a, b, *, vm, host):
+        import socket
+
+        if namespace != "Net":
+            return None
+        try:
+            if method == "Listen":
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind((self.bind_host, max(0, int(a))))
+                sock.listen(max(1, int(b) if int(b) > 0 else 16))
+                return self._put(sock)
+            if method == "Accept":
+                listener = self._sockets.get(int(a))
+                if listener is None:
+                    return (1, 0)
+                old_timeout = listener.gettimeout()
+                if int(b) > 0:
+                    listener.settimeout(int(b) / 1000.0)
+                try:
+                    conn, _ = listener.accept()
+                except socket.timeout:
+                    return (3, 0)
+                finally:
+                    listener.settimeout(old_timeout)
+                return self._put(conn)
+            if method == "Connect":
+                endpoint = host._span_str(vm, int(a)).strip()
+                port = int(b)
+                if port <= 0 and ":" in endpoint:
+                    endpoint, raw_port = endpoint.rsplit(":", 1)
+                    port = int(raw_port)
+                conn = socket.create_connection((endpoint or "127.0.0.1", port))
+                return self._put(conn)
+            if method in ("Read", "RecvSpan"):
+                conn = self._sockets.get(int(a))
+                if conn is None:
+                    return (1, b"")
+                return conn.recv(max(1, int(b) if int(b) > 0 else 65536))
+            if method in ("Write", "SendSpan"):
+                conn = self._sockets.get(int(a))
+                if conn is None:
+                    return (1, 0)
+                payload = host._span_raw(vm, int(b))
+                conn.sendall(payload)
+                return len(payload)
+            if method == "Shutdown":
+                sock = self._sockets.pop(int(a), None)
+                if sock is None:
+                    return (1, 0)
+                sock.close()
+                return 1
+            if method in ("PoolSize", "Register"):
+                return 1
+        except OSError as exc:
+            host.log.append(f"Net.{method} failed: {exc}")
+            return (1, b"" if method in ("Read", "RecvSpan") else 0)
+        return None
+
+
 class HostApi:
     """Default host-hook implementation.
 
@@ -1050,7 +1137,7 @@ class HostApi:
     reproducible.
     """
 
-    def __init__(self):
+    def __init__(self, compute_provider=None, network_provider=None):
         self.queues: Dict[int, List[int]] = {}
         self.rng_state = 0x2545F4914F6CDD1D
         self.caps = CAP_ALL          # granted binding capabilities (INV-17); host restricts to gate
@@ -1061,6 +1148,8 @@ class HostApi:
         self.const_used = set()      # addresses initialized by compiler-only Memory.SetConst
         self.log: List[str] = []
         self.handlers: Dict[tuple, Callable] = {}
+        self.compute_provider = compute_provider
+        self.network_provider = network_provider
         # Card store (PicoStore) + program-level Storage.* context.
         self._store = None
         self.cur_pack = 0
@@ -1236,6 +1325,36 @@ class HostApi:
     def register(self, ns: str, method: str, fn: Callable):
         self.handlers[(ns, method)] = fn
 
+    def _provider_call(self, provider, vm: "PicoVM", ns: str, method: str, rd, rs1, rs2) -> bool:
+        if provider is None:
+            return False
+        call = getattr(provider, "call", None)
+        if call is None:
+            call = provider
+        result = call(ns, method, vm.regs[rs1], vm.regs[rs2], vm=vm, host=self)
+        if result is None:
+            return False
+        status = 0
+        value = result
+        if isinstance(result, tuple) and len(result) == 2:
+            status, value = result
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            vm.regs[rd] = self._new_span_bytes(vm, bytes(value))
+        else:
+            vm.regs[rd] = int(value or 0) & MASK32
+        self.host_status = int(status) & MASK32
+        return True
+
+    def _compute_host(self, vm: "PicoVM", ns: str, method: str, rd, rs1, rs2) -> bool:
+        if self._provider_call(self.compute_provider, vm, ns, method, rd, rs1, rs2):
+            return True
+        vm.regs[rd] = 0
+        self.host_status = 1
+        return True
+
+    def _net_host(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        return self._provider_call(self.network_provider, vm, "Net", method, rd, rs1, rs2)
+
     def call(self, vm: "PicoVM", ns: str, method: str, rd, rs1, rs2, imm16):
         # INV-17: bindings are not ambient -- a hook touching the outside world is
         # denied unless its capability class has been granted to this capsule.
@@ -1332,6 +1451,9 @@ class HostApi:
                 return
         if ns == "Tensor":
             if self._tensor(vm, method, rd, rs1, rs2):
+                return
+        if ns in ("CatQ", "Async", "Shard"):
+            if self._compute_host(vm, ns, method, rd, rs1, rs2):
                 return
         if ns == "BitLinear":
             if self._bitlinear(vm, method, rd, rs1, rs2):
@@ -1562,6 +1684,8 @@ class HostApi:
         if ns == "Thread" and method == "YieldCounted":
             self._thread_yield_count += 1
             vm.regs[rd] = self._thread_yield_count & MASK32
+            return
+        if ns == "Net" and self._net_host(vm, method, rd, rs1, rs2):
             return
         if ns in self._RESERVED_NS:
             self._reserved_stub(vm, ns, method, rd, rs1, rs2)
@@ -3043,6 +3167,8 @@ class HostApi:
         return bytes(out)
 
     def _tensor(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method in ("Map", "View", "Gemm", "Reduce", "Elementwise"):
+            return self._compute_host(vm, "Tensor", method, rd, rs1, rs2)
         if method == "HasAccel":
             # Reference VM is scalar-only but supports every Tensor hook semantically.
             vm.regs[rd] = 1 if self._span_str(vm, vm.regs[rs1]).lower() in ("scalar", "vm") else 0
@@ -4319,7 +4445,7 @@ class HostApi:
         ("Context", "GetHeaders"), ("Context", "GetQueryString"), ("Context", "GetBody"),
         ("Context", "GetRequestId"), ("Context", "GetClientCert"), ("Context", "GetTraceId"),
         ("Environment", "GetOsVersion"), ("Environment", "GetHostname"), ("Environment", "GetTimeZone"),
-        ("Net", "Read"),
+        ("Net", "Read"), ("Net", "RecvSpan"),
         ("X509", "FetchCertificate"), ("X509", "GenerateCSR"), ("X509", "GenerateKeyPair"),
         ("X509", "GetCertInfo"),
     }

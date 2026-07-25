@@ -106,13 +106,15 @@
     Context: CAP.CONTEXT, Auth: CAP.AUTH, X509: CAP.AUTH, Environment: CAP.ENV, Locale: CAP.ENV, Gpio: CAP.GPIO,
     Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Stream: CAP.DMA, Event: CAP.EVENT, Ui: CAP.UI,
     Search: CAP.STORAGE, Process: CAP.PROCESS, Env: CAP.PROCESS, Timer: CAP.TIMER, Scheduler: CAP.TIMER,
-    Principal: CAP.PRINCIPAL, Capability: CAP.PRINCIPAL, Sandbox: CAP.PRINCIPAL, Capsule: CAP.CAPSULE_EXEC };
+    Principal: CAP.PRINCIPAL, Capability: CAP.PRINCIPAL, Sandbox: CAP.PRINCIPAL, Capsule: CAP.CAPSULE_EXEC,
+    CatQ: CAP.DEVICE, Async: CAP.DEVICE, Shard: CAP.STORAGE };
   function hookCap(name) {   // "Ns.Method" -> required capability class (0 = pure)
     var dot = name.indexOf("."), ns = name.slice(0, dot), m = name.slice(dot + 1);
     if (ns === "Maths" && (m === "Random" || m === "RandomRange")) return CAP.RANDOM;
     if (ns === "Crypto" && m === "RandomBytes") return CAP.RANDOM;
     if (ns === "Crypto" && (m === "Encrypt" || m === "Decrypt")) return CAP.CRYPTO;
     if (ns === "Http" && (m === "ReadHeader" || m === "ReadBody" || m === "GenerateHeaders" || m === "GenerateResponse")) return CAP.NET;
+    if (ns === "Tensor" && ["Map", "View", "Gemm", "Reduce", "Elementwise"].indexOf(m) >= 0) return CAP.DEVICE;
     return CAP_BY_NS[ns] || 0;
   }
 
@@ -138,6 +140,8 @@
     this._cardStore = opts.cardStore || null;
     this._gpioProvider = opts.gpioProvider || null;
     this._streamProvider = opts.streamProvider || null;
+    this._computeProvider = opts.computeProvider || null;
+    this._networkProvider = opts.networkProvider || null;
     this.reset();
   }
 
@@ -344,6 +348,11 @@
     var need = hookCap(name);
     if (need && !(this.caps & need)) throw picoFault(FAULT.CAPABILITY, this.curPc, code, "capability denied: " + name);
     if (name === "Status.Last") { this.regs[rd] = this.hostStatus | 0; return; }   // INV-18
+    var hostDot = name.indexOf("."), hostNs = name.slice(0, hostDot), hostMethod = name.slice(hostDot + 1);
+    if (hostNs === "CatQ" || hostNs === "Async" || hostNs === "Shard") {
+      this._computeHost(hostNs, hostMethod, rd, rs1, rs2); return;
+    }
+    if (hostNs === "Net" && this._netHost(hostMethod, rd, rs1, rs2)) return;
     if (name === "Random.U32") {
       var x = this.rng >>> 0;
       x ^= (x << 13); x >>>= 0;
@@ -2099,6 +2108,38 @@
   // Mirrors picoscript_vm HostApi._storage. Context model (cur pack + card)
   // keeps every op within the 2-in/1-out host ABI; field names and queries are
   // UTF-8 byte-spans the program builds in arena memory.
+  PicoVM.prototype._providerCall = function (provider, ns, method, rd, rs1, rs2) {
+    if (!provider) return false;
+    var fn = (typeof provider === "function") ? provider : provider.call;
+    if (typeof fn !== "function") return false;
+    var result = fn.call(provider, ns, method, this.regs[rs1] | 0, this.regs[rs2] | 0, this);
+    if (result === undefined || result === null) return false;
+    var status = 0, value = result;
+    if (typeof result === "object" && !Array.isArray(result) &&
+        !(result instanceof Uint8Array) && !(result instanceof ArrayBuffer) &&
+        Object.prototype.hasOwnProperty.call(result, "value")) {
+      status = result.status | 0;
+      value = result.value;
+    }
+    if (value instanceof ArrayBuffer) value = new Uint8Array(value);
+    if (value instanceof Uint8Array || Array.isArray(value)) {
+      this.regs[rd] = this._newSpanBytes(Array.from(value));
+    } else {
+      this.regs[rd] = (Number(value) || 0) | 0;
+    }
+    this.hostStatus = status | 0;
+    return true;
+  };
+  PicoVM.prototype._computeHost = function (ns, method, rd, rs1, rs2) {
+    if (this._providerCall(this._computeProvider, ns, method, rd, rs1, rs2)) return true;
+    this.regs[rd] = 0;
+    this.hostStatus = 1;
+    return true;
+  };
+  PicoVM.prototype._netHost = function (method, rd, rs1, rs2) {
+    return this._providerCall(this._networkProvider, "Net", method, rd, rs1, rs2);
+  };
+
   // ---- Tensor / BitLinear inference primitives ----------------------------
   function i8(b) { return b > 127 ? b - 256 : b; }
   function i32beAt(bytes, idx) {
@@ -2111,6 +2152,9 @@
     return out;
   }
   PicoVM.prototype._tensor = function (method, rd, rs1, rs2) {
+    if (["Map","View","Gemm","Reduce","Elementwise"].indexOf(method) >= 0) {
+      return this._computeHost("Tensor", method, rd, rs1, rs2);
+    }
     if (method === "SetShape") { this.tensorRows = Math.max(0, this.regs[rs1] | 0); this.tensorCols = Math.max(0, this.regs[rs2] | 0); this.regs[rd] = 1; return true; }
     if (method === "DotI8") { var a = this._spanBytes(this.regs[rs1]), b = this._spanBytes(this.regs[rs2]), n = this.tensorCols || Math.min(a.length, b.length), acc = 0; for (var i = 0; i < n && i < a.length && i < b.length; i++) acc = (acc + i8(a[i]) * i8(b[i])) | 0; this.regs[rd] = acc; return true; }
     if (method === "MatVecI8") { var mat = this._spanBytes(this.regs[rs1]), vec = this._spanBytes(this.regs[rs2]), rows = this.tensorRows, cols = this.tensorCols || vec.length, vals = []; for (var r = 0; r < rows; r++) { var sum = 0, base = r * cols; for (var c = 0; c < cols; c++) if (base + c < mat.length && c < vec.length) sum = (sum + i8(mat[base + c]) * i8(vec[c])) | 0; vals.push(sum); } this.regs[rd] = this._newSpanBytes(packI32(vals)); return true; }
@@ -3025,7 +3069,7 @@
     "Context.GetHeaders": 1, "Context.GetQueryString": 1, "Context.GetBody": 1,
     "Context.GetRequestId": 1, "Context.GetClientCert": 1, "Context.GetTraceId": 1,
     "Environment.GetOsVersion": 1, "Environment.GetHostname": 1, "Environment.GetTimeZone": 1,
-    "Net.Read": 1,
+    "Net.Read": 1, "Net.RecvSpan": 1,
     "X509.FetchCertificate": 1, "X509.GenerateCSR": 1, "X509.GenerateKeyPair": 1,
     "X509.GetCertInfo": 1
   };

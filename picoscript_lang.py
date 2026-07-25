@@ -181,6 +181,26 @@ NAMESPACE_MAP = {
         "RoPEI32": OP_NOOP,
         "SoftmaxI32": OP_NOOP,
         "ArgMaxI32": OP_NOOP,
+        "Map": OP_NOOP,
+        "View": OP_NOOP,
+        "Gemm": OP_NOOP,
+        "Reduce": OP_NOOP,
+        "Elementwise": OP_NOOP,
+    },
+    "CatQ": {
+        "Calibrate": OP_NOOP,
+        "Optimize": OP_NOOP,
+        "Ternarize": OP_NOOP,
+        "Pack": OP_NOOP,
+    },
+    "Async": {
+        "Submit": OP_NOOP,
+        "Wait": OP_NOOP,
+        "Result": OP_NOOP,
+    },
+    "Shard": {
+        "Load": OP_NOOP,
+        "Save": OP_NOOP,
     },
     "BitLinear": {
         "HasFormat": OP_NOOP,
@@ -324,6 +344,9 @@ NAMESPACE_MAP = {
         "Shutdown": OP_NOOP, # Raw socket: shutdown connection
         "PoolSize": OP_NOOP, # Configure worker pool size
         "Register": OP_NOOP, # Register ON event handler
+        "Connect": OP_NOOP,  # Raw socket client connect
+        "SendSpan": OP_NOOP, # Send a span over a connected socket
+        "RecvSpan": OP_NOOP, # Receive bytes as a span
     },
     "Kernel": {
         "WaitIRQ":       OP_NOOP,  # Host hook surface
@@ -904,6 +927,23 @@ HOST_HOOK_CODES = {
     ("BitLinear", "MatVecTernaryBlock"): 0x0274, # rs1=tensor rs2=i8 vec    rd=span<int32_be>
     ("BitLinear", "MatVecBitmapBlock"):  0x0275, # rs1=tensor rs2=i8 vec    rd=span<int32_be>
     ("BitLinear", "MatVecBase3Block"):   0x0276, # rs1=tensor rs2=i8 vec    rd=span<int32_be>
+    # Coarse host-backed CAT-Q appliance operations. Tensor handles are opaque
+    # host values; PicoScript orchestrates them without reproducing autograd or
+    # accelerator-specific implementation details in the language/runtime.
+    ("Tensor", "Map"):           0x0370, # rs1=source span rs2=options span rd=tensor handle
+    ("Tensor", "View"):          0x0371, # rs1=tensor rs2=view spec span   rd=tensor handle
+    ("Tensor", "Gemm"):          0x0372, # rs1=lhs tensor rs2=rhs tensor   rd=tensor handle
+    ("Tensor", "Reduce"):        0x0373, # rs1=tensor rs2=reduce spec      rd=tensor/scalar handle
+    ("Tensor", "Elementwise"):   0x0374, # rs1=tensor rs2=operation spec   rd=tensor handle
+    ("CatQ", "Calibrate"):       0x0375, # rs1=calibration tensor rs2=opts rd=CAT-Q context
+    ("CatQ", "Optimize"):        0x0376, # rs1=context rs2=weight tensor   rd=optimized tensor/state
+    ("CatQ", "Ternarize"):       0x0377, # rs1=context rs2=optimized       rd=ternary tensor
+    ("CatQ", "Pack"):            0x0378, # rs1=context rs2=ternary tensor  rd=packed tensor/span
+    ("Async", "Submit"):         0x0379, # rs1=request span rs2=resource   rd=job handle
+    ("Async", "Wait"):           0x037A, # rs1=job rs2=timeout ms          rd=status
+    ("Async", "Result"):         0x037B, # rs1=job                         rd=result handle/span
+    ("Shard", "Load"):           0x037C, # rs1=path span rs2=options span  rd=shard handle
+    ("Shard", "Save"):           0x037D, # rs1=shard rs2=path span         rd=ok
     ("Quant", "AbsMax"):         0x0228,
     ("Quant", "QuantI8"):        0x0229,
     ("Quant", "DequantI8"):      0x022A,
@@ -1079,6 +1119,9 @@ HOST_HOOK_CODES = {
     ("Net", "Shutdown"):         0x02E4,   # rs1=conn_fd                  rd=ok
     ("Net", "PoolSize"):         0x02E5,   # rs1=n                        rd=ok
     ("Net", "Register"):         0x02E6,   # rs1=event_id                 rd=ok (bind ON handler)
+    ("Net", "Connect"):          0x037E,   # rs1=host/address span rs2=port rd=conn
+    ("Net", "SendSpan"):         0x037F,   # rs1=conn rs2=span            rd=bytes sent
+    ("Net", "RecvSpan"):         0x0380,   # rs1=conn rs2=max bytes       rd=span
     # Log.* (0x02F0-0x02F4): deterministic, script-visible tracing/audit log.
     # See docs/LOGGING.md. Append-only {level, message span} table keyed by a
     # monotonic sequence id -- no wall-clock timestamp (host-injected/

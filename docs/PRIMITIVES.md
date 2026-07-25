@@ -6,6 +6,14 @@ maths, byte arrays, strings, encodings, hashing/crypto, RNG, and streaming text.
 PicoScript values are signed 32-bit integers. Text and byte arrays are represented
 as **spans**: integer handles pointing at bytes in the arena.
 
+## Host accelerator superinstructions
+
+PicoScript has a small host-backed surface for model-shard transforms:
+`Tensor.Map/View/Gemm/Reduce/Elementwise`, `CatQ.Calibrate/Optimize/Ternarize/Pack`,
+`Async.Submit/Wait/Result`, and `Shard.Load/Save`. These operations use opaque
+handles and deliberately keep accelerator kernels, differentiation, and optimizer
+details below the language boundary. See [CATQ_PRIMITIVES.md](CATQ_PRIMITIVES.md).
+
 ## Maths and integer primitives
 
 | Namespace | Methods | Notes |

@@ -1,4 +1,4 @@
-# PicoScript Hook Reference (533 hooks, 70 namespaces)
+# PicoScript Hook Reference (565 hooks, 74 namespaces)
 
 Complete reference for all host hooks in the PicoScript 16-opcode ISA.
 Each hook is a deterministic primitive callable from any of the 7 language surfaces.
@@ -7,8 +7,8 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Metric | Value |
 |--------|-------|
-| Total hooks | 533 |
-| Namespaces | 70 |
+| Total hooks | 565 |
+| Namespaces | 74 |
 | Language surfaces | 7 (C, BASIC, Python, English, COBOL, Report, Functional) |
 | Execution paths | 5 (Python VM, JS VM, C VM, native C, native JS) |
 
@@ -22,17 +22,20 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 |--------|------|-------------|
 | Thread.YieldCounted() | 0x0070 | Deterministic cooperative-yield counter; increments and returns a per-VM sequence number. Real on all 3 runtimes. |
 
-### Net.* (7 hooks)
+### Net.* (10 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
-| Net.Listen() | 0x02E0 | Reserved/host-injected (network socket). Returns 0 on every runtime until a host binds a real implementation. |
-| Net.Accept() | 0x02E1 | Reserved/host-injected. Returns 0. |
-| Net.Read() | 0x02E2 | Reserved/host-injected. Returns an empty span. |
-| Net.Write() | 0x02E3 | Reserved/host-injected. Returns 0. |
-| Net.Shutdown() | 0x02E4 | Reserved/host-injected. Returns 0. |
-| Net.PoolSize() | 0x02E5 | Reserved/host-injected. Returns 0. |
-| Net.Register() | 0x02E6 | Reserved/host-injected. Returns 0. |
+| Net.Listen() | 0x02E0 | Host-backed socket listener. |
+| Net.Accept() | 0x02E1 | Accept a connection from a listener. |
+| Net.Read() | 0x02E2 | Receive bytes as a span. |
+| Net.Write() | 0x02E3 | Send a span. |
+| Net.Shutdown() | 0x02E4 | Close a listener or connection. |
+| Net.PoolSize() | 0x02E5 | Configure a host worker pool. |
+| Net.Register() | 0x02E6 | Register an event handler with the host. |
+| Net.Connect() | 0x037E | Connect a client socket to endpoint + port. |
+| Net.SendSpan() | 0x037F | Span-oriented send alias. |
+| Net.RecvSpan() | 0x0380 | Span-oriented receive alias. |
 
 ---
 
@@ -691,7 +694,7 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 ## AI & Inference
 
-### Tensor.* (12 hooks)
+### Tensor.* (17 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
@@ -707,6 +710,35 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | Tensor.SoftmaxI32() | 0x01E9 | |
 | Tensor.ArgMaxI32() | 0x01EA | |
 | Tensor.HasAccel() | 0x01EB | |
+| Tensor.Map() | 0x0370 | Map host storage/device memory as an opaque tensor. |
+| Tensor.View() | 0x0371 | Create a host-defined tensor view. |
+| Tensor.Gemm() | 0x0372 | Host-accelerated matrix multiplication. |
+| Tensor.Reduce() | 0x0373 | Host-defined tensor reduction. |
+| Tensor.Elementwise() | 0x0374 | Host-defined elementwise transform. |
+
+### CatQ.* (4 hooks)
+
+| Method | Code | Description |
+|--------|------|-------------|
+| CatQ.Calibrate() | 0x0375 | Build a CAT-Q calibration context. |
+| CatQ.Optimize() | 0x0376 | Optimize a weight tensor within a CAT-Q context. |
+| CatQ.Ternarize() | 0x0377 | Produce ternary weights. |
+| CatQ.Pack() | 0x0378 | Pack ternary weights and scaling metadata. |
+
+### Async.* (3 hooks)
+
+| Method | Code | Description |
+|--------|------|-------------|
+| Async.Submit() | 0x0379 | Submit a coarse host job. |
+| Async.Wait() | 0x037A | Wait for completion or timeout. |
+| Async.Result() | 0x037B | Retrieve a completed result handle/span. |
+
+### Shard.* (2 hooks)
+
+| Method | Code | Description |
+|--------|------|-------------|
+| Shard.Load() | 0x037C | Load or map a model shard. |
+| Shard.Save() | 0x037D | Persist a transformed model shard. |
 
 ### BitLinear.* (5 hooks)
 

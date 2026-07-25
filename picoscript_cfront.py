@@ -1217,8 +1217,11 @@ class Lowerer:
             elif m == "HEADER":
                 self.b.net("header")
             else:
-                raise SyntaxError(f"unknown Net.{method}")
-            return None
+                # Raw/client Net methods are ordinary host hooks. Only the
+                # HTTP response-control subset uses the compact core encoding.
+                pass
+            if m in ("STATUS", "TYPE", "BODY", "CLOSE", "HEADER"):
+                return None
         # Storage.Load/Save/Pipe(tenant, pack, card, reg)
         if ns.upper() == "STORAGE" and method.upper() in ("LOAD", "SAVE", "PIPE"):
             tenant, pack, card = (_intlit(c.args[0]), _intlit(c.args[1]), _intlit(c.args[2]))
