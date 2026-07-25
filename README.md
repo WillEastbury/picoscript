@@ -78,6 +78,8 @@ PicoScript runs inside picoweb/PIOS as deterministic, bounded userland logic for
 | `picoscript_metrics.py` | IL/bytecode size, opcode histogram, static + (profiled) dynamic cycle estimates, C/JS backend sizes |
 | `vm/picovm.h` `vm/picovm.c` | portable **C VM** for bare metal (RP2354B/PIOS); freestanding-clean. Native `Req.*`/`Resp.*`, `pv_storage_hook` |
 | `vm/picovm_pool.c` `vm/picovm_pool.h` | thread-pooled **native HTTP server** runtime (accept loop, HTTP parse, per-worker arena). See `docs/NATIVE_HTTP_SERVER.md` |
+| `vm/picovm_catq.c` `vm/picovm_catq.h` | dependency-free native CAT-Q tensor/optimization/ternary/shard provider |
+| `vm/picovm_net.c` `vm/picovm_net.h` | optional hosted raw socket provider for PicoScript servers and clients |
 | `vm/picovm.js` | **JS VM** for browser/Node debugging (step API; 32-bit parity) |
 | `vm/picoc.js` | **In-browser compiler**: all four frontends → bytecode (byte-identical to Python) |
 | `vm/pico_hooks.h` `vm/pico_hooks.js` | auto-generated host-hook codes (kept in sync with `picoscript_lang.py`) |
@@ -151,6 +153,9 @@ python picoscript_build.py emit  examples/sum.eng --as c  -o sum_from_english.c 
 
 # Native build (Thumb / AArch64 via zig cc)
 python picoscript_build.py native examples/sum.pc --target aarch64-freestanding-none -o sum.o
+
+# Native C-PicoScript CAT-Q workflow
+python picoscript_build.py native examples/catq_quantize.pc --provider catq -o catq_quantize.exe
 ```
 
 The same four lines above (`.pc`, `.pbas`, `.ppy`, `.eng`) compile to **byte-for-byte

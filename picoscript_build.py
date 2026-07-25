@@ -190,10 +190,41 @@ def cmd_native(args):
     mcpu = args.mcpu or prof_mcpu
     opt = args.opt
     freestanding = bool(target) and "freestanding" in target
+    providers = list(dict.fromkeys(args.provider or []))
+    if freestanding and providers:
+        raise SystemExit("native providers require a hosted target")
     # Host builds get a runnable main(); freestanding cross builds emit a
     # linkable object (the emitted pico_main() is called from your firmware).
     csrc = lower_to_c(to_il(source, lang), func_name="pico_main",
-                      emit_main=not freestanding)
+                      emit_main=not freestanding and not providers)
+    if providers and not freestanding:
+        includes = ["#include <stdio.h>"]
+        init = []
+        cleanup = []
+        if "catq" in providers:
+            includes.append('#include "picovm_catq.h"')
+            init.append("    if (!pv_catq_install()) return 2;")
+            cleanup.append("    pv_catq_cleanup();")
+        if "net" in providers:
+            includes.append('#include "picovm_net.h"')
+            init.append("    if (!pv_net_install_socket_provider()) return 3;")
+            cleanup.append("    pv_net_socket_cleanup();")
+        csrc += "\n" + "\n".join(includes) + "\n"
+        csrc += "int main(void) {\n"
+        csrc += "    static uint8_t pico_arena[520 * 1024];\n"
+        csrc += "    pv_ctx ctx; pv_init(&ctx);\n"
+        csrc += "    ctx.mem = pico_arena; ctx.mem_size = (long)sizeof(pico_arena);\n"
+        csrc += "\n".join(init) + "\n"
+        csrc += "    pico_main(&ctx);\n"
+        csrc += '    printf("STEPS %ld\\n", ctx.steps);\n'
+        csrc += '    printf("STATUS %d\\n", ctx.http_status);\n'
+        csrc += '    printf("REGS");\n'
+        csrc += '    for (int i = 0; i < PV_NUM_REGS; i++) printf(" %d", ctx.regs[i]);\n'
+        csrc += '    printf("\\nOUT");\n'
+        csrc += '    for (int i = 0; i < ctx.out_len; i++) printf(" %02x", ctx.out[i]);\n'
+        csrc += '    printf("\\n");\n'
+        csrc += "\n".join(cleanup) + "\n"
+        csrc += "    return 0;\n}\n"
     default_ext = ".o" if freestanding else ".exe"
     out_obj = args.o or (os.path.splitext(args.file)[0] + default_ext)
     cfile = out_obj + ".c"
@@ -203,10 +234,20 @@ def cmd_native(args):
         cmd += ["-target", target]
     if mcpu:
         cmd += [f"-mcpu={mcpu}"]
+    runtime_sources = [cfile, os.path.join(VM_DIR, "picovm.c")]
+    if "catq" in providers:
+        runtime_sources.append(os.path.join(VM_DIR, "picovm_catq.c"))
+    if "net" in providers:
+        runtime_sources.append(os.path.join(VM_DIR, "picovm_net.c"))
     if freestanding:
-        cmd += ["-c", cfile, os.path.join(VM_DIR, "picovm.c"), "-o", out_obj]
+        cmd += ["-c"] + runtime_sources + ["-o", out_obj]
     else:
-        cmd += [cfile, os.path.join(VM_DIR, "picovm.c"), "-o", out_obj]
+        cmd += runtime_sources
+        if "catq" in providers:
+            cmd += ["-lm"]
+        if "net" in providers and os.name == "nt":
+            cmd += ["-lws2_32"]
+        cmd += ["-o", out_obj]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         print(r.stderr)
@@ -254,6 +295,8 @@ def main(argv=None):
     pn.add_argument("--mcpu", help="zig -mcpu, e.g. cortex_a76 (Pi5 NEON SDOT), cortex_m33+dsp (Pico2 SMLAD), native")
     pn.add_argument("--profile", choices=list(PROFILES),
                     help="deploy preset: host (native SIMD), pi5 (NEON SDOT), pico2 (SMLAD)")
+    pn.add_argument("--provider", action="append", choices=["catq", "net"],
+                    help="link and initialize a hosted runtime provider (repeatable)")
     pn.add_argument("--opt", default="3", help="optimization level passed as -O<opt> (default 3)")
     pn.set_defaults(func=cmd_native)
 

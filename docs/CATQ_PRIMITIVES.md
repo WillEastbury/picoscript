@@ -1,9 +1,8 @@
 # CAT-Q accelerator primitives
 
-PicoScript exposes CAT-Q as coarse host-backed superinstructions. The language
-orchestrates model shards and opaque tensor handles; CUDA, QPU, NEON, CPU, or
-another host backend owns tensor storage, differentiation, optimization, and
-packing.
+PicoScript exposes CAT-Q as coarse host-backed superinstructions. The executable
+pipeline is written in the C-syntax PicoScript dialect; CUDA, QPU, NEON, CPU, or
+another host backend supplies the execution substrate beneath those operations.
 
 No new core bytecodes are used. Every operation is an extended host hook, so the
 same PicoScript source lowers through bytecode, native C, and native JavaScript.
@@ -31,9 +30,10 @@ descriptor.
 | `CatQ.Ternarize(context, optimized)` | context, optimized tensor/state | ternary tensor |
 | `CatQ.Pack(context, ternary)` | context, ternary tensor | packed tensor or span |
 
-`CatQ.Optimize` is deliberately coarse. A backend may use analytical gradients,
-autodiff, CUDA kernels, a QPU implementation, or CPU code without exposing that
-machinery to PicoScript.
+`CatQ.Optimize` is deliberately coarse. The dependency-free native provider in
+`vm/picovm_catq.c` implements the paper's analytical gradients and AdamW update
+directly in C. Accelerated providers can replace that hook without changing the
+PicoScript workflow.
 
 ## Jobs and shards
 
@@ -86,22 +86,31 @@ program.run(rt);
 Native C:
 
 ```c
-pv_compute_hook = accelerator_hook;
+pv_catq_install();
 pv_net_install_socket_provider();
 ```
 
-All provider functions receive the VM context, hook code, and two operand
-registers. Returning non-zero means the provider handled the operation.
+Build the executable C-PicoScript workflow with:
 
-## Example
+```powershell
+python picoscript_build.py native examples\catq_quantize.pc --provider catq
+```
+
+This links `picovm.c` and `picovm_catq.c`; no Python ML framework or external
+tensor library is used by the resulting executable.
+
+## C-PicoScript workflow
 
 ```c
-int shard = Shard.Load("model-00001.safetensors", "mmap");
-int weights = Tensor.Map(shard, "dtype=bf16");
-int calibration = Tensor.Map("calibration.bin", "shape=512x2048");
-int catq = CatQ.Calibrate(calibration, "group=128;epochs=60");
+int shard = Shard.Load("model.safetensors", "mmap");
+int calibrationShard = Shard.Load("calibration.safetensors", "mmap");
+int weights = Tensor.Map(shard, "tensor=model.layers.0.mlp.down_proj.weight");
+int calibration = Tensor.Map(calibrationShard, "tensor=calibration");
+int catq = CatQ.Calibrate(calibration, "group=128;epochs=60;batch=3");
 int optimized = CatQ.Optimize(catq, weights);
 int ternary = CatQ.Ternarize(catq, optimized);
 int packed = CatQ.Pack(catq, ternary);
-Shard.Save(packed, "model-00001.ternary");
+Shard.Save(packed, "model.ternary.safetensors");
 ```
+
+The complete executable flow is `examples/catq_quantize.pc`.

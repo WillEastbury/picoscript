@@ -1,0 +1,53 @@
+// CAT-Q is orchestrated in PicoScript; native providers implement only the
+// coarse tensor, optimization, packing, and shard operations.
+
+int quantizeShard(
+    int modelPath,
+    int weightName,
+    int calibrationPath,
+    int calibrationName,
+    int outputPath,
+    int catqOptions
+) {
+    int modelShard = Shard.Load(modelPath, "mmap");
+    if (modelShard == 0) { raise 1001; }
+
+    int calibrationShard = Shard.Load(calibrationPath, "mmap");
+    if (calibrationShard == 0) { raise 1002; }
+
+    int weightMapOptions = String.Concat("tensor=", weightName);
+    int calibrationMapOptions = String.Concat("tensor=", calibrationName);
+
+    int weights = Tensor.Map(modelShard, weightMapOptions);
+    if (weights == 0) { raise 1003; }
+
+    int calibration = Tensor.Map(calibrationShard, calibrationMapOptions);
+    if (calibration == 0) { raise 1004; }
+
+    int context = CatQ.Calibrate(calibration, catqOptions);
+    if (context == 0) { raise 1005; }
+
+    int optimized = CatQ.Optimize(context, weights);
+    if (optimized == 0) { raise 1006; }
+
+    int ternary = CatQ.Ternarize(context, optimized);
+    if (ternary == 0) { raise 1007; }
+
+    int packed = CatQ.Pack(context, ternary);
+    if (packed == 0) { raise 1008; }
+
+    int saved = Shard.Save(packed, outputPath);
+    if (saved == 0) { raise 1009; }
+    return saved;
+}
+
+int result = quantizeShard(
+    "model-00001-of-00001.safetensors",
+    "model.layers.0.mlp.down_proj.weight",
+    "calibration.safetensors",
+    "calibration",
+    "model-00001-of-00001.ternary.safetensors",
+    "group=128;epochs=60;batch=3;gamma=0.8;s0=30;lr=0.001"
+);
+
+return result;
