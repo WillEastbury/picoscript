@@ -76,6 +76,29 @@ def test_qwen35_plan_emits_executable_picoscript(tmp_path):
     assert compile_result.returncode == 0, compile_result.stderr + compile_result.stdout
 
 
+def test_single_shard_qwen3_plan(tmp_path):
+    tool = build_tool(tmp_path)
+    model_dir = tmp_path / "qwen3"
+    model_dir.mkdir()
+    (model_dir / "model.safetensors").write_bytes(b"placeholder")
+    name = "model.layers.0.mlp.gate_proj.weight"
+    manifest = tmp_path / "qwen3-activations.tsv"
+    output = tmp_path / "qwen3-plan.pc"
+    manifest.write_text(
+        f"{name}\tcalibration.safetensors\tlayer0.mlp.input\tout.safetensors\n",
+        encoding="utf-8",
+    )
+    run = subprocess.run(
+        [str(tool), "qwen3", str(model_dir), str(manifest), str(output)],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 0, run.stderr
+    source = output.read_text(encoding="utf-8")
+    assert "model.safetensors" in source
+    assert f"tensor={name}" in source
+
+
 def test_gpt_oss_plan_pairs_mxfp4_blocks_and_scales(tmp_path):
     tool = build_tool(tmp_path)
     model_dir = tmp_path / "gpt-oss"

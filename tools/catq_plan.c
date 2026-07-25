@@ -161,6 +161,15 @@ static int qwen35_quantizable(const char *name)
         ends_with(name, ".experts.gate_up_proj");
 }
 
+static int qwen3_quantizable(const char *name)
+{
+    if (strncmp(name, "model.layers.", 13) != 0) return 0;
+    if (contains(name, "layernorm") || contains(name, ".q_norm.") ||
+        contains(name, ".k_norm.") || contains(name, ".bias"))
+        return 0;
+    return ends_with(name, ".weight");
+}
+
 static int gpt_oss_quantizable(const char *name)
 {
     if (contains(name, "_blocks") || ends_with(name, ".blocks")) return 2;
@@ -177,6 +186,8 @@ static int architecture_quantizable(const char *architecture, const char *name)
     if (strcmp(architecture, "qwen3.5") == 0 ||
         strcmp(architecture, "qwen3_5") == 0)
         return qwen35_quantizable(name);
+    if (strcmp(architecture, "qwen3") == 0)
+        return qwen3_quantizable(name);
     if (strcmp(architecture, "gpt-oss") == 0 ||
         strcmp(architecture, "gpt_oss") == 0)
         return gpt_oss_quantizable(name);
@@ -245,7 +256,7 @@ static int paired_scale_name(const char *blocks, char *out, size_t cap)
 
 int main(int argc, char **argv)
 {
-    char index_path[2048], line[8192];
+    char index_path[2048], single_path[2048], line[8192];
     char *json;
     weight_map map = {0};
     FILE *manifest, *out;
@@ -253,7 +264,7 @@ int main(int argc, char **argv)
     const char *options;
     if (argc < 5) {
         fprintf(stderr,
-            "usage: catq_plan <qwen3.5|gpt-oss> <model-dir> "
+            "usage: catq_plan <qwen3|qwen3.5|gpt-oss> <model-dir> "
             "<activation-manifest.tsv> <output.pc> [catq-options]\n");
         return 2;
     }
@@ -261,10 +272,19 @@ int main(int argc, char **argv)
         "group=128;epochs=60;batch=3;gamma=0.8;s0=30;lr=0.001";
     join_path(index_path, sizeof(index_path), argv[2], "model.safetensors.index.json");
     json = read_file(index_path);
-    if (!json || !parse_weight_map(json, &map)) {
-        fprintf(stderr, "failed to read weight map: %s\n", index_path);
+    join_path(single_path, sizeof(single_path), argv[2], "model.safetensors");
+    if (json && !parse_weight_map(json, &map)) {
+        fprintf(stderr, "failed to parse weight map: %s\n", index_path);
         free(json);
         return 3;
+    }
+    if (!json) {
+        FILE *single = fopen(single_path, "rb");
+        if (!single) {
+            fprintf(stderr, "no index or single safetensors shard in %s\n", argv[2]);
+            return 3;
+        }
+        fclose(single);
     }
     manifest = fopen(argv[3], "r");
     out = fopen(argv[4], "w");
@@ -319,6 +339,7 @@ int main(int argc, char **argv)
             continue;
         }
         shard = lookup_shard(&map, fields[0]);
+        if (!shard && !json) shard = "model.safetensors";
         if (!shard) {
             fprintf(stderr, "weight not found: %s\n", fields[0]);
             continue;
