@@ -157,6 +157,9 @@ python picoscript_build.py native examples/sum.pc --target aarch64-freestanding-
 
 # Native C-PicoScript CAT-Q workflow
 python picoscript_build.py native examples/catq_quantize.pc --provider catq -o catq_quantize.exe
+
+# Download Qwen3-0.6B if needed and run an end-to-end CAT-Q smoke conversion
+pwsh -File tools/run_catq_smoke.ps1
 ```
 
 The same four lines above (`.pc`, `.pbas`, `.ppy`, `.eng`) compile to **byte-for-byte

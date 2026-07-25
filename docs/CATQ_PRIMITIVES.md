@@ -115,6 +115,27 @@ Shard.Save(packed, "model.ternary.safetensors");
 
 The complete executable flow is `examples/catq_quantize.pc`.
 
+### Reproducible smoke test
+
+On Windows, the complete small-model test is scripted:
+
+```powershell
+pwsh -File tools\run_catq_smoke.ps1
+```
+
+By default it downloads `Qwen/Qwen3-0.6B-Base` when absent, reads the real
+`model.layers.0.mlp.gate_proj.weight` BF16 tensor, creates deterministic
+synthetic calibration activations, generates C-PicoScript with `catq_plan`,
+builds it with the native CAT-Q provider, executes it, and validates:
+
+- safetensors metadata, source shape, and group size;
+- packed codes contain only `-1`, `0`, and `+1`;
+- all group scales are finite and positive;
+- packed value count matches the source tensor.
+
+Use `-Epochs 60 -CalibrationRows 512 -BatchSize 3` only with meaningful captured
+activations; the defaults are intentionally a fast wiring test.
+
 ## Model-wide plan generation
 
 CAT-Q requires the activation tensor that actually enters each quantized weight;
