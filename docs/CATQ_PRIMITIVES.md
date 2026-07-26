@@ -159,6 +159,30 @@ RMSNorm(input)
 Layer norm weights remain BF16, while all three matrix projections use saved
 CAT-Q ternary shards and their learned group scales.
 
+### Host SIMD
+
+Hosted CAT-Q runners compile with `--profile host`, enabling AVX2/FMA on capable
+x86 machines while retaining scalar fallbacks for other targets. The native
+provider has explicit vector kernels for:
+
+- group mean and absolute-deviation statistics;
+- simultaneous reference/quantized dot products;
+- gradient AXPY updates;
+- RMSNorm sum-of-squares;
+- scaled packed CAT-Q ternary matrix-vector products.
+
+Measured on an Intel i9-12900H with the 3.15M-weight Qwen gate projection:
+
+| Operation | Previous | AVX2/hoisted group state |
+|---|---:|---:|
+| Two-epoch CAT-Q smoke conversion | ~4.7s | **1.6s** |
+| Saved CAT-Q 3072x1024 projection | 87ms | **71ms** |
+| Complete CAT-Q Qwen MLP | 128ms | **81ms** |
+
+The packed ternary codes are byte-identical to the previous implementation.
+Floating scales differ only through reduction order, with observed maximum
+absolute difference below `4.3e-8`.
+
 ### Reproducible smoke test
 
 On Windows, the complete small-model test is scripted:

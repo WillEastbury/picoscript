@@ -80,7 +80,7 @@ return saved;
 
 Push-Location $repoRoot
 try {
-    & python picoscript_build.py native $source --provider catq -o $executable
+    & python picoscript_build.py native $source --provider catq --profile host -o $executable
     if ($LASTEXITCODE -ne 0) { throw 'Qwen ternary MLP build failed' }
 }
 finally {

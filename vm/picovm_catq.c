@@ -6,6 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
+
 #define PV_CATQ_MAX_OBJECTS 256
 #define PV_CATQ_HANDLE_BASE 10000
 #define PV_CATQ_MAX_DIMS 4
@@ -88,6 +92,157 @@ typedef struct {
 } pv_catq_object;
 
 static pv_catq_object pv_catq_objects[PV_CATQ_MAX_OBJECTS];
+
+#if defined(__AVX2__)
+static float pv_catq_hsum256(__m256 value)
+{
+    __m128 low = _mm256_castps256_ps128(value);
+    __m128 high = _mm256_extractf128_ps(value, 1);
+    __m128 sum = _mm_add_ps(low, high);
+    sum = _mm_hadd_ps(sum, sum);
+    sum = _mm_hadd_ps(sum, sum);
+    return _mm_cvtss_f32(sum);
+}
+#endif
+
+static float pv_catq_sum_f32(const float *values, size_t count)
+{
+    size_t i = 0;
+    float sum = 0.0f;
+#if defined(__AVX2__)
+    __m256 acc = _mm256_setzero_ps();
+    for (; i + 8 <= count; i += 8)
+        acc = _mm256_add_ps(acc, _mm256_loadu_ps(values + i));
+    sum = pv_catq_hsum256(acc);
+#endif
+    for (; i < count; i++) sum += values[i];
+    return sum;
+}
+
+static float pv_catq_absdev_f32(const float *values, size_t count, float mean)
+{
+    size_t i = 0;
+    float sum = 0.0f;
+#if defined(__AVX2__)
+    __m256 acc = _mm256_setzero_ps();
+    __m256 center = _mm256_set1_ps(mean);
+    __m256 abs_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff));
+    for (; i + 8 <= count; i += 8) {
+        __m256 delta = _mm256_sub_ps(_mm256_loadu_ps(values + i), center);
+        acc = _mm256_add_ps(acc, _mm256_and_ps(delta, abs_mask));
+    }
+    sum = pv_catq_hsum256(acc);
+#endif
+    for (; i < count; i++) sum += fabsf(values[i] - mean);
+    return sum;
+}
+
+static void pv_catq_dot2_f32(const float *input, const float *left, const float *right,
+                             size_t count, float *left_sum, float *right_sum)
+{
+    size_t i = 0;
+    float a = 0.0f, b = 0.0f;
+#if defined(__AVX2__)
+    __m256 acc_left = _mm256_setzero_ps();
+    __m256 acc_right = _mm256_setzero_ps();
+    for (; i + 8 <= count; i += 8) {
+        __m256 x = _mm256_loadu_ps(input + i);
+#if defined(__FMA__)
+        acc_left = _mm256_fmadd_ps(x, _mm256_loadu_ps(left + i), acc_left);
+        acc_right = _mm256_fmadd_ps(x, _mm256_loadu_ps(right + i), acc_right);
+#else
+        acc_left = _mm256_add_ps(acc_left, _mm256_mul_ps(x, _mm256_loadu_ps(left + i)));
+        acc_right = _mm256_add_ps(acc_right, _mm256_mul_ps(x, _mm256_loadu_ps(right + i)));
+#endif
+    }
+    a = pv_catq_hsum256(acc_left);
+    b = pv_catq_hsum256(acc_right);
+#endif
+    for (; i < count; i++) {
+        a += input[i] * left[i];
+        b += input[i] * right[i];
+    }
+    *left_sum = a;
+    *right_sum = b;
+}
+
+static void pv_catq_axpy_f32(float *target, const float *source, float scale, size_t count)
+{
+    size_t i = 0;
+#if defined(__AVX2__)
+    __m256 factor = _mm256_set1_ps(scale);
+    for (; i + 8 <= count; i += 8) {
+        __m256 dst = _mm256_loadu_ps(target + i);
+#if defined(__FMA__)
+        dst = _mm256_fmadd_ps(factor, _mm256_loadu_ps(source + i), dst);
+#else
+        dst = _mm256_add_ps(dst, _mm256_mul_ps(factor, _mm256_loadu_ps(source + i)));
+#endif
+        _mm256_storeu_ps(target + i, dst);
+    }
+#endif
+    for (; i < count; i++) target[i] += scale * source[i];
+}
+
+static float pv_catq_sumsq_f32(const float *values, size_t count)
+{
+    size_t i = 0;
+    float sum = 0.0f;
+#if defined(__AVX2__)
+    __m256 acc = _mm256_setzero_ps();
+    for (; i + 8 <= count; i += 8) {
+        __m256 value = _mm256_loadu_ps(values + i);
+#if defined(__FMA__)
+        acc = _mm256_fmadd_ps(value, value, acc);
+#else
+        acc = _mm256_add_ps(acc, _mm256_mul_ps(value, value));
+#endif
+    }
+    sum = pv_catq_hsum256(acc);
+#endif
+    for (; i < count; i++) sum += values[i] * values[i];
+    return sum;
+}
+
+static float pv_catq_dot_packed_group(const uint8_t *codes, size_t start,
+                                      const float *activation, size_t count,
+                                      float scale)
+{
+    size_t i = 0;
+    float sum = 0.0f;
+#if defined(__AVX2__)
+    __m256 acc = _mm256_setzero_ps();
+    __m256 factor = _mm256_set1_ps(scale);
+    for (; i + 8 <= count; i += 8) {
+        float weights[8];
+        size_t lane;
+        for (lane = 0; lane < 8; lane++) {
+            size_t index = start + i + lane;
+            uint8_t encoded = (codes[index / 4] >> ((index & 3) * 2)) & 3;
+            weights[lane] = encoded == 1 ? 1.0f : (encoded == 2 ? -1.0f : 0.0f);
+        }
+#if defined(__FMA__)
+        acc = _mm256_fmadd_ps(
+            _mm256_mul_ps(_mm256_loadu_ps(weights), factor),
+            _mm256_loadu_ps(activation + i), acc);
+#else
+        acc = _mm256_add_ps(
+            acc,
+            _mm256_mul_ps(
+                _mm256_mul_ps(_mm256_loadu_ps(weights), factor),
+                _mm256_loadu_ps(activation + i)));
+#endif
+    }
+    sum = pv_catq_hsum256(acc);
+#endif
+    for (; i < count; i++) {
+        size_t index = start + i;
+        uint8_t encoded = (codes[index / 4] >> ((index & 3) * 2)) & 3;
+        float weight = encoded == 1 ? 1.0f : (encoded == 2 ? -1.0f : 0.0f);
+        sum += weight * scale * activation[i];
+    }
+    return sum;
+}
 
 static char *pv_catq_strdup(const char *s)
 {
@@ -675,6 +830,8 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
     float *mu0 = 0, *alpha0 = 0, *raw_mu = 0, *raw_alpha = 0, *raw_threshold = 0;
     float *m_mu = 0, *m_alpha = 0, *m_threshold = 0;
     float *v_mu = 0, *v_alpha = 0, *v_threshold = 0;
+    float *group_dm = 0, *group_alpha = 0, *group_mu = 0, *group_threshold = 0;
+    float *group_sig_alpha = 0, *group_sig_threshold = 0;
     float *quantized = 0, *gradient = 0;
     int epoch, batch_start, step = 0;
     int total_steps;
@@ -695,11 +852,19 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
     v_mu = (float *)calloc(groups, sizeof(float));
     v_alpha = (float *)calloc(groups, sizeof(float));
     v_threshold = (float *)calloc(groups, sizeof(float));
+    group_dm = (float *)malloc(groups * sizeof(float));
+    group_alpha = (float *)malloc(groups * sizeof(float));
+    group_mu = (float *)malloc(groups * sizeof(float));
+    group_threshold = (float *)malloc(groups * sizeof(float));
+    group_sig_alpha = (float *)malloc(groups * sizeof(float));
+    group_sig_threshold = (float *)malloc(groups * sizeof(float));
     quantized = (float *)malloc(count * sizeof(float));
     gradient = (float *)malloc(count * sizeof(float));
     if (!out->weight || !out->delta_mu || !out->delta_alpha || !out->delta_threshold ||
         !mu0 || !alpha0 || !raw_mu || !raw_alpha || !raw_threshold ||
         !m_mu || !m_alpha || !m_threshold || !v_mu || !v_alpha || !v_threshold ||
+        !group_dm || !group_alpha || !group_mu || !group_threshold ||
+        !group_sig_alpha || !group_sig_threshold ||
         !quantized || !gradient)
         goto fail;
     memcpy(out->weight, weight->data, count * sizeof(float));
@@ -714,10 +879,8 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
         size_t n;
         if (end > count) end = count;
         n = end - start;
-        for (i = start; i < end; i++) mu0[g] += weight->data[i];
-        mu0[g] /= (float)n;
-        for (i = start; i < end; i++) alpha0[g] += fabsf(weight->data[i] - mu0[g]);
-        alpha0[g] /= (float)n;
+        mu0[g] = pv_catq_sum_f32(weight->data + start, n) / (float)n;
+        alpha0[g] = pv_catq_absdev_f32(weight->data + start, n, mu0[g]) / (float)n;
         if (alpha0[g] < 1e-8f) alpha0[g] = 1e-8f;
         raw_alpha[g] = 0.5413248546f;
         raw_threshold[g] = 0.5413248546f;
@@ -734,22 +897,28 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
             float *group_alpha_grad = (float *)calloc(groups, sizeof(float));
             float *group_threshold_grad = (float *)calloc(groups, sizeof(float));
             float loss = 0.0f;
-            int s, o, c;
+            int s, o;
             if (!group_mu_grad || !group_alpha_grad || !group_threshold_grad) {
                 free(group_mu_grad); free(group_alpha_grad); free(group_threshold_grad);
                 goto fail;
             }
             if (batch_end > calibration->rows) batch_end = calibration->rows;
             memset(gradient, 0, count * sizeof(float));
+            for (g = 0; g < groups; g++) {
+                float da = pv_catq_softplus(raw_alpha[g]);
+                group_dm[g] = tanhf(raw_mu[g]);
+                group_alpha[g] = da * alpha0[g];
+                group_mu[g] = mu0[g] + group_dm[g] * alpha0[g];
+                group_threshold[g] = pv_catq_softplus(raw_threshold[g]) * 0.5f;
+                group_sig_alpha[g] = pv_catq_sigmoid(raw_alpha[g]);
+                group_sig_threshold[g] = pv_catq_sigmoid(raw_threshold[g]);
+            }
             for (i = 0; i < count; i++) {
                 g = i / (size_t)context->group_size;
                 {
-                    float dm = tanhf(raw_mu[g]);
-                    float da = pv_catq_softplus(raw_alpha[g]);
-                    float dt = pv_catq_softplus(raw_threshold[g]);
-                    float alpha = da * alpha0[g];
-                    float z = (weight->data[i] - (mu0[g] + dm * alpha0[g])) / alpha;
-                    float threshold = dt * 0.5f;
+                    float alpha = group_alpha[g];
+                    float z = (weight->data[i] - group_mu[g]) / alpha;
+                    float threshold = group_threshold[g];
                     float dz, dth, soft, tv;
                     float sharpness = t <= context->gamma
                         ? (t / context->gamma) * context->sharpness
@@ -766,31 +935,28 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
                     float target = 0.0f, prediction = 0.0f;
                     size_t row = (size_t)o * weight->cols;
                     float error, scale;
-                    for (c = 0; c < weight->cols; c++) {
-                        target += x[c] * weight->data[row + (size_t)c];
-                        prediction += x[c] * quantized[row + (size_t)c];
-                    }
+                    pv_catq_dot2_f32(
+                        x, weight->data + row, quantized + row,
+                        (size_t)weight->cols, &target, &prediction);
                     error = prediction - target;
                     loss += error * error;
                     scale = 2.0f * error /
                         (float)((batch_end - batch_start) * weight->rows);
-                    for (c = 0; c < weight->cols; c++)
-                        gradient[row + (size_t)c] += scale * x[c];
+                    pv_catq_axpy_f32(
+                        gradient + row, x, scale, (size_t)weight->cols);
                 }
             }
             loss /= (float)((batch_end - batch_start) * weight->rows);
             out->final_loss = loss;
             for (i = 0; i < count; i++) {
-                float dm, da, dt, alpha, z, threshold, dz, dth, soft, tv;
+                float dm, alpha, z, threshold, dz, dth, soft, tv;
                 float d_alpha, d_mu, d_delta_mu, d_delta_alpha, d_delta_threshold;
                 float sharpness;
                 g = i / (size_t)context->group_size;
-                dm = tanhf(raw_mu[g]);
-                da = pv_catq_softplus(raw_alpha[g]);
-                dt = pv_catq_softplus(raw_threshold[g]);
-                alpha = da * alpha0[g];
-                z = (weight->data[i] - (mu0[g] + dm * alpha0[g])) / alpha;
-                threshold = dt * 0.5f;
+                dm = group_dm[g];
+                alpha = group_alpha[g];
+                z = (weight->data[i] - group_mu[g]) / alpha;
+                threshold = group_threshold[g];
                 sharpness = t <= context->gamma
                     ? (t / context->gamma) * context->sharpness
                     : context->sharpness;
@@ -803,8 +969,8 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
                 d_delta_alpha = d_alpha * alpha0[g];
                 d_delta_threshold = alpha * dth * 0.5f;
                 group_mu_grad[g] += gradient[i] * d_delta_mu * (1.0f - dm * dm);
-                group_alpha_grad[g] += gradient[i] * d_delta_alpha * pv_catq_sigmoid(raw_alpha[g]);
-                group_threshold_grad[g] += gradient[i] * d_delta_threshold * pv_catq_sigmoid(raw_threshold[g]);
+                group_alpha_grad[g] += gradient[i] * d_delta_alpha * group_sig_alpha[g];
+                group_threshold_grad[g] += gradient[i] * d_delta_threshold * group_sig_threshold[g];
             }
             step++;
             for (g = 0; g < groups; g++) {
@@ -841,12 +1007,16 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
     free(mu0); free(alpha0); free(raw_mu); free(raw_alpha); free(raw_threshold);
     free(m_mu); free(m_alpha); free(m_threshold);
     free(v_mu); free(v_alpha); free(v_threshold);
+    free(group_dm); free(group_alpha); free(group_mu); free(group_threshold);
+    free(group_sig_alpha); free(group_sig_threshold);
     free(quantized); free(gradient);
     return out;
 fail:
     free(mu0); free(alpha0); free(raw_mu); free(raw_alpha); free(raw_threshold);
     free(m_mu); free(m_alpha); free(m_threshold);
     free(v_mu); free(v_alpha); free(v_threshold);
+    free(group_dm); free(group_alpha); free(group_mu); free(group_threshold);
+    free(group_sig_alpha); free(group_sig_threshold);
     free(quantized); free(gradient);
     if (out) {
         free(out->weight); free(out->delta_mu); free(out->delta_alpha); free(out->delta_threshold);
@@ -1041,12 +1211,11 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         out = pv_catq_tensor_new(input->count, input->rows, input->cols);
         if (!out) { ctx->regs[rd] = 0; return 1; }
         for (row = 0; row < input->rows; row++) {
-            float sum = 0.0f;
+            float sum;
             float inverse;
-            for (col = 0; col < input->cols; col++) {
-                float value = input->data[(size_t)row * input->cols + col];
-                sum += value * value;
-            }
+            sum = pv_catq_sumsq_f32(
+                input->data + (size_t)row * input->cols,
+                (size_t)input->cols);
             inverse = 1.0f / sqrtf(sum / (float)input->cols + 1e-6f);
             for (col = 0; col < input->cols; col++)
                 out->data[(size_t)row * input->cols + col] =
@@ -1155,7 +1324,7 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         pv_catq_tensor *activation = pv_catq_tensor_get(b);
         pv_catq_packed *packed;
         pv_catq_tensor *output;
-        int row, col;
+        int row;
         if (!packed_object || !activation) { ctx->regs[rd] = 0; return 1; }
         packed = (pv_catq_packed *)packed_object->value;
         if (activation->count != (size_t)packed->cols) {
@@ -1166,12 +1335,20 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         if (!output) { ctx->regs[rd] = 0; return 1; }
         for (row = 0; row < packed->rows; row++) {
             float sum = 0.0f;
-            for (col = 0; col < packed->cols; col++) {
-                size_t index = (size_t)row * packed->cols + col;
-                uint8_t encoded = (packed->codes[index / 4] >> ((index & 3) * 2)) & 3;
-                float weight = encoded == 1 ? 1.0f : (encoded == 2 ? -1.0f : 0.0f);
+            size_t index = (size_t)row * packed->cols;
+            size_t activation_index = 0;
+            size_t remaining = (size_t)packed->cols;
+            while (remaining) {
+                size_t group_offset = index % (size_t)packed->group_size;
+                size_t chunk = (size_t)packed->group_size - group_offset;
                 float scale = packed->scales[index / (size_t)packed->group_size];
-                sum += weight * scale * activation->data[col];
+                if (chunk > remaining) chunk = remaining;
+                sum += pv_catq_dot_packed_group(
+                    packed->codes, index,
+                    activation->data + activation_index, chunk, scale);
+                index += chunk;
+                activation_index += chunk;
+                remaining -= chunk;
             }
             output->data[row] = sum;
         }

@@ -278,7 +278,7 @@ try {
     )
     Invoke-Checked $python @(
         $buildDriver, 'native', $planFile,
-        '--provider', 'catq', '-o', $runnerExe
+        '--provider', 'catq', '--profile', 'host', '-o', $runnerExe
     )
 
     $runnerOutput = @()
