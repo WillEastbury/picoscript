@@ -687,7 +687,7 @@ _CAP_BY_NS = {
     "Timer": CAP_TIMER, "Scheduler": CAP_TIMER,
     "Principal": CAP_PRINCIPAL, "Capability": CAP_PRINCIPAL, "Sandbox": CAP_PRINCIPAL,
     "Capsule": CAP_CAPSULE_EXEC,
-    "CatQ": CAP_DEVICE, "Async": CAP_DEVICE,
+    "CatQ": CAP_DEVICE, "Async": CAP_DEVICE, "MoE": CAP_DEVICE,
     "Shard": CAP_STORAGE,
 }
 
@@ -1457,7 +1457,7 @@ class HostApi:
         if ns == "Tensor":
             if self._tensor(vm, method, rd, rs1, rs2):
                 return
-        if ns in ("CatQ", "Async", "Shard"):
+        if ns in ("CatQ", "Async", "Shard", "MoE"):
             if self._compute_host(vm, ns, method, rd, rs1, rs2):
                 return
         if ns == "BitLinear":

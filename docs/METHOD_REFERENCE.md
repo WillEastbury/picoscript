@@ -48,6 +48,7 @@ This document provides a comprehensive reference for all PicoScript methods, org
 - [Math](#math)
 - [Maths](#maths)
 - [Memory](#memory)
+- [MoE](#moe)
 - [Model](#model)
 - [Net](#net)
 - [Number](#number)
@@ -80,7 +81,7 @@ This document provides a comprehensive reference for all PicoScript methods, org
 
 ## Async
 
-**Conformance Level:** L0  
+**Conformance Level:** L0
 **Methods:** 3
 
 Host-backed submission and completion of coarse accelerator jobs.
@@ -680,6 +681,17 @@ Arena allocation and lease-based typed access primitives.
 | Poke | 0x00 | 0x7035 | `Memory.Poke(...)` |
 | Set | 0x00 | 0x7036 | `Memory.Set(...)` |
 
+## MoE
+
+**Conformance Level:** L0  
+**Methods:** 3
+
+| Method | Opcode | Hook Code | v2 Example |
+|--------|--------|-----------|----------|
+| Forward | 0x00 | 0x7387 | `MoE.Forward(...)` |
+| SelectedCount | 0x00 | 0x7388 | `MoE.SelectedCount(...)` |
+| SelectedExpert | 0x00 | 0x7389 | `MoE.SelectedExpert(...)` |
+
 ## Model
 
 **Conformance Level:** L0  
@@ -1138,7 +1150,7 @@ Thread preemption hints and cooperative yielding.
 
 ## Summary by Conformance Level
 
-### L0: 324 methods
+### L0: 327 methods
 
 - Async.Result (0x737B)
 - Async.Submit (0x7379)
@@ -1324,6 +1336,9 @@ Thread preemption hints and cooperative yielding.
 - Map.ValAt (0x7337)
 - Map.ValIsSpan (0x7339)
 - Map.ValSpanAt (0x7338)
+- MoE.Forward (0x7387)
+- MoE.SelectedCount (0x7388)
+- MoE.SelectedExpert (0x7389)
 - Model.GetConfig (0x7221)
 - Model.MatVecI8Block (0x7273)
 - Model.ReadTensor (0x7227)
@@ -1695,7 +1710,7 @@ Host hooks use reserved imm16 range 0x7000-0x7FFF:
 | 0x70E0-0x70EE | Context | 15 | Context |
 | 0x70F0-0x70FE | Crypto | 15 | Crypto |
 
-**Total:** 510 methods across 62 namespaces.
+**Total:** 513 methods across 63 namespaces.
 
 ## IDE Code Completion
 

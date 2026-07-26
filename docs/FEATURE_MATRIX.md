@@ -178,6 +178,7 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Maths | 12 | Partial | Partial | Partial | `Sin/Cos/Tan/Log/Log10/Exp` (Q16.16 CORDIC), `Power/Sqrt/Clamp/Lerp` implemented; `Random`/`RandomRange` host-injected (entropy) |
 | Memory | 9 | Y | Y | Y | |
 | Model | 12 | Y | Y | Y | |
+| MoE | 3 | Provider | Provider | Provider | Coarse Qwen-style top-K expert routing/streaming boundary; host owns packed expert storage. |
 | Net | 10 | Provider | Provider | Provider | Raw server/client sockets plus span transport. Python ships `SocketNetworkProvider`; native C ships `vm/picovm_net.c`; JS accepts an injected provider. |
 | Number | 11 | Y | Y | Y | |
 | **Pack** | 1 | **Y (real)** | **Y (real)** | **Y (real)** | New this pass: a lightweight "active pack" selector, no host state — real and deterministic. |

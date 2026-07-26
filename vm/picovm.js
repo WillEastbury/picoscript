@@ -107,7 +107,7 @@
     Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Stream: CAP.DMA, Event: CAP.EVENT, Ui: CAP.UI,
     Search: CAP.STORAGE, Process: CAP.PROCESS, Env: CAP.PROCESS, Timer: CAP.TIMER, Scheduler: CAP.TIMER,
     Principal: CAP.PRINCIPAL, Capability: CAP.PRINCIPAL, Sandbox: CAP.PRINCIPAL, Capsule: CAP.CAPSULE_EXEC,
-    CatQ: CAP.DEVICE, Async: CAP.DEVICE, Shard: CAP.STORAGE };
+    CatQ: CAP.DEVICE, Async: CAP.DEVICE, MoE: CAP.DEVICE, Shard: CAP.STORAGE };
   function hookCap(name) {   // "Ns.Method" -> required capability class (0 = pure)
     var dot = name.indexOf("."), ns = name.slice(0, dot), m = name.slice(dot + 1);
     if (ns === "Maths" && (m === "Random" || m === "RandomRange")) return CAP.RANDOM;
@@ -350,7 +350,7 @@
     if (need && !(this.caps & need)) throw picoFault(FAULT.CAPABILITY, this.curPc, code, "capability denied: " + name);
     if (name === "Status.Last") { this.regs[rd] = this.hostStatus | 0; return; }   // INV-18
     var hostDot = name.indexOf("."), hostNs = name.slice(0, hostDot), hostMethod = name.slice(hostDot + 1);
-    if (hostNs === "CatQ" || hostNs === "Async" || hostNs === "Shard") {
+    if (hostNs === "CatQ" || hostNs === "Async" || hostNs === "Shard" || hostNs === "MoE") {
       this._computeHost(hostNs, hostMethod, rd, rs1, rs2); return;
     }
     if (hostNs === "Net" && this._netHost(hostMethod, rd, rs1, rs2)) return;

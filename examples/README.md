@@ -42,6 +42,7 @@ asserting. See [`docs/PSUNIT.md`](../docs/PSUNIT.md).
 | `catq_quantize.pc` | C-syntax | executable shard → CAT-Q optimize → ternary pack → shard workflow over the native C provider |
 | `catq_ternary_infer.pc` | C-syntax | loads a saved CAT-Q shard and executes a correctly scaled ternary projection with `BitLinear.MatVecCatQ` |
 | `qwen_ternary_mlp.pc` | C-syntax | complete Qwen RMSNorm + SwiGLU MLP + residual block using three CAT-Q ternary matrices |
+| `qwen_moe_forward.pc` | C-syntax | stable `MoE.Forward(layer,input)` orchestration boundary for a storage-streamed Qwen top-K/shared-expert block |
 | `llm_paris_client.pc` | C-syntax | sends a factual Paris prompt to a warm local LLM using PicoScript `Net.*` and prints the raw OpenAI-compatible response |
 
 ## Running a program on each path

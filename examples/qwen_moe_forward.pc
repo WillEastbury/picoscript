@@ -1,0 +1,15 @@
+// Qwen MoE orchestration entry point.
+//
+// The host layer handle owns the router plus sector-addressed expert records.
+// MoE.Forward performs routing and streams only the selected experts.
+
+int qwenMoeBlock(int layer, int input) {
+    int output = MoE.Forward(layer, input);
+    if (output == 0) { raise 9101; }
+    return output;
+}
+
+int layerHandle = Model.GetConfig(32);
+int inputTensor = Model.GetConfig(33);
+int moeOutput = qwenMoeBlock(layerHandle, inputTensor);
+return moeOutput;

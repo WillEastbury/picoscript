@@ -583,6 +583,9 @@
       0x384: "Tensor.RmsNorm",
       0x385: "Tensor.SwiGLU",
       0x386: "Tensor.Release",
+      0x387: "MoE.Forward",
+      0x388: "MoE.SelectedCount",
+      0x389: "MoE.SelectedExpert",
     }
   };
   function _canonConstant(name) {

@@ -1,4 +1,4 @@
-# PicoScript Hook Reference (563 hooks, 73 namespaces)
+# PicoScript Hook Reference (566 hooks, 74 namespaces)
 
 Complete reference for all host hooks in the PicoScript 16-opcode ISA.
 Each hook is a deterministic primitive callable from any of the 7 language surfaces.
@@ -7,8 +7,8 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Metric | Value |
 |--------|-------|
-| Total hooks | 563 |
-| Namespaces | 73 |
+| Total hooks | 566 |
+| Namespaces | 74 |
 | Language surfaces | 7 (C, BASIC, Python, English, COBOL, Report, Functional) |
 | Execution paths | 5 (Python VM, JS VM, C VM, native C, native JS) |
 
@@ -744,6 +744,14 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 |--------|------|-------------|
 | Shard.Load() | 0x037C | Load or map a model shard. |
 | Shard.Save() | 0x037D | Persist a transformed model shard. |
+
+### MoE.* (3 hooks)
+
+| Method | Code | Description |
+|--------|------|-------------|
+| MoE.Forward() | 0x0387 | Route one token and stream only its selected experts. |
+| MoE.SelectedCount() | 0x0388 | Return the number of selected experts. |
+| MoE.SelectedExpert() | 0x0389 | Inspect one selected expert ID. |
 
 ### BitLinear.* (6 hooks)
 

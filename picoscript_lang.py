@@ -207,6 +207,11 @@ NAMESPACE_MAP = {
         "Load": OP_NOOP,
         "Save": OP_NOOP,
     },
+    "MoE": {
+        "Forward": OP_NOOP,
+        "SelectedCount": OP_NOOP,
+        "SelectedExpert": OP_NOOP,
+    },
     "BitLinear": {
         "HasFormat": OP_NOOP,
         "SetShape": OP_NOOP,
@@ -956,6 +961,9 @@ HOST_HOOK_CODES = {
     ("Tensor", "RmsNorm"):       0x0384, # rs1=input rs2=gamma tensor      rd=tensor
     ("Tensor", "SwiGLU"):        0x0385, # rs1=gate rs2=up tensor          rd=tensor
     ("Tensor", "Release"):       0x0386, # rs1=opaque provider handle      rd=ok
+    ("MoE", "Forward"):          0x0387, # rs1=layer handle rs2=input tensor rd=tensor
+    ("MoE", "SelectedCount"):    0x0388, # rs1=layer/result handle         rd=count
+    ("MoE", "SelectedExpert"):   0x0389, # rs1=layer/result handle rs2=slot rd=expert id
     ("Quant", "AbsMax"):         0x0228,
     ("Quant", "QuantI8"):        0x0229,
     ("Quant", "DequantI8"):      0x022A,
