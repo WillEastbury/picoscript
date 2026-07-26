@@ -37,6 +37,7 @@ int pv_catq_copy_f32(int tensor_handle, float *out, size_t count);
 /* Inspection helpers used by native hosts and conformance tests. */
 int pv_catq_get_packed(int handle, pv_catq_packed_info *out);
 float pv_catq_final_loss(int optimized_handle);
+int pv_catq_active_objects(void);
 
 #ifdef __cplusplus
 }

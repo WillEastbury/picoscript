@@ -531,6 +531,15 @@ void pv_catq_cleanup(void)
         pv_catq_free_object(&pv_catq_objects[i]);
 }
 
+int pv_catq_active_objects(void)
+{
+    int count = 0;
+    int index;
+    for (index = 0; index < PV_CATQ_MAX_OBJECTS; index++)
+        if (pv_catq_objects[index].type != PV_CATQ_NONE) count++;
+    return count;
+}
+
 static int pv_catq_span(pv_ctx *ctx, int handle, const uint8_t **ptr, int32_t *len)
 {
     uint32_t offset;
@@ -1595,6 +1604,16 @@ static int pv_catq_tensor_map(pv_ctx *ctx, int source, int options_handle)
 int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
 {
     int a = ctx->regs[rs1], b = ctx->regs[rs2];
+    if (hook == PV_HOOK_TENSOR_RELEASE) {
+        int index = pv_catq_index(a);
+        if (index < 0 || pv_catq_objects[index].type == PV_CATQ_NONE) {
+            ctx->regs[rd] = 0;
+        } else {
+            pv_catq_free_object(&pv_catq_objects[index]);
+            ctx->regs[rd] = 1;
+        }
+        return 1;
+    }
     if (hook == PV_HOOK_TENSOR_MAP) {
         ctx->regs[rd] = pv_catq_tensor_map(ctx, a, b);
         return 1;

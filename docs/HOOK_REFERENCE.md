@@ -1,4 +1,4 @@
-# PicoScript Hook Reference (562 hooks, 73 namespaces)
+# PicoScript Hook Reference (563 hooks, 73 namespaces)
 
 Complete reference for all host hooks in the PicoScript 16-opcode ISA.
 Each hook is a deterministic primitive callable from any of the 7 language surfaces.
@@ -7,7 +7,7 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Metric | Value |
 |--------|-------|
-| Total hooks | 562 |
+| Total hooks | 563 |
 | Namespaces | 73 |
 | Language surfaces | 7 (C, BASIC, Python, English, COBOL, Report, Functional) |
 | Execution paths | 5 (Python VM, JS VM, C VM, native C, native JS) |
@@ -694,7 +694,7 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 ## AI & Inference
 
-### Tensor.* (21 hooks)
+### Tensor.* (22 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
@@ -719,6 +719,7 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | Tensor.Mul() | 0x0383 | Elementwise F32 tensor multiplication. |
 | Tensor.RmsNorm() | 0x0384 | F32 RMSNorm using a gamma tensor. |
 | Tensor.SwiGLU() | 0x0385 | Fused `SiLU(gate) * up` tensor operation. |
+| Tensor.Release() | 0x0386 | Release an opaque tensor/shard/CAT-Q provider handle. |
 
 ### CatQ.* (4 hooks)
 

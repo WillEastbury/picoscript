@@ -41,6 +41,7 @@ class FakeComputeProvider:
             ("Tensor", "Mul"): 26,
             ("Tensor", "RmsNorm"): 27,
             ("Tensor", "SwiGLU"): 28,
+            ("Tensor", "Release"): 29,
             ("Async", "Submit"): 31,
             ("Async", "Wait"): 1,
             ("Async", "Result"): 32,
@@ -67,6 +68,7 @@ int added = Tensor.Add(projected, projected);
 int multiplied = Tensor.Mul(projected, projected);
 int normalized = Tensor.RmsNorm(projected, projected);
 int swiglu = Tensor.SwiGLU(projected, projected);
+int released = Tensor.Release(projected);
 int job = Async.Submit("save", packed);
 int waited = Async.Wait(job, 1000);
 int result = Async.Result(job);
@@ -86,6 +88,7 @@ Io.WriteByte(added);
 Io.WriteByte(multiplied);
 Io.WriteByte(normalized);
 Io.WriteByte(swiglu);
+Io.WriteByte(released);
 Io.WriteByte(job);
 Io.WriteByte(waited);
 Io.WriteByte(result);
@@ -99,14 +102,15 @@ def test_python_compute_provider_routes_coarse_operations():
     words = lower_to_bytecode_safe(compile_c(COMPUTE_SOURCE))
     vm = PicoVM(host=HostApi(compute_provider=provider)).run(words)
     output = b"".join(vm.output)
-    assert output == bytes([11, 12, 13, 14, 15, 21, 22, 23]) + b"TERN" + bytes([24, 25, 26, 27, 28, 31, 1, 32, 41, 1])
+    assert output == bytes([11, 12, 13, 14, 15, 21, 22, 23]) + b"TERN" + bytes([24, 25, 26, 27, 28, 29, 31, 1, 32, 41, 1])
     assert [(ns, method) for ns, method, _, _ in provider.calls] == [
         ("Tensor", "Map"), ("Tensor", "View"), ("Tensor", "Gemm"),
         ("Tensor", "Reduce"), ("Tensor", "Elementwise"),
         ("CatQ", "Calibrate"), ("CatQ", "Optimize"),
         ("CatQ", "Ternarize"), ("CatQ", "Pack"),
         ("BitLinear", "MatVecCatQ"),
-        ("Tensor", "Add"), ("Tensor", "Mul"), ("Tensor", "RmsNorm"), ("Tensor", "SwiGLU"),
+        ("Tensor", "Add"), ("Tensor", "Mul"), ("Tensor", "RmsNorm"),
+        ("Tensor", "SwiGLU"), ("Tensor", "Release"),
         ("Async", "Submit"), ("Async", "Wait"), ("Async", "Result"),
         ("Shard", "Load"), ("Shard", "Save"),
     ]
@@ -126,6 +130,8 @@ def test_all_lowerers_emit_code_keyed_host_calls():
         assert f"0x{code:X}" in js_source
     assert "0x385" in c_source
     assert "0x385" in js_source
+    assert "0x386" in c_source
+    assert "0x386" in js_source
 
 
 def test_browser_compiler_accepts_catq_and_raw_net_hooks():
@@ -262,6 +268,7 @@ const values = {
   'BitLinear.MatVecCatQ':24,
   'Tensor.Add':25,'Tensor.Mul':26,'Tensor.RmsNorm':27,
   'Tensor.SwiGLU':28,
+  'Tensor.Release':29,
   'Async.Submit':31,'Async.Wait':1,'Async.Result':32,'Shard.Load':41,'Shard.Save':1
 };
 const provider = { call: function(ns, method) {
@@ -277,7 +284,7 @@ console.log(Buffer.from(rt.output).toString('hex'));
     run = subprocess.run(["node", str(runner)], cwd=tmp_path, capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
     assert run.stdout.strip() == (
-        bytes([11, 12, 13, 14, 15, 21, 22, 23]) + b"TERN" + bytes([24, 25, 26, 27, 28, 31, 1, 32, 41, 1])
+        bytes([11, 12, 13, 14, 15, 21, 22, 23]) + b"TERN" + bytes([24, 25, 26, 27, 28, 29, 31, 1, 32, 41, 1])
     ).hex()
 
 

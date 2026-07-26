@@ -63,6 +63,8 @@ def test_qwen35_plan_emits_executable_picoscript(tmp_path):
     assert "in_proj_qkv.weight" in source
     assert "mlp.gate.weight" not in source
     assert "CatQ.Optimize" in source
+    assert source.count("Tensor.Release(") == 8
+    assert "Arena.Rewind(" in source
     compile_result = subprocess.run(
         [
             sys.executable, os.path.join(ROOT, "picoscript_build.py"),

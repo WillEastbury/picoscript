@@ -321,6 +321,14 @@ int main(int argc, char **argv)
           "    int packed = CatQ.Pack(context, ternary);\n"
           "    int saved = Shard.Save(packed, outputPath);\n"
           "    if (saved == 0) { raise 3005; }\n"
+          "    Tensor.Release(packed);\n"
+          "    Tensor.Release(ternary);\n"
+          "    Tensor.Release(optimized);\n"
+          "    Tensor.Release(context);\n"
+          "    Tensor.Release(calibration);\n"
+          "    Tensor.Release(weights);\n"
+          "    Tensor.Release(calShard);\n"
+          "    Tensor.Release(model);\n"
           "    return saved;\n"
           "}\n\n"
           "int completed = 0;\n", out);
@@ -362,6 +370,7 @@ int main(int argc, char **argv)
             snprintf(weight_options, sizeof(weight_options), "tensor=%s", fields[0]);
         }
         join_path(model_path, sizeof(model_path), argv[2], shard);
+        fprintf(out, "int jobMark%d = Arena.Mark();\n", emitted);
         fputs("completed += quantizeTensor(", out);
         pico_string(out, model_path); fputs(", ", out);
         pico_string(out, weight_options); fputs(", ", out);
@@ -369,6 +378,7 @@ int main(int argc, char **argv)
         pico_string(out, fields[1]); fputs(", ", out);
         pico_string(out, fields[2]); fputs(", ", out);
         pico_string(out, fields[3]); fputs(");\n", out);
+        fprintf(out, "Arena.Rewind(jobMark%d);\n", emitted);
         emitted++;
     }
     fputs("\nreturn completed;\n", out);

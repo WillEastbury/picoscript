@@ -149,7 +149,8 @@ def _capability_for(ns, method):
     if ns == "Http" and method in ("ReadHeader", "ReadBody", "GenerateHeaders", "GenerateResponse"):
         return "NET"
     if ns == "Tensor" and method in (
-        "Map", "View", "Gemm", "Reduce", "Elementwise", "Add", "Mul", "RmsNorm", "SwiGLU"
+        "Map", "View", "Gemm", "Reduce", "Elementwise", "Add", "Mul",
+        "RmsNorm", "SwiGLU", "Release"
     ):
         return "DEVICE"
     if ns == "BitLinear" and method == "MatVecCatQ":

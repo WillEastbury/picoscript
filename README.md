@@ -164,6 +164,9 @@ pwsh -File tools/run_catq_smoke.ps1
 # Run the paper-sized CAT-Q schedule on the local CUDA GPU
 pwsh -File tools/run_catq_smoke.ps1 -Cuda -Epochs 60 -CalibrationRows 512 -BatchSize 3
 
+# Convert all 196 eligible matrices in Qwen3-0.6B
+pwsh -File tools/run_qwen06_full_catq.ps1 -Epochs 60 -CalibrationRows 512 -BatchSize 3
+
 # Execute a saved CAT-Q Qwen projection through PicoScript's ternary stack
 pwsh -File tools/run_catq_ternary_infer.ps1
 

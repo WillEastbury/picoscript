@@ -582,6 +582,7 @@
       0x383: "Tensor.Mul",
       0x384: "Tensor.RmsNorm",
       0x385: "Tensor.SwiGLU",
+      0x386: "Tensor.Release",
     }
   };
   function _canonConstant(name) {

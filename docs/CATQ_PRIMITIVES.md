@@ -242,6 +242,32 @@ CUDA and CPU reductions have different floating-point association order. In the
 measured full schedule, about `0.04%` of ternary decisions differed, with mean
 scale difference around `1.2e-6`; model-level evaluation remains required.
 
+### Full Qwen3-0.6B conversion
+
+Run every eligible matrix in the dense Qwen checkpoint:
+
+```powershell
+pwsh -File tools\run_qwen06_full_catq.ps1 `
+  -Epochs 60 -CalibrationRows 512 -BatchSize 3
+```
+
+The generated C-PicoScript plan uses `Tensor.Release` and `Arena.Rewind` after
+every matrix, allowing hundreds of tensor jobs to stream through a bounded
+provider and PicoVM arena.
+
+Measured on the RTX A2000:
+
+- **196 matrices / 440,401,920 weights**
+- **60 epochs, 512 calibration rows, batch size 3**
+- **35m 1.6s total**
+- **118.17MB ternary matrix shards**
+- estimated complete checkpoint, retaining BF16 embeddings/norms: **415MB**
+  versus **1,137MB** original (**2.74x whole-checkpoint compression**)
+
+The run validates mechanical conversion of the complete matrix set. Its
+calibration tensors are deterministic synthetic activations, so it does not
+establish language-model quality.
+
 ### Reproducible smoke test
 
 On Windows, the complete small-model test is scripted:

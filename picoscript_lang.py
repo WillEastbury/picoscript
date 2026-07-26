@@ -190,6 +190,7 @@ NAMESPACE_MAP = {
         "Mul": OP_NOOP,
         "RmsNorm": OP_NOOP,
         "SwiGLU": OP_NOOP,
+        "Release": OP_NOOP,
     },
     "CatQ": {
         "Calibrate": OP_NOOP,
@@ -954,6 +955,7 @@ HOST_HOOK_CODES = {
     ("Tensor", "Mul"):           0x0383, # rs1=lhs tensor rs2=rhs tensor   rd=tensor
     ("Tensor", "RmsNorm"):       0x0384, # rs1=input rs2=gamma tensor      rd=tensor
     ("Tensor", "SwiGLU"):        0x0385, # rs1=gate rs2=up tensor          rd=tensor
+    ("Tensor", "Release"):       0x0386, # rs1=opaque provider handle      rd=ok
     ("Quant", "AbsMax"):         0x0228,
     ("Quant", "QuantI8"):        0x0229,
     ("Quant", "DequantI8"):      0x022A,

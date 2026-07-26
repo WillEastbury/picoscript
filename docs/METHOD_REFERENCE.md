@@ -985,7 +985,7 @@ String manipulation: concat, substring, split, trim, case conversion.
 ## Tensor
 
 **Conformance Level:** L0  
-**Methods:** 21
+**Methods:** 22
 
 Deterministic inference operations plus host-backed mapped tensor superinstructions.
 
@@ -1003,6 +1003,7 @@ Deterministic inference operations plus host-backed mapped tensor superinstructi
 | Mul | 0x00 | 0x7383 | `Tensor.Mul(...)` |
 | MulI32 | 0x00 | 0x71E4 | `Tensor.MulI32(...)` |
 | Reduce | 0x00 | 0x7373 | `Tensor.Reduce(...)` |
+| Release | 0x00 | 0x7386 | `Tensor.Release(...)` |
 | ReluI32 | 0x00 | 0x71E6 | `Tensor.ReluI32(...)` |
 | RmsNorm | 0x00 | 0x7384 | `Tensor.RmsNorm(...)` |
 | RmsNormI32 | 0x00 | 0x71E7 | `Tensor.RmsNormI32(...)` |
@@ -1137,7 +1138,7 @@ Thread preemption hints and cooperative yielding.
 
 ## Summary by Conformance Level
 
-### L0: 323 methods
+### L0: 324 methods
 
 - Async.Result (0x737B)
 - Async.Submit (0x7379)
@@ -1403,6 +1404,7 @@ Thread preemption hints and cooperative yielding.
 - Tensor.Mul (0x7383)
 - Tensor.MulI32 (0x71E4)
 - Tensor.Reduce (0x7373)
+- Tensor.Release (0x7386)
 - Tensor.ReluI32 (0x71E6)
 - Tensor.RmsNorm (0x7384)
 - Tensor.RmsNormI32 (0x71E7)
@@ -1693,7 +1695,7 @@ Host hooks use reserved imm16 range 0x7000-0x7FFF:
 | 0x70E0-0x70EE | Context | 15 | Context |
 | 0x70F0-0x70FE | Crypto | 15 | Crypto |
 
-**Total:** 509 methods across 62 namespaces.
+**Total:** 510 methods across 62 namespaces.
 
 ## IDE Code Completion
 

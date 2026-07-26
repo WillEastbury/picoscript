@@ -427,6 +427,9 @@ int main(void) {
         pv_catq_copy_f32(hn, norm, 2) != 2 ||
         pv_catq_copy_f32(hs, swiglu, 2) != 2)
         return 2;
+    if ((int)pv_host2(&ctx, PV_HOOK_TENSOR_RELEASE, ha, 0) != 1 ||
+        pv_catq_copy_f32(ha, add, 2) != 0)
+        return 3;
     printf("%.7f %.7f %.7f %.7f %.7f %.7f %.7f %.7f\n",
            add[0], add[1], mul[0], mul[1], norm[0], norm[1],
            swiglu[0], swiglu[1]);
