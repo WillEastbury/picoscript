@@ -4,6 +4,7 @@ param(
     [string]$WorkDirectory,
     [int]$Epochs = 2,
     [int]$CalibrationRows = 4,
+    [string]$CalibrationFile,
     [int]$BatchSize = 1,
     [int]$GroupSize = 128,
     [double]$LearningRate = 0.001,
@@ -11,7 +12,11 @@ param(
     [int]$MatricesPerBatch = 10,
     [int]$CudaChunkWeights = 33554432,
     [switch]$Resume,
-    [switch]$Cpu
+    [switch]$Cpu,
+    [string]$Layers,
+    [int]$MaxMatrices = 0,
+    [ValidateSet('All', 'Moe', 'Dense')]
+    [string]$MatrixSet = 'All'
 )
 
 Set-StrictMode -Version Latest
@@ -22,7 +27,7 @@ if (-not $WorkDirectory) {
     $WorkDirectory = Join-Path $ModelDirectory 'catq-full'
 }
 $indexFile = Join-Path $ModelDirectory 'model.safetensors.index.json'
-$calibrationFile = Join-Path $WorkDirectory 'calibration.safetensors'
+$syntheticCalibrationFile = Join-Path $WorkDirectory 'calibration.safetensors'
 $manifestFile = Join-Path $WorkDirectory 'activations.tsv'
 $plannerExe = Join-Path $WorkDirectory 'catq-plan.exe'
 $shardDirectory = Join-Path $WorkDirectory 'shards'
@@ -56,6 +61,33 @@ function Is-Quantizable([string]$Name, [hashtable]$Info) {
     return @($Info['shape']).Count -ge 2
 }
 
+function Parse-Layers([string]$Text) {
+    $result = [Collections.Generic.SortedSet[int]]::new()
+    foreach ($item in $Text.Split(',')) {
+        $match = [regex]::Match($item, '^\s*(\d+)\s*(?:-\s*(\d+)\s*)?$')
+        if (-not $match.Success) {
+            throw "Invalid layer or range: '$item'"
+        }
+        $first = [int]$match.Groups[1].Value
+        $last = if ($match.Groups[2].Success) {
+            [int]$match.Groups[2].Value
+        }
+        else {
+            $first
+        }
+        if ($last -lt $first) {
+            throw "Invalid descending layer range: '$item'"
+        }
+        for ($layer = $first; $layer -le $last; $layer++) {
+            $result.Add($layer) | Out-Null
+        }
+    }
+    if ($result.Count -eq 0) {
+        throw 'Layer selection must not be empty'
+    }
+    return $result
+}
+
 function PicoPath([string]$Path) {
     return ([IO.Path]::GetFullPath($Path)).Replace('\', '/')
 }
@@ -63,21 +95,22 @@ function PicoPath([string]$Path) {
 if (-not (Test-Path -LiteralPath $indexFile)) {
     throw "Checkpoint index is missing: $indexFile"
 }
-if ($Epochs -lt 1 -or $CalibrationRows -lt 1 -or $BatchSize -lt 1 -or
+if ($Epochs -lt 1 -or $BatchSize -lt 1 -or
     $GroupSize -lt 1 -or $MatricesPerBatch -lt 1 -or $CudaChunkWeights -lt 1) {
-    throw 'Epochs, CalibrationRows, BatchSize, GroupSize, MatricesPerBatch, and CudaChunkWeights must be positive'
+    throw 'Epochs, BatchSize, GroupSize, MatricesPerBatch, and CudaChunkWeights must be positive'
+}
+if (-not $CalibrationFile -and $CalibrationRows -lt 1) {
+    throw 'CalibrationRows must be positive when synthetic calibration is used'
+}
+if ($MaxMatrices -lt 0) {
+    throw 'MaxMatrices cannot be negative'
 }
 
 New-Item -ItemType Directory -Force -Path $WorkDirectory, $shardDirectory | Out-Null
-if (-not $Resume) {
-    Get-ChildItem -LiteralPath $shardDirectory -Filter '*.safetensors' -File `
-        -ErrorAction SilentlyContinue | Remove-Item -Force
-}
 
 $index = Get-Content -LiteralPath $indexFile -Raw | ConvertFrom-Json -AsHashtable
 $headers = @{}
 $matrices = [Collections.Generic.List[object]]::new()
-$dimensions = [Collections.Generic.SortedSet[int]]::new()
 foreach ($weight in ($index['weight_map'].GetEnumerator() | Sort-Object Key)) {
     $sourceShard = [string]$weight.Value
     if (-not $headers.ContainsKey($sourceShard)) {
@@ -89,10 +122,18 @@ foreach ($weight in ($index['weight_map'].GetEnumerator() | Sort-Object Key)) {
     }
     $shape = @($info['shape'])
     $inputDimension = [int]$shape[-1]
-    $dimensions.Add($inputDimension) | Out-Null
+    $layerMatch = [regex]::Match(
+        $weight.Key,
+        '^model\.language_model\.layers\.(\d+)\.'
+    )
+    if (-not $layerMatch.Success) {
+        throw "Cannot read decoder layer from quantizable tensor $($weight.Key)"
+    }
+    $layer = [int]$layerMatch.Groups[1].Value
     $safeName = ($weight.Key -replace '[^A-Za-z0-9_.-]', '_').Replace('.', '_')
     $matrices.Add([pscustomobject]@{
         Name = $weight.Key
+        Layer = $layer
         InputDimension = $inputDimension
         Output = Join-Path $shardDirectory ($safeName + '.ternary.safetensors')
     })
@@ -101,73 +142,215 @@ if ($matrices.Count -eq 0) {
     throw 'No quantizable Qwen3.5 matrices were found'
 }
 
-$dataStream = [IO.MemoryStream]::new()
-$dataWriter = [IO.BinaryWriter]::new($dataStream, [Text.Encoding]::UTF8, $true)
-$calibrationHeader = [ordered]@{}
-foreach ($dimension in $dimensions) {
-    $start = $dataStream.Position
-    $random = [Random]::new($Seed + $dimension)
-    for ($i = 0; $i -lt ($CalibrationRows * $dimension); $i++) {
-        $dataWriter.Write([single](($random.NextDouble() * 2.0 - 1.0) * 0.5))
+$allMatrices = @($matrices | Where-Object {
+    $isMoe = $_.Name.Contains('.mlp.experts.') -or
+        $_.Name.Contains('.mlp.shared_expert.')
+    $MatrixSet -eq 'All' -or
+        ($MatrixSet -eq 'Moe' -and $isMoe) -or
+        ($MatrixSet -eq 'Dense' -and -not $isMoe)
+} | Sort-Object Layer, Name)
+if ($allMatrices.Count -eq 0) {
+    throw "No quantizable Qwen3.5 matrices matched MatrixSet=$MatrixSet"
+}
+$availableLayers = @($allMatrices | Select-Object -ExpandProperty Layer -Unique)
+if ($Layers) {
+    $requestedLayers = Parse-Layers $Layers
+    $invalidLayers = @($requestedLayers | Where-Object { $_ -notin $availableLayers })
+    if ($invalidLayers.Count) {
+        throw "Requested layers are absent from the checkpoint: $($invalidLayers -join ', ')"
     }
-    $dataWriter.Flush()
-    $calibrationHeader["cal_$dimension"] = [ordered]@{
-        dtype = 'F32'
-        shape = @($CalibrationRows, $dimension)
-        data_offsets = @([long]$start, [long]$dataStream.Position)
-    }
-}
-$calibrationData = $dataStream.ToArray()
-$dataWriter.Dispose()
-$dataStream.Dispose()
-$headerBytes = [Text.Encoding]::UTF8.GetBytes(
-    ($calibrationHeader | ConvertTo-Json -Compress -Depth 6)
-)
-$padding = (8 - ($headerBytes.Length % 8)) % 8
-if ($padding) {
-    $padded = [byte[]]::new($headerBytes.Length + $padding)
-    [Array]::Copy($headerBytes, $padded, $headerBytes.Length)
-    for ($i = $headerBytes.Length; $i -lt $padded.Length; $i++) {
-        $padded[$i] = 0x20
-    }
-    $headerBytes = $padded
-}
-$stream = [IO.File]::Create($calibrationFile)
-try {
-    $writer = [IO.BinaryWriter]::new($stream, [Text.Encoding]::UTF8, $true)
-    $writer.Write([uint64]$headerBytes.Length)
-    $writer.Write($headerBytes)
-    $writer.Write($calibrationData)
-    $writer.Flush()
-}
-finally {
-    $stream.Dispose()
-}
-
-$calibrationPath = PicoPath $calibrationFile
-$lines = foreach ($matrix in $matrices) {
-    @(
-        $matrix.Name
-        $calibrationPath
-        "cal_$($matrix.InputDimension)"
-        (PicoPath $matrix.Output)
-    ) -join "`t"
-}
-[IO.File]::WriteAllLines($manifestFile, $lines)
-$pendingMatrices = if ($Resume) {
-    @($matrices | Where-Object { -not (Test-Path -LiteralPath $_.Output) })
+    $layerMatrices = @($allMatrices | Where-Object { $_.Layer -in $requestedLayers })
 }
 else {
-    @($matrices)
+    $requestedLayers = [Collections.Generic.SortedSet[int]]::new()
+    foreach ($layer in $availableLayers) {
+        $requestedLayers.Add([int]$layer) | Out-Null
+    }
+    $layerMatrices = $allMatrices
 }
-$pendingLines = foreach ($matrix in $pendingMatrices) {
+$selectedLayers = @($requestedLayers)
+$layerMatrixCount = $layerMatrices.Count
+if ($MaxMatrices -gt 0 -and $MaxMatrices -lt $layerMatrixCount) {
+    $matrices = @($layerMatrices | Select-Object -First $MaxMatrices)
+}
+else {
+    $matrices = $layerMatrices
+}
+if (-not $Resume) {
+    foreach ($matrix in $matrices) {
+        if (Test-Path -LiteralPath $matrix.Output -PathType Leaf) {
+            Remove-Item -LiteralPath $matrix.Output -Force
+        }
+    }
+}
+$partialValidation = $matrices.Count -lt $layerMatrixCount
+$dimensions = [Collections.Generic.SortedSet[int]]::new()
+foreach ($matrix in $matrices) {
+    $dimensions.Add($matrix.InputDimension) | Out-Null
+}
+
+$calibrationMode = 'synthetic dimension-global'
+$calibrationKeys = @{}
+if ($CalibrationFile) {
+    if (-not (Test-Path -LiteralPath $CalibrationFile -PathType Leaf)) {
+        throw "External calibration file is missing: $CalibrationFile"
+    }
+    $effectiveCalibrationFile = (Resolve-Path -LiteralPath $CalibrationFile).Path
+    $externalHeader = Read-SafeTensorHeader $effectiveCalibrationFile
+    $externalRows = $null
+    $perTensorNames = @($matrices | ForEach-Object { "cal.$($_.Name)" })
+    $presentPerTensor = @($perTensorNames | Where-Object {
+        $externalHeader.ContainsKey($_)
+    })
+    if ($presentPerTensor.Count -eq $perTensorNames.Count) {
+        foreach ($matrix in $matrices) {
+            $tensorName = "cal.$($matrix.Name)"
+            $info = $externalHeader[$tensorName]
+            if ([string]$info['dtype'] -ne 'F32') {
+                throw "External calibration tensor $tensorName must be F32"
+            }
+            $shape = @($info['shape'])
+            if ($shape.Count -ne 2) {
+                throw "External calibration tensor $tensorName must have rank 2"
+            }
+            $rows = [long]$shape[0]
+            $width = [long]$shape[1]
+            if ($rows -lt 1) {
+                throw "External calibration tensor $tensorName must have a positive row count"
+            }
+            if ($width -ne $matrix.InputDimension) {
+                throw "External calibration tensor $tensorName has width $width, expected $($matrix.InputDimension)"
+            }
+            if ($null -eq $externalRows) {
+                $externalRows = $rows
+            }
+            elseif ($rows -ne $externalRows) {
+                throw "External calibration tensors must have the same row count; $tensorName has $rows, expected $externalRows"
+            }
+            $calibrationKeys[$matrix.Name] = $tensorName
+        }
+        $calibrationMode = 'external per-tensor'
+    }
+    elseif ($presentPerTensor.Count -gt 0) {
+        $missingPerTensor = @($perTensorNames | Where-Object {
+            -not $externalHeader.ContainsKey($_)
+        })
+        $preview = ($missingPerTensor | Select-Object -First 5) -join ', '
+        throw "External calibration has $($presentPerTensor.Count) of $($perTensorNames.Count) selected per-tensor keys; missing: $preview"
+    }
+    else {
+        foreach ($dimension in $dimensions) {
+            $tensorName = "cal_$dimension"
+            $info = $externalHeader[$tensorName]
+            if (-not $info) {
+                throw "External calibration is missing tensor $tensorName"
+            }
+            if ([string]$info['dtype'] -ne 'F32') {
+                throw "External calibration tensor $tensorName must be F32"
+            }
+            $shape = @($info['shape'])
+            if ($shape.Count -ne 2) {
+                throw "External calibration tensor $tensorName must have rank 2"
+            }
+            $rows = [long]$shape[0]
+            $width = [long]$shape[1]
+            if ($rows -lt 1) {
+                throw "External calibration tensor $tensorName must have a positive row count"
+            }
+            if ($width -ne $dimension) {
+                throw "External calibration tensor $tensorName has width $width, expected $dimension"
+            }
+            if ($null -eq $externalRows) {
+                $externalRows = $rows
+            }
+            elseif ($rows -ne $externalRows) {
+                throw "External calibration tensors must have the same row count"
+            }
+        }
+        foreach ($matrix in $matrices) {
+            $calibrationKeys[$matrix.Name] = "cal_$($matrix.InputDimension)"
+        }
+        $calibrationMode = 'external dimension-global'
+    }
+    if ($externalRows -gt [int]::MaxValue) {
+        throw "External calibration row count is too large: $externalRows"
+    }
+    $CalibrationRows = [int]$externalRows
+}
+else {
+    $effectiveCalibrationFile = $syntheticCalibrationFile
+    $dataStream = [IO.MemoryStream]::new()
+    $dataWriter = [IO.BinaryWriter]::new($dataStream, [Text.Encoding]::UTF8, $true)
+    $calibrationHeader = [ordered]@{}
+    foreach ($dimension in $dimensions) {
+        $start = $dataStream.Position
+        $random = [Random]::new($Seed + $dimension)
+        for ($i = 0; $i -lt ($CalibrationRows * $dimension); $i++) {
+            $dataWriter.Write([single](($random.NextDouble() * 2.0 - 1.0) * 0.5))
+        }
+        $dataWriter.Flush()
+        $calibrationHeader["cal_$dimension"] = [ordered]@{
+            dtype = 'F32'
+            shape = @($CalibrationRows, $dimension)
+            data_offsets = @([long]$start, [long]$dataStream.Position)
+        }
+    }
+    $calibrationData = $dataStream.ToArray()
+    $dataWriter.Dispose()
+    $dataStream.Dispose()
+    $headerBytes = [Text.Encoding]::UTF8.GetBytes(
+        ($calibrationHeader | ConvertTo-Json -Compress -Depth 6)
+    )
+    $padding = (8 - ($headerBytes.Length % 8)) % 8
+    if ($padding) {
+        $padded = [byte[]]::new($headerBytes.Length + $padding)
+        [Array]::Copy($headerBytes, $padded, $headerBytes.Length)
+        for ($i = $headerBytes.Length; $i -lt $padded.Length; $i++) {
+            $padded[$i] = 0x20
+        }
+        $headerBytes = $padded
+    }
+    $stream = [IO.File]::Create($effectiveCalibrationFile)
+    try {
+        $writer = [IO.BinaryWriter]::new($stream, [Text.Encoding]::UTF8, $true)
+        $writer.Write([uint64]$headerBytes.Length)
+        $writer.Write($headerBytes)
+        $writer.Write($calibrationData)
+        $writer.Flush()
+    }
+    finally {
+        $stream.Dispose()
+    }
+    foreach ($matrix in $matrices) {
+        $calibrationKeys[$matrix.Name] = "cal_$($matrix.InputDimension)"
+    }
+}
+
+Write-Host "[calibration] mode=$calibrationMode rows=$CalibrationRows widths=$($dimensions -join ',') path=$effectiveCalibrationFile"
+$calibrationPath = PicoPath $effectiveCalibrationFile
+$lines = @(foreach ($matrix in $matrices) {
     @(
         $matrix.Name
         $calibrationPath
-        "cal_$($matrix.InputDimension)"
+        $calibrationKeys[$matrix.Name]
         (PicoPath $matrix.Output)
     ) -join "`t"
+})
+[IO.File]::WriteAllLines($manifestFile, $lines)
+$pendingMatrices = @(if ($Resume) {
+    $matrices | Where-Object { -not (Test-Path -LiteralPath $_.Output) }
 }
+else {
+    $matrices
+})
+$pendingLines = @(foreach ($matrix in $pendingMatrices) {
+    @(
+        $matrix.Name
+        $calibrationPath
+        $calibrationKeys[$matrix.Name]
+        (PicoPath $matrix.Output)
+    ) -join "`t"
+})
 
 $python = (Get-Command python -ErrorAction Stop).Source
 $options = "group=$GroupSize;epochs=$Epochs;batch=$BatchSize;gamma=0.8;s0=30;lr=$LearningRate;threads=0"
@@ -217,10 +400,11 @@ for ($batch = 0; $batch -lt $batchCount; $batch++) {
     Write-Host "Completed batch $($batch + 1)/$batchCount ($count tensors) in $([math]::Round($batchElapsed.TotalSeconds, 2)) s"
 }
 
-$outputs = @(Get-ChildItem -LiteralPath $shardDirectory -Filter '*.safetensors' -File)
-if ($outputs.Count -ne $matrices.Count) {
-    throw "Expected $($matrices.Count) output shards, found $($outputs.Count)"
+$missingOutputs = @($matrices | Where-Object { -not (Test-Path -LiteralPath $_.Output -PathType Leaf) })
+if ($missingOutputs.Count) {
+    throw "Expected $($matrices.Count) output shards, missing $($missingOutputs.Count)"
 }
+$outputs = @($matrices | ForEach-Object { Get-Item -LiteralPath $_.Output })
 $totalBytes = ($outputs | Measure-Object -Property Length -Sum).Sum
 foreach ($output in $outputs) {
     $outputHeader = Read-SafeTensorHeader $output.FullName
@@ -231,11 +415,18 @@ foreach ($output in $outputs) {
 
 $runOutput | ForEach-Object { Write-Host $_ }
 Write-Host ''
-Write-Host 'Full Qwen3.5-35B-A3B CAT-Q conversion passed'
+$tensorSummary = [string]$matrices.Count
+if ($partialValidation) {
+    $tensorSummary += " of $layerMatrixCount after layer filter (MaxMatrices=$MaxMatrices)"
+}
+Write-Host "$(if ($partialValidation) { 'Partial validation' } else { 'Full' }) Qwen3.5-35B-A3B CAT-Q conversion passed"
 Write-Host "  backend:      $(if ($Cpu) { 'CPU' } else { 'CUDA' })"
-Write-Host "  tensors:      $($matrices.Count)"
+Write-Host "  tensors:      $tensorSummary"
 Write-Host "  converted:    $($pendingMatrices.Count)"
+Write-Host "  matrix set:   $MatrixSet"
+Write-Host "  layers:       $($selectedLayers -join ', ')"
 Write-Host "  input widths: $($dimensions -join ', ')"
+Write-Host "  calibration:  $calibrationMode ($effectiveCalibrationFile)"
 Write-Host "  schedule:     $Epochs epochs, $CalibrationRows rows, batch $BatchSize"
 Write-Host "  plan batches: $batchCount x <= $MatricesPerBatch matrices"
 if (-not $Cpu) {

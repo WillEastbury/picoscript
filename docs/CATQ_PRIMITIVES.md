@@ -285,12 +285,26 @@ pwsh -File tools\run_qwen35_full_catq.ps1 `
 
 pwsh -File tools\run_qwen35_full_catq.ps1 `
   -ModelDirectory C:\models\Qwen3.5-35B-A3B -Resume
+
+# Quality conversion using captured per-tensor activations, selected layers,
+# and only the dominant MoE matrices.
+pwsh -File tools\run_qwen35_full_catq.ps1 `
+  -ModelDirectory C:\models\Qwen3.5-35B-A3B `
+  -CalibrationFile C:\captures\qwen35-per-tensor.safetensors `
+  -MatrixSet Moe -Layers 0-15 -Epochs 60 -BatchSize 3
 ```
 
 A two-epoch/four-row mechanical smoke conversion on the RTX A2000 produced all
 **390 eligible matrices** as **8.81GB** of CAT-Q shards. This proves large,
 multi-shard checkpoint coverage and bounded CUDA execution; synthetic
 calibration and the short schedule do not establish model quality.
+
+External quality calibration uses one F32 tensor per weight, named
+`cal.<checkpoint-weight-name>`. Dimension-global activation buckets are
+retained for compatibility but are unsuitable for later layers because the
+first layer using a width fills the shared bucket. `-Layers` accepts numeric
+ranges, `-MatrixSet` selects `All`, `Moe`, or `Dense`, and `-MaxMatrices`
+limits the selected set. Partial runs delete only their selected outputs.
 
 ### Reproducible smoke test
 
