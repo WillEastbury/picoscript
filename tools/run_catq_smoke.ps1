@@ -9,6 +9,7 @@ param(
     [int]$Epochs = 2,
     [int]$BatchSize = 1,
     [int]$GroupSize = 128,
+    [int]$Threads = 0,
     [double]$LearningRate = 0.001,
     [int]$Seed = 260626650,
     [string]$WorkDirectory,
@@ -202,8 +203,9 @@ function Test-TernaryOutput {
     }
 }
 
-if ($CalibrationRows -lt 1 -or $Epochs -lt 1 -or $BatchSize -lt 1 -or $GroupSize -lt 1) {
-    throw 'CalibrationRows, Epochs, BatchSize, and GroupSize must be positive'
+if ($CalibrationRows -lt 1 -or $Epochs -lt 1 -or $BatchSize -lt 1 -or
+    $GroupSize -lt 1 -or $Threads -lt 0) {
+    throw 'CalibrationRows, Epochs, BatchSize, and GroupSize must be positive; Threads cannot be negative'
 }
 
 New-Item -ItemType Directory -Force -Path $ModelDirectory, $WorkDirectory | Out-Null
@@ -265,7 +267,7 @@ $manifestLine = @(
 $python = (Get-Command python -ErrorAction Stop).Source
 $plannerSource = Join-Path $repoRoot 'tools\catq_plan.c'
 $buildDriver = Join-Path $repoRoot 'picoscript_build.py'
-$options = "group=$GroupSize;epochs=$Epochs;batch=$BatchSize;gamma=0.8;s0=30;lr=$LearningRate"
+$options = "group=$GroupSize;epochs=$Epochs;batch=$BatchSize;gamma=0.8;s0=30;lr=$LearningRate;threads=$Threads"
 
 Push-Location $repoRoot
 try {
@@ -309,6 +311,7 @@ Write-Host 'CAT-Q smoke test passed'
 Write-Host "  model:       $ModelRepo"
 Write-Host "  tensor:      $TensorName [$shapeText] $($tensor['dtype'])"
 Write-Host "  epochs:      $Epochs"
+Write-Host "  threads:     $(if ($Threads -eq 0) { 'auto' } else { $Threads })"
 Write-Host "  elapsed:     $([math]::Round($elapsed.TotalSeconds, 2)) s"
 Write-Host "  output:      $outputFile"
 Write-Host "  output size: $([math]::Round($outputBytes / 1MB, 2)) MB"

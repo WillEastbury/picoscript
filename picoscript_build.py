@@ -245,6 +245,8 @@ def cmd_native(args):
         cmd += runtime_sources
         if "catq" in providers:
             cmd += ["-lm"]
+            if os.name != "nt" or (target and "linux" in target):
+                cmd += ["-pthread"]
         if "net" in providers and os.name == "nt":
             cmd += ["-lws2_32"]
         cmd += ["-o", out_obj]

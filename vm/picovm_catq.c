@@ -9,6 +9,15 @@
 #if defined(__AVX2__)
 #include <immintrin.h>
 #endif
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__unix__) || defined(__APPLE__)
+#include <pthread.h>
+#include <unistd.h>
+#endif
 
 #define PV_CATQ_MAX_OBJECTS 256
 #define PV_CATQ_HANDLE_BASE 10000
@@ -42,6 +51,7 @@ typedef struct {
     float sharpness;
     float learning_rate;
     float weight_decay;
+    int threads;
 } pv_catq_context;
 
 typedef struct {
@@ -93,6 +103,122 @@ typedef struct {
 
 static pv_catq_object pv_catq_objects[PV_CATQ_MAX_OBJECTS];
 
+typedef void (*pv_catq_parallel_fn)(void *context, size_t start, size_t end);
+
+typedef struct {
+    pv_catq_parallel_fn fn;
+    void *context;
+    size_t count;
+    size_t chunk;
+    volatile long long next;
+} pv_catq_parallel_job;
+
+static size_t pv_catq_parallel_next(pv_catq_parallel_job *job)
+{
+#if defined(_WIN32)
+    return (size_t)InterlockedExchangeAdd64(
+        (volatile LONG64 *)&job->next, (LONG64)job->chunk);
+#elif defined(__GNUC__) || defined(__clang__)
+    return (size_t)__sync_fetch_and_add(&job->next, (long long)job->chunk);
+#else
+    size_t next = (size_t)job->next;
+    job->next += (long long)job->chunk;
+    return next;
+#endif
+}
+
+static void pv_catq_parallel_worker(pv_catq_parallel_job *job)
+{
+    for (;;) {
+        size_t start = pv_catq_parallel_next(job);
+        size_t end;
+        if (start >= job->count) break;
+        end = start + job->chunk;
+        if (end > job->count) end = job->count;
+        job->fn(job->context, start, end);
+    }
+}
+
+#if defined(_WIN32)
+static VOID CALLBACK pv_catq_parallel_callback(
+    PTP_CALLBACK_INSTANCE instance, PVOID context, PTP_WORK work)
+{
+    (void)instance;
+    (void)work;
+    pv_catq_parallel_worker((pv_catq_parallel_job *)context);
+}
+#elif defined(__unix__) || defined(__APPLE__)
+static void *pv_catq_parallel_callback(void *context)
+{
+    pv_catq_parallel_worker((pv_catq_parallel_job *)context);
+    return 0;
+}
+#endif
+
+static int pv_catq_default_threads(void)
+{
+#if defined(_WIN32)
+    DWORD count = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    return count > 0 ? (int)count : 1;
+#elif defined(__unix__) || defined(__APPLE__)
+    long count = sysconf(_SC_NPROCESSORS_ONLN);
+    return count > 0 ? (int)count : 1;
+#else
+    return 1;
+#endif
+}
+
+static void pv_catq_parallel_for(size_t count, int threads,
+                                 pv_catq_parallel_fn fn, void *context)
+{
+    pv_catq_parallel_job job;
+    int workers, i;
+    if (!fn || count == 0) return;
+    if (threads <= 0) threads = pv_catq_default_threads();
+    if (threads <= 1 || count < 2) {
+        fn(context, 0, count);
+        return;
+    }
+    if ((size_t)threads > count) threads = (int)count;
+    workers = threads - 1;
+    job.fn = fn;
+    job.context = context;
+    job.count = count;
+    job.chunk = (count + (size_t)threads * 8 - 1) / ((size_t)threads * 8);
+    if (job.chunk < 1) job.chunk = 1;
+    job.next = 0;
+#if defined(_WIN32)
+    {
+        PTP_WORK work = CreateThreadpoolWork(pv_catq_parallel_callback, &job, 0);
+        if (!work) {
+            fn(context, 0, count);
+            return;
+        }
+        for (i = 0; i < workers; i++) SubmitThreadpoolWork(work);
+        pv_catq_parallel_worker(&job);
+        WaitForThreadpoolWorkCallbacks(work, FALSE);
+        CloseThreadpoolWork(work);
+    }
+#elif defined(__unix__) || defined(__APPLE__)
+    {
+        pthread_t *pool = (pthread_t *)calloc((size_t)workers, sizeof(*pool));
+        int started = 0;
+        if (!pool) {
+            fn(context, 0, count);
+            return;
+        }
+        for (i = 0; i < workers; i++)
+            if (pthread_create(&pool[started], 0, pv_catq_parallel_callback, &job) == 0)
+                started++;
+        pv_catq_parallel_worker(&job);
+        for (i = 0; i < started; i++) pthread_join(pool[i], 0);
+        free(pool);
+    }
+#else
+    fn(context, 0, count);
+#endif
+}
+
 #if defined(__AVX2__)
 static float pv_catq_hsum256(__m256 value)
 {
@@ -105,6 +231,19 @@ static float pv_catq_hsum256(__m256 value)
 }
 #endif
 
+#if defined(__ARM_NEON)
+static float pv_catq_hsum128(float32x4_t value)
+{
+#if defined(__aarch64__)
+    return vaddvq_f32(value);
+#else
+    float32x2_t pair = vadd_f32(vget_low_f32(value), vget_high_f32(value));
+    pair = vpadd_f32(pair, pair);
+    return vget_lane_f32(pair, 0);
+#endif
+}
+#endif
+
 static float pv_catq_sum_f32(const float *values, size_t count)
 {
     size_t i = 0;
@@ -114,6 +253,11 @@ static float pv_catq_sum_f32(const float *values, size_t count)
     for (; i + 8 <= count; i += 8)
         acc = _mm256_add_ps(acc, _mm256_loadu_ps(values + i));
     sum = pv_catq_hsum256(acc);
+#elif defined(__ARM_NEON)
+    float32x4_t acc = vdupq_n_f32(0.0f);
+    for (; i + 4 <= count; i += 4)
+        acc = vaddq_f32(acc, vld1q_f32(values + i));
+    sum = pv_catq_hsum128(acc);
 #endif
     for (; i < count; i++) sum += values[i];
     return sum;
@@ -132,6 +276,14 @@ static float pv_catq_absdev_f32(const float *values, size_t count, float mean)
         acc = _mm256_add_ps(acc, _mm256_and_ps(delta, abs_mask));
     }
     sum = pv_catq_hsum256(acc);
+#elif defined(__ARM_NEON)
+    float32x4_t acc = vdupq_n_f32(0.0f);
+    float32x4_t center = vdupq_n_f32(mean);
+    for (; i + 4 <= count; i += 4) {
+        float32x4_t delta = vsubq_f32(vld1q_f32(values + i), center);
+        acc = vaddq_f32(acc, vabsq_f32(delta));
+    }
+    sum = pv_catq_hsum128(acc);
 #endif
     for (; i < count; i++) sum += fabsf(values[i] - mean);
     return sum;
@@ -157,6 +309,21 @@ static void pv_catq_dot2_f32(const float *input, const float *left, const float 
     }
     a = pv_catq_hsum256(acc_left);
     b = pv_catq_hsum256(acc_right);
+#elif defined(__ARM_NEON)
+    float32x4_t acc_left = vdupq_n_f32(0.0f);
+    float32x4_t acc_right = vdupq_n_f32(0.0f);
+    for (; i + 4 <= count; i += 4) {
+        float32x4_t x = vld1q_f32(input + i);
+#if defined(__aarch64__)
+        acc_left = vfmaq_f32(acc_left, x, vld1q_f32(left + i));
+        acc_right = vfmaq_f32(acc_right, x, vld1q_f32(right + i));
+#else
+        acc_left = vmlaq_f32(acc_left, x, vld1q_f32(left + i));
+        acc_right = vmlaq_f32(acc_right, x, vld1q_f32(right + i));
+#endif
+    }
+    a = pv_catq_hsum128(acc_left);
+    b = pv_catq_hsum128(acc_right);
 #endif
     for (; i < count; i++) {
         a += input[i] * left[i];
@@ -180,6 +347,17 @@ static void pv_catq_axpy_f32(float *target, const float *source, float scale, si
 #endif
         _mm256_storeu_ps(target + i, dst);
     }
+#elif defined(__ARM_NEON)
+    float32x4_t factor = vdupq_n_f32(scale);
+    for (; i + 4 <= count; i += 4) {
+        float32x4_t dst = vld1q_f32(target + i);
+#if defined(__aarch64__)
+        dst = vfmaq_f32(dst, factor, vld1q_f32(source + i));
+#else
+        dst = vmlaq_f32(dst, factor, vld1q_f32(source + i));
+#endif
+        vst1q_f32(target + i, dst);
+    }
 #endif
     for (; i < count; i++) target[i] += scale * source[i];
 }
@@ -199,6 +377,17 @@ static float pv_catq_sumsq_f32(const float *values, size_t count)
 #endif
     }
     sum = pv_catq_hsum256(acc);
+#elif defined(__ARM_NEON)
+    float32x4_t acc = vdupq_n_f32(0.0f);
+    for (; i + 4 <= count; i += 4) {
+        float32x4_t value = vld1q_f32(values + i);
+#if defined(__aarch64__)
+        acc = vfmaq_f32(acc, value, value);
+#else
+        acc = vmlaq_f32(acc, value, value);
+#endif
+    }
+    sum = pv_catq_hsum128(acc);
 #endif
     for (; i < count; i++) sum += values[i] * values[i];
     return sum;
@@ -234,6 +423,28 @@ static float pv_catq_dot_packed_group(const uint8_t *codes, size_t start,
 #endif
     }
     sum = pv_catq_hsum256(acc);
+#elif defined(__ARM_NEON)
+    float32x4_t acc = vdupq_n_f32(0.0f);
+    float32x4_t factor = vdupq_n_f32(scale);
+    for (; i + 4 <= count; i += 4) {
+        float weights[4];
+        size_t lane;
+        for (lane = 0; lane < 4; lane++) {
+            size_t index = start + i + lane;
+            uint8_t encoded = (codes[index / 4] >> ((index & 3) * 2)) & 3;
+            weights[lane] = encoded == 1 ? 1.0f : (encoded == 2 ? -1.0f : 0.0f);
+        }
+#if defined(__aarch64__)
+        acc = vfmaq_f32(
+            acc, vmulq_f32(vld1q_f32(weights), factor),
+            vld1q_f32(activation + i));
+#else
+        acc = vmlaq_f32(
+            acc, vmulq_f32(vld1q_f32(weights), factor),
+            vld1q_f32(activation + i));
+#endif
+    }
+    sum = pv_catq_hsum128(acc);
 #endif
     for (; i < count; i++) {
         size_t index = start + i;
@@ -820,6 +1031,243 @@ static float pv_catq_hard_value(float z, float threshold)
     return 0.0f;
 }
 
+typedef struct {
+    const float *weight;
+    size_t count;
+    int group_size;
+    float *mu0;
+    float *alpha0;
+} pv_catq_group_stats_job;
+
+static void pv_catq_group_stats_worker(void *opaque, size_t first, size_t last)
+{
+    pv_catq_group_stats_job *job = (pv_catq_group_stats_job *)opaque;
+    size_t group;
+    for (group = first; group < last; group++) {
+        size_t start = group * (size_t)job->group_size;
+        size_t end = start + (size_t)job->group_size;
+        size_t count;
+        if (end > job->count) end = job->count;
+        count = end - start;
+        job->mu0[group] = pv_catq_sum_f32(job->weight + start, count) / (float)count;
+        job->alpha0[group] =
+            pv_catq_absdev_f32(job->weight + start, count, job->mu0[group]) /
+            (float)count;
+        if (job->alpha0[group] < 1e-8f) job->alpha0[group] = 1e-8f;
+    }
+}
+
+typedef struct {
+    const float *raw_mu;
+    const float *raw_alpha;
+    const float *raw_threshold;
+    const float *mu0;
+    const float *alpha0;
+    float *dm;
+    float *alpha;
+    float *mu;
+    float *threshold;
+    float *sig_alpha;
+    float *sig_threshold;
+} pv_catq_group_cache_job;
+
+static void pv_catq_group_cache_worker(void *opaque, size_t first, size_t last)
+{
+    pv_catq_group_cache_job *job = (pv_catq_group_cache_job *)opaque;
+    size_t group;
+    for (group = first; group < last; group++) {
+        float da = pv_catq_softplus(job->raw_alpha[group]);
+        job->dm[group] = tanhf(job->raw_mu[group]);
+        job->alpha[group] = da * job->alpha0[group];
+        job->mu[group] = job->mu0[group] + job->dm[group] * job->alpha0[group];
+        job->threshold[group] = pv_catq_softplus(job->raw_threshold[group]) * 0.5f;
+        job->sig_alpha[group] = pv_catq_sigmoid(job->raw_alpha[group]);
+        job->sig_threshold[group] = pv_catq_sigmoid(job->raw_threshold[group]);
+    }
+}
+
+typedef struct {
+    const float *weight;
+    size_t count;
+    int group_size;
+    const float *alpha;
+    const float *mu;
+    const float *threshold;
+    float sharpness;
+    int softened;
+    float *quantized;
+} pv_catq_quantize_job;
+
+static void pv_catq_quantize_worker(void *opaque, size_t first, size_t last)
+{
+    pv_catq_quantize_job *job = (pv_catq_quantize_job *)opaque;
+    size_t group;
+    for (group = first; group < last; group++) {
+        size_t start = group * (size_t)job->group_size;
+        size_t end = start + (size_t)job->group_size;
+        size_t index;
+        if (end > job->count) end = job->count;
+        for (index = start; index < end; index++) {
+            float z = (job->weight[index] - job->mu[group]) / job->alpha[group];
+            float value;
+            if (job->softened) {
+                value = pv_catq_soft_value(
+                    z, job->sharpness, job->threshold[group], 0, 0);
+            } else {
+                value = pv_catq_hard_value(z, job->threshold[group]);
+            }
+            job->quantized[index] = job->alpha[group] * value;
+        }
+    }
+}
+
+typedef struct {
+    const pv_catq_tensor *weight;
+    const pv_catq_tensor *calibration;
+    const float *quantized;
+    int batch_start;
+    int batch_end;
+    float gradient_scale;
+    float *gradient;
+    float *row_loss;
+} pv_catq_forward_job;
+
+static void pv_catq_forward_worker(void *opaque, size_t first, size_t last)
+{
+    pv_catq_forward_job *job = (pv_catq_forward_job *)opaque;
+    size_t row;
+    for (row = first; row < last; row++) {
+        float loss = 0.0f;
+        float *gradient = job->gradient + row * (size_t)job->weight->cols;
+        int sample;
+        for (sample = job->batch_start; sample < job->batch_end; sample++) {
+            const float *input =
+                job->calibration->data + (size_t)sample * job->calibration->cols;
+            const float *weight =
+                job->weight->data + row * (size_t)job->weight->cols;
+            const float *quantized =
+                job->quantized + row * (size_t)job->weight->cols;
+            float target, prediction, error;
+            pv_catq_dot2_f32(
+                input, weight, quantized, (size_t)job->weight->cols,
+                &target, &prediction);
+            error = prediction - target;
+            loss += error * error;
+            pv_catq_axpy_f32(
+                gradient, input, job->gradient_scale * error,
+                (size_t)job->weight->cols);
+        }
+        job->row_loss[row] = loss;
+    }
+}
+
+typedef struct {
+    const pv_catq_tensor *weight;
+    const float *gradient;
+    int group_size;
+    const float *alpha0;
+    const float *raw_mu;
+    const float *dm;
+    const float *alpha;
+    const float *mu;
+    const float *threshold;
+    const float *sig_alpha;
+    const float *sig_threshold;
+    float sharpness;
+    int softened;
+    float *mu_grad;
+    float *alpha_grad;
+    float *threshold_grad;
+} pv_catq_derivative_job;
+
+static void pv_catq_derivative_worker(void *opaque, size_t first, size_t last)
+{
+    pv_catq_derivative_job *job = (pv_catq_derivative_job *)opaque;
+    size_t group;
+    for (group = first; group < last; group++) {
+        size_t start = group * (size_t)job->group_size;
+        size_t end = start + (size_t)job->group_size;
+        size_t index;
+        float mu_grad = 0.0f, alpha_grad = 0.0f, threshold_grad = 0.0f;
+        if (end > job->weight->count) end = job->weight->count;
+        for (index = start; index < end; index++) {
+            float z = (job->weight->data[index] - job->mu[group]) /
+                job->alpha[group];
+            float dz, dth;
+            float soft = pv_catq_soft_value(
+                z, job->sharpness, job->threshold[group], &dz, &dth);
+            float value = job->softened
+                ? soft
+                : pv_catq_hard_value(z, job->threshold[group]);
+            float d_alpha = value - dz * z;
+            float grad = job->gradient[index];
+            mu_grad += grad * (-dz * job->alpha0[group]) *
+                (1.0f - job->dm[group] * job->dm[group]);
+            alpha_grad += grad * (d_alpha * job->alpha0[group]) *
+                job->sig_alpha[group];
+            threshold_grad +=
+                grad * (job->alpha[group] * dth * 0.5f) *
+                job->sig_threshold[group];
+        }
+        job->mu_grad[group] = mu_grad;
+        job->alpha_grad[group] = alpha_grad;
+        job->threshold_grad[group] = threshold_grad;
+    }
+}
+
+typedef struct {
+    float *raw_mu;
+    float *raw_alpha;
+    float *raw_threshold;
+    const float *mu_grad;
+    const float *alpha_grad;
+    const float *threshold_grad;
+    float *m_mu;
+    float *m_alpha;
+    float *m_threshold;
+    float *v_mu;
+    float *v_alpha;
+    float *v_threshold;
+    float learning_rate;
+    float weight_decay;
+    float beta1_pow;
+    float beta2_pow;
+} pv_catq_adam_job;
+
+static void pv_catq_adam_worker(void *opaque, size_t first, size_t last)
+{
+    pv_catq_adam_job *job = (pv_catq_adam_job *)opaque;
+    size_t group;
+    for (group = first; group < last; group++) {
+        float *params[3] = {
+            &job->raw_mu[group], &job->raw_alpha[group], &job->raw_threshold[group]
+        };
+        float grads[3] = {
+            job->mu_grad[group], job->alpha_grad[group], job->threshold_grad[group]
+        };
+        float *moments[3] = {
+            &job->m_mu[group], &job->m_alpha[group], &job->m_threshold[group]
+        };
+        float *variances[3] = {
+            &job->v_mu[group], &job->v_alpha[group], &job->v_threshold[group]
+        };
+        int parameter;
+        for (parameter = 0; parameter < 3; parameter++) {
+            float mhat, vhat;
+            *moments[parameter] =
+                0.9f * *moments[parameter] + 0.1f * grads[parameter];
+            *variances[parameter] =
+                0.999f * *variances[parameter] +
+                0.001f * grads[parameter] * grads[parameter];
+            mhat = *moments[parameter] / (1.0f - job->beta1_pow);
+            vhat = *variances[parameter] / (1.0f - job->beta2_pow);
+            *params[parameter] -= job->learning_rate *
+                (mhat / (sqrtf(vhat) + 1e-8f) +
+                 job->weight_decay * *params[parameter]);
+        }
+    }
+}
+
 static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
                                            const pv_catq_tensor *weight,
                                            const pv_catq_tensor *calibration)
@@ -832,10 +1280,10 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
     float *v_mu = 0, *v_alpha = 0, *v_threshold = 0;
     float *group_dm = 0, *group_alpha = 0, *group_mu = 0, *group_threshold = 0;
     float *group_sig_alpha = 0, *group_sig_threshold = 0;
-    float *quantized = 0, *gradient = 0;
+    float *quantized = 0, *gradient = 0, *row_loss = 0;
     int epoch, batch_start, step = 0;
     int total_steps;
-    size_t g, i;
+    size_t g;
     if (!out || weight->cols != calibration->cols) goto fail;
     out->weight = (float *)malloc(count * sizeof(float));
     out->delta_mu = (float *)malloc(groups * sizeof(float));
@@ -860,12 +1308,13 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
     group_sig_threshold = (float *)malloc(groups * sizeof(float));
     quantized = (float *)malloc(count * sizeof(float));
     gradient = (float *)malloc(count * sizeof(float));
+    row_loss = (float *)malloc((size_t)weight->rows * sizeof(float));
     if (!out->weight || !out->delta_mu || !out->delta_alpha || !out->delta_threshold ||
         !mu0 || !alpha0 || !raw_mu || !raw_alpha || !raw_threshold ||
         !m_mu || !m_alpha || !m_threshold || !v_mu || !v_alpha || !v_threshold ||
         !group_dm || !group_alpha || !group_mu || !group_threshold ||
         !group_sig_alpha || !group_sig_threshold ||
-        !quantized || !gradient)
+        !quantized || !gradient || !row_loss)
         goto fail;
     memcpy(out->weight, weight->data, count * sizeof(float));
     out->count = count;
@@ -873,15 +1322,14 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
     out->cols = weight->cols;
     out->group_size = context->group_size;
     out->groups = groups;
+    {
+        pv_catq_group_stats_job stats = {
+            weight->data, count, context->group_size, mu0, alpha0
+        };
+        pv_catq_parallel_for(
+            groups, context->threads, pv_catq_group_stats_worker, &stats);
+    }
     for (g = 0; g < groups; g++) {
-        size_t start = g * (size_t)context->group_size;
-        size_t end = start + (size_t)context->group_size;
-        size_t n;
-        if (end > count) end = count;
-        n = end - start;
-        mu0[g] = pv_catq_sum_f32(weight->data + start, n) / (float)n;
-        alpha0[g] = pv_catq_absdev_f32(weight->data + start, n, mu0[g]) / (float)n;
-        if (alpha0[g] < 1e-8f) alpha0[g] = 1e-8f;
         raw_alpha[g] = 0.5413248546f;
         raw_threshold[g] = 0.5413248546f;
     }
@@ -897,102 +1345,73 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
             float *group_alpha_grad = (float *)calloc(groups, sizeof(float));
             float *group_threshold_grad = (float *)calloc(groups, sizeof(float));
             float loss = 0.0f;
-            int s, o;
+            float sharpness = t <= context->gamma
+                ? (t / context->gamma) * context->sharpness
+                : context->sharpness;
+            int softened = t <= context->gamma;
             if (!group_mu_grad || !group_alpha_grad || !group_threshold_grad) {
                 free(group_mu_grad); free(group_alpha_grad); free(group_threshold_grad);
                 goto fail;
             }
             if (batch_end > calibration->rows) batch_end = calibration->rows;
+            if (sharpness < 1e-6f) sharpness = 1e-6f;
             memset(gradient, 0, count * sizeof(float));
-            for (g = 0; g < groups; g++) {
-                float da = pv_catq_softplus(raw_alpha[g]);
-                group_dm[g] = tanhf(raw_mu[g]);
-                group_alpha[g] = da * alpha0[g];
-                group_mu[g] = mu0[g] + group_dm[g] * alpha0[g];
-                group_threshold[g] = pv_catq_softplus(raw_threshold[g]) * 0.5f;
-                group_sig_alpha[g] = pv_catq_sigmoid(raw_alpha[g]);
-                group_sig_threshold[g] = pv_catq_sigmoid(raw_threshold[g]);
+            {
+                pv_catq_group_cache_job cache = {
+                    raw_mu, raw_alpha, raw_threshold, mu0, alpha0,
+                    group_dm, group_alpha, group_mu, group_threshold,
+                    group_sig_alpha, group_sig_threshold
+                };
+                pv_catq_parallel_for(
+                    groups, context->threads, pv_catq_group_cache_worker, &cache);
             }
-            for (i = 0; i < count; i++) {
-                g = i / (size_t)context->group_size;
-                {
-                    float alpha = group_alpha[g];
-                    float z = (weight->data[i] - group_mu[g]) / alpha;
-                    float threshold = group_threshold[g];
-                    float dz, dth, soft, tv;
-                    float sharpness = t <= context->gamma
-                        ? (t / context->gamma) * context->sharpness
-                        : context->sharpness;
-                    if (sharpness < 1e-6f) sharpness = 1e-6f;
-                    soft = pv_catq_soft_value(z, sharpness, threshold, &dz, &dth);
-                    tv = t <= context->gamma ? soft : pv_catq_hard_value(z, threshold);
-                    quantized[i] = alpha * tv;
-                }
+            {
+                pv_catq_quantize_job quantize = {
+                    weight->data, count, context->group_size,
+                    group_alpha, group_mu, group_threshold,
+                    sharpness, softened, quantized
+                };
+                pv_catq_parallel_for(
+                    groups, context->threads, pv_catq_quantize_worker, &quantize);
             }
-            for (s = batch_start; s < batch_end; s++) {
-                const float *x = calibration->data + (size_t)s * calibration->cols;
-                for (o = 0; o < weight->rows; o++) {
-                    float target = 0.0f, prediction = 0.0f;
-                    size_t row = (size_t)o * weight->cols;
-                    float error, scale;
-                    pv_catq_dot2_f32(
-                        x, weight->data + row, quantized + row,
-                        (size_t)weight->cols, &target, &prediction);
-                    error = prediction - target;
-                    loss += error * error;
-                    scale = 2.0f * error /
-                        (float)((batch_end - batch_start) * weight->rows);
-                    pv_catq_axpy_f32(
-                        gradient + row, x, scale, (size_t)weight->cols);
-                }
+            {
+                pv_catq_forward_job forward = {
+                    weight, calibration, quantized, batch_start, batch_end,
+                    2.0f / (float)((batch_end - batch_start) * weight->rows),
+                    gradient, row_loss
+                };
+                pv_catq_parallel_for(
+                    (size_t)weight->rows, context->threads,
+                    pv_catq_forward_worker, &forward);
             }
-            loss /= (float)((batch_end - batch_start) * weight->rows);
+            loss = pv_catq_sum_f32(row_loss, (size_t)weight->rows) /
+                (float)((batch_end - batch_start) * weight->rows);
             out->final_loss = loss;
-            for (i = 0; i < count; i++) {
-                float dm, alpha, z, threshold, dz, dth, soft, tv;
-                float d_alpha, d_mu, d_delta_mu, d_delta_alpha, d_delta_threshold;
-                float sharpness;
-                g = i / (size_t)context->group_size;
-                dm = group_dm[g];
-                alpha = group_alpha[g];
-                z = (weight->data[i] - group_mu[g]) / alpha;
-                threshold = group_threshold[g];
-                sharpness = t <= context->gamma
-                    ? (t / context->gamma) * context->sharpness
-                    : context->sharpness;
-                if (sharpness < 1e-6f) sharpness = 1e-6f;
-                soft = pv_catq_soft_value(z, sharpness, threshold, &dz, &dth);
-                tv = t <= context->gamma ? soft : pv_catq_hard_value(z, threshold);
-                d_alpha = tv - dz * z;
-                d_mu = -dz;
-                d_delta_mu = d_mu * alpha0[g];
-                d_delta_alpha = d_alpha * alpha0[g];
-                d_delta_threshold = alpha * dth * 0.5f;
-                group_mu_grad[g] += gradient[i] * d_delta_mu * (1.0f - dm * dm);
-                group_alpha_grad[g] += gradient[i] * d_delta_alpha * group_sig_alpha[g];
-                group_threshold_grad[g] += gradient[i] * d_delta_threshold * group_sig_threshold[g];
+            {
+                pv_catq_derivative_job derivative = {
+                    weight, gradient, context->group_size, alpha0, raw_mu,
+                    group_dm, group_alpha, group_mu, group_threshold,
+                    group_sig_alpha, group_sig_threshold,
+                    sharpness, softened,
+                    group_mu_grad, group_alpha_grad, group_threshold_grad
+                };
+                pv_catq_parallel_for(
+                    groups, context->threads, pv_catq_derivative_worker, &derivative);
             }
             step++;
-            for (g = 0; g < groups; g++) {
-                float lr = context->learning_rate *
+            {
+                float learning_rate = context->learning_rate *
                     (1.0f - (float)(step - 1) / (float)total_steps);
-                float beta1_pow = powf(0.9f, (float)step);
-                float beta2_pow = powf(0.999f, (float)step);
-                float *params[3] = { &raw_mu[g], &raw_alpha[g], &raw_threshold[g] };
-                float grads[3] = { group_mu_grad[g], group_alpha_grad[g], group_threshold_grad[g] };
-                float *moments[3] = { &m_mu[g], &m_alpha[g], &m_threshold[g] };
-                float *variances[3] = { &v_mu[g], &v_alpha[g], &v_threshold[g] };
-                int k;
-                if (lr < 0.0f) lr = 0.0f;
-                for (k = 0; k < 3; k++) {
-                    float mhat, vhat;
-                    *moments[k] = 0.9f * *moments[k] + 0.1f * grads[k];
-                    *variances[k] = 0.999f * *variances[k] + 0.001f * grads[k] * grads[k];
-                    mhat = *moments[k] / (1.0f - beta1_pow);
-                    vhat = *variances[k] / (1.0f - beta2_pow);
-                    *params[k] -= lr *
-                        (mhat / (sqrtf(vhat) + 1e-8f) + context->weight_decay * *params[k]);
-                }
+                pv_catq_adam_job adam = {
+                    raw_mu, raw_alpha, raw_threshold,
+                    group_mu_grad, group_alpha_grad, group_threshold_grad,
+                    m_mu, m_alpha, m_threshold, v_mu, v_alpha, v_threshold,
+                    learning_rate > 0.0f ? learning_rate : 0.0f,
+                    context->weight_decay,
+                    powf(0.9f, (float)step), powf(0.999f, (float)step)
+                };
+                pv_catq_parallel_for(
+                    groups, context->threads, pv_catq_adam_worker, &adam);
             }
             free(group_mu_grad);
             free(group_alpha_grad);
@@ -1009,7 +1428,7 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
     free(v_mu); free(v_alpha); free(v_threshold);
     free(group_dm); free(group_alpha); free(group_mu); free(group_threshold);
     free(group_sig_alpha); free(group_sig_threshold);
-    free(quantized); free(gradient);
+    free(quantized); free(gradient); free(row_loss);
     return out;
 fail:
     free(mu0); free(alpha0); free(raw_mu); free(raw_alpha); free(raw_threshold);
@@ -1017,7 +1436,7 @@ fail:
     free(v_mu); free(v_alpha); free(v_threshold);
     free(group_dm); free(group_alpha); free(group_mu); free(group_threshold);
     free(group_sig_alpha); free(group_sig_threshold);
-    free(quantized); free(gradient);
+    free(quantized); free(gradient); free(row_loss);
     if (out) {
         free(out->weight); free(out->delta_mu); free(out->delta_alpha); free(out->delta_threshold);
         free(out);
@@ -1281,8 +1700,10 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         context->sharpness = pv_catq_option_float(options, "s0", 30.0f);
         context->learning_rate = pv_catq_option_float(options, "lr", 0.001f);
         context->weight_decay = pv_catq_option_float(options, "weight_decay", 0.01f);
+        context->threads = pv_catq_option_int(options, "threads", 0);
         if (context->epochs < 1 || context->group_size < 1 || context->batch_size < 1 ||
-            context->gamma <= 0.0f || context->gamma > 1.0f) {
+            context->gamma <= 0.0f || context->gamma > 1.0f ||
+            context->threads < 0) {
             free(context); ctx->regs[rd] = 0; return 1;
         }
         ctx->regs[rd] = pv_catq_object_put(PV_CATQ_CONTEXT, context);

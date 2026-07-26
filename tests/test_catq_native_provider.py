@@ -463,3 +463,85 @@ int main(void) {
         ],
         abs=1e-6,
     )
+
+
+def test_multicore_catq_matches_single_thread_codes(tmp_path):
+    harness = tmp_path / "multicore.c"
+    executable = tmp_path / "multicore.exe"
+    harness.write_text(
+        r'''
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+#include "picovm.h"
+#include "picovm_catq.h"
+#include "pico_hooks.h"
+
+static int make_span(pv_ctx *ctx, const char *text, int offset) {
+    int handle = ctx->span_count++;
+    int length = (int)strlen(text);
+    memcpy(ctx->mem + offset, text, (size_t)length);
+    ctx->span_ptr[handle] = (uint32_t)offset;
+    ctx->span_len[handle] = length;
+    return handle;
+}
+
+static int convert(pv_ctx *ctx, int samples, int weights, int options) {
+    int catq = (int)pv_host2(ctx, PV_HOOK_CATQ_CALIBRATE, samples, options);
+    int optimized = (int)pv_host2(ctx, PV_HOOK_CATQ_OPTIMIZE, catq, weights);
+    int ternary = (int)pv_host2(ctx, PV_HOOK_CATQ_TERNARIZE, catq, optimized);
+    return (int)pv_host2(ctx, PV_HOOK_CATQ_PACK, catq, ternary);
+}
+
+int main(void) {
+    float weights[8] = {-0.9f,-0.2f,0.1f,0.8f,0.7f,-0.6f,0.3f,-0.1f};
+    float calibration[24] = {
+        1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1,
+        1,-1,0.5f,0.25f, -0.5f,0.75f,-1,1
+    };
+    unsigned char memory[8192] = {0};
+    pv_catq_packed_info one, many;
+    pv_ctx ctx;
+    int weight, samples, single_options, multi_options, single, multi;
+    size_t i;
+    pv_init(&ctx);
+    ctx.mem = memory;
+    ctx.mem_size = (long)sizeof(memory);
+    pv_catq_install();
+    weight = pv_catq_register_f32(weights, 2, 4);
+    samples = pv_catq_register_f32(calibration, 6, 4);
+    single_options = make_span(
+        &ctx, "group=4;epochs=10;batch=2;gamma=0.8;s0=30;lr=0.02;threads=1", 100);
+    multi_options = make_span(
+        &ctx, "group=4;epochs=10;batch=2;gamma=0.8;s0=30;lr=0.02;threads=4", 300);
+    single = convert(&ctx, samples, weight, single_options);
+    multi = convert(&ctx, samples, weight, multi_options);
+    if (!pv_catq_get_packed(single, &one) || !pv_catq_get_packed(multi, &many) ||
+        one.codes_len != many.codes_len || one.scale_count != many.scale_count)
+        return 2;
+    if (memcmp(one.codes, many.codes, one.codes_len) != 0) return 3;
+    for (i = 0; i < one.scale_count; i++)
+        if (fabsf(one.scales[i] - many.scales[i]) > 1e-6f) return 4;
+    puts("ok");
+    pv_catq_cleanup();
+    return 0;
+}
+''',
+        encoding="utf-8",
+    )
+    build = subprocess.run(
+        [
+            sys.executable, "-m", "ziglang", "cc", "-std=c99", "-O2",
+            f"-I{os.path.join(ROOT, 'vm')}",
+            str(harness),
+            os.path.join(ROOT, "vm", "picovm.c"),
+            os.path.join(ROOT, "vm", "picovm_catq.c"),
+            "-lm", "-o", str(executable),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert build.returncode == 0, build.stderr
+    run = subprocess.run([str(executable)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr + run.stdout
+    assert run.stdout.strip() == "ok"

@@ -162,8 +162,9 @@ CAT-Q ternary shards and their learned group scales.
 ### Host SIMD
 
 Hosted CAT-Q runners compile with `--profile host`, enabling AVX2/FMA on capable
-x86 machines while retaining scalar fallbacks for other targets. The native
-provider has explicit vector kernels for:
+x86 machines. The same exact kernels use NEON/FMA when compiled for ARM64/Pi 5,
+with scalar fallbacks elsewhere. The native provider has explicit vector kernels
+for:
 
 - group mean and absolute-deviation statistics;
 - simultaneous reference/quantized dot products;
@@ -182,6 +183,26 @@ Measured on an Intel i9-12900H with the 3.15M-weight Qwen gate projection:
 The packed ternary codes are byte-identical to the previous implementation.
 Floating scales differ only through reduction order, with observed maximum
 absolute difference below `4.3e-8`.
+
+### Multicore conversion
+
+CAT-Q conversion also parallelizes independent groups and output rows. Hosted
+Windows uses the native OS thread pool; hosted Linux/ARM uses pthread workers.
+`threads=0` selects every online logical processor, while `threads=N` overrides
+the worker count.
+
+On the same i9-12900H (14 cores / 20 logical processors), the two-epoch 3.15M
+weight conversion measured:
+
+| Execution mode | Time |
+|---|---:|
+| Original scalar | ~4.7s |
+| Single-core AVX2 + group-state hoisting | ~1.6s |
+| **20-thread AVX2** | **0.25s** |
+
+This is an observed **18.8x** gain over the original scalar provider. Packed
+ternary codes remained byte-identical; scale differences versus single-thread
+SIMD were below `3.8e-9`.
 
 ### Reproducible smoke test
 
