@@ -20,9 +20,12 @@ namespace/method, .ast/.astjson = AST-as-JSON) or forced with
 from __future__ import annotations
 
 import argparse
+import glob
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 from picoscript_il import (
     lower_to_bytecode_safe, lower_to_c, lower_to_js, il_to_text, optimize,
@@ -40,6 +43,48 @@ PROFILES = {
     "pi5":   ("aarch64-linux-gnu", "cortex_a76"),
     "pico2": ("thumb-freestanding-eabi", "cortex_m33+dsp"),
 }
+
+
+def windows_vcvars_path():
+    if os.name != "nt":
+        return None
+    candidates = sorted(
+        glob.glob(
+            r"C:\Program Files\Microsoft Visual Studio\*\*\VC\Auxiliary\Build\vcvars64.bat"
+        ),
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def run_cuda_command(arguments):
+    vcvars = windows_vcvars_path()
+    if vcvars:
+        arguments = list(arguments)
+        script = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".cmd", delete=False, encoding="utf-8"
+            ) as handle:
+                script = handle.name
+                handle.write("@echo off\n")
+                handle.write(f'call "{vcvars}" >nul\n')
+                handle.write(
+                    f'"{arguments[0]}" {subprocess.list2cmdline(arguments[1:])}\n'
+                )
+                handle.write("exit /b %errorlevel%\n")
+            return subprocess.run(
+                [os.environ.get("ComSpec", "cmd.exe"), "/d", "/c", script],
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            if script:
+                try:
+                    os.remove(script)
+                except OSError:
+                    pass
+    return subprocess.run(arguments, capture_output=True, text=True)
 
 
 def detect_lang(path: str, forced: str | None) -> str:
@@ -191,6 +236,7 @@ def cmd_native(args):
     opt = args.opt
     freestanding = bool(target) and "freestanding" in target
     providers = list(dict.fromkeys(args.provider or []))
+    has_catq = "catq" in providers or "catq-cuda" in providers
     if freestanding and providers:
         raise SystemExit("native providers require a hosted target")
     # Host builds get a runnable main(); freestanding cross builds emit a
@@ -201,7 +247,7 @@ def cmd_native(args):
         includes = ["#include <stdio.h>"]
         init = []
         cleanup = []
-        if "catq" in providers:
+        if has_catq:
             includes.append('#include "picovm_catq.h"')
             init.append("    if (!pv_catq_install()) return 2;")
             cleanup.append("    pv_catq_cleanup();")
@@ -235,15 +281,71 @@ def cmd_native(args):
     if mcpu:
         cmd += [f"-mcpu={mcpu}"]
     runtime_sources = [cfile, os.path.join(VM_DIR, "picovm.c")]
-    if "catq" in providers:
+    if has_catq:
         runtime_sources.append(os.path.join(VM_DIR, "picovm_catq.c"))
     if "net" in providers:
         runtime_sources.append(os.path.join(VM_DIR, "picovm_net.c"))
+    if "catq-cuda" in providers:
+        if freestanding or target:
+            raise SystemExit("catq-cuda currently supports the native hosted target only")
+        nvcc = shutil.which("nvcc")
+        if not nvcc:
+            raise SystemExit("catq-cuda requires nvcc on PATH")
+        objects = []
+        compile_sources = list(runtime_sources)
+        for index, source_path in enumerate(compile_sources):
+            obj = out_obj + (f".{index}.obj" if os.name == "nt" else f".{index}.o")
+            if os.name == "nt":
+                msvc_opt = "/O2" if opt != "0" else "/Od"
+                compile_cmd = [
+                    "cl.exe", "/nologo", msvc_opt, "/TC", f"/I{VM_DIR}",
+                    "/DPV_CATQ_ENABLE_CUDA", "/c", source_path, f"/Fo{obj}",
+                ]
+                result = run_cuda_command(compile_cmd)
+            else:
+                compile_cmd = [
+                    sys.executable, "-m", "ziglang", "cc", "-std=c99", f"-O{opt}",
+                    f"-I{VM_DIR}", "-DPV_CATQ_ENABLE_CUDA", "-c", source_path, "-o", obj,
+                ]
+                if mcpu:
+                    compile_cmd += [f"-mcpu={mcpu}"]
+                result = subprocess.run(compile_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(result.stderr)
+                raise SystemExit("native CUDA C build failed")
+            objects.append(obj)
+        cuda_obj = out_obj + ".cuda.o"
+        cuda_cmd = [
+            nvcc, "-O3", f"-arch={args.cuda_arch}", f"-I{VM_DIR}",
+            "-c", os.path.join(VM_DIR, "picovm_catq_cuda.cu"), "-o", cuda_obj,
+        ]
+        result = run_cuda_command(cuda_cmd)
+        if result.returncode != 0:
+            print(result.stdout)
+            print(result.stderr)
+            raise SystemExit("CUDA kernel build failed")
+        objects.append(cuda_obj)
+        link_cmd = [nvcc, "-O3", f"-arch={args.cuda_arch}"] + objects
+        if "net" in providers and os.name == "nt":
+            link_cmd += ["ws2_32.lib"]
+        link_cmd += ["-o", out_obj]
+        result = run_cuda_command(link_cmd)
+        for path in objects:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        if result.returncode != 0:
+            print(result.stdout)
+            print(result.stderr)
+            raise SystemExit("CUDA native link failed")
+        print(f"wrote {out_obj} (executable via nvcc -arch={args.cuda_arch})")
+        return
     if freestanding:
         cmd += ["-c"] + runtime_sources + ["-o", out_obj]
     else:
         cmd += runtime_sources
-        if "catq" in providers:
+        if has_catq:
             cmd += ["-lm"]
             if os.name != "nt" or (target and "linux" in target):
                 cmd += ["-pthread"]
@@ -297,8 +399,10 @@ def main(argv=None):
     pn.add_argument("--mcpu", help="zig -mcpu, e.g. cortex_a76 (Pi5 NEON SDOT), cortex_m33+dsp (Pico2 SMLAD), native")
     pn.add_argument("--profile", choices=list(PROFILES),
                     help="deploy preset: host (native SIMD), pi5 (NEON SDOT), pico2 (SMLAD)")
-    pn.add_argument("--provider", action="append", choices=["catq", "net"],
+    pn.add_argument("--provider", action="append", choices=["catq", "catq-cuda", "net"],
                     help="link and initialize a hosted runtime provider (repeatable)")
+    pn.add_argument("--cuda-arch", default="sm_86",
+                    help="CUDA architecture for catq-cuda (default: sm_86)")
     pn.add_argument("--opt", default="3", help="optimization level passed as -O<opt> (default 3)")
     pn.set_defaults(func=cmd_native)
 

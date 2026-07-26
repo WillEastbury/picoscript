@@ -204,6 +204,44 @@ This is an observed **18.8x** gain over the original scalar provider. Packed
 ternary codes remained byte-identical; scale differences versus single-thread
 SIMD were below `3.8e-9`.
 
+### CUDA
+
+`catq-cuda` keeps weights, calibration samples, modulation state, reconstruction
+errors, gradients, and AdamW moments resident on the GPU. It uses custom CUDA
+kernels rather than a Python tensor framework.
+
+```powershell
+pwsh -File tools\run_catq_smoke.ps1 -Cuda `
+  -Epochs 60 -CalibrationRows 512 -BatchSize 3
+```
+
+The Windows build driver initializes MSVC automatically for `nvcc`; override the
+default A2000 architecture with `--cuda-arch` when invoking
+`picoscript_build.py native ... --provider catq-cuda`.
+
+Measured on the RTX A2000 8GB Laptop GPU (`sm_86`), using the same 3.15M-weight
+Qwen matrix and the full 60-epoch/512-row schedule:
+
+| Backend | Time |
+|---|---:|
+| 20-thread AVX2 CPU | 282.38s |
+| **RTX A2000 CUDA** | **15.33s** |
+
+That is an observed **18.4x CUDA speedup**. The short two-epoch/four-row smoke
+case remains CPU-faster because CUDA initialization and kernel launches dominate.
+
+Linear parameter-count estimates at the measured CUDA rate are approximately:
+
+| Model | Estimated conversion |
+|---|---:|
+| Qwen3-0.6B quantizable matrices | **36 minutes** |
+| Qwen3.5-35B-A3B quantizable matrices | **1.9 days** |
+| GPT-OSS-120B total-parameter equivalent | **6.6 days** |
+
+CUDA and CPU reductions have different floating-point association order. In the
+measured full schedule, about `0.04%` of ternary decisions differed, with mean
+scale difference around `1.2e-6`; model-level evaluation remains required.
+
 ### Reproducible smoke test
 
 On Windows, the complete small-model test is scripted:

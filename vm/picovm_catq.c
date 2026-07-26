@@ -6,6 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(PV_CATQ_ENABLE_CUDA)
+#include "picovm_catq_cuda.h"
+#endif
+
 #if defined(__AVX2__)
 #include <immintrin.h>
 #endif
@@ -52,6 +56,8 @@ typedef struct {
     float learning_rate;
     float weight_decay;
     int threads;
+    int use_cuda;
+    int cuda_required;
 } pv_catq_context;
 
 typedef struct {
@@ -1322,6 +1328,35 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
     out->cols = weight->cols;
     out->group_size = context->group_size;
     out->groups = groups;
+#if defined(PV_CATQ_ENABLE_CUDA)
+    if (context->use_cuda) {
+        pv_catq_cuda_options cuda_options;
+        cuda_options.epochs = context->epochs;
+        cuda_options.group_size = context->group_size;
+        cuda_options.batch_size = context->batch_size;
+        cuda_options.gamma = context->gamma;
+        cuda_options.sharpness = context->sharpness;
+        cuda_options.learning_rate = context->learning_rate;
+        cuda_options.weight_decay = context->weight_decay;
+        if (pv_catq_cuda_optimize(
+                weight->data, weight->rows, weight->cols,
+                calibration->data, calibration->rows,
+                &cuda_options,
+                out->delta_mu, out->delta_alpha, out->delta_threshold,
+                &out->final_loss)) {
+            free(mu0); free(alpha0); free(raw_mu); free(raw_alpha); free(raw_threshold);
+            free(m_mu); free(m_alpha); free(m_threshold);
+            free(v_mu); free(v_alpha); free(v_threshold);
+            free(group_dm); free(group_alpha); free(group_mu); free(group_threshold);
+            free(group_sig_alpha); free(group_sig_threshold);
+            free(quantized); free(gradient); free(row_loss);
+            return out;
+        }
+        if (context->cuda_required) goto fail;
+    }
+#else
+    if (context->cuda_required) goto fail;
+#endif
     {
         pv_catq_group_stats_job stats = {
             weight->data, count, context->group_size, mu0, alpha0
@@ -1701,6 +1736,14 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         context->learning_rate = pv_catq_option_float(options, "lr", 0.001f);
         context->weight_decay = pv_catq_option_float(options, "weight_decay", 0.01f);
         context->threads = pv_catq_option_int(options, "threads", 0);
+        {
+            char device[32];
+            context->use_cuda =
+                pv_catq_option(options, "device", device, sizeof(device)) &&
+                strcmp(device, "cuda") == 0;
+        }
+        context->cuda_required =
+            pv_catq_option_int(options, "cuda_required", context->use_cuda);
         if (context->epochs < 1 || context->group_size < 1 || context->batch_size < 1 ||
             context->gamma <= 0.0f || context->gamma > 1.0f ||
             context->threads < 0) {

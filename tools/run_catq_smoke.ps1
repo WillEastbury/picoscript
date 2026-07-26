@@ -14,6 +14,7 @@ param(
     [int]$Seed = 260626650,
     [string]$WorkDirectory,
     [switch]$SkipDownload,
+    [switch]$Cuda,
     [switch]$KeepBuildArtifacts
 )
 
@@ -268,6 +269,10 @@ $python = (Get-Command python -ErrorAction Stop).Source
 $plannerSource = Join-Path $repoRoot 'tools\catq_plan.c'
 $buildDriver = Join-Path $repoRoot 'picoscript_build.py'
 $options = "group=$GroupSize;epochs=$Epochs;batch=$BatchSize;gamma=0.8;s0=30;lr=$LearningRate;threads=$Threads"
+if ($Cuda) {
+    $options += ';device=cuda;cuda_required=1'
+}
+$provider = if ($Cuda) { 'catq-cuda' } else { 'catq' }
 
 Push-Location $repoRoot
 try {
@@ -280,7 +285,7 @@ try {
     )
     Invoke-Checked $python @(
         $buildDriver, 'native', $planFile,
-        '--provider', 'catq', '--profile', 'host', '-o', $runnerExe
+        '--provider', $provider, '--profile', 'host', '-o', $runnerExe
     )
 
     $runnerOutput = @()
@@ -312,6 +317,7 @@ Write-Host "  model:       $ModelRepo"
 Write-Host "  tensor:      $TensorName [$shapeText] $($tensor['dtype'])"
 Write-Host "  epochs:      $Epochs"
 Write-Host "  threads:     $(if ($Threads -eq 0) { 'auto' } else { $Threads })"
+Write-Host "  backend:     $(if ($Cuda) { 'CUDA' } else { 'CPU' })"
 Write-Host "  elapsed:     $([math]::Round($elapsed.TotalSeconds, 2)) s"
 Write-Host "  output:      $outputFile"
 Write-Host "  output size: $([math]::Round($outputBytes / 1MB, 2)) MB"
