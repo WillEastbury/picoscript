@@ -11,6 +11,7 @@ typedef struct pv_catq_cuda_options {
     int epochs;
     int group_size;
     int batch_size;
+    int normalization_rows;
     float gamma;
     float sharpness;
     float learning_rate;
@@ -18,6 +19,7 @@ typedef struct pv_catq_cuda_options {
 } pv_catq_cuda_options;
 
 int pv_catq_cuda_available(void);
+const char *pv_catq_cuda_last_error(void);
 
 int pv_catq_cuda_optimize(
     const float *weight,

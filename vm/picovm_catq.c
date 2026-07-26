@@ -1,3 +1,7 @@
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200112L
+#endif
+
 #include "picovm_catq.h"
 #include "pico_hooks.h"
 
@@ -20,6 +24,7 @@
 #include <windows.h>
 #elif defined(__unix__) || defined(__APPLE__)
 #include <pthread.h>
+#include <sys/types.h>
 #include <unistd.h>
 #endif
 
@@ -58,6 +63,7 @@ typedef struct {
     int threads;
     int use_cuda;
     int cuda_required;
+    size_t cuda_chunk_weights;
 } pv_catq_context;
 
 typedef struct {
@@ -685,6 +691,17 @@ static uint64_t pv_catq_u64le(const uint8_t *p)
     return value;
 }
 
+static int pv_catq_seek(FILE *file, uint64_t offset)
+{
+#if defined(_WIN32)
+    return offset <= INT64_MAX &&
+           _fseeki64(file, (int64_t)offset, SEEK_SET) == 0;
+#else
+    return offset <= INT64_MAX &&
+           fseeko(file, (off_t)offset, SEEK_SET) == 0;
+#endif
+}
+
 static void pv_catq_put_u64le(uint8_t *p, uint64_t value)
 {
     int i;
@@ -782,7 +799,7 @@ static int pv_catq_load_raw_safetensor(const char *path, const char *name,
     out->bytes = (size_t)(offsets[1] - offsets[0]);
     out->data = (uint8_t *)malloc(out->bytes ? out->bytes : 1);
     if (!out->data ||
-        fseek(file, (long)(8 + header_len + offsets[0]), SEEK_SET) != 0 ||
+        !pv_catq_seek(file, 8 + header_len + offsets[0]) ||
         fread(out->data, 1, out->bytes, file) != out->bytes)
         goto done;
     ok = 1;
@@ -1343,16 +1360,45 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
         cuda_options.epochs = context->epochs;
         cuda_options.group_size = context->group_size;
         cuda_options.batch_size = context->batch_size;
+        cuda_options.normalization_rows = weight->rows;
         cuda_options.gamma = context->gamma;
         cuda_options.sharpness = context->sharpness;
         cuda_options.learning_rate = context->learning_rate;
         cuda_options.weight_decay = context->weight_decay;
-        if (pv_catq_cuda_optimize(
-                weight->data, weight->rows, weight->cols,
-                calibration->data, calibration->rows,
-                &cuda_options,
-                out->delta_mu, out->delta_alpha, out->delta_threshold,
-                &out->final_loss)) {
+        size_t max_weights = context->cuda_chunk_weights;
+        size_t rows_per_chunk;
+        int cuda_ok = 1;
+        double weighted_loss = 0.0;
+        size_t weighted_rows = 0;
+        if (max_weights < (size_t)weight->cols) {
+            max_weights = (size_t)weight->cols;
+        }
+        rows_per_chunk = max_weights / (size_t)weight->cols;
+        if (rows_per_chunk < 1u) rows_per_chunk = 1u;
+        for (size_t row = 0; row < (size_t)weight->rows; row += rows_per_chunk) {
+            size_t rows = (size_t)weight->rows - row;
+            size_t weight_offset = row * (size_t)weight->cols;
+            size_t group_offset = weight_offset / (size_t)context->group_size;
+            float chunk_loss = 0.0f;
+            if (rows > rows_per_chunk) rows = rows_per_chunk;
+            if (!pv_catq_cuda_optimize(
+                    weight->data + weight_offset, (int)rows, weight->cols,
+                    calibration->data, calibration->rows,
+                    &cuda_options,
+                    out->delta_mu + group_offset,
+                    out->delta_alpha + group_offset,
+                    out->delta_threshold + group_offset,
+                    &chunk_loss)) {
+                cuda_ok = 0;
+                break;
+            }
+            weighted_loss += (double)chunk_loss * (double)rows;
+            weighted_rows += rows;
+        }
+        if (cuda_ok) {
+            out->final_loss = weighted_rows
+                ? (float)(weighted_loss / (double)weighted_rows)
+                : 0.0f;
             free(mu0); free(alpha0); free(raw_mu); free(raw_alpha); free(raw_threshold);
             free(m_mu); free(m_alpha); free(m_threshold);
             free(v_mu); free(v_alpha); free(v_threshold);
@@ -1361,7 +1407,11 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
             free(quantized); free(gradient); free(row_loss);
             return out;
         }
-        if (context->cuda_required) goto fail;
+        if (context->cuda_required) {
+            fprintf(stderr, "CAT-Q CUDA optimization failed: %s\n",
+                    pv_catq_cuda_last_error());
+            goto fail;
+        }
     }
 #else
     if (context->cuda_required) goto fail;
@@ -1616,6 +1666,15 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
     }
     if (hook == PV_HOOK_TENSOR_MAP) {
         ctx->regs[rd] = pv_catq_tensor_map(ctx, a, b);
+        ctx->host_status = ctx->regs[rd] ? 0 : 1;
+        if (!ctx->regs[rd]) {
+            char options[PV_CATQ_OPTION_BYTES] = "";
+            pv_catq_object *shard_object = pv_catq_object_get(a, PV_CATQ_SHARD);
+            pv_catq_span_text(ctx, b, options, sizeof(options));
+            fprintf(stderr, "Tensor.Map failed: %s%s%s\n",
+                    shard_object ? ((pv_catq_shard *)shard_object->value)->path : "<span>",
+                    options[0] ? " " : "", options);
+        }
         return 1;
     }
     if (hook == PV_HOOK_TENSOR_VIEW) {
@@ -1763,6 +1822,11 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         }
         context->cuda_required =
             pv_catq_option_int(options, "cuda_required", context->use_cuda);
+        context->cuda_chunk_weights = (size_t)pv_catq_option_int(
+            options, "cuda_chunk_weights", 32 * 1024 * 1024);
+        if (context->cuda_chunk_weights == 0u) {
+            context->cuda_chunk_weights = 32u * 1024u * 1024u;
+        }
         if (context->epochs < 1 || context->group_size < 1 || context->batch_size < 1 ||
             context->gamma <= 0.0f || context->gamma > 1.0f ||
             context->threads < 0) {
@@ -1855,34 +1919,45 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         char path[1024];
         pv_catq_shard *shard;
         if (!pv_catq_span_text(ctx, a, path, sizeof(path))) {
-            ctx->regs[rd] = 0; return 1;
+            fprintf(stderr, "Shard.Load failed: invalid path span\n");
+            ctx->regs[rd] = 0; ctx->host_status = 1; return 1;
         }
         {
             FILE *file = fopen(path, "rb");
-            if (!file) { ctx->regs[rd] = 0; return 1; }
+            if (!file) {
+                fprintf(stderr, "Shard.Load failed: %s\n", path);
+                ctx->regs[rd] = 0; ctx->host_status = 1; return 1;
+            }
             fclose(file);
         }
         shard = (pv_catq_shard *)calloc(1, sizeof(*shard));
         if (!shard || !(shard->path = pv_catq_strdup(path))) {
-            free(shard); ctx->regs[rd] = 0; return 1;
+            fprintf(stderr, "Shard.Load failed: allocation for %s\n", path);
+            free(shard); ctx->regs[rd] = 0; ctx->host_status = 1; return 1;
         }
         ctx->regs[rd] = pv_catq_object_put(PV_CATQ_SHARD, shard);
+        ctx->host_status = ctx->regs[rd] ? 0 : 1;
         return 1;
     }
     if (hook == PV_HOOK_SHARD_SAVE) {
         char path[1024];
         pv_catq_object *object;
         if (!pv_catq_span_text(ctx, b, path, sizeof(path))) {
-            ctx->regs[rd] = 0; return 1;
+            fprintf(stderr, "Shard.Save failed: invalid path span\n");
+            ctx->regs[rd] = 0; ctx->host_status = 1; return 1;
         }
         object = pv_catq_object_get(a, PV_CATQ_PACKED);
         if (object) {
             ctx->regs[rd] = pv_catq_write_packed(path, (pv_catq_packed *)object->value);
+            ctx->host_status = ctx->regs[rd] ? 0 : 1;
+            if (!ctx->regs[rd]) fprintf(stderr, "Shard.Save failed: %s\n", path);
             return 1;
         }
         object = pv_catq_object_get(a, PV_CATQ_TENSOR);
         ctx->regs[rd] = object
             ? pv_catq_write_tensor(path, (pv_catq_tensor *)object->value) : 0;
+        ctx->host_status = ctx->regs[rd] ? 0 : 1;
+        if (!ctx->regs[rd]) fprintf(stderr, "Shard.Save failed: %s\n", path);
         return 1;
     }
     return 0;

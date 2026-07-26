@@ -3,13 +3,23 @@
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 namespace {
 
 constexpr int kWeightThreads = 256;
 constexpr int kDotThreads = 256;
+char last_error[256] = "";
+
+void set_error(const char *operation, cudaError_t status)
+{
+    std::snprintf(
+        last_error, sizeof(last_error), "%s: %s",
+        operation, cudaGetErrorString(status));
+}
 
 __device__ float softplusf_stable(float value)
 {
@@ -281,6 +291,11 @@ extern "C" int pv_catq_cuda_available(void)
     return cudaGetDeviceCount(&devices) == cudaSuccess && devices > 0;
 }
 
+extern "C" const char *pv_catq_cuda_last_error(void)
+{
+    return last_error;
+}
+
 extern "C" int pv_catq_cuda_optimize(
     const float *weight,
     int rows,
@@ -320,8 +335,10 @@ extern "C" int pv_catq_cuda_optimize(
     if (!weight || !calibration || !options || !delta_mu || !delta_alpha ||
         !delta_threshold || !final_loss || rows <= 0 || cols <= 0 ||
         calibration_rows <= 0 || options->group_size <= 0 ||
+        options->normalization_rows <= 0 ||
         !pv_catq_cuda_available())
         return 0;
+    last_error[0] = '\0';
 
     count = static_cast<size_t>(rows) * cols;
     groups =
@@ -339,9 +356,15 @@ extern "C" int pv_catq_cuda_optimize(
     raw_threshold.resize(groups);
 
 #define CUDA_ALLOC(pointer, elements) \
-    do { if (!cuda_ok(cudaMalloc(&(pointer), (elements) * sizeof(*(pointer))))) goto cleanup; } while (0)
+    do { \
+        cudaError_t status = cudaMalloc(&(pointer), (elements) * sizeof(*(pointer))); \
+        if (!cuda_ok(status)) { set_error("cudaMalloc " #pointer, status); goto cleanup; } \
+    } while (0)
 #define CUDA_ZERO(pointer, elements) \
-    do { if (!cuda_ok(cudaMemset((pointer), 0, (elements) * sizeof(*(pointer))))) goto cleanup; } while (0)
+    do { \
+        cudaError_t status = cudaMemset((pointer), 0, (elements) * sizeof(*(pointer))); \
+        if (!cuda_ok(status)) { set_error("cudaMemset " #pointer, status); goto cleanup; } \
+    } while (0)
 
     CUDA_ALLOC(d_weight, count);
     CUDA_ALLOC(d_calibration, calibration_count);
@@ -369,12 +392,21 @@ extern "C" int pv_catq_cuda_optimize(
     CUDA_ALLOC(d_alpha_grad, groups);
     CUDA_ALLOC(d_threshold_grad, groups);
 
-    if (!cuda_ok(cudaMemcpy(
-            d_weight, weight, count * sizeof(float), cudaMemcpyHostToDevice)) ||
-        !cuda_ok(cudaMemcpy(
+    {
+        cudaError_t status = cudaMemcpy(
+            d_weight, weight, count * sizeof(float), cudaMemcpyHostToDevice);
+        if (!cuda_ok(status)) {
+            set_error("copy weight to CUDA", status);
+            goto cleanup;
+        }
+        status = cudaMemcpy(
             d_calibration, calibration, calibration_count * sizeof(float),
-            cudaMemcpyHostToDevice)))
-        goto cleanup;
+            cudaMemcpyHostToDevice);
+        if (!cuda_ok(status)) {
+            set_error("copy calibration to CUDA", status);
+            goto cleanup;
+        }
+    }
     CUDA_ZERO(d_m_mu, groups);
     CUDA_ZERO(d_m_alpha, groups);
     CUDA_ZERO(d_m_threshold, groups);
@@ -401,7 +433,8 @@ extern "C" int pv_catq_cuda_optimize(
             int batch_count =
                 min(options->batch_size, calibration_rows - batch_start);
             float gradient_scale =
-                2.0f / static_cast<float>(batch_count * rows);
+                2.0f /
+                static_cast<float>(batch_count * options->normalization_rows);
             float learning_rate = options->learning_rate *
                 (1.0f - static_cast<float>(step) /
                  static_cast<float>(total_steps));
@@ -439,21 +472,46 @@ extern "C" int pv_catq_cuda_optimize(
         }
     }
 
-    if (!cuda_ok(cudaGetLastError()) ||
-        !cuda_ok(cudaDeviceSynchronize()) ||
-        !cuda_ok(cudaMemcpy(
-            delta_mu, d_raw_mu, groups * sizeof(float), cudaMemcpyDeviceToHost)) ||
-        !cuda_ok(cudaMemcpy(
+    {
+        cudaError_t status = cudaGetLastError();
+        if (!cuda_ok(status)) {
+            set_error("CAT-Q kernel launch", status);
+            goto cleanup;
+        }
+        status = cudaDeviceSynchronize();
+        if (!cuda_ok(status)) {
+            set_error("CAT-Q kernel execution", status);
+            goto cleanup;
+        }
+        status = cudaMemcpy(
+            delta_mu, d_raw_mu, groups * sizeof(float), cudaMemcpyDeviceToHost);
+        if (!cuda_ok(status)) {
+            set_error("copy delta_mu from CUDA", status);
+            goto cleanup;
+        }
+        status = cudaMemcpy(
             raw_alpha.data(), d_raw_alpha, groups * sizeof(float),
-            cudaMemcpyDeviceToHost)) ||
-        !cuda_ok(cudaMemcpy(
+            cudaMemcpyDeviceToHost);
+        if (!cuda_ok(status)) {
+            set_error("copy delta_alpha from CUDA", status);
+            goto cleanup;
+        }
+        status = cudaMemcpy(
             raw_threshold.data(), d_raw_threshold, groups * sizeof(float),
-            cudaMemcpyDeviceToHost)) ||
-        !cuda_ok(cudaMemcpy(
+            cudaMemcpyDeviceToHost);
+        if (!cuda_ok(status)) {
+            set_error("copy delta_threshold from CUDA", status);
+            goto cleanup;
+        }
+        status = cudaMemcpy(
             host_errors.data(), d_errors,
             static_cast<size_t>(last_batch_count) * rows * sizeof(float),
-            cudaMemcpyDeviceToHost)))
-        goto cleanup;
+            cudaMemcpyDeviceToHost);
+        if (!cuda_ok(status)) {
+            set_error("copy errors from CUDA", status);
+            goto cleanup;
+        }
+    }
 
     {
         double loss = 0.0;

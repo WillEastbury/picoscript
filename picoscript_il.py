@@ -1297,6 +1297,8 @@ def lower_to_c(insts: List[Inst], func_name: str = "pico_main", opt: bool = True
         out.append("    ctx.mem = pico_arena; ctx.mem_size = (long)sizeof(pico_arena);")
         out.append(f"    {module}(&ctx);")
         out.append('    printf("STEPS %ld\\n", ctx.steps);')
+        out.append('    printf("FAULT %d %d %d\\n", ctx.fault, ctx.fault_pc, ctx.fault_detail);')
+        out.append('    printf("ERROR %d %d %d\\n", ctx.err_code, ctx.raise_active, ctx.host_status);')
         out.append('    printf("STATUS %d\\n", ctx.http_status);')
         out.append('    printf("REGS");')
         out.append('    for (int i = 0; i < PV_NUM_REGS; i++) printf(" %d", ctx.regs[i]);')

@@ -210,6 +210,11 @@ SIMD were below `3.8e-9`.
 errors, gradients, and AdamW moments resident on the GPU. It uses custom CUDA
 kernels rather than a Python tensor framework.
 
+Large matrices are split into row-aligned chunks by default
+(`cuda_chunk_weights=33554432`). Chunk gradients retain the full matrix-row
+normalization, so chunked and unchunked runs are bit-identical. Override the
+limit with `-CudaChunkWeights` in the PowerShell runners.
+
 ```powershell
 pwsh -File tools\run_catq_smoke.ps1 -Cuda `
   -Epochs 60 -CalibrationRows 512 -BatchSize 3
@@ -267,6 +272,25 @@ Measured on the RTX A2000:
 The run validates mechanical conversion of the complete matrix set. Its
 calibration tensors are deterministic synthetic activations, so it does not
 establish language-model quality.
+
+### Full Qwen3.5 MoE checkpoint conversion
+
+The sharded Qwen3.5 runner batches generated PicoScript plans below the native
+literal-span ceiling and supports resuming incomplete output directories:
+
+```powershell
+pwsh -File tools\run_qwen35_full_catq.ps1 `
+  -ModelDirectory C:\models\Qwen3.5-35B-A3B `
+  -Epochs 60 -CalibrationRows 512 -BatchSize 3
+
+pwsh -File tools\run_qwen35_full_catq.ps1 `
+  -ModelDirectory C:\models\Qwen3.5-35B-A3B -Resume
+```
+
+A two-epoch/four-row mechanical smoke conversion on the RTX A2000 produced all
+**390 eligible matrices** as **8.81GB** of CAT-Q shards. This proves large,
+multi-shard checkpoint coverage and bounded CUDA execution; synthetic
+calibration and the short schedule do not establish model quality.
 
 ### Reproducible smoke test
 

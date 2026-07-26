@@ -10,6 +10,7 @@ param(
     [int]$BatchSize = 1,
     [int]$GroupSize = 128,
     [int]$Threads = 0,
+    [int]$CudaChunkWeights = 33554432,
     [double]$LearningRate = 0.001,
     [int]$Seed = 260626650,
     [string]$WorkDirectory,
@@ -205,8 +206,8 @@ function Test-TernaryOutput {
 }
 
 if ($CalibrationRows -lt 1 -or $Epochs -lt 1 -or $BatchSize -lt 1 -or
-    $GroupSize -lt 1 -or $Threads -lt 0) {
-    throw 'CalibrationRows, Epochs, BatchSize, and GroupSize must be positive; Threads cannot be negative'
+    $GroupSize -lt 1 -or $Threads -lt 0 -or $CudaChunkWeights -lt 1) {
+    throw 'CalibrationRows, Epochs, BatchSize, GroupSize, and CudaChunkWeights must be positive; Threads cannot be negative'
 }
 
 New-Item -ItemType Directory -Force -Path $ModelDirectory, $WorkDirectory | Out-Null
@@ -270,7 +271,7 @@ $plannerSource = Join-Path $repoRoot 'tools\catq_plan.c'
 $buildDriver = Join-Path $repoRoot 'picoscript_build.py'
 $options = "group=$GroupSize;epochs=$Epochs;batch=$BatchSize;gamma=0.8;s0=30;lr=$LearningRate;threads=$Threads"
 if ($Cuda) {
-    $options += ';device=cuda;cuda_required=1'
+    $options += ";device=cuda;cuda_required=1;cuda_chunk_weights=$CudaChunkWeights"
 }
 $provider = if ($Cuda) { 'catq-cuda' } else { 'catq' }
 

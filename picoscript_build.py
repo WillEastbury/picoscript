@@ -263,6 +263,8 @@ def cmd_native(args):
         csrc += "\n".join(init) + "\n"
         csrc += "    pico_main(&ctx);\n"
         csrc += '    printf("STEPS %ld\\n", ctx.steps);\n'
+        csrc += '    printf("FAULT %d %d %d\\n", ctx.fault, ctx.fault_pc, ctx.fault_detail);\n'
+        csrc += '    printf("ERROR %d %d %d\\n", ctx.err_code, ctx.raise_active, ctx.host_status);\n'
         csrc += '    printf("STATUS %d\\n", ctx.http_status);\n'
         csrc += '    printf("REGS");\n'
         csrc += '    for (int i = 0; i < PV_NUM_REGS; i++) printf(" %d", ctx.regs[i]);\n'

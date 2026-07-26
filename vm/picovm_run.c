@@ -5,6 +5,7 @@
  *
  *   STEPS <n>
  *   FAULT <code> <pc> <detail>
+ *   ERROR <code> <raise_active> <host_status>
  *   STATUS <http_status>
  *   REGS <r0> <r1> ... <r15>
  *   OUT  <hex bytes>
@@ -56,6 +57,7 @@ int main(void)
 
     printf("STEPS %ld\n", steps);
     printf("FAULT %d %d %d\n", ctx.fault, ctx.fault_pc, ctx.fault_detail);
+    printf("ERROR %d %d %d\n", ctx.err_code, ctx.raise_active, ctx.host_status);
     printf("STATUS %d\n", ctx.http_status);
     printf("REGS");
     for (int i = 0; i < PV_NUM_REGS; i++) printf(" %d", ctx.regs[i]);

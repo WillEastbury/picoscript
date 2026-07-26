@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -70,6 +71,68 @@ def write_raw_safetensors(path, tensors):
 
 def pico_path(path):
     return str(path).replace("\\", "/")
+
+
+def has_cuda_toolchain():
+    nvcc = shutil.which("nvcc")
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvcc or not nvidia_smi:
+        return False
+    probe = subprocess.run(
+        [nvidia_smi, "-L"], capture_output=True, text=True,
+    )
+    return probe.returncode == 0
+
+
+@pytest.mark.skipif(not has_cuda_toolchain(), reason="CUDA toolchain and GPU required")
+def test_cuda_chunking_matches_unchunked_optimizer(tmp_path):
+    model = tmp_path / "model.safetensors"
+    calibration = tmp_path / "calibration.safetensors"
+    unchunked = tmp_path / "unchunked.safetensors"
+    chunked = tmp_path / "chunked.safetensors"
+    source = tmp_path / "chunking.pc"
+    executable = tmp_path / "chunking.exe"
+    rows, cols = 64, 32
+    values = [math.sin(index * 0.17) * 0.5 for index in range(rows * cols)]
+    samples = [math.cos(index * 0.11) * 0.5 for index in range(4 * cols)]
+
+    write_safetensor(model, "weight", rows, cols, values, dtype="BF16")
+    write_safetensor(calibration, "calibration", 4, cols, samples)
+    source.write_text(
+        f'''
+int model = Shard.Load("{pico_path(model)}", "mmap");
+int calShard = Shard.Load("{pico_path(calibration)}", "mmap");
+int weights = Tensor.Map(model, "tensor=weight");
+int samples = Tensor.Map(calShard, "tensor=calibration");
+int full = CatQ.Calibrate(samples, "group=32;epochs=2;batch=1;device=cuda;cuda_required=1;cuda_chunk_weights=1048576");
+int fullOptimized = CatQ.Optimize(full, weights);
+int fullTernary = CatQ.Ternarize(full, fullOptimized);
+int fullPacked = CatQ.Pack(full, fullTernary);
+if (Shard.Save(fullPacked, "{pico_path(unchunked)}") == 0) {{ raise 5001; }}
+int split = CatQ.Calibrate(samples, "group=32;epochs=2;batch=1;device=cuda;cuda_required=1;cuda_chunk_weights=512");
+int splitOptimized = CatQ.Optimize(split, weights);
+int splitTernary = CatQ.Ternarize(split, splitOptimized);
+int splitPacked = CatQ.Pack(split, splitTernary);
+if (Shard.Save(splitPacked, "{pico_path(chunked)}") == 0) {{ raise 5002; }}
+return 1;
+''',
+        encoding="utf-8",
+    )
+    build = subprocess.run(
+        [
+            sys.executable, os.path.join(ROOT, "picoscript_build.py"),
+            "native", str(source), "--provider", "catq-cuda",
+            "--profile", "host", "-o", str(executable),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert build.returncode == 0, build.stderr + build.stdout
+    run = subprocess.run([str(executable)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr + run.stdout
+    assert "ERROR 0 0 0" in run.stdout
+    assert unchunked.read_bytes() == chunked.read_bytes()
 
 
 def test_native_catq_pipeline(tmp_path):
