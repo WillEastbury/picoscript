@@ -137,6 +137,28 @@ autoregressive Qwen model: embeddings, all transformer layers, attention/KV
 state, nonlinearities, final norm, LM head, sampling, and tokenizer orchestration
 still need to be assembled around this now-correct projection primitive.
 
+### Qwen ternary MLP block
+
+The next assembled graph is a complete Qwen SwiGLU MLP block:
+
+```powershell
+pwsh -File tools\run_qwen_ternary_mlp.ps1
+```
+
+The C-PicoScript graph performs:
+
+```text
+RMSNorm(input)
+  -> CAT-Q gate projection
+  -> CAT-Q up projection
+  -> Tensor.SwiGLU(gate, up)
+  -> CAT-Q down projection
+  -> residual add
+```
+
+Layer norm weights remain BF16, while all three matrix projections use saved
+CAT-Q ternary shards and their learned group scales.
+
 ### Reproducible smoke test
 
 On Windows, the complete small-model test is scripted:

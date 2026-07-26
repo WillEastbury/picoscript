@@ -1012,6 +1012,50 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         ctx->regs[rd] = pv_catq_object_put(PV_CATQ_TENSOR, out);
         return 1;
     }
+    if (hook == PV_HOOK_TENSOR_ADD || hook == PV_HOOK_TENSOR_MUL ||
+        hook == PV_HOOK_TENSOR_SWIGLU) {
+        pv_catq_tensor *left = pv_catq_tensor_get(a), *right = pv_catq_tensor_get(b);
+        pv_catq_tensor *out;
+        size_t i;
+        if (!left || !right || left->count != right->count) {
+            ctx->regs[rd] = 0; return 1;
+        }
+        out = pv_catq_tensor_new(left->count, left->rows, left->cols);
+        if (!out) { ctx->regs[rd] = 0; return 1; }
+        for (i = 0; i < left->count; i++)
+            out->data[i] = hook == PV_HOOK_TENSOR_ADD
+                ? left->data[i] + right->data[i]
+                : hook == PV_HOOK_TENSOR_SWIGLU
+                    ? (left->data[i] / (1.0f + expf(-left->data[i]))) * right->data[i]
+                    : left->data[i] * right->data[i];
+        ctx->regs[rd] = pv_catq_object_put(PV_CATQ_TENSOR, out);
+        return 1;
+    }
+    if (hook == PV_HOOK_TENSOR_RMSNORM) {
+        pv_catq_tensor *input = pv_catq_tensor_get(a), *gamma = pv_catq_tensor_get(b);
+        pv_catq_tensor *out;
+        int row, col;
+        if (!input || !gamma || gamma->count != (size_t)input->cols) {
+            ctx->regs[rd] = 0; return 1;
+        }
+        out = pv_catq_tensor_new(input->count, input->rows, input->cols);
+        if (!out) { ctx->regs[rd] = 0; return 1; }
+        for (row = 0; row < input->rows; row++) {
+            float sum = 0.0f;
+            float inverse;
+            for (col = 0; col < input->cols; col++) {
+                float value = input->data[(size_t)row * input->cols + col];
+                sum += value * value;
+            }
+            inverse = 1.0f / sqrtf(sum / (float)input->cols + 1e-6f);
+            for (col = 0; col < input->cols; col++)
+                out->data[(size_t)row * input->cols + col] =
+                    input->data[(size_t)row * input->cols + col] *
+                    inverse * gamma->data[col];
+        }
+        ctx->regs[rd] = pv_catq_object_put(PV_CATQ_TENSOR, out);
+        return 1;
+    }
     if (hook == PV_HOOK_TENSOR_REDUCE || hook == PV_HOOK_TENSOR_ELEMENTWISE) {
         pv_catq_tensor *source = pv_catq_tensor_get(a), *out;
         char operation[64];
@@ -1045,6 +1089,7 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
                 float x = source->data[i];
                 out->data[i] = strcmp(operation, "abs") == 0 ? fabsf(x) :
                     strcmp(operation, "tanh") == 0 ? tanhf(x) :
+                    strcmp(operation, "silu") == 0 ? x / (1.0f + expf(-x)) :
                     strcmp(operation, "neg") == 0 ? -x : x * scale;
             }
         }

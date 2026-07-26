@@ -114,7 +114,7 @@
     if (ns === "Crypto" && m === "RandomBytes") return CAP.RANDOM;
     if (ns === "Crypto" && (m === "Encrypt" || m === "Decrypt")) return CAP.CRYPTO;
     if (ns === "Http" && (m === "ReadHeader" || m === "ReadBody" || m === "GenerateHeaders" || m === "GenerateResponse")) return CAP.NET;
-    if (ns === "Tensor" && ["Map", "View", "Gemm", "Reduce", "Elementwise"].indexOf(m) >= 0) return CAP.DEVICE;
+    if (ns === "Tensor" && ["Map", "View", "Gemm", "Reduce", "Elementwise", "Add", "Mul", "RmsNorm", "SwiGLU"].indexOf(m) >= 0) return CAP.DEVICE;
     if (ns === "BitLinear" && m === "MatVecCatQ") return CAP.DEVICE;
     return CAP_BY_NS[ns] || 0;
   }
@@ -2153,7 +2153,7 @@
     return out;
   }
   PicoVM.prototype._tensor = function (method, rd, rs1, rs2) {
-    if (["Map","View","Gemm","Reduce","Elementwise"].indexOf(method) >= 0) {
+    if (["Map","View","Gemm","Reduce","Elementwise","Add","Mul","RmsNorm","SwiGLU"].indexOf(method) >= 0) {
       return this._computeHost("Tensor", method, rd, rs1, rs2);
     }
     if (method === "SetShape") { this.tensorRows = Math.max(0, this.regs[rs1] | 0); this.tensorCols = Math.max(0, this.regs[rs2] | 0); this.regs[rd] = 1; return true; }

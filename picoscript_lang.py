@@ -186,6 +186,10 @@ NAMESPACE_MAP = {
         "Gemm": OP_NOOP,
         "Reduce": OP_NOOP,
         "Elementwise": OP_NOOP,
+        "Add": OP_NOOP,
+        "Mul": OP_NOOP,
+        "RmsNorm": OP_NOOP,
+        "SwiGLU": OP_NOOP,
     },
     "CatQ": {
         "Calibrate": OP_NOOP,
@@ -946,6 +950,10 @@ HOST_HOOK_CODES = {
     ("Shard", "Load"):           0x037C, # rs1=path span rs2=options span  rd=shard handle
     ("Shard", "Save"):           0x037D, # rs1=shard rs2=path span         rd=ok
     ("BitLinear", "MatVecCatQ"): 0x0381, # rs1=CAT-Q packed rs2=F32 activation rd=tensor
+    ("Tensor", "Add"):           0x0382, # rs1=lhs tensor rs2=rhs tensor   rd=tensor
+    ("Tensor", "Mul"):           0x0383, # rs1=lhs tensor rs2=rhs tensor   rd=tensor
+    ("Tensor", "RmsNorm"):       0x0384, # rs1=input rs2=gamma tensor      rd=tensor
+    ("Tensor", "SwiGLU"):        0x0385, # rs1=gate rs2=up tensor          rd=tensor
     ("Quant", "AbsMax"):         0x0228,
     ("Quant", "QuantI8"):        0x0229,
     ("Quant", "DequantI8"):      0x022A,

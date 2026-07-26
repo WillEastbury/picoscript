@@ -703,7 +703,9 @@ def hook_cap(ns: str, method: str) -> int:
         return CAP_CRYPTO
     if ns == "Http" and method in ("ReadHeader", "ReadBody", "GenerateHeaders", "GenerateResponse"):
         return CAP_NET
-    if ns == "Tensor" and method in ("Map", "View", "Gemm", "Reduce", "Elementwise"):
+    if ns == "Tensor" and method in (
+        "Map", "View", "Gemm", "Reduce", "Elementwise", "Add", "Mul", "RmsNorm", "SwiGLU"
+    ):
         return CAP_DEVICE
     if ns == "BitLinear" and method == "MatVecCatQ":
         return CAP_DEVICE
@@ -3169,7 +3171,7 @@ class HostApi:
         return bytes(out)
 
     def _tensor(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
-        if method in ("Map", "View", "Gemm", "Reduce", "Elementwise"):
+        if method in ("Map", "View", "Gemm", "Reduce", "Elementwise", "Add", "Mul", "RmsNorm", "SwiGLU"):
             return self._compute_host(vm, "Tensor", method, rd, rs1, rs2)
         if method == "HasAccel":
             # Reference VM is scalar-only but supports every Tensor hook semantically.

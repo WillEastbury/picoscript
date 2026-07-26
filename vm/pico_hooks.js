@@ -578,6 +578,10 @@
       0x37F: "Net.SendSpan",
       0x380: "Net.RecvSpan",
       0x381: "BitLinear.MatVecCatQ",
+      0x382: "Tensor.Add",
+      0x383: "Tensor.Mul",
+      0x384: "Tensor.RmsNorm",
+      0x385: "Tensor.SwiGLU",
     }
   };
   function _canonConstant(name) {

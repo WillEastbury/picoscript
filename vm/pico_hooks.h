@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0x5158C53A
+#define PV_HOOK_TABLE_VERSION 0x81485802
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -572,5 +572,9 @@
 #define PV_HOOK_NET_SENDSPAN                     0x37F
 #define PV_HOOK_NET_RECVSPAN                     0x380
 #define PV_HOOK_BITLINEAR_MATVECCATQ             0x381
+#define PV_HOOK_TENSOR_ADD                       0x382
+#define PV_HOOK_TENSOR_MUL                       0x383
+#define PV_HOOK_TENSOR_RMSNORM                   0x384
+#define PV_HOOK_TENSOR_SWIGLU                    0x385
 
 #endif

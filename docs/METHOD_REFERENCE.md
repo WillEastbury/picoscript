@@ -985,12 +985,13 @@ String manipulation: concat, substring, split, trim, case conversion.
 ## Tensor
 
 **Conformance Level:** L0  
-**Methods:** 17
+**Methods:** 21
 
 Deterministic inference operations plus host-backed mapped tensor superinstructions.
 
 | Method | Opcode | Hook Code | v2 Example |
 |--------|--------|-----------|----------|
+| Add | 0x00 | 0x7382 | `Tensor.Add(...)` |
 | AddI32 | 0x00 | 0x71E3 | `Tensor.AddI32(...)` |
 | ArgMaxI32 | 0x00 | 0x71EA | `Tensor.ArgMaxI32(...)` |
 | DotI8 | 0x00 | 0x71E1 | `Tensor.DotI8(...)` |
@@ -999,14 +1000,17 @@ Deterministic inference operations plus host-backed mapped tensor superinstructi
 | HasAccel | 0x00 | 0x71EB | `Tensor.HasAccel(...)` |
 | Map | 0x00 | 0x7370 | `Tensor.Map(...)` |
 | MatVecI8 | 0x00 | 0x71E2 | `Tensor.MatVecI8(...)` |
+| Mul | 0x00 | 0x7383 | `Tensor.Mul(...)` |
 | MulI32 | 0x00 | 0x71E4 | `Tensor.MulI32(...)` |
 | Reduce | 0x00 | 0x7373 | `Tensor.Reduce(...)` |
 | ReluI32 | 0x00 | 0x71E6 | `Tensor.ReluI32(...)` |
+| RmsNorm | 0x00 | 0x7384 | `Tensor.RmsNorm(...)` |
 | RmsNormI32 | 0x00 | 0x71E7 | `Tensor.RmsNormI32(...)` |
 | RoPEI32 | 0x00 | 0x71E8 | `Tensor.RoPEI32(...)` |
 | ScaleI32 | 0x00 | 0x71E5 | `Tensor.ScaleI32(...)` |
 | SetShape | 0x00 | 0x71E0 | `Tensor.SetShape(...)` |
 | SoftmaxI32 | 0x00 | 0x71E9 | `Tensor.SoftmaxI32(...)` |
+| SwiGLU | 0x00 | 0x7385 | `Tensor.SwiGLU(...)` |
 | View | 0x00 | 0x7371 | `Tensor.View(...)` |
 
 ## TextRender
@@ -1133,7 +1137,7 @@ Thread preemption hints and cooperative yielding.
 
 ## Summary by Conformance Level
 
-### L0: 319 methods
+### L0: 323 methods
 
 - Async.Result (0x737B)
 - Async.Submit (0x7379)
@@ -1387,6 +1391,7 @@ Thread preemption hints and cooperative yielding.
 - Shard.Save (0x737D)
 - Template.Compile (0x707A)
 - Template.Render (0x707B)
+- Tensor.Add (0x7382)
 - Tensor.AddI32 (0x71E3)
 - Tensor.ArgMaxI32 (0x71EA)
 - Tensor.DotI8 (0x71E1)
@@ -1395,14 +1400,17 @@ Thread preemption hints and cooperative yielding.
 - Tensor.HasAccel (0x71EB)
 - Tensor.Map (0x7370)
 - Tensor.MatVecI8 (0x71E2)
+- Tensor.Mul (0x7383)
 - Tensor.MulI32 (0x71E4)
 - Tensor.Reduce (0x7373)
 - Tensor.ReluI32 (0x71E6)
+- Tensor.RmsNorm (0x7384)
 - Tensor.RmsNormI32 (0x71E7)
 - Tensor.RoPEI32 (0x71E8)
 - Tensor.ScaleI32 (0x71E5)
 - Tensor.SetShape (0x71E0)
 - Tensor.SoftmaxI32 (0x71E9)
+- Tensor.SwiGLU (0x7385)
 - Tensor.View (0x7371)
 - TextRender.Attr (0x7263)
 - TextRender.Br (0x7268)
@@ -1685,7 +1693,7 @@ Host hooks use reserved imm16 range 0x7000-0x7FFF:
 | 0x70E0-0x70EE | Context | 15 | Context |
 | 0x70F0-0x70FE | Crypto | 15 | Crypto |
 
-**Total:** 505 methods across 62 namespaces.
+**Total:** 509 methods across 62 namespaces.
 
 ## IDE Code Completion
 

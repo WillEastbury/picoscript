@@ -1,0 +1,48 @@
+// Qwen layer-0 MLP using three saved CAT-Q projections.
+// Generate the default shards with tools/run_qwen_ternary_mlp.ps1.
+
+int model = Shard.Load(
+    "C:/source/Qwen3-0.6B-Base/model.safetensors",
+    "mmap"
+);
+int gamma = Tensor.Map(
+    model,
+    "tensor=model.layers.0.post_attention_layernorm.weight"
+);
+
+int inputShard = Shard.Load(
+    "C:/source/Qwen3-0.6B-Base/catq-mlp/gate/calibration.safetensors",
+    "mmap"
+);
+int inputs = Tensor.Map(inputShard, "tensor=calibration");
+int input = Tensor.View(inputs, "row_start=0;row_count=1");
+int normalized = Tensor.RmsNorm(input, gamma);
+
+int gateShard = Shard.Load(
+    "C:/source/Qwen3-0.6B-Base/catq-mlp/gate/tensor.ternary.safetensors",
+    "mmap"
+);
+int upShard = Shard.Load(
+    "C:/source/Qwen3-0.6B-Base/catq-mlp/up/tensor.ternary.safetensors",
+    "mmap"
+);
+int downShard = Shard.Load(
+    "C:/source/Qwen3-0.6B-Base/catq-mlp/down/tensor.ternary.safetensors",
+    "mmap"
+);
+int gateWeights = Tensor.Map(gateShard, "catq_packed=1");
+int upWeights = Tensor.Map(upShard, "catq_packed=1");
+int downWeights = Tensor.Map(downShard, "catq_packed=1");
+
+int gate = BitLinear.MatVecCatQ(gateWeights, normalized);
+int up = BitLinear.MatVecCatQ(upWeights, normalized);
+int hidden = Tensor.SwiGLU(gate, up);
+int down = BitLinear.MatVecCatQ(downWeights, hidden);
+int output = Tensor.Add(input, down);
+
+int saved = Shard.Save(
+    output,
+    "C:/source/Qwen3-0.6B-Base/catq-mlp/mlp-output.safetensors"
+);
+if (saved == 0) { raise 8001; }
+return saved;

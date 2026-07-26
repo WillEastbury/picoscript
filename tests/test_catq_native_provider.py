@@ -394,3 +394,72 @@ int main(void) {
     values = [float(value) for value in run.stdout.split()]
     assert values[0] == pytest.approx(values[2], abs=1e-6)
     assert values[1] == pytest.approx(values[3], abs=1e-6)
+
+
+def test_native_f32_tensor_ops_for_qwen_mlp(tmp_path):
+    harness = tmp_path / "tensor_ops.c"
+    executable = tmp_path / "tensor_ops.exe"
+    harness.write_text(
+        r'''
+#include <stdio.h>
+#include "picovm.h"
+#include "picovm_catq.h"
+#include "pico_hooks.h"
+
+int main(void) {
+    float x[2] = {3.0f, 4.0f};
+    float y[2] = {1.0f, 2.0f};
+    float gamma[2] = {1.0f, 2.0f};
+    float add[2], mul[2], norm[2], swiglu[2];
+    pv_ctx ctx;
+    int hx, hy, hg, ha, hm, hn, hs;
+    pv_init(&ctx);
+    pv_catq_install();
+    hx = pv_catq_register_f32(x, 1, 2);
+    hy = pv_catq_register_f32(y, 1, 2);
+    hg = pv_catq_register_f32(gamma, 1, 2);
+    ha = (int)pv_host2(&ctx, PV_HOOK_TENSOR_ADD, hx, hy);
+    hm = (int)pv_host2(&ctx, PV_HOOK_TENSOR_MUL, hx, hy);
+    hn = (int)pv_host2(&ctx, PV_HOOK_TENSOR_RMSNORM, hx, hg);
+    hs = (int)pv_host2(&ctx, PV_HOOK_TENSOR_SWIGLU, hx, hy);
+    if (pv_catq_copy_f32(ha, add, 2) != 2 ||
+        pv_catq_copy_f32(hm, mul, 2) != 2 ||
+        pv_catq_copy_f32(hn, norm, 2) != 2 ||
+        pv_catq_copy_f32(hs, swiglu, 2) != 2)
+        return 2;
+    printf("%.7f %.7f %.7f %.7f %.7f %.7f %.7f %.7f\n",
+           add[0], add[1], mul[0], mul[1], norm[0], norm[1],
+           swiglu[0], swiglu[1]);
+    pv_catq_cleanup();
+    return 0;
+}
+''',
+        encoding="utf-8",
+    )
+    build = subprocess.run(
+        [
+            sys.executable, "-m", "ziglang", "cc", "-std=c99", "-O2",
+            f"-I{os.path.join(ROOT, 'vm')}",
+            str(harness),
+            os.path.join(ROOT, "vm", "picovm.c"),
+            os.path.join(ROOT, "vm", "picovm_catq.c"),
+            "-lm", "-o", str(executable),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert build.returncode == 0, build.stderr
+    run = subprocess.run([str(executable)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    values = [float(value) for value in run.stdout.split()]
+    assert values[:4] == pytest.approx([4.0, 6.0, 3.0, 8.0])
+    inverse_rms = 1.0 / math.sqrt((9.0 + 16.0) / 2.0 + 1e-6)
+    assert values[4:] == pytest.approx(
+        [
+            3.0 * inverse_rms,
+            4.0 * inverse_rms * 2.0,
+            (3.0 / (1.0 + math.exp(-3.0))) * 1.0,
+            (4.0 / (1.0 + math.exp(-4.0))) * 2.0,
+        ],
+        abs=1e-6,
+    )

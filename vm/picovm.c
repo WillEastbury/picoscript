@@ -1356,6 +1356,7 @@ uint32_t pv_hook_cap(int hook)
     if (hook >= 0x37C && hook <= 0x37D) return PV_CAP_STORAGE; /* Shard.* */
     if ((hook >= 0x2E0 && hook <= 0x2E6) || (hook >= 0x37E && hook <= 0x380)) return PV_CAP_NET; /* Net.* */
     if (hook == 0x381) return PV_CAP_DEVICE; /* BitLinear.MatVecCatQ */
+    if (hook >= 0x382 && hook <= 0x385) return PV_CAP_DEVICE; /* Tensor F32 ops */
     return 0;                                                /* pure: String/Number/Maths/Span/... */
 }
 
@@ -2503,6 +2504,12 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         return;
     }
     if (hook == PV_HOOK_BITLINEAR_MATVECCATQ) {
+        if (pv_compute_hook && pv_compute_hook(ctx, hook, rd, rs1, rs2)) return;
+        ctx->regs[rd] = 0;
+        ctx->host_status = 1;
+        return;
+    }
+    if (hook >= PV_HOOK_TENSOR_ADD && hook <= PV_HOOK_TENSOR_SWIGLU) {
         if (pv_compute_hook && pv_compute_hook(ctx, hook, rd, rs1, rs2)) return;
         ctx->regs[rd] = 0;
         ctx->host_status = 1;

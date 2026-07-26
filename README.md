@@ -164,6 +164,9 @@ pwsh -File tools/run_catq_smoke.ps1
 # Execute a saved CAT-Q Qwen projection through PicoScript's ternary stack
 pwsh -File tools/run_catq_ternary_infer.ps1
 
+# Execute a full Qwen layer-0 ternary SwiGLU MLP block
+pwsh -File tools/run_qwen_ternary_mlp.ps1
+
 # Send a factual Paris prompt from compiled PicoScript to Qwen3-0.6B
 pwsh -File tools/run_llm_paris_demo.ps1
 ```
