@@ -115,6 +115,7 @@
     if (ns === "Crypto" && (m === "Encrypt" || m === "Decrypt")) return CAP.CRYPTO;
     if (ns === "Http" && (m === "ReadHeader" || m === "ReadBody" || m === "GenerateHeaders" || m === "GenerateResponse")) return CAP.NET;
     if (ns === "Tensor" && ["Map", "View", "Gemm", "Reduce", "Elementwise"].indexOf(m) >= 0) return CAP.DEVICE;
+    if (ns === "BitLinear" && m === "MatVecCatQ") return CAP.DEVICE;
     return CAP_BY_NS[ns] || 0;
   }
 
@@ -2240,6 +2241,7 @@
     this.regs[rd] = this._newSpanBytes(packI32(vals)); return true;
   };
   PicoVM.prototype._bitlinear = function (method, rd, rs1, rs2) {
+    if (method === "MatVecCatQ") return this._computeHost("BitLinear", method, rd, rs1, rs2);
     if (method === "SetShape") { this.bitlinearRows = Math.max(0, this.regs[rs1] | 0); this.bitlinearCols = Math.max(0, this.regs[rs2] | 0); this.regs[rd] = 1; return true; }
     if (method === "MatVecTernary") { var w = this._spanBytes(this.regs[rs1]), v = this._spanBytes(this.regs[rs2]), rows = this.bitlinearRows, cols = this.bitlinearCols || v.length, vals = []; for (var r = 0; r < rows; r++) { var acc = 0, base = r * cols; for (var c = 0; c < cols; c++) if (c < v.length) acc = (acc + ternaryWeight(w, base + c) * i8(v[c])) | 0; vals.push(acc); } this.regs[rd] = this._newSpanBytes(packI32(vals)); return true; }
     if (method === "MatVecBitmap") { var bw = this._spanBytes(this.regs[rs1]), bv = this._spanBytes(this.regs[rs2]), brows = this.bitlinearRows, bcols = this.bitlinearCols || bv.length, mb = Math.ceil(bcols / 8), bvals = []; for (var br = 0; br < brows; br++) { var bacc = 0, row = br * mb * 2; for (var bc = 0; bc < bcols && bc < bv.length; bc++) { var bit = 1 << (bc & 7), z = (bw[row + ((bc / 8) | 0)] || 0) & bit, mn = (bw[row + mb + ((bc / 8) | 0)] || 0) & bit; bacc = (bacc + (z ? 0 : (mn ? -1 : 1)) * i8(bv[bc])) | 0; } bvals.push(bacc); } this.regs[rd] = this._newSpanBytes(packI32(bvals)); return true; }

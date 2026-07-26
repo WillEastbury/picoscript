@@ -211,6 +211,7 @@ NAMESPACE_MAP = {
         "MatVecTernaryBlock": OP_NOOP,
         "MatVecBitmapBlock": OP_NOOP,
         "MatVecBase3Block": OP_NOOP,
+        "MatVecCatQ": OP_NOOP,
     },
     "Quant": {
         "AbsMax": OP_NOOP,
@@ -944,6 +945,7 @@ HOST_HOOK_CODES = {
     ("Async", "Result"):         0x037B, # rs1=job                         rd=result handle/span
     ("Shard", "Load"):           0x037C, # rs1=path span rs2=options span  rd=shard handle
     ("Shard", "Save"):           0x037D, # rs1=shard rs2=path span         rd=ok
+    ("BitLinear", "MatVecCatQ"): 0x0381, # rs1=CAT-Q packed rs2=F32 activation rd=tensor
     ("Quant", "AbsMax"):         0x0228,
     ("Quant", "QuantI8"):        0x0229,
     ("Quant", "DequantI8"):      0x022A,

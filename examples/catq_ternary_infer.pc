@@ -1,0 +1,27 @@
+// Load a saved CAT-Q shard and execute a scaled ternary matrix-vector product.
+// The default paths are produced by tools/run_catq_smoke.ps1.
+
+int packedShard = Shard.Load(
+    "C:/source/Qwen3-0.6B-Base/catq-smoke/tensor.ternary.safetensors",
+    "mmap"
+);
+int packed = Tensor.Map(packedShard, "catq_packed=1");
+if (packed == 0) { raise 7001; }
+
+int calibrationShard = Shard.Load(
+    "C:/source/Qwen3-0.6B-Base/catq-smoke/calibration.safetensors",
+    "mmap"
+);
+int samples = Tensor.Map(calibrationShard, "tensor=calibration");
+int activation = Tensor.View(samples, "row_start=0;row_count=1");
+
+int projection = BitLinear.MatVecCatQ(packed, activation);
+if (projection == 0) { raise 7002; }
+
+int saved = Shard.Save(
+    projection,
+    "C:/source/Qwen3-0.6B-Base/catq-smoke/gate-projection.safetensors"
+);
+if (saved == 0) { raise 7003; }
+
+return saved;

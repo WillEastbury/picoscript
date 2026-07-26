@@ -32,6 +32,7 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2);
 
 /* Native host helpers for registering calibration/weight tensors. */
 int pv_catq_register_f32(const float *values, int rows, int cols);
+int pv_catq_copy_f32(int tensor_handle, float *out, size_t count);
 
 /* Inspection helpers used by native hosts and conformance tests. */
 int pv_catq_get_packed(int handle, pv_catq_packed_info *out);

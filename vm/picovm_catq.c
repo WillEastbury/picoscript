@@ -288,6 +288,14 @@ static pv_catq_tensor *pv_catq_tensor_get(int handle)
     return object ? (pv_catq_tensor *)object->value : 0;
 }
 
+int pv_catq_copy_f32(int tensor_handle, float *out, size_t count)
+{
+    pv_catq_tensor *tensor = pv_catq_tensor_get(tensor_handle);
+    if (!tensor || !out || count < tensor->count) return 0;
+    memcpy(out, tensor->data, tensor->count * sizeof(float));
+    return (int)tensor->count;
+}
+
 static uint64_t pv_catq_u64le(const uint8_t *p)
 {
     uint64_t value = 0;
@@ -485,6 +493,72 @@ done:
     pv_catq_raw_free(&blocks);
     pv_catq_raw_free(&scales);
     return tensor;
+}
+
+static pv_catq_packed *pv_catq_load_packed(const char *path)
+{
+    FILE *file = fopen(path, "rb");
+    uint8_t len_bytes[8];
+    uint64_t header_len;
+    char *header = 0, shape_text[128], group_text[32];
+    pv_catq_raw_tensor codes, scales;
+    pv_catq_packed *packed = 0;
+    char *comma;
+    int rows, cols, group_size;
+    size_t count;
+    memset(&codes, 0, sizeof(codes));
+    memset(&scales, 0, sizeof(scales));
+    if (!file || fread(len_bytes, 1, 8, file) != 8) goto done;
+    header_len = pv_catq_u64le(len_bytes);
+    if (header_len == 0 || header_len > 64u * 1024u * 1024u) goto done;
+    header = (char *)malloc((size_t)header_len + 1);
+    if (!header || fread(header, 1, (size_t)header_len, file) != (size_t)header_len)
+        goto done;
+    header[header_len] = '\0';
+    if (!pv_catq_json_string(
+            header, header + header_len, "shape", shape_text, sizeof(shape_text)) ||
+        !pv_catq_json_string(
+            header, header + header_len, "group_size", group_text, sizeof(group_text)))
+        goto done;
+    comma = strchr(shape_text, ',');
+    if (!comma) goto done;
+    *comma = '\0';
+    rows = atoi(shape_text);
+    cols = atoi(comma + 1);
+    group_size = atoi(group_text);
+    if (rows <= 0 || cols <= 0 || group_size <= 0) goto done;
+    fclose(file);
+    file = 0;
+    if (!pv_catq_load_raw_safetensor(path, "codes", &codes) ||
+        !pv_catq_load_raw_safetensor(path, "scales", &scales) ||
+        strcmp(codes.dtype, "U8") != 0 || strcmp(scales.dtype, "F32") != 0)
+        goto done;
+    count = (size_t)rows * cols;
+    if (codes.bytes < (count + 3) / 4 ||
+        scales.bytes < ((count + (size_t)group_size - 1) / (size_t)group_size) * 4)
+        goto done;
+    packed = (pv_catq_packed *)calloc(1, sizeof(*packed));
+    if (!packed) goto done;
+    packed->codes_len = (count + 3) / 4;
+    packed->groups = (count + (size_t)group_size - 1) / (size_t)group_size;
+    packed->codes = (uint8_t *)malloc(packed->codes_len);
+    packed->scales = (float *)malloc(packed->groups * sizeof(float));
+    if (!packed->codes || !packed->scales) {
+        free(packed->codes); free(packed->scales); free(packed); packed = 0;
+        goto done;
+    }
+    memcpy(packed->codes, codes.data, packed->codes_len);
+    memcpy(packed->scales, scales.data, packed->groups * sizeof(float));
+    packed->count = count;
+    packed->rows = rows;
+    packed->cols = cols;
+    packed->group_size = group_size;
+done:
+    pv_catq_raw_free(&codes);
+    pv_catq_raw_free(&scales);
+    free(header);
+    if (file) fclose(file);
+    return packed;
 }
 
 static int pv_catq_write_packed(const char *path, const pv_catq_packed *packed)
@@ -852,6 +926,10 @@ static int pv_catq_tensor_map(pv_ctx *ctx, int source, int options_handle)
     pv_catq_span_text(ctx, options_handle, options, sizeof(options));
     if (shard_object) {
         pv_catq_shard *shard = (pv_catq_shard *)shard_object->value;
+        if (pv_catq_option_int(options, "catq_packed", 0)) {
+            pv_catq_packed *packed = pv_catq_load_packed(shard->path);
+            return packed ? pv_catq_object_put(PV_CATQ_PACKED, packed) : 0;
+        }
         if (pv_catq_option(options, "mxfp4_blocks", value, sizeof(value))) {
             if (!pv_catq_option(options, "mxfp4_scales", scales, sizeof(scales)))
                 return 0;
@@ -1025,6 +1103,34 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
             ? pv_catq_pack((pv_catq_ternary *)ternary_object->value) : 0;
         ctx->regs[rd] = context_object && packed
             ? pv_catq_object_put(PV_CATQ_PACKED, packed) : 0;
+        return 1;
+    }
+    if (hook == PV_HOOK_BITLINEAR_MATVECCATQ) {
+        pv_catq_object *packed_object = pv_catq_object_get(a, PV_CATQ_PACKED);
+        pv_catq_tensor *activation = pv_catq_tensor_get(b);
+        pv_catq_packed *packed;
+        pv_catq_tensor *output;
+        int row, col;
+        if (!packed_object || !activation) { ctx->regs[rd] = 0; return 1; }
+        packed = (pv_catq_packed *)packed_object->value;
+        if (activation->count != (size_t)packed->cols) {
+            ctx->regs[rd] = 0;
+            return 1;
+        }
+        output = pv_catq_tensor_new((size_t)packed->rows, packed->rows, 1);
+        if (!output) { ctx->regs[rd] = 0; return 1; }
+        for (row = 0; row < packed->rows; row++) {
+            float sum = 0.0f;
+            for (col = 0; col < packed->cols; col++) {
+                size_t index = (size_t)row * packed->cols + col;
+                uint8_t encoded = (packed->codes[index / 4] >> ((index & 3) * 2)) & 3;
+                float weight = encoded == 1 ? 1.0f : (encoded == 2 ? -1.0f : 0.0f);
+                float scale = packed->scales[index / (size_t)packed->group_size];
+                sum += weight * scale * activation->data[col];
+            }
+            output->data[row] = sum;
+        }
+        ctx->regs[rd] = pv_catq_object_put(PV_CATQ_TENSOR, output);
         return 1;
     }
     if (hook == PV_HOOK_ASYNC_SUBMIT) {

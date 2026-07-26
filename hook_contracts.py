@@ -150,6 +150,8 @@ def _capability_for(ns, method):
         return "NET"
     if ns == "Tensor" and method in ("Map", "View", "Gemm", "Reduce", "Elementwise"):
         return "DEVICE"
+    if ns == "BitLinear" and method == "MatVecCatQ":
+        return "DEVICE"
     return _CAP_BY_NS.get(ns, "pure")
 
 

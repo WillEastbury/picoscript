@@ -10,6 +10,8 @@ import struct
 import subprocess
 import sys
 
+import pytest
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -157,6 +159,43 @@ return saved;
     assert all(((byte >> shift) & 3) in (0, 1, 2)
                for byte in packed_codes for shift in (0, 2, 4, 6))
 
+    inference_source = tmp_path / "infer.pc"
+    inference_executable = tmp_path / "infer.exe"
+    inference_output = tmp_path / "projection.safetensors"
+    inference_source.write_text(
+        f'''
+int packedShard = Shard.Load("{pico_path(output)}", "mmap");
+int packed = Tensor.Map(packedShard, "catq_packed=1");
+if (packed == 0) {{ raise 2101; }}
+int calShard = Shard.Load("{pico_path(calibration)}", "mmap");
+int samples = Tensor.Map(calShard, "tensor=calibration");
+int input = Tensor.View(samples, "row_start=0;row_count=1");
+int projection = BitLinear.MatVecCatQ(packed, input);
+if (projection == 0) {{ raise 2102; }}
+int saved = Shard.Save(projection, "{pico_path(inference_output)}");
+if (saved == 0) {{ raise 2103; }}
+return saved;
+''',
+        encoding="utf-8",
+    )
+    infer_build = subprocess.run(
+        [
+            sys.executable, os.path.join(ROOT, "picoscript_build.py"),
+            "native", str(inference_source), "--provider", "catq",
+            "-o", str(inference_executable),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert infer_build.returncode == 0, infer_build.stderr + infer_build.stdout
+    infer_run = subprocess.run([str(inference_executable)], capture_output=True, text=True)
+    assert infer_run.returncode == 0, infer_run.stderr + infer_run.stdout
+    projection_header, projection_data = read_safetensor(inference_output)
+    assert projection_header["tensor"]["shape"] == [2, 1]
+    projection = struct.unpack("<2f", projection_data)
+    assert all(math.isfinite(value) for value in projection)
+
 
 def test_native_optimizer_reconstructs_calibration_outputs(tmp_path):
     harness = tmp_path / "loss.c"
@@ -269,3 +308,89 @@ return saved;
         -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
     ) * 2
     assert values == expected
+
+
+def test_native_catq_scaled_ternary_matvec(tmp_path):
+    harness = tmp_path / "catq_matvec.c"
+    executable = tmp_path / "catq_matvec.exe"
+    harness.write_text(
+        r'''
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+#include "picovm.h"
+#include "picovm_catq.h"
+#include "pico_hooks.h"
+
+static int make_span(pv_ctx *ctx, const char *text, int offset) {
+    int handle = ctx->span_count++;
+    int length = (int)strlen(text);
+    memcpy(ctx->mem + offset, text, (size_t)length);
+    ctx->span_ptr[handle] = (uint32_t)offset;
+    ctx->span_len[handle] = length;
+    return handle;
+}
+
+int main(void) {
+    float weights[8] = {-0.9f,-0.2f,0.1f,0.8f,0.7f,-0.6f,0.3f,-0.1f};
+    float calibration[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    float activation[4] = {0.25f,-0.5f,1.0f,0.75f};
+    float output[2] = {0,0};
+    float expected[2] = {0,0};
+    unsigned char memory[8192] = {0};
+    pv_catq_packed_info info;
+    pv_ctx ctx;
+    int weight, samples, input, options, catq, optimized, ternary, packed, result;
+    int row, col;
+
+    pv_init(&ctx);
+    ctx.mem = memory;
+    ctx.mem_size = (long)sizeof(memory);
+    pv_catq_install();
+    weight = pv_catq_register_f32(weights, 2, 4);
+    samples = pv_catq_register_f32(calibration, 4, 4);
+    input = pv_catq_register_f32(activation, 1, 4);
+    options = make_span(&ctx, "group=4;epochs=10;batch=1;gamma=0.8;s0=30;lr=0.02", 100);
+    catq = (int)pv_host2(&ctx, PV_HOOK_CATQ_CALIBRATE, samples, options);
+    optimized = (int)pv_host2(&ctx, PV_HOOK_CATQ_OPTIMIZE, catq, weight);
+    ternary = (int)pv_host2(&ctx, PV_HOOK_CATQ_TERNARIZE, catq, optimized);
+    packed = (int)pv_host2(&ctx, PV_HOOK_CATQ_PACK, catq, ternary);
+    result = (int)pv_host2(&ctx, PV_HOOK_BITLINEAR_MATVECCATQ, packed, input);
+    if (!pv_catq_get_packed(packed, &info) || pv_catq_copy_f32(result, output, 2) != 2)
+        return 2;
+    for (row = 0; row < 2; row++) {
+        for (col = 0; col < 4; col++) {
+            size_t index = (size_t)row * 4 + col;
+            unsigned int code = (info.codes[index / 4] >> ((index & 3) * 2)) & 3;
+            float w = code == 1 ? 1.0f : (code == 2 ? -1.0f : 0.0f);
+            expected[row] += w * info.scales[index / (size_t)info.group_size] * activation[col];
+        }
+    }
+    printf("%.8f %.8f %.8f %.8f\n", output[0], output[1], expected[0], expected[1]);
+    if (fabsf(output[0] - expected[0]) > 1e-6f ||
+        fabsf(output[1] - expected[1]) > 1e-6f)
+        return 3;
+    pv_catq_cleanup();
+    return 0;
+}
+''',
+        encoding="utf-8",
+    )
+    build = subprocess.run(
+        [
+            sys.executable, "-m", "ziglang", "cc", "-std=c99", "-O2",
+            f"-I{os.path.join(ROOT, 'vm')}",
+            str(harness),
+            os.path.join(ROOT, "vm", "picovm.c"),
+            os.path.join(ROOT, "vm", "picovm_catq.c"),
+            "-lm", "-o", str(executable),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert build.returncode == 0, build.stderr
+    run = subprocess.run([str(executable)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr + run.stdout
+    values = [float(value) for value in run.stdout.split()]
+    assert values[0] == pytest.approx(values[2], abs=1e-6)
+    assert values[1] == pytest.approx(values[3], abs=1e-6)

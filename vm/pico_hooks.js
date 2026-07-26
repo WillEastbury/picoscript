@@ -577,6 +577,7 @@
       0x37E: "Net.Connect",
       0x37F: "Net.SendSpan",
       0x380: "Net.RecvSpan",
+      0x381: "BitLinear.MatVecCatQ",
     }
   };
   function _canonConstant(name) {

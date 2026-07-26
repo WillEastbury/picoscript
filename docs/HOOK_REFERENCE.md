@@ -1,4 +1,4 @@
-# PicoScript Hook Reference (565 hooks, 74 namespaces)
+# PicoScript Hook Reference (558 hooks, 73 namespaces)
 
 Complete reference for all host hooks in the PicoScript 16-opcode ISA.
 Each hook is a deterministic primitive callable from any of the 7 language surfaces.
@@ -7,8 +7,8 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Metric | Value |
 |--------|-------|
-| Total hooks | 565 |
-| Namespaces | 74 |
+| Total hooks | 558 |
+| Namespaces | 73 |
 | Language surfaces | 7 (C, BASIC, Python, English, COBOL, Report, Functional) |
 | Execution paths | 5 (Python VM, JS VM, C VM, native C, native JS) |
 
@@ -740,7 +740,7 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | Shard.Load() | 0x037C | Load or map a model shard. |
 | Shard.Save() | 0x037D | Persist a transformed model shard. |
 
-### BitLinear.* (5 hooks)
+### BitLinear.* (6 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
@@ -749,6 +749,7 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | BitLinear.MatVecBitmap() | 0x01F2 | |
 | BitLinear.MatVecBase3() | 0x01F3 | |
 | BitLinear.HasFormat() | 0x01F4 | |
+| BitLinear.MatVecCatQ() | 0x0381 | Scaled CAT-Q packed-weight matrix-vector projection. |
 
 ### Quant.* (5 hooks)
 

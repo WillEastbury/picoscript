@@ -705,6 +705,8 @@ def hook_cap(ns: str, method: str) -> int:
         return CAP_NET
     if ns == "Tensor" and method in ("Map", "View", "Gemm", "Reduce", "Elementwise"):
         return CAP_DEVICE
+    if ns == "BitLinear" and method == "MatVecCatQ":
+        return CAP_DEVICE
     return _CAP_BY_NS.get(ns, 0)
 
 
@@ -3352,6 +3354,8 @@ class HostApi:
         return True
 
     def _bitlinear(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if method == "MatVecCatQ":
+            return self._compute_host(vm, "BitLinear", method, rd, rs1, rs2)
         if method == "HasFormat":
             fmt = vm.regs[rs1] & MASK32
             vm.regs[rd] = 1 if fmt in (1, 2, 3) else 0

@@ -150,7 +150,7 @@ Host-backed submission and completion of coarse accelerator jobs.
 ## BitLinear
 
 **Conformance Level:** L0  
-**Methods:** 8
+**Methods:** 9
 
 | Method | Opcode | Hook Code | v2 Example |
 |--------|--------|-----------|----------|
@@ -159,6 +159,7 @@ Host-backed submission and completion of coarse accelerator jobs.
 | MatVecBase3Block | 0x00 | 0x7276 | `BitLinear.MatVecBase3Block(...)` |
 | MatVecBitmap | 0x00 | 0x71F2 | `BitLinear.MatVecBitmap(...)` |
 | MatVecBitmapBlock | 0x00 | 0x7275 | `BitLinear.MatVecBitmapBlock(...)` |
+| MatVecCatQ | 0x00 | 0x7381 | `BitLinear.MatVecCatQ(...)` |
 | MatVecTernary | 0x00 | 0x71F1 | `BitLinear.MatVecTernary(...)` |
 | MatVecTernaryBlock | 0x00 | 0x7274 | `BitLinear.MatVecTernaryBlock(...)` |
 | SetShape | 0x00 | 0x71F0 | `BitLinear.SetShape(...)` |
@@ -1132,7 +1133,7 @@ Thread preemption hints and cooperative yielding.
 
 ## Summary by Conformance Level
 
-### L0: 318 methods
+### L0: 319 methods
 
 - Async.Result (0x737B)
 - Async.Submit (0x7379)
@@ -1166,6 +1167,7 @@ Thread preemption hints and cooperative yielding.
 - BitLinear.MatVecBase3Block (0x7276)
 - BitLinear.MatVecBitmap (0x71F2)
 - BitLinear.MatVecBitmapBlock (0x7275)
+- BitLinear.MatVecCatQ (0x7381)
 - BitLinear.MatVecTernary (0x71F1)
 - BitLinear.MatVecTernaryBlock (0x7274)
 - BitLinear.SetShape (0x71F0)
@@ -1683,7 +1685,7 @@ Host hooks use reserved imm16 range 0x7000-0x7FFF:
 | 0x70E0-0x70EE | Context | 15 | Context |
 | 0x70F0-0x70FE | Crypto | 15 | Crypto |
 
-**Total:** 504 methods across 62 namespaces.
+**Total:** 505 methods across 62 namespaces.
 
 ## IDE Code Completion
 

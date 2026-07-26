@@ -115,6 +115,28 @@ Shard.Save(packed, "model.ternary.safetensors");
 
 The complete executable flow is `examples/catq_quantize.pc`.
 
+### Ternary inference
+
+CAT-Q weights cannot use the older unscaled `BitLinear.MatVecTernary` directly:
+CAT-Q stores a floating scaling factor for every flattened weight group.
+`BitLinear.MatVecCatQ(packed, activation)` consumes both the packed two-bit
+weights and their group scales.
+
+Run the real Qwen layer demonstration:
+
+```powershell
+pwsh -File tools\run_catq_ternary_infer.ps1
+```
+
+It loads the CAT-Q shard produced by `run_catq_smoke.ps1`, selects one 1024-value
+activation vector, executes the 3072x1024 gate projection through the PicoScript
+ternary stack, saves the result, and checks that all 3072 outputs are finite.
+
+This is a genuine CAT-Q ternary layer inference path. It is not yet a complete
+autoregressive Qwen model: embeddings, all transformer layers, attention/KV
+state, nonlinearities, final norm, LM head, sampling, and tokenizer orchestration
+still need to be assembled around this now-correct projection primitive.
+
 ### Reproducible smoke test
 
 On Windows, the complete small-model test is scripted:
