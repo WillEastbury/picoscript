@@ -34,6 +34,7 @@ class FakeComputeProvider:
             ("Tensor", "Reduce"): 14,
             ("Tensor", "Elementwise"): 15,
             ("CatQ", "Calibrate"): 21,
+            ("CatQ", "CalibrateTarget"): 30,
             ("CatQ", "Optimize"): 22,
             ("CatQ", "Ternarize"): 23,
             ("BitLinear", "MatVecCatQ"): 24,
@@ -145,6 +146,50 @@ def test_all_lowerers_emit_code_keyed_host_calls():
     for code in range(0x387, 0x38A):
         assert f"0x{code:X}" in c_source
         assert f"0x{code:X}" in js_source
+
+
+def test_calibrate_target_lowers_through_context_attachment():
+    source = r'''
+int input = Tensor.Map("input", "dtype=f32");
+int target = Tensor.Map("target", "dtype=f32");
+int context = CatQ.CalibrateTarget(input, target, "group=4;experts=2");
+Io.WriteByte(context);
+'''
+    provider = FakeComputeProvider()
+    il = compile_c(source)
+    host_calls = [
+        (ins.ns, ins.method) for ins in il
+        if ins.op == "host" and ins.ns == "CatQ"
+    ]
+    assert host_calls == [
+        ("CatQ", "Calibrate"),
+        ("CatQ", "CalibrateTarget"),
+    ]
+    c_source = lower_to_c(il)
+    js_source = lower_to_js(il)
+    assert "pv_host2(ctx, 0x375" in c_source
+    assert "pv_host2(ctx, 0x38A" in c_source
+    assert "rt.host(0x375" in js_source
+    assert "rt.host(0x38A" in js_source
+    vm = PicoVM(host=HostApi(compute_provider=provider)).run(
+        lower_to_bytecode_safe(il)
+    )
+    assert b"".join(vm.output) == bytes([30])
+    assert [(ns, method) for ns, method, _, _ in provider.calls[-2:]] == [
+        ("CatQ", "Calibrate"),
+        ("CatQ", "CalibrateTarget"),
+    ]
+    variants = [
+        lower_to_bytecode_safe(compile_c(
+            'int c=CatQ.CalibrateTarget(11,22,"group=4;experts=2"); return c;')),
+        lower_to_bytecode_safe(compile_basic(
+            'DIM c = CatQ.CalibrateTarget(11, 22, "group=4;experts=2")\nRETURN c')),
+        lower_to_bytecode_safe(compile_python(
+            'c = CatQ.CalibrateTarget(11, 22, "group=4;experts=2")\nreturn c')),
+        lower_to_bytecode_safe(compile_english(
+            'Set c to CatQ.CalibrateTarget(11, 22, "group=4;experts=2").\nReturn c.')),
+    ]
+    assert all(words == variants[0] for words in variants[1:])
 
 
 def test_browser_compiler_accepts_catq_and_raw_net_hooks():

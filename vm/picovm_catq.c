@@ -53,9 +53,11 @@ typedef struct {
 
 typedef struct {
     int calibration;
+    int target;
     int epochs;
     int group_size;
     int batch_size;
+    int expert_count;
     float gamma;
     float sharpness;
     float learning_rate;
@@ -1156,9 +1158,12 @@ static void pv_catq_quantize_worker(void *opaque, size_t first, size_t last)
 typedef struct {
     const pv_catq_tensor *weight;
     const pv_catq_tensor *calibration;
+    const pv_catq_tensor *target;
     const float *quantized;
     int batch_start;
     int batch_end;
+    int rows_per_expert;
+    int calibration_rows_per_expert;
     float gradient_scale;
     float *gradient;
     float *row_loss;
@@ -1171,18 +1176,34 @@ static void pv_catq_forward_worker(void *opaque, size_t first, size_t last)
     for (row = first; row < last; row++) {
         float loss = 0.0f;
         float *gradient = job->gradient + row * (size_t)job->weight->cols;
+        size_t calibration_row =
+            (row / (size_t)job->rows_per_expert) *
+            (size_t)job->calibration_rows_per_expert;
         int sample;
         for (sample = job->batch_start; sample < job->batch_end; sample++) {
             const float *input =
-                job->calibration->data + (size_t)sample * job->calibration->cols;
+                job->calibration->data +
+                (calibration_row + (size_t)sample) * job->calibration->cols;
             const float *weight =
                 job->weight->data + row * (size_t)job->weight->cols;
             const float *quantized =
                 job->quantized + row * (size_t)job->weight->cols;
             float target, prediction, error;
-            pv_catq_dot2_f32(
-                input, weight, quantized, (size_t)job->weight->cols,
-                &target, &prediction);
+            if (job->target) {
+                float duplicate;
+                size_t expert = row / (size_t)job->rows_per_expert;
+                size_t output = row % (size_t)job->rows_per_expert;
+                target = job->target->data[
+                    (expert * (size_t)job->calibration_rows_per_expert +
+                     (size_t)sample) * job->target->cols + output];
+                pv_catq_dot2_f32(
+                    input, quantized, quantized,
+                    (size_t)job->weight->cols, &prediction, &duplicate);
+            } else {
+                pv_catq_dot2_f32(
+                    input, weight, quantized, (size_t)job->weight->cols,
+                    &target, &prediction);
+            }
             error = prediction - target;
             loss += error * error;
             pv_catq_axpy_f32(
@@ -1302,7 +1323,8 @@ static void pv_catq_adam_worker(void *opaque, size_t first, size_t last)
 
 static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
                                            const pv_catq_tensor *weight,
-                                           const pv_catq_tensor *calibration)
+                                           const pv_catq_tensor *calibration,
+                                           const pv_catq_tensor *target)
 {
     size_t count = weight->count;
     size_t groups = (count + (size_t)context->group_size - 1) / (size_t)context->group_size;
@@ -1315,8 +1337,20 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
     float *quantized = 0, *gradient = 0, *row_loss = 0;
     int epoch, batch_start, step = 0;
     int total_steps;
+    int rows_per_expert;
+    int calibration_rows_per_expert;
     size_t g;
-    if (!out || weight->cols != calibration->cols) goto fail;
+    if (!out || weight->cols != calibration->cols ||
+        context->expert_count < 1 ||
+        weight->rows % context->expert_count != 0 ||
+        calibration->rows % context->expert_count != 0 ||
+        (target &&
+         (target->rows != calibration->rows ||
+          target->rows % context->expert_count != 0 ||
+          weight->rows != context->expert_count * target->cols)))
+        goto fail;
+    rows_per_expert = weight->rows / context->expert_count;
+    calibration_rows_per_expert = calibration->rows / context->expert_count;
     out->weight = (float *)malloc(count * sizeof(float));
     out->delta_mu = (float *)malloc(groups * sizeof(float));
     out->delta_alpha = (float *)malloc(groups * sizeof(float));
@@ -1361,6 +1395,10 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
         cuda_options.group_size = context->group_size;
         cuda_options.batch_size = context->batch_size;
         cuda_options.normalization_rows = weight->rows;
+        cuda_options.expert_count = context->expert_count;
+        cuda_options.rows_per_expert = rows_per_expert;
+        cuda_options.calibration_rows_per_expert = calibration_rows_per_expert;
+        cuda_options.global_row_offset = 0;
         cuda_options.gamma = context->gamma;
         cuda_options.sharpness = context->sharpness;
         cuda_options.learning_rate = context->learning_rate;
@@ -1375,15 +1413,28 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
         }
         rows_per_chunk = max_weights / (size_t)weight->cols;
         if (rows_per_chunk < 1u) rows_per_chunk = 1u;
+        if (context->expert_count > 1) {
+            if (rows_per_chunk < (size_t)rows_per_expert) {
+                rows_per_chunk = (size_t)rows_per_expert;
+            } else {
+                rows_per_chunk =
+                    (rows_per_chunk / (size_t)rows_per_expert) *
+                    (size_t)rows_per_expert;
+            }
+        }
         for (size_t row = 0; row < (size_t)weight->rows; row += rows_per_chunk) {
             size_t rows = (size_t)weight->rows - row;
             size_t weight_offset = row * (size_t)weight->cols;
             size_t group_offset = weight_offset / (size_t)context->group_size;
             float chunk_loss = 0.0f;
             if (rows > rows_per_chunk) rows = rows_per_chunk;
+            cuda_options.global_row_offset = (int)row;
             if (!pv_catq_cuda_optimize(
                     weight->data + weight_offset, (int)rows, weight->cols,
                     calibration->data, calibration->rows,
+                    target ? target->data : 0,
+                    target ? target->rows : 0,
+                    target ? target->cols : 0,
                     &cuda_options,
                     out->delta_mu + group_offset,
                     out->delta_alpha + group_offset,
@@ -1428,11 +1479,12 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
         raw_threshold[g] = 0.5413248546f;
     }
     total_steps = context->epochs *
-        ((calibration->rows + context->batch_size - 1) / context->batch_size);
+        ((calibration_rows_per_expert + context->batch_size - 1) /
+         context->batch_size);
     if (total_steps < 1) total_steps = 1;
     for (epoch = 0; epoch < context->epochs; epoch++) {
         float t = (float)(epoch + 1) / (float)context->epochs;
-        for (batch_start = 0; batch_start < calibration->rows;
+        for (batch_start = 0; batch_start < calibration_rows_per_expert;
              batch_start += context->batch_size) {
             int batch_end = batch_start + context->batch_size;
             float *group_mu_grad = (float *)calloc(groups, sizeof(float));
@@ -1447,7 +1499,8 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
                 free(group_mu_grad); free(group_alpha_grad); free(group_threshold_grad);
                 goto fail;
             }
-            if (batch_end > calibration->rows) batch_end = calibration->rows;
+            if (batch_end > calibration_rows_per_expert)
+                batch_end = calibration_rows_per_expert;
             if (sharpness < 1e-6f) sharpness = 1e-6f;
             memset(gradient, 0, count * sizeof(float));
             {
@@ -1470,7 +1523,8 @@ static pv_catq_optimized *pv_catq_optimize(const pv_catq_context *context,
             }
             {
                 pv_catq_forward_job forward = {
-                    weight, calibration, quantized, batch_start, batch_end,
+                    weight, calibration, target, quantized, batch_start, batch_end,
+                    rows_per_expert, calibration_rows_per_expert,
                     2.0f / (float)((batch_end - batch_start) * weight->rows),
                     gradient, row_loss
                 };
@@ -1809,6 +1863,7 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         context->epochs = pv_catq_option_int(options, "epochs", 60);
         context->group_size = pv_catq_option_int(options, "group", 128);
         context->batch_size = pv_catq_option_int(options, "batch", 3);
+        context->expert_count = pv_catq_option_int(options, "experts", 1);
         context->gamma = pv_catq_option_float(options, "gamma", 0.8f);
         context->sharpness = pv_catq_option_float(options, "s0", 30.0f);
         context->learning_rate = pv_catq_option_float(options, "lr", 0.001f);
@@ -1827,7 +1882,9 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         if (context->cuda_chunk_weights == 0u) {
             context->cuda_chunk_weights = 32u * 1024u * 1024u;
         }
-        if (context->epochs < 1 || context->group_size < 1 || context->batch_size < 1 ||
+        if (context->epochs < 1 || context->group_size < 1 ||
+            context->batch_size < 1 || context->expert_count < 1 ||
+            calibration->rows % context->expert_count != 0 ||
             context->gamma <= 0.0f || context->gamma > 1.0f ||
             context->threads < 0) {
             free(context); ctx->regs[rd] = 0; return 1;
@@ -1835,16 +1892,36 @@ int pv_catq_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         ctx->regs[rd] = pv_catq_object_put(PV_CATQ_CONTEXT, context);
         return 1;
     }
+    if (hook == PV_HOOK_CATQ_CALIBRATETARGET) {
+        pv_catq_object *context_object = pv_catq_object_get(a, PV_CATQ_CONTEXT);
+        pv_catq_tensor *target = pv_catq_tensor_get(b);
+        pv_catq_context *context;
+        pv_catq_tensor *calibration;
+        if (!context_object || !target) { ctx->regs[rd] = 0; return 1; }
+        context = (pv_catq_context *)context_object->value;
+        calibration = pv_catq_tensor_get(context->calibration);
+        if (!calibration || target->rows != calibration->rows ||
+            target->rows % context->expert_count != 0) {
+            ctx->regs[rd] = 0;
+            return 1;
+        }
+        context->target = b;
+        ctx->regs[rd] = a;
+        return 1;
+    }
     if (hook == PV_HOOK_CATQ_OPTIMIZE) {
         pv_catq_object *context_object = pv_catq_object_get(a, PV_CATQ_CONTEXT);
         pv_catq_tensor *weight = pv_catq_tensor_get(b);
         pv_catq_context *context;
         pv_catq_tensor *calibration;
+        pv_catq_tensor *target;
         pv_catq_optimized *optimized;
         if (!context_object || !weight) { ctx->regs[rd] = 0; return 1; }
         context = (pv_catq_context *)context_object->value;
         calibration = pv_catq_tensor_get(context->calibration);
-        optimized = calibration ? pv_catq_optimize(context, weight, calibration) : 0;
+        target = context->target ? pv_catq_tensor_get(context->target) : 0;
+        optimized = calibration && (!context->target || target)
+            ? pv_catq_optimize(context, weight, calibration, target) : 0;
         ctx->regs[rd] = optimized ? pv_catq_object_put(PV_CATQ_OPTIMIZED, optimized) : 0;
         return 1;
     }

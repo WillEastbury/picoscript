@@ -194,6 +194,7 @@ NAMESPACE_MAP = {
     },
     "CatQ": {
         "Calibrate": OP_NOOP,
+        "CalibrateTarget": OP_NOOP,
         "Optimize": OP_NOOP,
         "Ternarize": OP_NOOP,
         "Pack": OP_NOOP,
@@ -964,6 +965,7 @@ HOST_HOOK_CODES = {
     ("MoE", "Forward"):          0x0387, # rs1=layer handle rs2=input tensor rd=tensor
     ("MoE", "SelectedCount"):    0x0388, # rs1=layer/result handle         rd=count
     ("MoE", "SelectedExpert"):   0x0389, # rs1=layer/result handle rs2=slot rd=expert id
+    ("CatQ", "CalibrateTarget"): 0x038A, # internal attach: rs1=context rs2=target rd=context
     ("Quant", "AbsMax"):         0x0228,
     ("Quant", "QuantI8"):        0x0229,
     ("Quant", "DequantI8"):      0x022A,

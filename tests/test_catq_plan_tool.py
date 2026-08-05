@@ -63,7 +63,7 @@ def test_qwen35_plan_emits_executable_picoscript(tmp_path):
     assert "in_proj_qkv.weight" in source
     assert "mlp.gate.weight" not in source
     assert "CatQ.Optimize" in source
-    assert source.count("Tensor.Release(") == 8
+    assert source.count("Tensor.Release(") == 9
     assert "Arena.Rewind(" in source
     compile_result = subprocess.run(
         [
@@ -76,6 +76,31 @@ def test_qwen35_plan_emits_executable_picoscript(tmp_path):
         text=True,
     )
     assert compile_result.returncode == 0, compile_result.stderr + compile_result.stdout
+
+
+def test_qwen35_plan_emits_target_aware_calibration(tmp_path):
+    tool = build_tool(tmp_path)
+    model_dir = tmp_path / "qwen"
+    model_dir.mkdir()
+    name = "model.language_model.layers.0.mlp.experts.down_proj"
+    write_index(model_dir, {name: "model-00001.safetensors"})
+    manifest = tmp_path / "activations.tsv"
+    output = tmp_path / "plan.pc"
+    manifest.write_text(
+        f"{name}\tcalibration.safetensors\tcal.{name}\tout.safetensors\t\t"
+        f"experts=2\ttarget.{name}\n",
+        encoding="utf-8",
+    )
+    run = subprocess.run(
+        [str(tool), "qwen3.5", str(model_dir), str(manifest), str(output)],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 0, run.stderr
+    source = output.read_text(encoding="utf-8")
+    assert "CatQ.CalibrateTarget(calibration, target, catqOptions)" in source
+    assert f'"target.{name}"' in source
+    assert '"experts=2"' in source
 
 
 def test_single_shard_qwen3_plan(tmp_path):
@@ -99,6 +124,44 @@ def test_single_shard_qwen3_plan(tmp_path):
     source = output.read_text(encoding="utf-8")
     assert "model.safetensors" in source
     assert f"tensor={name}" in source
+
+
+def test_plan_merges_optional_per_job_catq_options(tmp_path):
+    tool = build_tool(tmp_path)
+    model_dir = tmp_path / "qwen35"
+    model_dir.mkdir()
+    name = "model.language_model.layers.0.mlp.experts.down_proj.weight"
+    write_index(model_dir, {name: "model-00001.safetensors"})
+    manifest = tmp_path / "expert-activations.tsv"
+    output = tmp_path / "expert-plan.pc"
+    manifest.write_text(
+        f"{name}\tcalibration.safetensors\tcal.{name}\tout.safetensors\t\t"
+        'experts=2;tag=a"b\\c\n',
+        encoding="utf-8",
+    )
+    run = subprocess.run(
+        [
+            str(tool), "qwen3.5", str(model_dir), str(manifest), str(output),
+            "group=4;epochs=2;batch=1",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 0, run.stderr
+    source = output.read_text(encoding="utf-8")
+    assert 'String.Concat(catqOptions, ";")' in source
+    assert 'experts=2;tag=a\\"b\\\\c' in source
+    compile_result = subprocess.run(
+        [
+            sys.executable, os.path.join(ROOT, "picoscript_build.py"),
+            "emit", str(output), "--as", "bytecode", "--hex",
+            "-o", str(tmp_path / "expert-plan.hex"),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert compile_result.returncode == 0, compile_result.stderr + compile_result.stdout
 
 
 def test_gpt_oss_plan_pairs_mxfp4_blocks_and_scales(tmp_path):

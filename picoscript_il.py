@@ -332,6 +332,17 @@ class ILBuilder:
 
     def host(self, ns: str, method: str, args: Tuple[Operand, ...] = (),
              dst: Optional[VReg] = None):
+        if ns == "CatQ" and method == "CalibrateTarget":
+            if len(args) != 3:
+                raise ValueError("CatQ.CalibrateTarget requires input, target, and options")
+            context = dst if dst is not None else self.vreg()
+            self._emit(Inst(
+                "host", ns="CatQ", method="Calibrate",
+                args=(args[0], args[2]), dst=context))
+            self._emit(Inst(
+                "host", ns="CatQ", method="CalibrateTarget",
+                args=(context, args[1]), dst=context))
+            return
         self._emit(Inst("host", ns=ns, method=method, args=tuple(args), dst=dst))
 
     def load(self, dst: VReg, addr16: int):

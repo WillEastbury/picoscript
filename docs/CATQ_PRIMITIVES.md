@@ -35,6 +35,26 @@ descriptor.
 directly in C. Accelerated providers can replace that hook without changing the
 PicoScript workflow.
 
+### Expert-aware fused MoE calibration
+
+Set `experts=E` in `CatQ.Calibrate` for a routed fused matrix. If the flattened
+weight has `E * O` output rows, its F32 calibration tensor must have shape
+`[E * R, input_dim]`, ordered expert-major:
+
+```text
+expert 0 rows [0, R)
+expert 1 rows [R, 2R)
+...
+expert E-1 rows [(E-1)R, ER)
+```
+
+Output row `r` uses expert `floor(r / O)` and only that expert's `R`
+calibration rows. Epoch batching indexes are therefore in `[0, R)`, while
+gradient normalization remains `2 / (batch_samples * full_fused_output_rows)`.
+Both weight rows and calibration rows must be divisible by `E`. Dense and
+shared-expert matrices use the default `experts=1`, which preserves the
+original behavior.
+
 ## Jobs and shards
 
 | Method | Inputs | Result |
@@ -215,6 +235,10 @@ Large matrices are split into row-aligned chunks by default
 normalization, so chunked and unchunked runs are bit-identical. Override the
 limit with `-CudaChunkWeights` in the PowerShell runners.
 
+Expert-aware CUDA chunks are also aligned to complete experts. The kernels
+receive the global row offset and select the matching expert-major calibration
+slice, so forced chunking remains byte-identical to an unchunked run.
+
 ```powershell
 pwsh -File tools\run_catq_smoke.ps1 -Cuda `
   -Epochs 60 -CalibrationRows 512 -BatchSize 3
@@ -305,6 +329,21 @@ retained for compatibility but are unsuitable for later layers because the
 first layer using a width fills the shared bucket. `-Layers` accepts numeric
 ranges, `-MatrixSet` selects `All`, `Moe`, or `Dense`, and `-MaxMatrices`
 limits the selected set. Partial runs delete only their selected outputs.
+
+For per-tensor calibration, rank-3 source weights use their first dimension as
+the expert count. Their calibration tensor is `[experts * rows_per_expert,
+input_dim]`; rank-2/shared matrices remain `[rows_per_expert, input_dim]`.
+Selected tensors may have different total row counts, but all must have the
+same positive `rows_per_expert`. The generated activation manifest carries
+`experts=N` as its optional sixth TSV field:
+
+```text
+weight  calibration_shard  calibration_tensor  output_shard  [view]  [job_options]
+```
+
+Four- and five-field manifests remain valid. `catq_plan` appends the sixth
+field to the global CAT-Q option string for only that job. Dimension-global
+calibration remains `experts=1` only.
 
 ### Reproducible smoke test
 

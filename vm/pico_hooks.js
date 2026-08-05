@@ -586,6 +586,7 @@
       0x387: "MoE.Forward",
       0x388: "MoE.SelectedCount",
       0x389: "MoE.SelectedExpert",
+      0x38A: "CatQ.CalibrateTarget",
     }
   };
   function _canonConstant(name) {

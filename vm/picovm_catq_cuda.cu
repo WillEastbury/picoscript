@@ -146,22 +146,34 @@ __global__ void quantize_kernel(
 __global__ void error_kernel(
     const float *weight, const float *quantized,
     const float *calibration, int rows, int cols,
-    int batch_start, int batch_count, float *errors)
+    const float *target_values, int target_cols,
+    int rows_per_expert, int calibration_rows_per_expert,
+    int global_row_offset, int batch_start, int batch_count, float *errors)
 {
     extern __shared__ float shared[];
     int item = blockIdx.x;
     int row = item % rows;
     int sample = item / rows;
+    int global_row = global_row_offset + row;
+    int expert = global_row / rows_per_expert;
+    int output = global_row % rows_per_expert;
     if (sample >= batch_count) return;
     const float *input =
-        calibration + static_cast<size_t>(batch_start + sample) * cols;
+        calibration +
+        static_cast<size_t>(
+            expert * calibration_rows_per_expert + batch_start + sample) * cols;
     const float *source = weight + static_cast<size_t>(row) * cols;
     const float *approximation = quantized + static_cast<size_t>(row) * cols;
     float target = 0.0f;
+    if (target_values && threadIdx.x == 0)
+        target = target_values[
+            static_cast<size_t>(
+                expert * calibration_rows_per_expert + batch_start + sample) *
+                target_cols + output];
     float predicted = 0.0f;
     for (int col = threadIdx.x; col < cols; col += blockDim.x) {
         float x = input[col];
-        target += x * source[col];
+        if (!target_values) target += x * source[col];
         predicted += x * approximation[col];
     }
     float target_sum = block_reduce_sum(target, shared);
@@ -175,6 +187,8 @@ __global__ void error_kernel(
 __global__ void gradient_kernel(
     const float *calibration, const float *errors,
     int rows, int cols, int batch_start, int batch_count,
+    int rows_per_expert, int calibration_rows_per_expert,
+    int global_row_offset,
     float scale, float *gradient)
 {
     size_t index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -182,10 +196,15 @@ __global__ void gradient_kernel(
     if (index >= count) return;
     int row = static_cast<int>(index / cols);
     int col = static_cast<int>(index % cols);
+    int expert = (global_row_offset + row) / rows_per_expert;
+    size_t calibration_start =
+        static_cast<size_t>(expert * calibration_rows_per_expert + batch_start) *
+        cols;
     float value = 0.0f;
     for (int sample = 0; sample < batch_count; sample++)
         value += errors[static_cast<size_t>(sample) * rows + row] *
-            calibration[static_cast<size_t>(batch_start + sample) * cols + col];
+            calibration[
+                calibration_start + static_cast<size_t>(sample) * cols + col];
     gradient[index] = value * scale;
 }
 
@@ -302,6 +321,9 @@ extern "C" int pv_catq_cuda_optimize(
     int cols,
     const float *calibration,
     int calibration_rows,
+    const float *target,
+    int target_rows,
+    int target_cols,
     const pv_catq_cuda_options *options,
     float *delta_mu,
     float *delta_alpha,
@@ -318,7 +340,7 @@ extern "C" int pv_catq_cuda_optimize(
     int total_steps;
     int step = 0;
     int last_batch_count = 0;
-    float *d_weight = nullptr, *d_calibration = nullptr;
+    float *d_weight = nullptr, *d_calibration = nullptr, *d_target = nullptr;
     float *d_mu0 = nullptr, *d_alpha0 = nullptr;
     float *d_raw_mu = nullptr, *d_raw_alpha = nullptr, *d_raw_threshold = nullptr;
     float *d_m_mu = nullptr, *d_m_alpha = nullptr, *d_m_threshold = nullptr;
@@ -335,7 +357,19 @@ extern "C" int pv_catq_cuda_optimize(
     if (!weight || !calibration || !options || !delta_mu || !delta_alpha ||
         !delta_threshold || !final_loss || rows <= 0 || cols <= 0 ||
         calibration_rows <= 0 || options->group_size <= 0 ||
-        options->normalization_rows <= 0 ||
+        options->normalization_rows <= 0 || options->expert_count <= 0 ||
+        options->rows_per_expert <= 0 ||
+        options->calibration_rows_per_expert <= 0 ||
+        options->global_row_offset < 0 ||
+        calibration_rows !=
+            options->expert_count * options->calibration_rows_per_expert ||
+        (target &&
+         (target_rows != calibration_rows ||
+          target_cols != options->rows_per_expert)) ||
+        (!target && (target_rows != 0 || target_cols != 0)) ||
+        options->normalization_rows !=
+            options->expert_count * options->rows_per_expert ||
+        options->global_row_offset + rows > options->normalization_rows ||
         !pv_catq_cuda_available())
         return 0;
     last_error[0] = '\0';
@@ -349,7 +383,8 @@ extern "C" int pv_catq_cuda_optimize(
     group_blocks = static_cast<int>((groups + 255) / 256);
     weight_blocks = static_cast<int>((count + kWeightThreads - 1) / kWeightThreads);
     steps_per_epoch =
-        (calibration_rows + options->batch_size - 1) / options->batch_size;
+        (options->calibration_rows_per_expert + options->batch_size - 1) /
+        options->batch_size;
     total_steps = options->epochs * steps_per_epoch;
     host_errors.resize(static_cast<size_t>(options->batch_size) * rows);
     raw_alpha.resize(groups);
@@ -368,6 +403,8 @@ extern "C" int pv_catq_cuda_optimize(
 
     CUDA_ALLOC(d_weight, count);
     CUDA_ALLOC(d_calibration, calibration_count);
+    if (target) CUDA_ALLOC(
+        d_target, static_cast<size_t>(target_rows) * target_cols);
     CUDA_ALLOC(d_mu0, groups);
     CUDA_ALLOC(d_alpha0, groups);
     CUDA_ALLOC(d_raw_mu, groups);
@@ -406,6 +443,16 @@ extern "C" int pv_catq_cuda_optimize(
             set_error("copy calibration to CUDA", status);
             goto cleanup;
         }
+        if (target) {
+            status = cudaMemcpy(
+                d_target, target,
+                static_cast<size_t>(target_rows) * target_cols * sizeof(float),
+                cudaMemcpyHostToDevice);
+            if (!cuda_ok(status)) {
+                set_error("copy target to CUDA", status);
+                goto cleanup;
+            }
+        }
     }
     CUDA_ZERO(d_m_mu, groups);
     CUDA_ZERO(d_m_alpha, groups);
@@ -428,10 +475,13 @@ extern "C" int pv_catq_cuda_optimize(
             : options->sharpness;
         int softened = time <= options->gamma;
         if (sharpness < 1e-6f) sharpness = 1e-6f;
-        for (int batch_start = 0; batch_start < calibration_rows;
+        for (int batch_start = 0;
+             batch_start < options->calibration_rows_per_expert;
              batch_start += options->batch_size) {
             int batch_count =
-                min(options->batch_size, calibration_rows - batch_start);
+                min(
+                    options->batch_size,
+                    options->calibration_rows_per_expert - batch_start);
             float gradient_scale =
                 2.0f /
                 static_cast<float>(batch_count * options->normalization_rows);
@@ -451,10 +501,18 @@ extern "C" int pv_catq_cuda_optimize(
             error_kernel<<<batch_count * rows, kDotThreads,
                 static_cast<size_t>(kDotThreads) * sizeof(float)>>>(
                     d_weight, d_quantized, d_calibration, rows, cols,
+                    d_target, target_cols,
+                    options->rows_per_expert,
+                    options->calibration_rows_per_expert,
+                    options->global_row_offset,
                     batch_start, batch_count, d_errors);
             gradient_kernel<<<weight_blocks, kWeightThreads>>>(
                 d_calibration, d_errors, rows, cols,
-                batch_start, batch_count, gradient_scale, d_gradient);
+                batch_start, batch_count,
+                options->rows_per_expert,
+                options->calibration_rows_per_expert,
+                options->global_row_offset,
+                gradient_scale, d_gradient);
             derivative_kernel<<<static_cast<unsigned>(groups), group_threads,
                 static_cast<size_t>(group_threads) * 3 * sizeof(float)>>>(
                     d_weight, d_gradient, count, options->group_size,
@@ -536,6 +594,7 @@ extern "C" int pv_catq_cuda_optimize(
 cleanup:
     cudaFree(d_weight);
     cudaFree(d_calibration);
+    cudaFree(d_target);
     cudaFree(d_mu0);
     cudaFree(d_alpha0);
     cudaFree(d_raw_mu);

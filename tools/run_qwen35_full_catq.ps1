@@ -16,7 +16,10 @@ param(
     [string]$Layers,
     [int]$MaxMatrices = 0,
     [ValidateSet('All', 'Moe', 'Dense')]
-    [string]$MatrixSet = 'All'
+    [string]$MatrixSet = 'All',
+    [ValidateSet('All', 'GateUp', 'Down')]
+    [string]$MatrixStage = 'All',
+    [switch]$RequireTargets
 )
 
 Set-StrictMode -Version Latest
@@ -122,6 +125,16 @@ foreach ($weight in ($index['weight_map'].GetEnumerator() | Sort-Object Key)) {
     }
     $shape = @($info['shape'])
     $inputDimension = [int]$shape[-1]
+    $outputDimension = if ($shape.Count -eq 3) {
+        [int]$shape[-2]
+    }
+    else {
+        [int]$shape[0]
+    }
+    $expertCount = if ($shape.Count -eq 3) { [int]$shape[0] } else { 1 }
+    if ($expertCount -lt 1) {
+        throw "Invalid expert count in source shape for $($weight.Key)"
+    }
     $layerMatch = [regex]::Match(
         $weight.Key,
         '^model\.language_model\.layers\.(\d+)\.'
@@ -135,6 +148,8 @@ foreach ($weight in ($index['weight_map'].GetEnumerator() | Sort-Object Key)) {
         Name = $weight.Key
         Layer = $layer
         InputDimension = $inputDimension
+        OutputDimension = $outputDimension
+        ExpertCount = $expertCount
         Output = Join-Path $shardDirectory ($safeName + '.ternary.safetensors')
     })
 }
@@ -145,9 +160,18 @@ if ($matrices.Count -eq 0) {
 $allMatrices = @($matrices | Where-Object {
     $isMoe = $_.Name.Contains('.mlp.experts.') -or
         $_.Name.Contains('.mlp.shared_expert.')
-    $MatrixSet -eq 'All' -or
+    $setMatch = $MatrixSet -eq 'All' -or
         ($MatrixSet -eq 'Moe' -and $isMoe) -or
         ($MatrixSet -eq 'Dense' -and -not $isMoe)
+    $isDown = $_.Name.Contains('.mlp.experts.down_proj') -or
+        $_.Name.Contains('.mlp.shared_expert.down_proj.weight')
+    $isGateUp = $_.Name.Contains('.mlp.experts.gate_up_proj') -or
+        $_.Name.Contains('.mlp.shared_expert.gate_proj.weight') -or
+        $_.Name.Contains('.mlp.shared_expert.up_proj.weight')
+    $stageMatch = $MatrixStage -eq 'All' -or
+        ($MatrixStage -eq 'Down' -and $isDown) -or
+        ($MatrixStage -eq 'GateUp' -and $isGateUp)
+    $setMatch -and $stageMatch
 } | Sort-Object Layer, Name)
 if ($allMatrices.Count -eq 0) {
     throw "No quantizable Qwen3.5 matrices matched MatrixSet=$MatrixSet"
@@ -190,7 +214,9 @@ foreach ($matrix in $matrices) {
 }
 
 $calibrationMode = 'synthetic dimension-global'
+$expertAwareCalibration = $false
 $calibrationKeys = @{}
+$targetKeys = @{}
 if ($CalibrationFile) {
     if (-not (Test-Path -LiteralPath $CalibrationFile -PathType Leaf)) {
         throw "External calibration file is missing: $CalibrationFile"
@@ -198,6 +224,7 @@ if ($CalibrationFile) {
     $effectiveCalibrationFile = (Resolve-Path -LiteralPath $CalibrationFile).Path
     $externalHeader = Read-SafeTensorHeader $effectiveCalibrationFile
     $externalRows = $null
+    $externalRowsPerExpert = $null
     $perTensorNames = @($matrices | ForEach-Object { "cal.$($_.Name)" })
     $presentPerTensor = @($perTensorNames | Where-Object {
         $externalHeader.ContainsKey($_)
@@ -218,18 +245,47 @@ if ($CalibrationFile) {
             if ($rows -lt 1) {
                 throw "External calibration tensor $tensorName must have a positive row count"
             }
+            if ($rows -gt [int]::MaxValue) {
+                throw "External calibration tensor $tensorName row count is too large: $rows"
+            }
             if ($width -ne $matrix.InputDimension) {
                 throw "External calibration tensor $tensorName has width $width, expected $($matrix.InputDimension)"
             }
-            if ($null -eq $externalRows) {
-                $externalRows = $rows
+            if (($rows % $matrix.ExpertCount) -ne 0) {
+                throw "External calibration tensor $tensorName has $rows rows, not divisible by experts=$($matrix.ExpertCount)"
             }
-            elseif ($rows -ne $externalRows) {
-                throw "External calibration tensors must have the same row count; $tensorName has $rows, expected $externalRows"
+            $rowsPerExpert = [long]($rows / $matrix.ExpertCount)
+            if ($rowsPerExpert -lt 1) {
+                throw "External calibration tensor $tensorName must have a positive rows-per-expert count"
+            }
+            if ($null -eq $externalRowsPerExpert) {
+                $externalRowsPerExpert = $rowsPerExpert
+            }
+            elseif ($rowsPerExpert -ne $externalRowsPerExpert) {
+                throw "External calibration tensors must have the same rows per expert; $tensorName has $rowsPerExpert, expected $externalRowsPerExpert"
             }
             $calibrationKeys[$matrix.Name] = $tensorName
+            $targetName = "target.$($matrix.Name)"
+            if ($externalHeader.ContainsKey($targetName)) {
+                $targetInfo = $externalHeader[$targetName]
+                if ([string]$targetInfo['dtype'] -notin @('F32', 'BF16', 'F16')) {
+                    throw "External target tensor $targetName must be F32, BF16, or F16"
+                }
+                $targetShape = @($targetInfo['shape'])
+                if ($targetShape.Count -ne 2 -or
+                    [long]$targetShape[0] -ne $rows -or
+                    [long]$targetShape[1] -ne $matrix.OutputDimension) {
+                    throw "External target tensor $targetName must have shape [$rows,$($matrix.OutputDimension)]"
+                }
+                $targetKeys[$matrix.Name] = $targetName
+            }
+            elseif ($RequireTargets) {
+                throw "External calibration is missing required target tensor $targetName"
+            }
         }
-        $calibrationMode = 'external per-tensor'
+        $externalRows = $externalRowsPerExpert
+        $calibrationMode = 'external per-tensor expert-aware'
+        $expertAwareCalibration = $true
     }
     elseif ($presentPerTensor.Count -gt 0) {
         $missingPerTensor = @($perTensorNames | Where-Object {
@@ -256,6 +312,9 @@ if ($CalibrationFile) {
             $width = [long]$shape[1]
             if ($rows -lt 1) {
                 throw "External calibration tensor $tensorName must have a positive row count"
+            }
+            if ($rows -gt [int]::MaxValue) {
+                throw "External calibration tensor $tensorName row count is too large: $rows"
             }
             if ($width -ne $dimension) {
                 throw "External calibration tensor $tensorName has width $width, expected $dimension"
@@ -326,15 +385,33 @@ else {
     }
 }
 
-Write-Host "[calibration] mode=$calibrationMode rows=$CalibrationRows widths=$($dimensions -join ',') path=$effectiveCalibrationFile"
+if ($expertAwareCalibration) {
+    $expertCounts = @($matrices | Select-Object -ExpandProperty ExpertCount -Unique | Sort-Object)
+    Write-Host "[calibration] mode=$calibrationMode rows/expert=$CalibrationRows experts=$($expertCounts -join ',') widths=$($dimensions -join ',') path=$effectiveCalibrationFile"
+}
+else {
+    Write-Host "[calibration] mode=$calibrationMode rows=$CalibrationRows widths=$($dimensions -join ',') path=$effectiveCalibrationFile"
+}
 $calibrationPath = PicoPath $effectiveCalibrationFile
 $lines = @(foreach ($matrix in $matrices) {
-    @(
+    $fields = @(
         $matrix.Name
         $calibrationPath
         $calibrationKeys[$matrix.Name]
         (PicoPath $matrix.Output)
-    ) -join "`t"
+    )
+    if ($expertAwareCalibration) {
+        $fields += ''
+        $fields += "experts=$($matrix.ExpertCount)"
+    }
+    elseif ($targetKeys.ContainsKey($matrix.Name)) {
+        $fields += ''
+        $fields += ''
+    }
+    if ($targetKeys.ContainsKey($matrix.Name)) {
+        $fields += $targetKeys[$matrix.Name]
+    }
+    $fields -join "`t"
 })
 [IO.File]::WriteAllLines($manifestFile, $lines)
 $pendingMatrices = @(if ($Resume) {
@@ -344,12 +421,24 @@ else {
     $matrices
 })
 $pendingLines = @(foreach ($matrix in $pendingMatrices) {
-    @(
+    $fields = @(
         $matrix.Name
         $calibrationPath
         $calibrationKeys[$matrix.Name]
         (PicoPath $matrix.Output)
-    ) -join "`t"
+    )
+    if ($expertAwareCalibration) {
+        $fields += ''
+        $fields += "experts=$($matrix.ExpertCount)"
+    }
+    elseif ($targetKeys.ContainsKey($matrix.Name)) {
+        $fields += ''
+        $fields += ''
+    }
+    if ($targetKeys.ContainsKey($matrix.Name)) {
+        $fields += $targetKeys[$matrix.Name]
+    }
+    $fields -join "`t"
 })
 
 $python = (Get-Command python -ErrorAction Stop).Source
@@ -424,10 +513,15 @@ Write-Host "  backend:      $(if ($Cpu) { 'CPU' } else { 'CUDA' })"
 Write-Host "  tensors:      $tensorSummary"
 Write-Host "  converted:    $($pendingMatrices.Count)"
 Write-Host "  matrix set:   $MatrixSet"
+Write-Host "  matrix stage: $MatrixStage"
+Write-Host "  targets:      $($targetKeys.Count)$(if ($RequireTargets) { ' required' } else { '' })"
 Write-Host "  layers:       $($selectedLayers -join ', ')"
 Write-Host "  input widths: $($dimensions -join ', ')"
 Write-Host "  calibration:  $calibrationMode ($effectiveCalibrationFile)"
-Write-Host "  schedule:     $Epochs epochs, $CalibrationRows rows, batch $BatchSize"
+Write-Host "  schedule:     $Epochs epochs, $CalibrationRows $(if ($expertAwareCalibration) { 'rows/expert' } else { 'rows' }), batch $BatchSize"
+if ($expertAwareCalibration) {
+    Write-Host "  experts:      per source tensor rank-3 first dimension (shared/dense = 1)"
+}
 Write-Host "  plan batches: $batchCount x <= $MatricesPerBatch matrices"
 if (-not $Cpu) {
     Write-Host "  CUDA chunk:   $CudaChunkWeights weights"

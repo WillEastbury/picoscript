@@ -12,6 +12,10 @@ typedef struct pv_catq_cuda_options {
     int group_size;
     int batch_size;
     int normalization_rows;
+    int expert_count;
+    int rows_per_expert;
+    int calibration_rows_per_expert;
+    int global_row_offset;
     float gamma;
     float sharpness;
     float learning_rate;
@@ -27,6 +31,9 @@ int pv_catq_cuda_optimize(
     int cols,
     const float *calibration,
     int calibration_rows,
+    const float *target,
+    int target_rows,
+    int target_cols,
     const pv_catq_cuda_options *options,
     float *delta_mu,
     float *delta_alpha,

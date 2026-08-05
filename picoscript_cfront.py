@@ -1266,7 +1266,10 @@ class Lowerer:
             return dst
         # generic host hook: resolve to canonical ABI spelling (case-insensitive)
         ns, method = canon_host(ns, method)
-        argregs = [self.eval(a) for a in c.args[:2]]
+        if ns == "CatQ" and method == "CalibrateTarget" and len(c.args) != 3:
+            raise SyntaxError("CatQ.CalibrateTarget requires 3 args (input, target, options)")
+        arg_limit = 3 if ns == "CatQ" and method == "CalibrateTarget" else 2
+        argregs = [self.eval(a) for a in c.args[:arg_limit]]
         dst = self.b.vreg() if want_value else None
         self.b.host(ns, method, tuple(argregs), dst)
         return dst

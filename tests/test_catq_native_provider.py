@@ -73,6 +73,147 @@ def pico_path(path):
     return str(path).replace("\\", "/")
 
 
+def packed_expert_losses(path, weights, calibration, rows_per_expert, rows_per_sample):
+    header, data = read_safetensor(path)
+    codes_end = header["codes"]["data_offsets"][1]
+    codes = data[:codes_end]
+    scale_start, scale_end = header["scales"]["data_offsets"]
+    scales = struct.unpack(
+        "<" + "f" * ((scale_end - scale_start) // 4),
+        data[scale_start:scale_end],
+    )
+    rows, cols = map(int, header["__metadata__"]["shape"].split(","))
+    group_size = int(header["__metadata__"]["group_size"])
+    expert_count = rows // rows_per_expert
+    losses = []
+    for expert in range(expert_count):
+        loss = 0.0
+        for row in range(expert * rows_per_expert, (expert + 1) * rows_per_expert):
+            for sample in range(rows_per_sample):
+                input_row = calibration[
+                    (expert * rows_per_sample + sample) * cols:
+                    (expert * rows_per_sample + sample + 1) * cols
+                ]
+                target = 0.0
+                predicted = 0.0
+                for col, activation in enumerate(input_row):
+                    index = row * cols + col
+                    code = (codes[index // 4] >> ((index & 3) * 2)) & 3
+                    ternary = 1.0 if code == 1 else (-1.0 if code == 2 else 0.0)
+                    target += activation * weights[index]
+                    predicted += activation * ternary * scales[index // group_size]
+                loss += (predicted - target) ** 2
+        losses.append(loss / (rows_per_expert * rows_per_sample))
+    return losses
+
+
+def packed_target_mse(path, calibration, targets, expert_count):
+    header, data = read_safetensor(path)
+    codes_end = header["codes"]["data_offsets"][1]
+    codes = data[:codes_end]
+    scale_start, scale_end = header["scales"]["data_offsets"]
+    scales = struct.unpack(
+        "<" + "f" * ((scale_end - scale_start) // 4),
+        data[scale_start:scale_end],
+    )
+    rows, cols = map(int, header["__metadata__"]["shape"].split(","))
+    group_size = int(header["__metadata__"]["group_size"])
+    outputs_per_expert = rows // expert_count
+    samples_per_expert = len(calibration) // (expert_count * cols)
+    total = 0.0
+    for expert in range(expert_count):
+        for sample in range(samples_per_expert):
+            input_row = calibration[
+                (expert * samples_per_expert + sample) * cols:
+                (expert * samples_per_expert + sample + 1) * cols
+            ]
+            for output in range(outputs_per_expert):
+                row = expert * outputs_per_expert + output
+                predicted = 0.0
+                for col, activation in enumerate(input_row):
+                    index = row * cols + col
+                    code = (codes[index // 4] >> ((index & 3) * 2)) & 3
+                    ternary = 1.0 if code == 1 else (-1.0 if code == 2 else 0.0)
+                    predicted += activation * ternary * scales[index // group_size]
+                target = targets[
+                    (expert * samples_per_expert + sample) *
+                    outputs_per_expert + output
+                ]
+                total += (predicted - target) ** 2
+    return total / (expert_count * samples_per_expert * outputs_per_expert)
+
+
+def packed_target_losses(path, calibration, targets, expert_count):
+    header, data = read_safetensor(path)
+    codes_end = header["codes"]["data_offsets"][1]
+    codes = data[:codes_end]
+    scale_start, scale_end = header["scales"]["data_offsets"]
+    scales = struct.unpack(
+        "<" + "f" * ((scale_end - scale_start) // 4),
+        data[scale_start:scale_end],
+    )
+    rows, cols = map(int, header["__metadata__"]["shape"].split(","))
+    group_size = int(header["__metadata__"]["group_size"])
+    outputs_per_expert = rows // expert_count
+    samples_per_expert = len(calibration) // (expert_count * cols)
+    losses = []
+    for expert in range(expert_count):
+        total = 0.0
+        for sample in range(samples_per_expert):
+            input_row = calibration[
+                (expert * samples_per_expert + sample) * cols:
+                (expert * samples_per_expert + sample + 1) * cols
+            ]
+            for output in range(outputs_per_expert):
+                row = expert * outputs_per_expert + output
+                predicted = 0.0
+                for col, activation in enumerate(input_row):
+                    index = row * cols + col
+                    code = (codes[index // 4] >> ((index & 3) * 2)) & 3
+                    ternary = 1.0 if code == 1 else (-1.0 if code == 2 else 0.0)
+                    predicted += activation * ternary * scales[index // group_size]
+                target = targets[
+                    (expert * samples_per_expert + sample) *
+                    outputs_per_expert + output
+                ]
+                total += (predicted - target) ** 2
+        losses.append(total / (samples_per_expert * outputs_per_expert))
+    return losses
+
+
+def packed_expert_matvec(path, activation, expert, rows_per_expert):
+    header, data = read_safetensor(path)
+    codes_end = header["codes"]["data_offsets"][1]
+    codes = data[:codes_end]
+    scale_start, scale_end = header["scales"]["data_offsets"]
+    scales = struct.unpack(
+        "<" + "f" * ((scale_end - scale_start) // 4),
+        data[scale_start:scale_end],
+    )
+    rows, cols = map(int, header["__metadata__"]["shape"].split(","))
+    group_size = int(header["__metadata__"]["group_size"])
+    assert len(activation) == cols
+    assert rows % rows_per_expert == 0
+    output = []
+    for row in range(expert * rows_per_expert, (expert + 1) * rows_per_expert):
+        value = 0.0
+        for col, x in enumerate(activation):
+            index = row * cols + col
+            code = (codes[index // 4] >> ((index & 3) * 2)) & 3
+            ternary = 1.0 if code == 1 else (-1.0 if code == 2 else 0.0)
+            value += x * ternary * scales[index // group_size]
+        output.append(value)
+    return output
+
+
+def bf16_values(values):
+    rounded = []
+    for value in values:
+        bits = struct.unpack("<I", struct.pack("<f", value))[0] & 0xFFFF0000
+        rounded.append(struct.unpack("<f", struct.pack("<I", bits))[0])
+    return rounded
+
+
 def has_cuda_toolchain():
     nvcc = shutil.which("nvcc")
     nvidia_smi = shutil.which("nvidia-smi")
@@ -133,6 +274,151 @@ return 1;
     assert run.returncode == 0, run.stderr + run.stdout
     assert "ERROR 0 0 0" in run.stdout
     assert unchunked.read_bytes() == chunked.read_bytes()
+
+
+@pytest.mark.skipif(not has_cuda_toolchain(), reason="CUDA toolchain and GPU required")
+def test_cuda_optimizer_uses_expert_major_calibration_and_chunks_exactly(tmp_path):
+    model = tmp_path / "expert-model.safetensors"
+    calibration_path = tmp_path / "expert-calibration.safetensors"
+    global_output = tmp_path / "global.safetensors"
+    expert_output = tmp_path / "expert.safetensors"
+    chunked_output = tmp_path / "expert-chunked.safetensors"
+    source = tmp_path / "expert-cuda.pc"
+    executable = tmp_path / "expert-cuda.exe"
+    weights = [
+        0.95, 0.35, -0.15, -0.75,
+        -0.65, 0.25, 0.85, -0.10,
+        0.95, 0.35, -0.15, -0.75,
+        -0.65, 0.25, 0.85, -0.10,
+    ]
+    calibration = [
+        1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, -1, 0, 0,
+        0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, -1,
+    ]
+    write_safetensor(model, "weight", 4, 4, weights)
+    write_safetensor(calibration_path, "calibration", 8, 4, calibration)
+    source.write_text(
+        f'''
+int model = Shard.Load("{pico_path(model)}", "mmap");
+int calShard = Shard.Load("{pico_path(calibration_path)}", "mmap");
+int weights = Tensor.Map(model, "tensor=weight");
+int samples = Tensor.Map(calShard, "tensor=calibration");
+int global = CatQ.Calibrate(samples, "group=4;epochs=60;batch=2;gamma=0.8;s0=30;lr=0.02;device=cuda;cuda_required=1;cuda_chunk_weights=1024");
+int globalOptimized = CatQ.Optimize(global, weights);
+int globalTernary = CatQ.Ternarize(global, globalOptimized);
+int globalPacked = CatQ.Pack(global, globalTernary);
+if (Shard.Save(globalPacked, "{pico_path(global_output)}") == 0) {{ raise 5101; }}
+int expert = CatQ.Calibrate(samples, "group=4;epochs=60;batch=2;gamma=0.8;s0=30;lr=0.02;experts=2;device=cuda;cuda_required=1;cuda_chunk_weights=1024");
+int expertOptimized = CatQ.Optimize(expert, weights);
+int expertTernary = CatQ.Ternarize(expert, expertOptimized);
+int expertPacked = CatQ.Pack(expert, expertTernary);
+if (Shard.Save(expertPacked, "{pico_path(expert_output)}") == 0) {{ raise 5102; }}
+int chunked = CatQ.Calibrate(samples, "group=4;epochs=60;batch=2;gamma=0.8;s0=30;lr=0.02;experts=2;device=cuda;cuda_required=1;cuda_chunk_weights=8");
+int chunkedOptimized = CatQ.Optimize(chunked, weights);
+int chunkedTernary = CatQ.Ternarize(chunked, chunkedOptimized);
+int chunkedPacked = CatQ.Pack(chunked, chunkedTernary);
+if (Shard.Save(chunkedPacked, "{pico_path(chunked_output)}") == 0) {{ raise 5103; }}
+return 1;
+''',
+        encoding="utf-8",
+    )
+    build = subprocess.run(
+        [
+            sys.executable, os.path.join(ROOT, "picoscript_build.py"),
+            "native", str(source), "--provider", "catq-cuda",
+            "--profile", "host", "-o", str(executable),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert build.returncode == 0, build.stderr + build.stdout
+    run = subprocess.run([str(executable)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr + run.stdout
+    assert "ERROR 0 0 0" in run.stdout
+    assert expert_output.read_bytes() == chunked_output.read_bytes()
+    assert expert_output.read_bytes() != global_output.read_bytes()
+    global_losses = packed_expert_losses(global_output, weights, calibration, 2, 4)
+    expert_losses = packed_expert_losses(expert_output, weights, calibration, 2, 4)
+    assert expert_losses[0] < global_losses[0]
+    assert expert_losses[1] < global_losses[1]
+
+
+@pytest.mark.skipif(not has_cuda_toolchain(), reason="CUDA toolchain and GPU required")
+def test_cuda_calibrate_target_e2_chunks_use_expert_local_output_rows(tmp_path):
+    model = tmp_path / "target-cuda-model.safetensors"
+    input_path = tmp_path / "target-cuda-input.safetensors"
+    target_path = tmp_path / "target-cuda-output.safetensors"
+    ordinary_output = tmp_path / "target-cuda-ordinary.safetensors"
+    targeted_output = tmp_path / "target-cuda-full.safetensors"
+    chunked_output = tmp_path / "target-cuda-chunked.safetensors"
+    source = tmp_path / "target-cuda.pc"
+    executable = tmp_path / "target-cuda.exe"
+    weights = [
+        0.95, 0.35, -0.15, -0.75,
+        -0.65, 0.25, 0.85, -0.10,
+        0.95, 0.35, -0.15, -0.75,
+        -0.65, 0.25, 0.85, -0.10,
+    ]
+    calibration = [
+        1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, -1, 0, 0,
+        0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, -1,
+    ]
+    targets = [0.0] * 16
+    common = (
+        "group=4;epochs=80;batch=2;gamma=0.8;s0=30;lr=0.02;"
+        "experts=2;device=cuda;cuda_required=1"
+    )
+    write_safetensor(model, "weight", 4, 4, weights)
+    write_safetensor(input_path, "input", 8, 4, calibration)
+    write_safetensor(target_path, "target", 8, 2, targets)
+    source.write_text(
+        f'''
+int model = Shard.Load("{pico_path(model)}", "mmap");
+int inputShard = Shard.Load("{pico_path(input_path)}", "mmap");
+int targetShard = Shard.Load("{pico_path(target_path)}", "mmap");
+int weights = Tensor.Map(model, "tensor=weight");
+int input = Tensor.Map(inputShard, "tensor=input");
+int target = Tensor.Map(targetShard, "tensor=target");
+int ordinary = CatQ.Calibrate(input, "{common};cuda_chunk_weights=1024");
+int ordinaryOptimized = CatQ.Optimize(ordinary, weights);
+int ordinaryTernary = CatQ.Ternarize(ordinary, ordinaryOptimized);
+int ordinaryPacked = CatQ.Pack(ordinary, ordinaryTernary);
+if (Shard.Save(ordinaryPacked, "{pico_path(ordinary_output)}") == 0) {{ raise 5301; }}
+int targeted = CatQ.CalibrateTarget(input, target, "{common};cuda_chunk_weights=1024");
+int targetedOptimized = CatQ.Optimize(targeted, weights);
+int targetedTernary = CatQ.Ternarize(targeted, targetedOptimized);
+int targetedPacked = CatQ.Pack(targeted, targetedTernary);
+if (Shard.Save(targetedPacked, "{pico_path(targeted_output)}") == 0) {{ raise 5302; }}
+int chunked = CatQ.CalibrateTarget(input, target, "{common};cuda_chunk_weights=8");
+int chunkedOptimized = CatQ.Optimize(chunked, weights);
+int chunkedTernary = CatQ.Ternarize(chunked, chunkedOptimized);
+int chunkedPacked = CatQ.Pack(chunked, chunkedTernary);
+if (Shard.Save(chunkedPacked, "{pico_path(chunked_output)}") == 0) {{ raise 5303; }}
+return 1;
+''',
+        encoding="utf-8",
+    )
+    build = subprocess.run(
+        [
+            sys.executable, os.path.join(ROOT, "picoscript_build.py"),
+            "native", str(source), "--provider", "catq-cuda",
+            "--profile", "host", "-o", str(executable),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert build.returncode == 0, build.stderr + build.stdout
+    run = subprocess.run([str(executable)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr + run.stdout
+    assert "ERROR 0 0 0" in run.stdout
+    assert targeted_output.read_bytes() == chunked_output.read_bytes()
+    assert packed_target_mse(
+        targeted_output, calibration, targets, expert_count=2
+    ) < packed_target_mse(
+        ordinary_output, calibration, targets, expert_count=2
+    )
 
 
 def test_native_catq_pipeline(tmp_path):
@@ -323,6 +609,540 @@ int main(void) {
     loss = float(run.stdout.strip())
     assert math.isfinite(loss)
     assert loss < 0.01
+
+
+def test_native_calibrate_target_validates_shapes_and_reduces_e2_target_mse(tmp_path):
+    harness = tmp_path / "target_loss.c"
+    executable = tmp_path / "target_loss.exe"
+    harness.write_text(
+        r'''
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+#include "picovm.h"
+#include "picovm_catq.h"
+#include "pico_hooks.h"
+
+static int make_span(pv_ctx *ctx, const char *text, int offset) {
+    int handle = ctx->span_count++;
+    int length = (int)strlen(text);
+    memcpy(ctx->mem + offset, text, (size_t)length);
+    ctx->span_ptr[handle] = (uint32_t)offset;
+    ctx->span_len[handle] = length;
+    return handle;
+}
+
+static int pack_context(pv_ctx *ctx, int context, int weight) {
+    int optimized = (int)pv_host2(
+        ctx, PV_HOOK_CATQ_OPTIMIZE, context, weight);
+    int ternary = (int)pv_host2(
+        ctx, PV_HOOK_CATQ_TERNARIZE, context, optimized);
+    return (int)pv_host2(ctx, PV_HOOK_CATQ_PACK, context, ternary);
+}
+
+static float target_mse(const pv_catq_packed_info *info, const float *input,
+                        const float *target, int experts) {
+    int rows_per_expert = info->rows / experts;
+    int samples_per_expert = 4;
+    float total = 0.0f;
+    int expert, sample, output, col;
+    for (expert = 0; expert < experts; expert++) {
+        for (sample = 0; sample < samples_per_expert; sample++) {
+            const float *x = input + (expert * samples_per_expert + sample) * info->cols;
+            for (output = 0; output < rows_per_expert; output++) {
+                int row = expert * rows_per_expert + output;
+                float predicted = 0.0f;
+                for (col = 0; col < info->cols; col++) {
+                    size_t index = (size_t)row * info->cols + col;
+                    unsigned int code =
+                        (info->codes[index / 4] >> ((index & 3) * 2)) & 3;
+                    float ternary =
+                        code == 1 ? 1.0f : (code == 2 ? -1.0f : 0.0f);
+                    predicted += x[col] * ternary *
+                        info->scales[index / (size_t)info->group_size];
+                }
+                {
+                    float expected = target[
+                        (expert * samples_per_expert + sample) *
+                        rows_per_expert + output];
+                    float error = predicted - expected;
+                    total += error * error;
+                }
+            }
+        }
+    }
+    return total / (float)(experts * samples_per_expert * rows_per_expert);
+}
+
+int main(void) {
+    float weights[16] = {
+        0.95f, 0.35f, -0.15f, -0.75f,
+        -0.65f, 0.25f, 0.85f, -0.10f,
+        0.95f, 0.35f, -0.15f, -0.75f,
+        -0.65f, 0.25f, 0.85f, -0.10f
+    };
+    float input[32] = {
+        1,0,0,0, 0,1,0,0, 1,1,0,0, 1,-1,0,0,
+        0,0,1,0, 0,0,0,1, 0,0,1,1, 0,0,1,-1
+    };
+    float targets[16] = {0};
+    float bad_rows_data[12] = {0};
+    float bad_cols_data[24] = {0};
+    unsigned char memory[16384] = {0};
+    pv_catq_packed_info ordinary_info, target_info;
+    pv_ctx ctx;
+    int weight, samples, target, bad_rows, bad_cols;
+    int options, one_options, ordinary_context, target_context;
+    int ordinary_packed, target_packed, invalid_context, invalid_optimized;
+    int one_weight, one_samples, one_target, one_context, one_optimized;
+    float ordinary_loss, target_loss;
+
+    pv_init(&ctx);
+    ctx.mem = memory;
+    ctx.mem_size = (long)sizeof(memory);
+    pv_catq_install();
+    weight = pv_catq_register_f32(weights, 4, 4);
+    samples = pv_catq_register_f32(input, 8, 4);
+    target = pv_catq_register_f32(targets, 8, 2);
+    bad_rows = pv_catq_register_f32(bad_rows_data, 6, 2);
+    bad_cols = pv_catq_register_f32(bad_cols_data, 8, 3);
+    options = make_span(
+        &ctx, "group=4;epochs=80;batch=2;gamma=0.8;s0=30;lr=0.02;threads=1;experts=2", 100);
+    one_options = make_span(
+        &ctx, "group=4;epochs=4;batch=2;gamma=0.8;s0=30;lr=0.02;threads=1;experts=1", 400);
+
+    ordinary_context = (int)pv_host2(
+        &ctx, PV_HOOK_CATQ_CALIBRATE, samples, options);
+    target_context = (int)pv_host2(
+        &ctx, PV_HOOK_CATQ_CALIBRATE, samples, options);
+    if ((int)pv_host2(
+            &ctx, PV_HOOK_CATQ_CALIBRATETARGET,
+            target_context, target) != target_context)
+        return 2;
+    ordinary_packed = pack_context(&ctx, ordinary_context, weight);
+    target_packed = pack_context(&ctx, target_context, weight);
+    if (!pv_catq_get_packed(ordinary_packed, &ordinary_info) ||
+        !pv_catq_get_packed(target_packed, &target_info))
+        return 3;
+
+    invalid_context = (int)pv_host2(
+        &ctx, PV_HOOK_CATQ_CALIBRATE, samples, options);
+    if ((int)pv_host2(
+            &ctx, PV_HOOK_CATQ_CALIBRATETARGET,
+            invalid_context, bad_rows) != 0)
+        return 4;
+    invalid_context = (int)pv_host2(
+        &ctx, PV_HOOK_CATQ_CALIBRATE, samples, options);
+    if ((int)pv_host2(
+            &ctx, PV_HOOK_CATQ_CALIBRATETARGET,
+            invalid_context, bad_cols) != invalid_context)
+        return 5;
+    invalid_optimized = (int)pv_host2(
+        &ctx, PV_HOOK_CATQ_OPTIMIZE, invalid_context, weight);
+    if (invalid_optimized != 0) return 6;
+
+    one_weight = pv_catq_register_f32(weights, 2, 4);
+    one_samples = pv_catq_register_f32(input, 4, 4);
+    one_target = pv_catq_register_f32(targets, 4, 2);
+    one_context = (int)pv_host2(
+        &ctx, PV_HOOK_CATQ_CALIBRATE, one_samples, one_options);
+    one_context = (int)pv_host2(
+        &ctx, PV_HOOK_CATQ_CALIBRATETARGET, one_context, one_target);
+    one_optimized = (int)pv_host2(
+        &ctx, PV_HOOK_CATQ_OPTIMIZE, one_context, one_weight);
+    if (!one_context || !one_optimized) return 7;
+
+    ordinary_loss = target_mse(&ordinary_info, input, targets, 2);
+    target_loss = target_mse(&target_info, input, targets, 2);
+    printf("%.9f %.9f\n", ordinary_loss, target_loss);
+    pv_catq_cleanup();
+    return target_loss < ordinary_loss ? 0 : 8;
+}
+''',
+        encoding="utf-8",
+    )
+    build = subprocess.run(
+        [
+            sys.executable, "-m", "ziglang", "cc", "-std=c99", "-O2",
+            f"-I{os.path.join(ROOT, 'vm')}",
+            str(harness),
+            os.path.join(ROOT, "vm", "picovm.c"),
+            os.path.join(ROOT, "vm", "picovm_catq.c"),
+            "-lm", "-o", str(executable),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert build.returncode == 0, build.stderr
+    run = subprocess.run([str(executable)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr + run.stdout
+    ordinary_loss, target_loss = map(float, run.stdout.split())
+    assert target_loss < ordinary_loss
+
+
+def test_picoscript_down_target_optimizes_each_expert_final_output(tmp_path):
+    gate_model = tmp_path / "gate-model.safetensors"
+    up_model = tmp_path / "up-model.safetensors"
+    down_model = tmp_path / "down-model.safetensors"
+    hidden_path = tmp_path / "hidden.safetensors"
+    down_input_path = tmp_path / "ternary-swiglu.safetensors"
+    target_path = tmp_path / "bf16-expert-output.safetensors"
+    gate_packed = tmp_path / "gate-packed.safetensors"
+    up_packed = tmp_path / "up-packed.safetensors"
+    ordinary_output = tmp_path / "ordinary.safetensors"
+    targeted_output = tmp_path / "targeted.safetensors"
+    upstream_source = tmp_path / "quantize-upstream.pc"
+    upstream_executable = tmp_path / "quantize-upstream.exe"
+    down_source = tmp_path / "quantize-down.pc"
+    down_executable = tmp_path / "quantize-down.exe"
+    expert_count = 2
+    samples_per_expert = 6
+    hidden_cols = 4
+    intermediate_cols = 4
+    output_cols = 2
+    gate_weights = bf16_values([
+        0.95, 0.35, -0.15, -0.75,
+        -0.65, 0.25, 0.85, -0.10,
+        0.55, -0.80, 0.20, 0.45,
+        -0.35, -0.55, 0.90, 0.15,
+        -0.75, 0.60, 0.30, 0.85,
+        0.40, -0.95, 0.65, -0.25,
+        0.80, 0.10, -0.60, 0.50,
+        -0.20, 0.70, 0.45, -0.85,
+    ])
+    up_weights = bf16_values([
+        0.45, -0.90, 0.30, 0.20,
+        0.75, 0.15, -0.65, 0.40,
+        -0.55, 0.80, 0.25, -0.35,
+        0.20, -0.45, 0.95, 0.60,
+        -0.85, 0.30, 0.70, -0.10,
+        0.65, -0.25, 0.15, 0.90,
+        -0.40, 0.55, -0.95, 0.35,
+        0.90, 0.20, 0.50, -0.70,
+    ])
+    down_weights = bf16_values([
+        0.90, 0.40, -0.20, -0.70,
+        -0.60, 0.20, 0.80, -0.10,
+        -0.80, 0.50, 0.25, 0.70,
+        0.40, -0.90, 0.60, -0.20,
+    ])
+    hidden = [
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+        1.0, -0.5, 0.75, 0.25,
+        -0.25, 0.80, -1.0, 0.60,
+        0.70, 0.20, -0.40, 1.0,
+        -0.60, 1.0, 0.30, -0.20,
+        0.25, -0.75, 1.0, 0.50,
+        1.0, 0.50, -0.25, -0.75,
+        -0.80, 0.40, 0.60, 0.90,
+        0.30, -1.0, 0.80, -0.40,
+    ]
+    upstream_options = (
+        "group=4;epochs=60;batch=2;gamma=0.8;s0=30;"
+        "lr=0.02;threads=1;experts=2"
+    )
+    down_options = (
+        "group=4;epochs=100;batch=2;gamma=0.8;s0=30;"
+        "lr=0.02;threads=1;experts=2"
+    )
+    write_safetensor(
+        gate_model, "weight", expert_count * intermediate_cols,
+        hidden_cols, gate_weights, dtype="BF16")
+    write_safetensor(
+        up_model, "weight", expert_count * intermediate_cols,
+        hidden_cols, up_weights, dtype="BF16")
+    write_safetensor(
+        down_model, "weight", expert_count * output_cols,
+        intermediate_cols, down_weights, dtype="BF16")
+    write_safetensor(
+        hidden_path, "hidden", expert_count * samples_per_expert,
+        hidden_cols, hidden)
+    upstream_source.write_text(
+        f'''
+int gateShard = Shard.Load("{pico_path(gate_model)}", "mmap");
+int upShard = Shard.Load("{pico_path(up_model)}", "mmap");
+int hiddenShard = Shard.Load("{pico_path(hidden_path)}", "mmap");
+int gate = Tensor.Map(gateShard, "tensor=weight");
+int up = Tensor.Map(upShard, "tensor=weight");
+int hidden = Tensor.Map(hiddenShard, "tensor=hidden");
+int gateContext = CatQ.Calibrate(hidden, "{upstream_options}");
+int gateOptimized = CatQ.Optimize(gateContext, gate);
+int gateTernary = CatQ.Ternarize(gateContext, gateOptimized);
+int gatePacked = CatQ.Pack(gateContext, gateTernary);
+if (Shard.Save(gatePacked, "{pico_path(gate_packed)}") == 0) {{ raise 5401; }}
+int upContext = CatQ.Calibrate(hidden, "{upstream_options}");
+int upOptimized = CatQ.Optimize(upContext, up);
+int upTernary = CatQ.Ternarize(upContext, upOptimized);
+int upPacked = CatQ.Pack(upContext, upTernary);
+if (Shard.Save(upPacked, "{pico_path(up_packed)}") == 0) {{ raise 5402; }}
+return 1;
+''',
+        encoding="utf-8",
+    )
+    upstream_build = subprocess.run(
+        [
+            sys.executable, os.path.join(ROOT, "picoscript_build.py"),
+            "native", str(upstream_source), "--provider", "catq",
+            "-o", str(upstream_executable),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert upstream_build.returncode == 0, upstream_build.stderr + upstream_build.stdout
+    upstream_run = subprocess.run(
+        [str(upstream_executable)], capture_output=True, text=True)
+    assert upstream_run.returncode == 0, upstream_run.stderr + upstream_run.stdout
+
+    down_input = []
+    targets = []
+    for expert in range(expert_count):
+        gate_offset = expert * intermediate_cols * hidden_cols
+        up_offset = expert * intermediate_cols * hidden_cols
+        down_offset = expert * output_cols * intermediate_cols
+        for sample in range(samples_per_expert):
+            hidden_row = hidden[
+                (expert * samples_per_expert + sample) * hidden_cols:
+                (expert * samples_per_expert + sample + 1) * hidden_cols
+            ]
+            gate_quant = packed_expert_matvec(
+                gate_packed, hidden_row, expert, intermediate_cols)
+            up_quant = packed_expert_matvec(
+                up_packed, hidden_row, expert, intermediate_cols)
+            swiglu_quant = [
+                (gate_value / (1.0 + math.exp(-gate_value))) * up_value
+                for gate_value, up_value in zip(gate_quant, up_quant)
+            ]
+            down_input.extend(swiglu_quant)
+
+            gate_bf16 = []
+            up_bf16 = []
+            for row in range(intermediate_cols):
+                gate_bf16.append(sum(
+                    hidden_row[col] *
+                    gate_weights[gate_offset + row * hidden_cols + col]
+                    for col in range(hidden_cols)
+                ))
+                up_bf16.append(sum(
+                    hidden_row[col] *
+                    up_weights[up_offset + row * hidden_cols + col]
+                    for col in range(hidden_cols)
+                ))
+            swiglu_bf16 = [
+                (gate_value / (1.0 + math.exp(-gate_value))) * up_value
+                for gate_value, up_value in zip(gate_bf16, up_bf16)
+            ]
+            for output in range(output_cols):
+                targets.append(sum(
+                    swiglu_bf16[col] *
+                    down_weights[down_offset + output * intermediate_cols + col]
+                    for col in range(intermediate_cols)
+                ))
+
+    write_safetensor(
+        down_input_path, "input", expert_count * samples_per_expert,
+        intermediate_cols, down_input)
+    write_safetensor(
+        target_path, "target", expert_count * samples_per_expert,
+        output_cols, targets)
+    down_source.write_text(
+        f'''
+int downShard = Shard.Load("{pico_path(down_model)}", "mmap");
+int inputShard = Shard.Load("{pico_path(down_input_path)}", "mmap");
+int targetShard = Shard.Load("{pico_path(target_path)}", "mmap");
+int down = Tensor.Map(downShard, "tensor=weight");
+int input = Tensor.Map(inputShard, "tensor=input");
+int target = Tensor.Map(targetShard, "tensor=target");
+int ordinary = CatQ.Calibrate(input, "{down_options}");
+int ordinaryOptimized = CatQ.Optimize(ordinary, down);
+int ordinaryTernary = CatQ.Ternarize(ordinary, ordinaryOptimized);
+int ordinaryPacked = CatQ.Pack(ordinary, ordinaryTernary);
+if (Shard.Save(ordinaryPacked, "{pico_path(ordinary_output)}") == 0) {{ raise 5403; }}
+int targeted = CatQ.CalibrateTarget(input, target, "{down_options}");
+int targetedOptimized = CatQ.Optimize(targeted, down);
+int targetedTernary = CatQ.Ternarize(targeted, targetedOptimized);
+int targetedPacked = CatQ.Pack(targeted, targetedTernary);
+if (Shard.Save(targetedPacked, "{pico_path(targeted_output)}") == 0) {{ raise 5404; }}
+return 1;
+''',
+        encoding="utf-8",
+    )
+    down_build = subprocess.run(
+        [
+            sys.executable, os.path.join(ROOT, "picoscript_build.py"),
+            "native", str(down_source), "--provider", "catq",
+            "-o", str(down_executable),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert down_build.returncode == 0, down_build.stderr + down_build.stdout
+    down_run = subprocess.run(
+        [str(down_executable)], capture_output=True, text=True)
+    assert down_run.returncode == 0, down_run.stderr + down_run.stdout
+    ordinary_losses = packed_target_losses(
+        ordinary_output, down_input, targets, expert_count)
+    targeted_losses = packed_target_losses(
+        targeted_output, down_input, targets, expert_count)
+    assert targeted_losses[0] < ordinary_losses[0]
+    assert targeted_losses[1] < ordinary_losses[1]
+
+
+def test_native_optimizer_uses_expert_major_calibration(tmp_path):
+    harness = tmp_path / "expert_calibration.c"
+    executable = tmp_path / "expert_calibration.exe"
+    harness.write_text(
+        r'''
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+#include "picovm.h"
+#include "picovm_catq.h"
+#include "pico_hooks.h"
+
+static int make_span(pv_ctx *ctx, const char *text, int offset) {
+    int handle = ctx->span_count++;
+    int length = (int)strlen(text);
+    memcpy(ctx->mem + offset, text, (size_t)length);
+    ctx->span_ptr[handle] = (uint32_t)offset;
+    ctx->span_len[handle] = length;
+    return handle;
+}
+
+static int convert(pv_ctx *ctx, int samples, int weights, int options) {
+    int catq = (int)pv_host2(ctx, PV_HOOK_CATQ_CALIBRATE, samples, options);
+    int optimized = (int)pv_host2(ctx, PV_HOOK_CATQ_OPTIMIZE, catq, weights);
+    int ternary = (int)pv_host2(ctx, PV_HOOK_CATQ_TERNARIZE, catq, optimized);
+    return (int)pv_host2(ctx, PV_HOOK_CATQ_PACK, catq, ternary);
+}
+
+static float expert_loss(const pv_catq_packed_info *info, const float *weight,
+                         const float *calibration, int selected_expert) {
+    float total = 0.0f;
+    int row, sample, col;
+    for (row = selected_expert * 2; row < (selected_expert + 1) * 2; row++) {
+        for (sample = 0; sample < 4; sample++) {
+            const float *input = calibration + (selected_expert * 4 + sample) * 4;
+            float target = 0.0f, predicted = 0.0f;
+            for (col = 0; col < 4; col++) {
+                size_t index = (size_t)row * 4 + col;
+                unsigned int code =
+                    (info->codes[index / 4] >> ((index & 3) * 2)) & 3;
+                float ternary =
+                    code == 1 ? 1.0f : (code == 2 ? -1.0f : 0.0f);
+                target += input[col] * weight[index];
+                predicted += input[col] * ternary *
+                    info->scales[index / (size_t)info->group_size];
+            }
+            total += (predicted - target) * (predicted - target);
+        }
+    }
+    return total / 8.0f;
+}
+
+int main(void) {
+    float weights[16] = {
+        0.95f, 0.35f, -0.15f, -0.75f,
+        -0.65f, 0.25f, 0.85f, -0.10f,
+        0.95f, 0.35f, -0.15f, -0.75f,
+        -0.65f, 0.25f, 0.85f, -0.10f
+    };
+    float calibration[32] = {
+        1,0,0,0, 0,1,0,0, 1,1,0,0, 1,-1,0,0,
+        0,0,1,0, 0,0,0,1, 0,0,1,1, 0,0,1,-1
+    };
+    float invalid_weights[12] = {0};
+    float invalid_calibration[12] = {0};
+    unsigned char memory[16384] = {0};
+    pv_catq_packed_info global, expert, implicit_one, explicit_one;
+    pv_ctx ctx;
+    int weight, samples, bad_weight, bad_samples;
+    int global_options, expert_options, implicit_options, explicit_options;
+    int global_packed, expert_packed, implicit_packed, explicit_packed;
+    int bad_context, valid_context, bad_optimized;
+    size_t i;
+
+    pv_init(&ctx);
+    ctx.mem = memory;
+    ctx.mem_size = (long)sizeof(memory);
+    pv_catq_install();
+    weight = pv_catq_register_f32(weights, 4, 4);
+    samples = pv_catq_register_f32(calibration, 8, 4);
+    bad_weight = pv_catq_register_f32(invalid_weights, 3, 4);
+    bad_samples = pv_catq_register_f32(invalid_calibration, 3, 4);
+    global_options = make_span(
+        &ctx, "group=4;epochs=60;batch=2;gamma=0.8;s0=30;lr=0.02;threads=1", 100);
+    expert_options = make_span(
+        &ctx, "group=4;epochs=60;batch=2;gamma=0.8;s0=30;lr=0.02;threads=1;experts=2", 300);
+    implicit_options = make_span(
+        &ctx, "group=4;epochs=4;batch=2;gamma=0.8;s0=30;lr=0.02;threads=1", 500);
+    explicit_options = make_span(
+        &ctx, "group=4;epochs=4;batch=2;gamma=0.8;s0=30;lr=0.02;threads=1;experts=1", 700);
+
+    global_packed = convert(&ctx, samples, weight, global_options);
+    expert_packed = convert(&ctx, samples, weight, expert_options);
+    implicit_packed = convert(&ctx, samples, weight, implicit_options);
+    explicit_packed = convert(&ctx, samples, weight, explicit_options);
+    if (!pv_catq_get_packed(global_packed, &global) ||
+        !pv_catq_get_packed(expert_packed, &expert) ||
+        !pv_catq_get_packed(implicit_packed, &implicit_one) ||
+        !pv_catq_get_packed(explicit_packed, &explicit_one))
+        return 2;
+    if (global.codes_len != expert.codes_len ||
+        (memcmp(global.codes, expert.codes, global.codes_len) == 0 &&
+         memcmp(global.scales, expert.scales,
+                global.scale_count * sizeof(float)) == 0))
+        return 3;
+    if (implicit_one.codes_len != explicit_one.codes_len ||
+        implicit_one.scale_count != explicit_one.scale_count ||
+        memcmp(implicit_one.codes, explicit_one.codes, implicit_one.codes_len) != 0 ||
+        memcmp(implicit_one.scales, explicit_one.scales,
+               implicit_one.scale_count * sizeof(float)) != 0)
+        return 4;
+
+    bad_context = (int)pv_host2(
+        &ctx, PV_HOOK_CATQ_CALIBRATE, bad_samples, expert_options);
+    valid_context = (int)pv_host2(
+        &ctx, PV_HOOK_CATQ_CALIBRATE, samples, expert_options);
+    bad_optimized = (int)pv_host2(
+        &ctx, PV_HOOK_CATQ_OPTIMIZE, valid_context, bad_weight);
+    if (bad_context != 0 || bad_optimized != 0) return 5;
+
+    for (i = 0; i < expert.scale_count; i++)
+        if (!isfinite(expert.scales[i])) return 6;
+    printf("%.9f %.9f %.9f %.9f\n",
+           expert_loss(&global, weights, calibration, 0),
+           expert_loss(&expert, weights, calibration, 0),
+           expert_loss(&global, weights, calibration, 1),
+           expert_loss(&expert, weights, calibration, 1));
+    pv_catq_cleanup();
+    return 0;
+}
+''',
+        encoding="utf-8",
+    )
+    build = subprocess.run(
+        [
+            sys.executable, "-m", "ziglang", "cc", "-std=c99", "-O2",
+            f"-I{os.path.join(ROOT, 'vm')}",
+            str(harness),
+            os.path.join(ROOT, "vm", "picovm.c"),
+            os.path.join(ROOT, "vm", "picovm_catq.c"),
+            "-lm", "-o", str(executable),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert build.returncode == 0, build.stderr
+    run = subprocess.run([str(executable)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr + run.stdout
+    global_0, expert_0, global_1, expert_1 = map(float, run.stdout.split())
+    assert expert_0 < global_0
+    assert expert_1 < global_1
 
 
 def test_native_mxfp4_dequantization(tmp_path):

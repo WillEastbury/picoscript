@@ -1358,6 +1358,7 @@ uint32_t pv_hook_cap(int hook)
     if (hook == 0x381) return PV_CAP_DEVICE; /* BitLinear.MatVecCatQ */
     if (hook >= 0x382 && hook <= 0x386) return PV_CAP_DEVICE; /* Tensor F32 ops */
     if (hook >= 0x387 && hook <= 0x389) return PV_CAP_DEVICE; /* MoE.* */
+    if (hook == 0x38A) return PV_CAP_DEVICE; /* CatQ.CalibrateTarget */
     return 0;                                                /* pure: String/Number/Maths/Span/... */
 }
 
@@ -2517,6 +2518,12 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         return;
     }
     if (hook >= PV_HOOK_MOE_FORWARD && hook <= PV_HOOK_MOE_SELECTEDEXPERT) {
+        if (pv_compute_hook && pv_compute_hook(ctx, hook, rd, rs1, rs2)) return;
+        ctx->regs[rd] = 0;
+        ctx->host_status = 1;
+        return;
+    }
+    if (hook == PV_HOOK_CATQ_CALIBRATETARGET) {
         if (pv_compute_hook && pv_compute_hook(ctx, hook, rd, rs1, rs2)) return;
         ctx->regs[rd] = 0;
         ctx->host_status = 1;
