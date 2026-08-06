@@ -104,7 +104,7 @@
   var CAP_BY_NS = { Kernel: CAP.KERNEL, Queue: CAP.QUEUE, Random: CAP.RANDOM,
     Req: CAP.NET, Resp: CAP.NET, Net: CAP.NET, Storage: CAP.STORAGE, DateTime: CAP.TIME,
     Context: CAP.CONTEXT, Auth: CAP.AUTH, X509: CAP.AUTH, Environment: CAP.ENV, Locale: CAP.ENV, Gpio: CAP.GPIO,
-    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Stream: CAP.DMA, Event: CAP.EVENT, Ui: CAP.UI,
+    Pack: CAP.CAPSULE, Card: CAP.CAPSULE, Fifo: CAP.CAPSULE, Device: CAP.DEVICE, Media: CAP.DEVICE, Stream: CAP.DMA, Event: CAP.EVENT, Ui: CAP.UI,
     Search: CAP.STORAGE, Process: CAP.PROCESS, Env: CAP.PROCESS, Timer: CAP.TIMER, Scheduler: CAP.TIMER,
     Principal: CAP.PRINCIPAL, Capability: CAP.PRINCIPAL, Sandbox: CAP.PRINCIPAL, Capsule: CAP.CAPSULE_EXEC,
     CatQ: CAP.DEVICE, Async: CAP.DEVICE, MoE: CAP.DEVICE, Shard: CAP.STORAGE };
@@ -359,6 +359,8 @@
       var P = PicoVM.prototype;
       T = PicoVM._NS_DISPATCH_TABLE = {
         "Map": P._mapHook, "Tensor": P._tensor, "BitLinear": P._bitlinear, "Quant": P._quant,
+        "CatQ": nsWrap(P._computeHost, "CatQ"), "Async": nsWrap(P._computeHost, "Async"),
+        "Shard": nsWrap(P._computeHost, "Shard"), "Net": P._netHost,
         "Attention": P._attention, "Tokenizer": P._tokenizer, "Model": P._model, "Kv": P._kv,
         "Sampling": P._sampling, "Resp": P._resp, "Query": P._queryHelpers, "Search": P._search,
         "Storage": P._storage, "Gpio": P._gpio, "Device": P._device, "Stream": P._stream,

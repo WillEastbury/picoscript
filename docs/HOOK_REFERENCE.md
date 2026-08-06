@@ -1,4 +1,4 @@
-# PicoScript Hook Reference (566 hooks, 74 namespaces)
+# PicoScript Hook Reference (587 hooks, 76 namespaces)
 
 Complete reference for all host hooks in the PicoScript 16-opcode ISA.
 Each hook is a deterministic primitive callable from any of the 7 language surfaces.
@@ -7,8 +7,8 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Metric | Value |
 |--------|-------|
-| Total hooks | 566 |
-| Namespaces | 74 |
+| Total hooks | 587 |
+| Namespaces | 76 |
 | Language surfaces | 7 (C, BASIC, Python, English, COBOL, Report, Functional) |
 | Execution paths | 5 (Python VM, JS VM, C VM, native C, native JS) |
 
@@ -721,7 +721,7 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | Tensor.SwiGLU() | 0x0385 | Fused `SiLU(gate) * up` tensor operation. |
 | Tensor.Release() | 0x0386 | Release an opaque tensor/shard/CAT-Q provider handle. |
 
-### CatQ.* (4 hooks)
+### CatQ.* (5 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
@@ -729,6 +729,7 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | CatQ.Optimize() | 0x0376 | Optimize a weight tensor within a CAT-Q context. |
 | CatQ.Ternarize() | 0x0377 | Produce ternary weights. |
 | CatQ.Pack() | 0x0378 | Pack ternary weights and scaling metadata. |
+| CatQ.CalibrateTarget() | 0x038A | Attach a target tensor to a calibration context. |
 
 ### Async.* (3 hooks)
 
@@ -745,6 +746,22 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | Shard.Load() | 0x037C | Load or map a model shard. |
 | Shard.Save() | 0x037D | Persist a transformed model shard. |
 
+### Media.* (11 hooks)
+
+| Method | Code | Description |
+|--------|------|-------------|
+| Media.SetShape() | 0x0360 | Configure grayscale frame dimensions. |
+| Media.GrayDeltaEncode() | 0x0361 | Encode reversible grayscale deltas. |
+| Media.GrayDeltaDecode() | 0x0362 | Decode reversible grayscale deltas. |
+| Media.H264Residual() | 0x0363 | Produce a modulo-256 prediction residual. |
+| Media.H264Restore() | 0x0364 | Restore grayscale bytes from a residual. |
+| Media.HasAccel() | 0x0365 | Report whether a native media accelerator is installed. |
+| Media.HevcConfigure() | 0x0366 | Configure a host HEVC decoder. |
+| Media.HevcDecode() | 0x0367 | Decode through a host HEVC provider. |
+| Media.HasHevc() | 0x0368 | Report whether a host HEVC decoder is available. |
+| Media.GrayXorResidual() | 0x0369 | Produce an XOR prediction residual. |
+| Media.GrayXorRestore() | 0x036A | Restore grayscale bytes from an XOR residual. |
+
 ### MoE.* (3 hooks)
 
 | Method | Code | Description |
@@ -753,7 +770,7 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | MoE.SelectedCount() | 0x0388 | Return the number of selected experts. |
 | MoE.SelectedExpert() | 0x0389 | Inspect one selected expert ID. |
 
-### BitLinear.* (6 hooks)
+### BitLinear.* (10 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
@@ -762,6 +779,10 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | BitLinear.MatVecBitmap() | 0x01F2 | |
 | BitLinear.MatVecBase3() | 0x01F3 | |
 | BitLinear.HasFormat() | 0x01F4 | |
+| BitLinear.MatVecTernaryBlock() | 0x0274 | Run ternary matvec against the active model block. |
+| BitLinear.MatVecBitmapBlock() | 0x0275 | Run bitmap matvec against the active model block. |
+| BitLinear.MatVecBase3Block() | 0x0276 | Run base-3 matvec against the active model block. |
+| BitLinear.MatMulBitmapBatch() | 0x036B | Run bitmap weights over a batch of int8 vectors. |
 | BitLinear.MatVecCatQ() | 0x0381 | Scaled CAT-Q packed-weight matrix-vector projection. |
 
 ### Quant.* (5 hooks)

@@ -178,6 +178,7 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Log | 5 | Y | Y | **Y (fixed)** | Real `Log.*` subsystem — **now on all 3 runtimes**. C VM uses a fixed-size table (`PV_MAX_LOGS=128`), consistent with this embedded runtime's other handle tables (Map/Descriptor/Lease/Fifo) — a bounded vs. Python/JS's unbounded dict, not a behavioral difference at any realistic scale. |
 | Map | 27 | Y | Y | Y | |
 | Maths | 12 | Partial | Partial | Partial | `Sin/Cos/Tan/Log/Log10/Exp` (Q16.16 CORDIC), `Power/Sqrt/Clamp/Lerp` implemented; `Random`/`RandomRange` host-injected (entropy) |
+| Media | 11 | Provider | Provider | **Y (real)** | Host/device media acceleration surface; native C provides deterministic grayscale delta, residual, and XOR fallbacks while HEVC remains provider-backed. |
 | Memory | 9 | Y | Y | Y | |
 | Model | 12 | Y | Y | Y | |
 | MoE | 3 | Provider | Provider | Provider | Coarse Qwen-style top-K expert routing/streaming boundary; host owns packed expert storage. |

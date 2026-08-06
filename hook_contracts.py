@@ -27,7 +27,7 @@ _CAP_BY_NS = {
     "Locale": "ENV",
     "Gpio": "GPIO",
     "Pack": "CAPSULE", "Card": "CAPSULE", "Fifo": "CAPSULE",
-    "Device": "DEVICE", "Stream": "DMA",
+    "Device": "DEVICE", "Media": "DEVICE", "Stream": "DMA",
     "Event": "EVENT", "Ui": "UI",
     "CatQ": "DEVICE", "Async": "DEVICE", "MoE": "DEVICE",
     "Shard": "STORAGE",

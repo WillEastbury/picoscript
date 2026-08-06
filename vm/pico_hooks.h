@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0x2919EB8B
+#define PV_HOOK_TABLE_VERSION 0x2AE7BB7B
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -562,6 +562,18 @@
 #define PV_HOOK_DECIMAL_DIV                      0x355
 #define PV_HOOK_DECIMAL_COMPARE                  0x356
 #define PV_HOOK_DECIMAL_TOINT                    0x357
+#define PV_HOOK_MEDIA_SETSHAPE                   0x360
+#define PV_HOOK_MEDIA_GRAYDELTAENCODE            0x361
+#define PV_HOOK_MEDIA_GRAYDELTADECODE            0x362
+#define PV_HOOK_MEDIA_H264RESIDUAL               0x363
+#define PV_HOOK_MEDIA_H264RESTORE                0x364
+#define PV_HOOK_MEDIA_HASACCEL                   0x365
+#define PV_HOOK_MEDIA_HEVCCONFIGURE              0x366
+#define PV_HOOK_MEDIA_HEVCDECODE                 0x367
+#define PV_HOOK_MEDIA_HASHEVC                    0x368
+#define PV_HOOK_MEDIA_GRAYXORRESIDUAL            0x369
+#define PV_HOOK_MEDIA_GRAYXORRESTORE             0x36A
+#define PV_HOOK_BITLINEAR_MATMULBITMAPBATCH      0x36B
 #define PV_HOOK_TENSOR_MAP                       0x370
 #define PV_HOOK_TENSOR_VIEW                      0x371
 #define PV_HOOK_TENSOR_GEMM                      0x372
@@ -595,6 +607,6 @@
  * fillable primitive (INV-18 default: 0 / NOT_FOUND, mirroring
  * picoscript_vm.py / picovm.js) from a genuinely unknown hook id in
  * malformed bytecode, which fails closed (PV_FAULT_BAD_HOOK). */
-#define PV_HOOK_CODE_MAX 0x357
+#define PV_HOOK_CODE_MAX 0x38A
 
 #endif

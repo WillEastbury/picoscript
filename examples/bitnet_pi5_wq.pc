@@ -1,0 +1,10 @@
+// Real packed-tiny BitNet fixture:
+//   expanded layer-0 Wq at arena 0x1000 (64x64 int8)
+//   token embedding activation at arena 0x3000 (64 int8)
+// The Pi5 host preloads those bytes from the RP2350B_Bitnet packed-tiny model.
+
+Tensor.SetShape(64, 64);
+int weights = Span.Make(4096, 4096);
+int activation = Span.Make(12288, 64);
+int projected = Tensor.MatVecI8(weights, activation);
+print(Tensor.ArgMaxI32(projected));

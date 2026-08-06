@@ -213,11 +213,25 @@ NAMESPACE_MAP = {
         "SelectedCount": OP_NOOP,
         "SelectedExpert": OP_NOOP,
     },
+    "Media": {
+        "HasAccel": OP_NOOP,
+        "SetShape": OP_NOOP,
+        "GrayDeltaEncode": OP_NOOP,
+        "GrayDeltaDecode": OP_NOOP,
+        "GrayXorResidual": OP_NOOP,
+        "GrayXorRestore": OP_NOOP,
+        "H264Residual": OP_NOOP,
+        "H264Restore": OP_NOOP,
+        "HevcConfigure": OP_NOOP,
+        "HevcDecode": OP_NOOP,
+        "HasHevc": OP_NOOP,
+    },
     "BitLinear": {
         "HasFormat": OP_NOOP,
         "SetShape": OP_NOOP,
         "MatVecTernary": OP_NOOP,
         "MatVecBitmap": OP_NOOP,
+        "MatMulBitmapBatch": OP_NOOP,
         "MatVecBase3": OP_NOOP,
         "MatVecTernaryBlock": OP_NOOP,
         "MatVecBitmapBlock": OP_NOOP,
@@ -939,6 +953,19 @@ HOST_HOOK_CODES = {
     ("BitLinear", "MatVecTernaryBlock"): 0x0274, # rs1=tensor rs2=i8 vec    rd=span<int32_be>
     ("BitLinear", "MatVecBitmapBlock"):  0x0275, # rs1=tensor rs2=i8 vec    rd=span<int32_be>
     ("BitLinear", "MatVecBase3Block"):   0x0276, # rs1=tensor rs2=i8 vec    rd=span<int32_be>
+    # Coarse grayscale/media superinstructions.
+    ("Media", "SetShape"):       0x0360, # rs1=width rs2=height             rd=ok
+    ("Media", "GrayDeltaEncode"):0x0361, # rs1=gray bytes                  rd=reversible delta span
+    ("Media", "GrayDeltaDecode"):0x0362, # rs1=delta bytes                 rd=gray span
+    ("Media", "H264Residual"):   0x0363, # rs1=current gray rs2=prediction rd=mod-256 residual
+    ("Media", "H264Restore"):    0x0364, # rs1=residual rs2=prediction     rd=reconstructed gray
+    ("Media", "HasAccel"):       0x0365, # rd=1 only after native proof
+    ("Media", "HevcConfigure"):  0x0366, # rs1=validated codec descriptor  rd=decoder handle/status
+    ("Media", "HevcDecode"):     0x0367, # rs1=bitstream rs2=surface desc  rd=decoded surface/status
+    ("Media", "HasHevc"):        0x0368, # rd=1 only after decoder probe
+    ("Media", "GrayXorResidual"):0x0369, # rs1=current rs2=predictor       rd=xor residual
+    ("Media", "GrayXorRestore"): 0x036A, # rs1=residual rs2=predictor      rd=restored gray
+    ("BitLinear", "MatMulBitmapBatch"): 0x036B, # rs1=bitmap weights rs2=batch i8 vectors rd=packed i32
     # Coarse host-backed CAT-Q appliance operations. Tensor handles are opaque
     # host values; PicoScript orchestrates them without reproducing autograd or
     # accelerator-specific implementation details in the language/runtime.

@@ -47,6 +47,7 @@ This document provides a comprehensive reference for all PicoScript methods, org
 - [Map](#map)
 - [Math](#math)
 - [Maths](#maths)
+- [Media](#media)
 - [Memory](#memory)
 - [MoE](#moe)
 - [Model](#model)
@@ -81,7 +82,7 @@ This document provides a comprehensive reference for all PicoScript methods, org
 
 ## Async
 
-**Conformance Level:** L0
+**Conformance Level:** L0  
 **Methods:** 3
 
 Host-backed submission and completion of coarse accelerator jobs.
@@ -151,11 +152,12 @@ Host-backed submission and completion of coarse accelerator jobs.
 ## BitLinear
 
 **Conformance Level:** L0  
-**Methods:** 9
+**Methods:** 10
 
 | Method | Opcode | Hook Code | v2 Example |
 |--------|--------|-----------|----------|
 | HasFormat | 0x00 | 0x71F4 | `BitLinear.HasFormat(...)` |
+| MatMulBitmapBatch | 0x00 | 0x736B | `BitLinear.MatMulBitmapBatch(...)` |
 | MatVecBase3 | 0x00 | 0x71F3 | `BitLinear.MatVecBase3(...)` |
 | MatVecBase3Block | 0x00 | 0x7276 | `BitLinear.MatVecBase3Block(...)` |
 | MatVecBitmap | 0x00 | 0x71F2 | `BitLinear.MatVecBitmap(...)` |
@@ -207,13 +209,14 @@ Host-backed submission and completion of coarse accelerator jobs.
 ## CatQ
 
 **Conformance Level:** L0  
-**Methods:** 4
+**Methods:** 5
 
 Host-backed CAT-Q calibration, optimization, ternarization, and packing.
 
 | Method | Opcode | Hook Code | v2 Example |
 |--------|--------|-----------|----------|
 | Calibrate | 0x00 | 0x7375 | `CatQ.Calibrate(...)` |
+| CalibrateTarget | 0x00 | 0x738A | `CatQ.CalibrateTarget(...)` |
 | Optimize | 0x00 | 0x7376 | `CatQ.Optimize(...)` |
 | Pack | 0x00 | 0x7378 | `CatQ.Pack(...)` |
 | Ternarize | 0x00 | 0x7377 | `CatQ.Ternarize(...)` |
@@ -662,6 +665,25 @@ Mathematical functions: sqrt, trig, log, GCD, LCM.
 | Sin | 0x00 | 0x70A0 | `Maths.Sin(...)` |
 | Sqrt | 0x00 | 0x70A3 | `Maths.Sqrt(...)` |
 | Tan | 0x00 | 0x70A2 | `Maths.Tan(...)` |
+
+## Media
+
+**Conformance Level:** L0  
+**Methods:** 11
+
+| Method | Opcode | Hook Code | v2 Example |
+|--------|--------|-----------|----------|
+| GrayDeltaDecode | 0x00 | 0x7362 | `Media.GrayDeltaDecode(...)` |
+| GrayDeltaEncode | 0x00 | 0x7361 | `Media.GrayDeltaEncode(...)` |
+| GrayXorResidual | 0x00 | 0x7369 | `Media.GrayXorResidual(...)` |
+| GrayXorRestore | 0x00 | 0x736A | `Media.GrayXorRestore(...)` |
+| H264Residual | 0x00 | 0x7363 | `Media.H264Residual(...)` |
+| H264Restore | 0x00 | 0x7364 | `Media.H264Restore(...)` |
+| HasAccel | 0x00 | 0x7365 | `Media.HasAccel(...)` |
+| HasHevc | 0x00 | 0x7368 | `Media.HasHevc(...)` |
+| HevcConfigure | 0x00 | 0x7366 | `Media.HevcConfigure(...)` |
+| HevcDecode | 0x00 | 0x7367 | `Media.HevcDecode(...)` |
+| SetShape | 0x00 | 0x7360 | `Media.SetShape(...)` |
 
 ## Memory
 
@@ -1150,7 +1172,7 @@ Thread preemption hints and cooperative yielding.
 
 ## Summary by Conformance Level
 
-### L0: 327 methods
+### L0: 340 methods
 
 - Async.Result (0x737B)
 - Async.Submit (0x7379)
@@ -1180,6 +1202,7 @@ Thread preemption hints and cooperative yielding.
 - Binary.SetKey (0x7345)
 - Binary.Verify (0x7346)
 - BitLinear.HasFormat (0x71F4)
+- BitLinear.MatMulBitmapBatch (0x736B)
 - BitLinear.MatVecBase3 (0x71F3)
 - BitLinear.MatVecBase3Block (0x7276)
 - BitLinear.MatVecBitmap (0x71F2)
@@ -1204,6 +1227,7 @@ Thread preemption hints and cooperative yielding.
 - Capsule.RunModule (0x72C4)
 - Capsule.Schedule (0x72C1)
 - CatQ.Calibrate (0x7375)
+- CatQ.CalibrateTarget (0x738A)
 - CatQ.Optimize (0x7376)
 - CatQ.Pack (0x7378)
 - CatQ.Ternarize (0x7377)
@@ -1336,6 +1360,17 @@ Thread preemption hints and cooperative yielding.
 - Map.ValAt (0x7337)
 - Map.ValIsSpan (0x7339)
 - Map.ValSpanAt (0x7338)
+- Media.GrayDeltaDecode (0x7362)
+- Media.GrayDeltaEncode (0x7361)
+- Media.GrayXorResidual (0x7369)
+- Media.GrayXorRestore (0x736A)
+- Media.H264Residual (0x7363)
+- Media.H264Restore (0x7364)
+- Media.HasAccel (0x7365)
+- Media.HasHevc (0x7368)
+- Media.HevcConfigure (0x7366)
+- Media.HevcDecode (0x7367)
+- Media.SetShape (0x7360)
 - MoE.Forward (0x7387)
 - MoE.SelectedCount (0x7388)
 - MoE.SelectedExpert (0x7389)
@@ -1710,7 +1745,7 @@ Host hooks use reserved imm16 range 0x7000-0x7FFF:
 | 0x70E0-0x70EE | Context | 15 | Context |
 | 0x70F0-0x70FE | Crypto | 15 | Crypto |
 
-**Total:** 513 methods across 63 namespaces.
+**Total:** 526 methods across 64 namespaces.
 
 ## IDE Code Completion
 
