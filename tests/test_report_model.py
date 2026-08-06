@@ -4,7 +4,9 @@
 JSON -> English PicoScript -> IL)."""
 import json
 import os
+import subprocess
 import sys
+from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -12,6 +14,9 @@ sys.path.insert(0, ROOT)
 from picoscript_reportmodel import compile_report_model, report_model_to_english  # noqa: E402
 from picoscript_il import lower_to_bytecode_safe  # noqa: E402
 from picoscript_vm import PicoVM  # noqa: E402
+
+
+REPORT_MODEL_JS = Path(ROOT) / "vm" / "picoreportmodel.js"
 
 
 def run(model):
@@ -73,3 +78,28 @@ def test_english_shape():
     assert "For each _r0 from 0 to 1:" in src
     assert "Print _sum." in src
     assert warnings == []
+
+
+def test_browser_lowering_matches_python():
+    model = {
+        "title": 42,
+        "source": {"kind": "array", "values": [5, 12, 8]},
+        "where": "item >= 10",
+        "row": "item * 2",
+        "aggregates": ["count", "sum", "min", "max"],
+    }
+    expected_source, expected_warnings = report_model_to_english(model)
+    script = (
+        "const report = require(process.argv[1]);"
+        "const model = JSON.parse(process.argv[2]);"
+        "process.stdout.write(JSON.stringify(report.toEnglish(model)));"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script, str(REPORT_MODEL_JS), json.dumps(model)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    actual = json.loads(completed.stdout)
+    assert actual["source"] == expected_source
+    assert actual["warnings"] == expected_warnings
