@@ -87,7 +87,7 @@
       0x42: "Span.Materialize",
       0x43: "Span.Len",
       0x44: "Span.Get",
-      0x1D7: "Span.Append",
+      0x108: "Span.Append",
       0x45: "Json.BeginObject",
       0x46: "Json.EndObject",
       0x47: "Json.BeginArray",

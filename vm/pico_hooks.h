@@ -81,7 +81,7 @@
 #define PV_HOOK_SPAN_MATERIALIZE                 0x42
 #define PV_HOOK_SPAN_LEN                         0x43
 #define PV_HOOK_SPAN_GET                         0x44
-#define PV_HOOK_SPAN_APPEND                      0x1D7
+#define PV_HOOK_SPAN_APPEND                      0x108
 #define PV_HOOK_JSON_BEGINOBJECT                 0x45
 #define PV_HOOK_JSON_ENDOBJECT                   0x46
 #define PV_HOOK_JSON_BEGINARRAY                  0x47

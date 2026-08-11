@@ -832,7 +832,7 @@ HOST_HOOK_CODES = {
     ("Span", "Materialize"):    0x42,
     ("Span", "Len"):            0x43,
     ("Span", "Get"):            0x44,
-    ("Span", "Append"):         0x01D7,
+    ("Span", "Append"):         0x0108,
     # Descriptor hooks (0x50-0x55)
     ("Descriptor", "Make"):     0x50,
     ("Descriptor", "SetFlags"): 0x51,
