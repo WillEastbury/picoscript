@@ -2958,8 +2958,9 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
      * shrinks after Clear -- unlike the monotonic handle counter itself). */
     if (hook == PV_HOOK_LOG_WRITE) {
         int h;
-        if (ctx->log_count >= PV_MAX_LOGS) { ctx->regs[rd] = 0; return; }
-        h = ctx->log_count++;
+        if (ctx->log_count >= PV_MAX_LOGS - 1) { ctx->regs[rd] = 0; return; }
+        /* Handles are 1-based on Python/JS and in the public Log.* contract. */
+        h = ++ctx->log_count;
         ctx->log_level[h] = ctx->regs[rs1];
         ctx->log_span[h] = ctx->regs[rs2];
         ctx->log_used[h] = 1;
@@ -2995,8 +2996,8 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
     if (hook == PV_HOOK_KERNEL_FIRESWIRQ) { ctx->regs[rd] = 1; return; }
     if (hook == PV_HOOK_KERNEL_PROFILESTART || hook == PV_HOOK_KERNEL_PROFILEEND || hook == PV_HOOK_KERNEL_TRACEPOINT) {
         int h;
-        if (ctx->log_count >= PV_MAX_LOGS) { ctx->regs[rd] = 0; return; }
-        h = ctx->log_count++;
+        if (ctx->log_count >= PV_MAX_LOGS - 1) { ctx->regs[rd] = 0; return; }
+        h = ++ctx->log_count;
         ctx->log_level[h] = (hook == PV_HOOK_KERNEL_PROFILESTART) ? 100 : (hook == PV_HOOK_KERNEL_PROFILEEND) ? 101 : 102;
         ctx->log_span[h] = ctx->regs[rs1];
         ctx->log_used[h] = 1;
