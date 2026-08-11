@@ -55,7 +55,7 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | Memory.Get() | 0x0037 | |
 | Memory.SetConst() | 0x005F | |
 
-### Span.* (5 hooks)
+### Span.* (6 hooks)
 
 | Method | Code | Description |
 |--------|------|-------------|
@@ -64,6 +64,7 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | Span.Materialize() | 0x0042 | |
 | Span.Len() | 0x0043 | |
 | Span.Get() | 0x0044 | |
+| Span.Append() | 0x0108 | Appends source bytes to destination, reusing capacity or allocating a new span; returns status. |
 
 ### Descriptor.* (6 hooks)
 

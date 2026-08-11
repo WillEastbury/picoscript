@@ -36,7 +36,7 @@ int s = Maths.Sin(RAD_PER_DEG_Q16 * 90);
 | Namespace | Methods | Notes |
 |-----------|---------|-------|
 | `Memory` | `Set`, `Get`, `ArenaInit`, `ArenaAlloc`, `ArenaReset`, `ArenaStats`, `Peek`, `Poke` | Byte-addressable arena and lower-level memory hooks. Prefer string literals/spans unless byte-by-byte work is the point. |
-| `Span` | `Make`, `Slice`, `Materialize`, `Len`, `Get` | A `span` is the byte-array handle. `Slice` is zero-copy; `Materialize` copies into a new contiguous span. |
+| `Span` | `Make`, `Slice`, `Materialize`, `Len`, `Get`, `Append` | A `span` is the byte-array handle. `Slice` is zero-copy; `Materialize` copies into a new contiguous span. `Append` combines two spans, reusing destination capacity when available and otherwise returning a new span with an explicit status. |
 | `Io` | `Write`, `WriteByte` | Output bytes/spans. |
 
 Example:
