@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -31,6 +32,7 @@ from picoscript_il import (
     lower_to_bytecode_safe, lower_to_c, lower_to_js, il_to_text, optimize,
 )
 from picoscript_vm import PicoVM
+from picoscript_systems import SystemsPicoVM, is_super_word, disassemble_systems
 from picoscript import disassemble
 
 VM_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vm")
@@ -108,10 +110,10 @@ def detect_lang(path: str, forced: str | None) -> str:
     return "c"
 
 
-def to_il(source: str, lang: str):
+def to_il(source: str, lang: str, source_path: str | None = None):
     if lang == "c":
         from picoscript_cfront import compile_c
-        return compile_c(source)
+        return compile_c(source, source_path=source_path)
     if lang == "basic":
         from picoscript_basic import compile_basic
         return compile_basic(source)
@@ -170,11 +172,11 @@ def to_ast_json(source: str, lang: str) -> str:
     return _json.dumps(ast_to_json(prog), indent=2)
 
 
-def to_bytecode(source: str, lang: str, opt: bool = True):
+def to_bytecode(source: str, lang: str, opt: bool = True, source_path: str | None = None):
     if lang == "v1":
         from picoscript_lang import Compiler
         return Compiler().compile(source)
-    return lower_to_bytecode_safe(to_il(source, lang), opt=opt)
+    return lower_to_bytecode_safe(to_il(source, lang, source_path), opt=opt)
 
 
 def decode_output(vm: PicoVM):
@@ -186,8 +188,9 @@ def decode_output(vm: PicoVM):
 def cmd_run(args):
     source = open(args.file, encoding="utf-8").read()
     lang = detect_lang(args.file, args.lang)
-    words = to_bytecode(source, lang, opt=not args.no_opt)
-    vm = PicoVM(max_steps=args.max_steps).run(words)
+    words = to_bytecode(source, lang, opt=not args.no_opt, source_path=args.file)
+    vm_cls = SystemsPicoVM if any(is_super_word(word) for word in words) else PicoVM
+    vm = vm_cls(max_steps=args.max_steps).run(words)
     if args.print:
         print("output:", decode_output(vm))
     if args.regs:
@@ -202,20 +205,21 @@ def cmd_emit(args):
     lang = detect_lang(args.file, args.lang)
     out = ""
     if args.as_ == "il":
-        out = il_to_text(to_il(source, lang))
+        out = il_to_text(to_il(source, lang, args.file))
     elif args.as_ == "bytecode":
-        words = to_bytecode(source, lang, opt=not args.no_opt)
+        words = to_bytecode(source, lang, opt=not args.no_opt, source_path=args.file)
         if args.hex:
             out = "\n".join(f"{w:08x}" for w in words)
         else:
-            out = disassemble(words)
+            out = (disassemble_systems(words) if any(is_super_word(word) for word in words)
+                   else disassemble(words))
     elif args.as_ == "c":
         name = args.funcname or "pico_main"
-        out = lower_to_c(to_il(source, lang), func_name=name,
+        out = lower_to_c(to_il(source, lang, args.file), func_name=name,
                          opt=not args.no_opt, emit_main=args.with_main)
     elif args.as_ == "js":
         name = args.funcname or "pico"
-        out = lower_to_js(to_il(source, lang), module_name=name, opt=not args.no_opt)
+        out = lower_to_js(to_il(source, lang, args.file), module_name=name, opt=not args.no_opt)
     elif args.as_ == "ast":
         out = to_ast_json(source, lang)
     else:
@@ -235,13 +239,13 @@ def cmd_native(args):
     mcpu = args.mcpu or prof_mcpu
     opt = args.opt
     freestanding = bool(target) and "freestanding" in target
-    providers = list(dict.fromkeys(args.provider or []))
+    providers = list(dict.fromkeys(getattr(args, "provider", None) or []))
     has_catq = "catq" in providers or "catq-cuda" in providers
     if freestanding and providers:
         raise SystemExit("native providers require a hosted target")
     # Host builds get a runnable main(); freestanding cross builds emit a
     # linkable object (the emitted pico_main() is called from your firmware).
-    csrc = lower_to_c(to_il(source, lang), func_name="pico_main",
+    csrc = lower_to_c(to_il(source, lang, args.file), func_name="pico_main",
                       emit_main=not freestanding and not providers)
     if providers and not freestanding:
         includes = ["#include <stdio.h>"]
@@ -277,12 +281,36 @@ def cmd_native(args):
     out_obj = args.o or (os.path.splitext(args.file)[0] + default_ext)
     cfile = out_obj + ".c"
     open(cfile, "w", encoding="utf-8").write(csrc)
-    cmd = [sys.executable, "-m", "ziglang", "cc", "-std=c99", f"-O{opt}", f"-I{VM_DIR}"]
+    zig = shutil.which("zig")
+    clang = shutil.which("clang") or (r"C:\Program Files\LLVM\bin\clang.exe"
+                                      if os.path.isfile(r"C:\Program Files\LLVM\bin\clang.exe") else None)
+    if zig:
+        cmd, compiler_name = [zig, "cc"], "zig cc"
+    elif importlib.util.find_spec("ziglang") is not None:
+        cmd, compiler_name = [sys.executable, "-m", "ziglang", "cc"], "zig cc"
+    elif clang:
+        cmd, compiler_name = [clang], "clang"
+    else:
+        cc = shutil.which("cc") or shutil.which("gcc")
+        if not cc:
+            raise SystemExit("native build requires Zig, Clang, GCC, or MSVC-compatible cc")
+        cmd, compiler_name = [cc], os.path.basename(cc)
+    cmd += ["-std=c99", f"-O{opt}", f"-I{VM_DIR}"]
+    if compiler_name == "clang" and not target and os.name == "nt":
+        cmd += ["-msse4.2"]
     if target:
         cmd += ["-target", target]
     if mcpu:
-        cmd += [f"-mcpu={mcpu}"]
+        cmd += (["-march=native"] if compiler_name == "clang" and mcpu == "native" and not target
+                else [f"-mcpu={mcpu}"])
     runtime_sources = [cfile, os.path.join(VM_DIR, "picovm.c")]
+    if not freestanding:
+        for support in (
+            os.path.join(VM_DIR, "picovm_emu.c"),
+            os.path.join(VM_DIR, "picovm_crypto_ext.c"),
+            os.path.join(os.path.dirname(VM_DIR), "host", "pv_auth_store.c"),
+        ):
+            if os.path.isfile(support): runtime_sources.append(support)
     if has_catq:
         runtime_sources.append(os.path.join(VM_DIR, "picovm_catq.c"))
     if "net" in providers:
@@ -318,7 +346,7 @@ def cmd_native(args):
             objects.append(obj)
         cuda_obj = out_obj + ".cuda.o"
         cuda_cmd = [
-            nvcc, "-O3", f"-arch={args.cuda_arch}", f"-I{VM_DIR}",
+            nvcc, "-O3", f"-arch={getattr(args, 'cuda_arch', 'sm_86')}", f"-I{VM_DIR}",
             "-c", os.path.join(VM_DIR, "picovm_catq_cuda.cu"), "-o", cuda_obj,
         ]
         result = run_cuda_command(cuda_cmd)
@@ -327,7 +355,7 @@ def cmd_native(args):
             print(result.stderr)
             raise SystemExit("CUDA kernel build failed")
         objects.append(cuda_obj)
-        link_cmd = [nvcc, "-O3", f"-arch={args.cuda_arch}"] + objects
+        link_cmd = [nvcc, "-O3", f"-arch={getattr(args, 'cuda_arch', 'sm_86')}"] + objects
         if "net" in providers and os.name == "nt":
             link_cmd += ["ws2_32.lib"]
         link_cmd += ["-o", out_obj]
@@ -341,7 +369,7 @@ def cmd_native(args):
             print(result.stdout)
             print(result.stderr)
             raise SystemExit("CUDA native link failed")
-        print(f"wrote {out_obj} (executable via nvcc -arch={args.cuda_arch})")
+        print(f"wrote {out_obj} (executable via nvcc -arch={getattr(args, 'cuda_arch', 'sm_86')})")
         return
     if freestanding:
         cmd += ["-c"] + runtime_sources + ["-o", out_obj]
@@ -360,7 +388,7 @@ def cmd_native(args):
         raise SystemExit("native build failed")
     kind = "object" if freestanding else "executable"
     flags = f" -O{opt}" + (f" -target {target}" if target else "") + (f" -mcpu={mcpu}" if mcpu else "")
-    print(f"wrote {out_obj} ({kind} via zig cc{flags})")
+    print(f"wrote {out_obj} ({kind} via {compiler_name}{flags})")
 
 
 def cmd_stats(args):

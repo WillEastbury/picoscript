@@ -46,7 +46,7 @@ from typing import List, Optional
 import copy
 
 from picoscript_basic import (  # reuse AST + lowering unchanged
-    Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
+    Num, Str, Var, Bin, Cmp, Call, Let, Dim, Ternary, If, While, DoLoop, ForTo, ForEach,
     Switch, Goto, Label, Sub, Gosub, Return, Break, Skip, Print, CallStmt, Lowerer,
     Dispatch, TryExcept, Raise, OnBlock, ServerMain, ConstDecl, EnumDecl,
 )
@@ -387,13 +387,28 @@ class Parser:
                 return CallStmt(call)
         raise SyntaxError(f"line {t.line}: cannot parse statement at {t.value!r}")
 
-    def parse_assign(self, kw) -> Let:
+    def parse_assign(self, kw):
         self.next()                              # 'set' | 'let'
         name = self.expect("word").value
+        type_name = None
+        if self.at_word("as"):
+            self.next()
+            if self.at_word("unsigned", "signed"):
+                signed = self.next().value.lower() == "signed"
+                width = self.expect("num").value
+                if self.at("op", "-"):
+                    self.next()
+                if self.at_word("bit", "bits"):
+                    self.next()
+                if width != "64":
+                    raise SyntaxError("English native integer declarations currently require 64-bit")
+                type_name = "i64" if signed else "u64"
+            else:
+                type_name = self.expect("word").value
         self.eat_word("to" if kw == "set" else "be")
         v = self.parse_expr()
         self.end_stmt()
-        return Let(name, v)
+        return Dim(name, v, type_name) if type_name is not None else Let(name, v)
 
     def parse_if(self) -> If:
         self.eat_word("if")

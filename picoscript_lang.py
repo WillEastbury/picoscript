@@ -134,6 +134,13 @@ NAMESPACE_MAP = {
         "ReadSlice":        OP_NOOP,
         "WriteSlice":       OP_NOOP,
     },
+    "Block": {
+        "Ready": OP_NOOP, "BlockSize": OP_NOOP, "SizeLow": OP_NOOP,
+        "SizeHigh": OP_NOOP, "SetOffset": OP_NOOP, "Read": OP_NOOP,
+        "Write": OP_NOOP, "Sync": OP_NOOP, "Resize": OP_NOOP,
+        "SetLba": OP_NOOP, "ReadBlocks": OP_NOOP,
+        "WriteBlocks": OP_NOOP, "Status": OP_NOOP,
+    },
     "Query": {
         "BuildLookupFilter": OP_NOOP,
         "BuildManyToManyMap": OP_NOOP,
@@ -825,6 +832,7 @@ HOST_HOOK_CODES = {
     ("Span", "Materialize"):    0x42,
     ("Span", "Len"):            0x43,
     ("Span", "Get"):            0x44,
+    ("Span", "Append"):         0x01D7,
     # Descriptor hooks (0x50-0x55)
     ("Descriptor", "Make"):     0x50,
     ("Descriptor", "SetFlags"): 0x51,
@@ -1003,6 +1011,13 @@ HOST_HOOK_CODES = {
     ("MoE", "SelectedCount"):    0x0388, # rs1=layer/result handle         rd=count
     ("MoE", "SelectedExpert"):   0x0389, # rs1=layer/result handle rs2=slot rd=expert id
     ("CatQ", "CalibrateTarget"): 0x038A, # internal attach: rs1=context rs2=target rd=context
+    ("Block", "Ready"): 0x03D0, ("Block", "BlockSize"): 0x03D1,
+    ("Block", "SizeLow"): 0x03D2, ("Block", "SizeHigh"): 0x03D3,
+    ("Block", "SetOffset"): 0x03D4, ("Block", "Read"): 0x03D5,
+    ("Block", "Write"): 0x03D6, ("Block", "Sync"): 0x03D7,
+    ("Block", "Resize"): 0x03D8, ("Block", "SetLba"): 0x03D9,
+    ("Block", "ReadBlocks"): 0x03DA, ("Block", "WriteBlocks"): 0x03DB,
+    ("Block", "Status"): 0x03DC,
     ("Quant", "AbsMax"):         0x0228,
     ("Quant", "QuantI8"):        0x0229,
     ("Quant", "DequantI8"):      0x022A,
@@ -2466,7 +2481,7 @@ class Compiler:
             return self._compile_flow(opcode, method, args, pc)
         elif namespace == "Net":
             return self._compile_net(method, args, pc)
-        elif namespace in ("Kernel", "Queue", "Random", "Memory", "Span", "Descriptor", "Lease", "Context", "Io"):
+        elif namespace in ("Kernel", "Queue", "Random", "Memory", "Span", "Descriptor", "Lease", "Context", "Io", "Block"):
             return self._compile_host_hook(namespace, method, args, pc)
         else:
             raise SyntaxError(f"Unhandled namespace '{namespace}' at line {pc}")
@@ -2864,6 +2879,13 @@ class Compiler:
                 if m0 != "reg" or m1 != "reg" or m2 != "reg":
                     raise SyntaxError("Span.Get args must be registers")
                 rs1, rs2, rd = v0, v1, v2
+            elif method == "Append":
+                if len(args) != 3:
+                    raise SyntaxError("Span.Append requires 3 register args (Rdestination, Rsource, Rout)")
+                m0, v0 = parse_arg(args[0]); m1, v1 = parse_arg(args[1]); m2, v2 = parse_arg(args[2])
+                if m0 != "reg" or m1 != "reg" or m2 != "reg":
+                    raise SyntaxError("Span.Append args must be registers")
+                rs1, rs2, rd = v0, v1, v2
             elif method == "Materialize":
                 if len(args) != 2:
                     raise SyntaxError("Span.Materialize requires 2 register args (Rspan, Rout)")
@@ -2954,6 +2976,20 @@ class Compiler:
             else:
                 assert False, f"_compile_host_hook: unhandled Storage method {method!r}"
 
+        if namespace == "Block":
+            parsed = [parse_arg(a) for a in args]
+            if any(m != "reg" for m, _ in parsed):
+                raise SyntaxError(f"Block.{method} arguments must be registers")
+            vals = [v for _, v in parsed]
+            if method in ("Ready", "BlockSize", "SizeLow", "SizeHigh", "Status", "Sync"):
+                if len(vals) != 1: raise SyntaxError(f"Block.{method} requires one register")
+                rd = vals[0]
+            elif method in ("SetOffset", "SetLba", "Resize"):
+                if len(vals) != 2: raise SyntaxError(f"Block.{method} requires two registers")
+                rs1, rs2 = vals
+            elif method in ("Read", "ReadBlocks", "Write", "WriteBlocks"):
+                if len(vals) != 2: raise SyntaxError(f"Block.{method} requires two registers")
+                rs1, rd = vals
         return encode_instruction(OP_NOOP, rd=rd, rs1=rs1, rs2=rs2, imm16=imm16)
 
 
@@ -3047,6 +3083,13 @@ def disassemble(words):
                         lines.append(f"    Storage.{method}(R{rs1}, R{rs2});")
                     else:
                         lines.append(f"    Storage.{method}(R{rs1}, R{rs2}, R{rd});")
+                elif namespace == "Block":
+                    if method in ("Ready", "BlockSize", "SizeLow", "SizeHigh", "Status", "Sync"):
+                        lines.append(f"    Block.{method}(R{rd});")
+                    elif method in ("SetOffset", "SetLba", "Resize"):
+                        lines.append(f"    Block.{method}(R{rs1}, R{rs2});")
+                    else:
+                        lines.append(f"    Block.{method}(R{rs1}, R{rd});")
                 else:
                     # Generic host hook (e.g. ext-page Http.*/Auth.*/Html.*/String.*/Json.*):
                     # faithfully decode the encoded registers in IL (args -> dst) order.

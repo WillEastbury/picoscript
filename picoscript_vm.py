@@ -18,6 +18,8 @@ A deterministic step budget bounds execution (spec sec 11, L0).
 
 from __future__ import annotations
 
+import re
+import binascii
 from typing import Callable, Dict, List, Optional
 
 import picoscript as isa
@@ -773,7 +775,7 @@ CAP_ALL     = 0xFFFFF           # default grant: every binding (host restricts t
 _CAP_BY_NS = {
     "Kernel": CAP_KERNEL, "Queue": CAP_QUEUE, "Random": CAP_RANDOM,
     "Req": CAP_NET, "Resp": CAP_NET, "Net": CAP_NET,
-    "Storage": CAP_STORAGE, "DateTime": CAP_TIME, "Context": CAP_CONTEXT,
+    "Storage": CAP_STORAGE, "Block": CAP_STORAGE, "DateTime": CAP_TIME, "Context": CAP_CONTEXT,
     "Data": CAP_STORAGE,
     "Auth": CAP_AUTH, "X509": CAP_AUTH, "Environment": CAP_ENV, "Locale": CAP_ENV,
     "Gpio": CAP_GPIO,
@@ -1253,6 +1255,12 @@ class HostApi:
         self.handlers: Dict[tuple, Callable] = {}
         self.compute_provider = compute_provider
         self.network_provider = network_provider
+        # Deterministic raw block device for reference/conformance runs.
+        self.block_data = bytearray(64 * 1024)
+        self.block_size = 512
+        self.block_offset = 0
+        self.block_lba = 0
+        self.block_status = 0
         # Card store (PicoStore) + program-level Storage.* context.
         self._store = None
         self.cur_pack = 0
@@ -1453,6 +1461,7 @@ class HostApi:
             "Query": self._query_helpers,
             "Search": self._search,
             "Storage": self._storage,
+            "Block": self._block,
             "Gpio": self._gpio,
             "Device": self._device,
             "Stream": self._stream,
@@ -1469,6 +1478,7 @@ class HostApi:
             "Html": self._htmllib,
             "Http": self._httplib,
             "TextRender": self._textrender,
+            "Parquet": self._parquet,
             "Error": self._error_hook,
             "Capsule": self._capsule_exec,
             "Base64": self._base64,
@@ -1492,6 +1502,60 @@ class HostApi:
             "Capability": lambda vm, method, rd, rs1, rs2: self._principal_cap(vm, "Capability", method, rd, rs1, rs2),
             "Sandbox": lambda vm, method, rd, rs1, rs2: self._principal_cap(vm, "Sandbox", method, rd, rs1, rs2),
         }
+
+    def _block(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        """Bounded reference implementation of the public raw Block API."""
+        data = self.block_data
+        if method == "Ready":
+            vm.regs[rd] = 1 if data is not None else 0; return True
+        if method == "BlockSize":
+            vm.regs[rd] = self.block_size & MASK32; return True
+        if method in ("SizeLow", "SizeHigh"):
+            size = len(data) if data is not None else 0
+            vm.regs[rd] = (size if method == "SizeLow" else size >> 32) & MASK32
+            return True
+        if method in ("SetOffset", "SetLba"):
+            value = (vm.regs[rs1] & MASK32) | ((vm.regs[rs2] & MASK32) << 32)
+            if method == "SetOffset": self.block_offset = value
+            else: self.block_lba = value
+            self.block_status = 0; return True
+        if method == "Status":
+            vm.regs[rd] = self.block_status & MASK32; return True
+        if data is None:
+            self.block_status = -6; vm.regs[rd] = self.block_status & MASK32; return True
+        if method in ("Read", "ReadBlocks"):
+            count = vm.regs[rs1] & MASK32
+            off = self.block_offset if method == "Read" else self.block_lba * self.block_size
+            length = count if method == "Read" else count * self.block_size
+            if length > 16384 or off + length > len(data):
+                self.block_status = -2
+                vm.regs[rd] = self._new_span_bytes(vm, b"")
+            else:
+                self.block_status = 0
+                vm.regs[rd] = self._new_span_bytes(vm, bytes(data[off:off + length]))
+            return True
+        if method in ("Write", "WriteBlocks"):
+            payload = self._span_raw(vm, vm.regs[rs1])
+            off = self.block_offset if method == "Write" else self.block_lba * self.block_size
+            if len(payload) > 16384 or off + len(payload) > len(data) or \
+               (method == "WriteBlocks" and len(payload) % self.block_size):
+                self.block_status = -2
+            else:
+                data[off:off + len(payload)] = payload
+                self.block_status = 0
+            vm.regs[rd] = self.block_status & MASK32; return True
+        if method == "Sync":
+            self.block_status = 0; vm.regs[rd] = 0; return True
+        if method == "Resize":
+            size = (vm.regs[rs1] & MASK32) | ((vm.regs[rs2] & MASK32) << 32)
+            if size > 16 * 1024 * 1024:
+                self.block_status = -4
+            else:
+                if size < len(data): del data[size:]
+                else: data.extend(b"\0" * (size - len(data)))
+                self.block_status = 0
+            vm.regs[rd] = self.block_status & MASK32; return True
+        return False
 
     @property
     def store(self):
@@ -1541,7 +1605,7 @@ class HostApi:
             hook = HOST_HOOK_CODES.get((ns, method), 0)
             raise PicoFault(PV_FAULT_CAPABILITY, getattr(vm, "cur_pc", 0), hook,
                             f"capability denied: {ns}.{method} requires an ungranted binding")
-        if ns == "Status" and method == "Last":      # INV-18: read out-of-band fallible-hook status
+        # Db is the internal database ABI. Keep the reference VM compatible with\n        # existing PicoWAL-backed Storage handlers while hosts migrate.\n        if ns == "Db":\n            db_storage = {"Read": "ReadExact", "Insert": "PutCard", "Write": "PutCard",\n                          "Update": "UpdateCard", "Delete": "DeleteExact", "Patch": "PatchCard",\n                          "Sync": "Sync", "Recover": "Recover"}\n            storage_method = db_storage.get(method)\n            if storage_method is not None:\n                return self._storage(vm, storage_method, rd, rs1, rs2)\n            # Builder/definition hooks are provider-defined until a structured\n            # planner is installed; return a deterministic unsupported status.\n            vm.regs[rd] = 0\n            self.host_status = 1\n            return\n        if ns == "Status" and method == "Last":      # INV-18: read out-of-band fallible-hook status
             vm.regs[rd] = self.host_status & MASK32
             return
         fn = self.handlers.get((ns, method))
@@ -1682,6 +1746,23 @@ class HostApi:
             idx = _sx32(vm.regs[rs2])
             vm.regs[rd] = vm.mem[s["ptr"] + idx] if 0 <= idx < s["len"] else 0
             return
+        if ns == "Span" and method == "Append":
+            dst = vm.spans[vm.regs[rs1]] if 0 <= vm.regs[rs1] < len(vm.spans) else None
+            src = vm.spans[vm.regs[rs2]] if 0 <= vm.regs[rs2] < len(vm.spans) else None
+            if not dst or not src:
+                vm.regs[rd] = 0; self.host_status = 1; return
+            total = dst["len"] + src["len"]
+            cap = dst.get("cap", dst["len"])
+            if total <= cap:
+                vm.mem[dst["ptr"] + dst["len"]:dst["ptr"] + total] = vm.mem[src["ptr"]:src["ptr"] + src["len"]]
+                dst["len"] = total; vm.regs[rd] = vm.regs[rs1]; self.host_status = 0; return
+            if vm.arena_top + total > vm.arena_bytes:
+                vm.regs[rd] = 0; self.host_status = 7; return
+            ptr = vm.arena_top; vm.arena_top += total
+            vm.mem[ptr:ptr + dst["len"]] = vm.mem[dst["ptr"]:dst["ptr"] + dst["len"]]
+            vm.mem[ptr + dst["len"]:ptr + total] = vm.mem[src["ptr"]:src["ptr"] + src["len"]]
+            vm.spans.append({"ptr": ptr, "len": total, "cap": total}); vm.regs[rd] = len(vm.spans) - 1; self.host_status = 0
+            return
         # Arena scopes: Mark/Rewind/Reset the bump arena (request-scoped allocation).
         if ns == "Arena":
             if method == "Mark":
@@ -1765,6 +1846,24 @@ class HostApi:
         vm.spans.append({"ptr": dst, "len": len(b)})
         return len(vm.spans) - 1
 
+    def _parquet(self, vm: "PicoVM", method, rd, rs1, rs2) -> bool:
+        """Inspect a Parquet byte span without external dependencies.
+
+        IsValid checks the PAR1 header/footer and validates the footer length
+        envelope. FooterLength returns the encoded metadata length, allowing
+        hosted importers to fetch/decode the Thrift metadata in a later pass.
+        """
+        raw = self._span_raw(vm, vm.regs[rs1])
+        ok = len(raw) >= 12 and raw[:4] == b"PAR1" and raw[-4:] == b"PAR1"
+        footer = int.from_bytes(raw[-8:-4], "little") if len(raw) >= 8 else 0
+        ok = ok and footer <= len(raw) - 12
+        if method == "IsValid":
+            vm.regs[rd] = 1 if ok else 0
+            return True
+        if method == "FooterLength":
+            vm.regs[rd] = footer if ok else 0
+            return True
+        return False
     # -- String.* arena string library (spans in / spans out) ---------------
     def _span_raw(self, vm: "PicoVM", h: int) -> bytes:
         if h <= 0 or h >= len(vm.spans) or not vm.spans[h]:
@@ -4005,6 +4104,220 @@ class HostApi:
             p = vm.regs[rs1] & MASK32
             vm.regs[rd] = 1 if 2 <= p <= 0x3FF else 0
             return True
+        if method == "PutCard":
+            cid = _sx32(vm.regs[rs1])
+            data = self._span_raw(vm, vm.regs[rs2])
+            if not (0 <= self.cur_pack <= 0x3FF and 0 <= cid <= 0x3FFFFF):
+                vm.regs[rd] = 1                 # PW_INVALID
+            else:
+                self.blob_cards[(str(self.cur_pack), cid)] = bytearray(data)
+                vm.regs[rd] = 0                 # PW_OK
+            return True
+        if method == "ReadExact":
+            cid = _sx32(vm.regs[rs1])
+            data = self.blob_cards.get((str(self.cur_pack), cid))
+            vm.regs[rd] = self._new_span_bytes(vm, bytes(data)) if data is not None else 0
+            return True
+        if method == "DeleteExact":
+            cid = _sx32(vm.regs[rs1])
+            key = (str(self.cur_pack), cid)
+            vm.regs[rd] = 1 if self.blob_cards.pop(key, None) is not None else 0
+            return True
+        if method == "Exists":
+            cid = _sx32(vm.regs[rs1])
+            vm.regs[rd] = 1 if (str(self.cur_pack), cid) in self.blob_cards else 0
+            return True
+        if method == "ScanNext":
+            after = _sx32(vm.regs[rs1])
+            ids = [cid for (p, cid) in self.blob_cards if p == str(self.cur_pack) and cid > after]
+            vm.regs[rd] = min(ids) if ids else MASK32  # -1 sentinel
+            return True
+        if method in ("Sync", "Recover"):
+            vm.regs[rd] = 0                     # reference store is already consistent
+            return True
+        if method.startswith("Page"):
+            if not hasattr(self, "_pw_page"):
+                self._pw_page = {"id": 0, "layout": 0, "entries": [], "sealed": None}
+            page = self._pw_page
+            if method == "PageBegin":
+                page.update(id=vm.regs[rs1] & MASK32, layout=vm.regs[rs2] & 1,
+                            entries=[], sealed=None)
+                vm.regs[rd] = 1; return True
+            if method == "PageAdd":
+                if page["sealed"] is not None or len(page["entries"]) >= 256:
+                    vm.regs[rd] = 0; return True
+                page["entries"].append((vm.regs[rs1] & MASK32,
+                                        self._span_raw(vm, vm.regs[rs2])))
+                vm.regs[rd] = 1; return True
+            if method == "PageSeal":
+                rows = sorted(page["entries"], key=lambda item: item[0])
+                keys = b"".join(key.to_bytes(4, "little") for key, _ in rows)
+                lens = b"".join(len(data).to_bytes(2, "little") for _, data in rows)
+                values = b"".join(data for _, data in rows)
+                decoded = (keys + lens + values) if page["layout"] else b"".join(
+                    key.to_bytes(4, "little") + len(data).to_bytes(2, "little") + data
+                    for key, data in rows)
+                encoded = bytearray(); i = 0
+                while i < len(decoded):
+                    run = 1
+                    while i + run < len(decoded) and decoded[i + run] == decoded[i] and run < 128:
+                        run += 1
+                    if run >= 4:
+                        encoded.extend((0x80 | (run - 1), decoded[i])); i += run; continue
+                    start = i; i += run
+                    while i < len(decoded) and i - start < 128:
+                        look = 1
+                        while i + look < len(decoded) and decoded[i + look] == decoded[i] and look < 4:
+                            look += 1
+                        if look >= 4: break
+                        i += look
+                    encoded.extend((i - start - 1,)); encoded.extend(decoded[start:i])
+                codec = 1 if len(encoded) < len(decoded) else 0
+                payload = bytes(encoded) if codec else decoded
+                header = (b"PWP2" + bytes((1, page["layout"], codec, 0)) +
+                          len(rows).to_bytes(2, "little") + b"\x00\x00" +
+                          len(decoded).to_bytes(4, "little") + len(payload).to_bytes(4, "little") +
+                          (binascii.crc32(payload) & MASK32).to_bytes(4, "little") +
+                          (binascii.crc32(decoded) & MASK32).to_bytes(4, "little"))
+                sealed = header + payload
+                if len(sealed) > 16384:
+                    vm.regs[rd] = 0; return True
+                page["sealed"] = sealed
+                vm.regs[rd] = 1; return True
+            if method == "PageData":
+                vm.regs[rd] = self._new_span_bytes(vm, page["sealed"] or b""); return True
+            if method == "PageVerify":
+                blob = self._span_raw(vm, vm.regs[rs1])
+                ok = len(blob) >= 28 and blob[:4] == b"PWP2" and blob[4] == 1
+                if ok:
+                    decoded_len = int.from_bytes(blob[12:16], "little")
+                    encoded_len = int.from_bytes(blob[16:20], "little")
+                    payload = blob[28:]
+                    ok = encoded_len == len(payload) and (binascii.crc32(payload) & MASK32) == int.from_bytes(blob[20:24], "little")
+                    if ok and blob[6] == 0:
+                        decoded = payload
+                    elif ok:
+                        out = bytearray(); j = 0
+                        while j < len(payload):
+                            control = payload[j]; j += 1
+                            count = (control & 0x7F) + 1
+                            if control & 0x80:
+                                if j >= len(payload): ok = False; break
+                                out.extend(bytes((payload[j],)) * count); j += 1
+                            else:
+                                if j + count > len(payload): ok = False; break
+                                out.extend(payload[j:j + count]); j += count
+                        decoded = bytes(out)
+                    if ok:
+                        ok = len(decoded) == decoded_len and (binascii.crc32(decoded) & MASK32) == int.from_bytes(blob[24:28], "little")
+                vm.regs[rd] = 1 if ok else 0; return True
+        if method.startswith("FullText"):
+            if not hasattr(self, "_pw_fulltext"):
+                self._pw_fulltext = {"field": 0, "mode": 0, "near": 0,
+                                     "docs": {}, "results": []}
+            ft = self._pw_fulltext
+            if method == "FullTextField":
+                ft["field"] = _sx32(vm.regs[rs1]); vm.regs[rd] = ft["field"]; return True
+            if method == "FullTextMode":
+                spec = vm.regs[rs1] & MASK32
+                ft["mode"], ft["near"] = (spec >> 16) & 0xFFFF, spec & 0xFFFF
+                vm.regs[rd] = 1; return True
+            if method == "FullTextUpsert":
+                doc = vm.regs[rs1] & MASK32
+                toks = re.findall(r"[a-z0-9]+", self._span_str(vm, vm.regs[rs2]).lower())
+                ft["docs"][(self.cur_pack, ft["field"], doc)] = toks
+                vm.regs[rd] = 1; return True
+            if method == "FullTextDelete":
+                doc = vm.regs[rs1] & MASK32
+                vm.regs[rd] = 1 if ft["docs"].pop((self.cur_pack, ft["field"], doc), None) is not None else 0
+                return True
+            if method == "FullTextFind":
+                query = re.findall(r"[a-z0-9]+", self._span_str(vm, vm.regs[rs1]).lower())[:16]
+                hits = []
+                for (pack_id, field_id, doc), toks in ft["docs"].items():
+                    if pack_id != self.cur_pack or field_id != ft["field"] or not query:
+                        continue
+                    positions = [[i for i, token in enumerate(toks) if token == term] for term in query]
+                    mode = ft["mode"]
+                    if mode == 0:
+                        matched = any(positions)
+                    elif mode == 1:
+                        matched = all(positions)
+                    elif mode == 2:
+                        matched = (all(positions) and
+                                   any(all(start + offset in positions[offset]
+                                           for offset in range(len(query)))
+                                       for start in positions[0]))
+                    else:
+                        distance = max(1, ft["near"])
+                        matched = (all(positions) and
+                                   any(all(any(abs(p - anchor) <= distance for p in ps)
+                                           for ps in positions[1:])
+                                       for anchor in positions[0]))
+                    if matched:
+                        hits.append(doc)
+                ft["results"] = sorted(set(hits))[:4096]
+                vm.regs[rd] = len(ft["results"]); return True
+            if method == "FullTextResult":
+                i = _sx32(vm.regs[rs1])
+                vm.regs[rd] = ft["results"][i] if 0 <= i < len(ft["results"]) else MASK32
+                return True
+        if method.startswith("Graph"):
+            if not hasattr(self, "_pw_graph"):
+                self._pw_graph = {"relation": 0, "weight": 0, "edges": {}, "results": []}
+            graph = self._pw_graph
+            if method == "GraphRelation":
+                graph["relation"] = vm.regs[rs1] & 0xFFFF; vm.regs[rd] = graph["relation"]; return True
+            if method == "GraphWeightSet":
+                graph["weight"] = _sx32(vm.regs[rs1]); vm.regs[rd] = 1; return True
+            source, destination = vm.regs[rs1] & MASK32, vm.regs[rs2] & MASK32
+            key = (self.cur_pack, graph["relation"], source, destination)
+            if method == "GraphAdd":
+                graph["edges"][key] = graph["weight"]; vm.regs[rd] = 1; return True
+            if method == "GraphDelete":
+                vm.regs[rd] = 1 if graph["edges"].pop(key, None) is not None else 0; return True
+            if method == "GraphWeight":
+                vm.regs[rd] = graph["edges"].get(key, 0) & MASK32; return True
+            if method == "GraphOut":
+                incoming = bool(vm.regs[rs2] & MASK32)
+                rows = []
+                for (pack_id, relation, src, dst), weight in graph["edges"].items():
+                    if pack_id == self.cur_pack and relation == graph["relation"] and \
+                       ((incoming and dst == source) or (not incoming and src == source)):
+                        rows.append((src if incoming else dst, weight))
+                graph["results"] = sorted(rows, key=lambda row: (row[0], row[1]))[:4096]
+                vm.regs[rd] = len(graph["results"]); return True
+            if method in ("GraphResultNode", "GraphResultWeight"):
+                i = _sx32(vm.regs[rs1])
+                if 0 <= i < len(graph["results"]):
+                    vm.regs[rd] = graph["results"][i][0 if method == "GraphResultNode" else 1] & MASK32
+                else:
+                    vm.regs[rd] = MASK32
+                return True
+            if method == "GraphPath":
+                source, target = vm.regs[rs1] & MASK32, vm.regs[rs2] & MASK32
+                dist, parent, open_nodes = {source: 0}, {}, {source}
+                while open_nodes:
+                    node = min(open_nodes, key=lambda n: (dist[n], n)); open_nodes.remove(node)
+                    if node == target: break
+                    for (pack_id, relation, src, dst), weight in graph["edges"].items():
+                        if (pack_id != self.cur_pack or relation != graph["relation"] or
+                                src != node or weight < 0):
+                            continue
+                        nd = dist[node] + weight
+                        if dst not in dist or nd < dist[dst]:
+                            dist[dst], parent[dst] = nd, node; open_nodes.add(dst)
+                path = []
+                if target in dist:
+                    node = target
+                    while True:
+                        path.append(node)
+                        if node == source: break
+                        node = parent[node]
+                    path.reverse()
+                graph["results"] = [(node, dist[node]) for node in path]
+                vm.regs[rd] = len(path)
+                return True
         if method == "GetSchemaForPack":
             data = self.schemas.get(vm.regs[rs1] & MASK32, b"")
             vm.regs[rd] = self._new_span_bytes(vm, data)

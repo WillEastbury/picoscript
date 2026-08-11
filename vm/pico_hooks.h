@@ -81,6 +81,7 @@
 #define PV_HOOK_SPAN_MATERIALIZE                 0x42
 #define PV_HOOK_SPAN_LEN                         0x43
 #define PV_HOOK_SPAN_GET                         0x44
+#define PV_HOOK_SPAN_APPEND                      0x1D7
 #define PV_HOOK_JSON_BEGINOBJECT                 0x45
 #define PV_HOOK_JSON_ENDOBJECT                   0x46
 #define PV_HOOK_JSON_BEGINARRAY                  0x47
@@ -603,6 +604,19 @@
 #define PV_HOOK_MOE_SELECTEDCOUNT                0x388
 #define PV_HOOK_MOE_SELECTEDEXPERT               0x389
 #define PV_HOOK_CATQ_CALIBRATETARGET             0x38A
+#define PV_HOOK_BLOCK_READY                      0x3D0
+#define PV_HOOK_BLOCK_BLOCKSIZE                  0x3D1
+#define PV_HOOK_BLOCK_SIZELOW                    0x3D2
+#define PV_HOOK_BLOCK_SIZEHIGH                   0x3D3
+#define PV_HOOK_BLOCK_SETOFFSET                  0x3D4
+#define PV_HOOK_BLOCK_READ                       0x3D5
+#define PV_HOOK_BLOCK_WRITE                      0x3D6
+#define PV_HOOK_BLOCK_SYNC                       0x3D7
+#define PV_HOOK_BLOCK_RESIZE                     0x3D8
+#define PV_HOOK_BLOCK_SETLBA                     0x3D9
+#define PV_HOOK_BLOCK_READBLOCKS                 0x3DA
+#define PV_HOOK_BLOCK_WRITEBLOCKS                0x3DB
+#define PV_HOOK_BLOCK_STATUS                     0x3DC
 #define PV_HOOK_DB_READ                          0x400
 #define PV_HOOK_DB_INSERT                        0x401
 #define PV_HOOK_DB_WRITE                         0x402

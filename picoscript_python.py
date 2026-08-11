@@ -27,7 +27,7 @@ Supported:
 from typing import List, Optional
 
 from picoscript_basic import (  # reuse AST + lowering unchanged
-    Num, Str, Var, Bin, Cmp, Call, Let, Ternary, If, While, DoLoop, ForTo, ForEach,
+    Num, Str, Var, Bin, Cmp, Call, Let, Dim, Ternary, If, While, DoLoop, ForTo, ForEach,
     Switch, Goto, Label, Sub, Gosub, Return, Break, Skip, Print, CallStmt, Lowerer,
     Dispatch, TryExcept, Raise, OnBlock, ConstDecl, EnumDecl,
 )
@@ -317,6 +317,18 @@ class Parser:
             raise SyntaxError(f"line {t.line}: unexpected keyword {t.value!r}")
         if t.kind == "id":
             nxt = self.peek2()
+            # Native PicoScript annotation: offset: u64 = Block.Size()
+            if nxt.kind == "op" and nxt.value == ":":
+                name = self.next().value
+                self.next()
+                type_tok = self.next()
+                if type_tok.kind not in ("id", "kw"):
+                    raise SyntaxError(f"line {type_tok.line}: expected type name")
+                init = None
+                if self.at("op", "="):
+                    self.next(); init = self.parse_expr()
+                self.expect("newline")
+                return Dim(name, init, type_tok.value)
             # augmented / plain assignment
             if nxt.kind == "op" and nxt.value == "=":
                 name = self.next().value

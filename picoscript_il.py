@@ -136,6 +136,10 @@ class Inst:
     imm: int = 0
     text: str = ""        # carried comment / string literal (e.g. Net.Type)
     targets: Tuple[str, ...] = ()   # ordered case labels for a jump table (jmptab)
+    family: int = 0          # systems superinstruction family
+    sysop: int = 0           # systems family opcode
+    typecode: int = 0        # I64/U64/PTR/SIZE/OFFSET
+    payload: int = 0         # immediate/displacement/target (b may hold X-reg operand)
     pos: int = -1         # INV-25: source byte offset this inst lowered from (-1 = unknown)
     # op == "trycatch": structured try/except/finally, kept as NESTED instruction
     # blocks (not flattened into laddr/label/jmp) so backends that can express
@@ -360,6 +364,18 @@ class ILBuilder:
 
     def dsp(self, subop: int, dst: VReg, a: Optional[VReg] = None, b: Optional[Operand] = None):
         self._emit(Inst("dsp", dst=dst, a=a, b=b, imm=subop))
+
+    def system(self, family: int, sysop: int, dst: Optional[VReg] = None,
+               src: Optional[VReg] = None, payload=0, typecode: int = 0):
+        """Emit one fixed two-word systems superinstruction.
+
+        A VReg payload is encoded as an X-register operand; an int is the raw
+        32-bit immediate/displacement payload.
+        """
+        self._emit(Inst("system", dst=dst, a=src,
+                        b=payload if isinstance(payload, VReg) else None,
+                        family=family, sysop=sysop, typecode=typecode,
+                        payload=payload if isinstance(payload, int) else 0))
 
     def wait(self, mask: Optional[VReg] = None):
         self._emit(Inst("wait", a=mask))
@@ -719,7 +735,7 @@ def allocate(insts: List[Inst], spill: bool = False) -> Dict[int, int]:
 
 
 # Ops whose `dst` field is a written destination, and ops that read `dst` as input.
-_DST_WRITTEN = {"const", "mov", "add", "sub", "mul", "div", "host", "load", "inc"}
+_DST_WRITTEN = {"const", "mov", "add", "sub", "mul", "div", "host", "load", "inc", "system"}
 _DST_READ_OPS = {"cmpbr", "inc"}
 SPILL_CARD_BASE = 0xF000   # reserved scratch-card region: one card per spilled vreg
 
@@ -1061,6 +1077,8 @@ def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True,
             # form's *word count* doesn't depend on the value, so it sidesteps
             # the circularity; see _emit_const.
             return 8
+        if ins.op == "system":
+            return 2
         return 1
 
     labels: Dict[str, int] = {}
@@ -1093,6 +1111,14 @@ def lower_to_bytecode_safe(insts: List[Inst], opt: bool = True,
             for tgt in ins.targets:                       # inline table: one absolute JUMP per case
                 words.append(E(isa.OP_JUMP, imm16=labels[tgt]))
             pc += len(ins.targets) + 1
+            continue
+        if ins.op == "system":
+            from picoscript_systems import encode_super, reg_operand
+            dst = _phys(mapping, ins.dst) if isinstance(ins.dst, VReg) else 0
+            src = _phys(mapping, ins.a) if isinstance(ins.a, VReg) else 0
+            payload = reg_operand(_phys(mapping, ins.b)) if isinstance(ins.b, VReg) else ins.payload
+            words.extend(encode_super(ins.family, ins.sysop, dst, src, payload, ins.typecode))
+            pc += 2
             continue
         try:
             words.append(_emit_word(ins, mapping, labels, pc))
@@ -1270,7 +1296,29 @@ def lower_to_c(insts: List[Inst], func_name: str = "pico_main", opt: bool = True
     out: List[str] = []
     out.append(provenance)
     out.append('#include "picovm.h"')
+    has_systems = any(ins.op == "system" for ins in _iter_insts_recursive(insts))
+    if has_systems:
+        out.append("#include <string.h>")
     out.append("")
+    if has_systems:
+        out.append("static uint64_t pico_sys_load(pv_ctx *ctx, uint64_t p, unsigned n) {")
+        out.append("    uint64_t v = 0; if (!ctx->mem || p + n > (uint64_t)ctx->mem_size) { ctx->fault = PV_FAULT_BAD_JUMP; return 0; }")
+        out.append("    for (unsigned i = 0; i < n; ++i) v |= (uint64_t)ctx->mem[p + i] << (i * 8); return v;")
+        out.append("}")
+        out.append("static void pico_sys_store(pv_ctx *ctx, uint64_t p, unsigned n, uint64_t v) {")
+        out.append("    if (!ctx->mem || p + n > (uint64_t)ctx->mem_size) { ctx->fault = PV_FAULT_BAD_JUMP; return; }")
+        out.append("    for (unsigned i = 0; i < n; ++i) ctx->mem[p + i] = (uint8_t)(v >> (i * 8));")
+        out.append("}")
+        out.append("typedef struct { uint64_t h; uint32_t record, value; uint8_t used; } pico_sys_index_row;")
+        out.append("static pico_sys_index_row pico_sys_index[256]; static uint32_t pico_sys_results[256], pico_sys_result_count;")
+        out.append("static int64_t pico_sys_index_upsert(uint64_t h, uint32_t record, uint32_t value) {")
+        out.append("    int free_slot=-1; for(int i=0;i<256;i++){ if(pico_sys_index[i].used&&pico_sys_index[i].h==h&&pico_sys_index[i].record==record){pico_sys_index[i].value=value;return 1;} if(!pico_sys_index[i].used&&free_slot<0)free_slot=i; }")
+        out.append("    if(free_slot<0)return 0; pico_sys_index[free_slot]=(pico_sys_index_row){h,record,value,1}; return 1;")
+        out.append("}")
+        out.append("static int64_t pico_sys_index_find(uint64_t h, uint32_t value) {")
+        out.append("    pico_sys_result_count=0; for(int i=0;i<256;i++)if(pico_sys_index[i].used&&pico_sys_index[i].h==h&&pico_sys_index[i].value==value)pico_sys_results[pico_sys_result_count++]=pico_sys_index[i].record; return pico_sys_result_count;")
+        out.append("}")
+        out.append("")
     if pinned_ids:
         for vid, v in sorted(pinned_ids.items()):
             out.append(f"static int64_t g{vid} = 0;   /* {v.name} */")
@@ -1464,6 +1512,137 @@ def _emit_c(ins: Inst, opnd, name_of, label_to_func, is_main: bool,
         return "    pv_wait(ctx);"
     if op == "raise":
         return f"    pv_raise(ctx, {ins.imm});"
+    if op == "system":
+        from picoscript_systems import (
+            F_INT64, F_MEMORY, F_POINTER, F_FRAME, F_STORAGE, F_GRAPH,
+            T_I64, S_MOV64, S_MOVI64, S_ADD64, S_SUB64, S_MUL64, S_DIV64,
+            S_AND64, S_OR64, S_XOR64, S_SHL64, S_SHR64, S_FROM_R32, S_TO_R32,
+            S_EQ64, S_NE64, S_LT64, S_GT64, S_LE64, S_GE64,
+            S_LOAD8, S_LOAD16, S_LOAD32, S_LOAD64,
+            S_STORE8, S_STORE16, S_STORE32, S_STORE64, S_MEMCPY, S_MEMSET,
+            S_LOAD_FIELD64, S_STORE_FIELD32,
+            S_LEA, S_PTR_ADD, S_PTR_DIFF, S_PTR_INDEX,
+            S_FRAME_ENTER, S_FRAME_LEAVE, S_ADDR_LOCAL,
+            S_LD_LOCAL32, S_ST_LOCAL32, S_LD_LOCAL64, S_ST_LOCAL64,
+            S_WAL_OPEN, S_WAL_PACK, S_WAL_PUT, S_WAL_CREATE, S_WAL_GET,
+            S_WAL_DELETE, S_WAL_EXISTS, S_WAL_SCAN, S_WAL_SYNC, S_WAL_RECOVER,
+            S_INDEX_OPEN, S_INDEX_UPSERT, S_INDEX_DELETE, S_INDEX_EXACT,
+            S_INDEX_REVERSE, S_INDEX_RESULT,
+            S_FTS_OPEN, S_FTS_UPSERT, S_FTS_DELETE, S_FTS_FIND, S_FTS_RESULT,
+            S_GRAPH_OPEN, S_GRAPH_SET_WEIGHT, S_GRAPH_ADD, S_GRAPH_DELETE,
+            S_GRAPH_WEIGHT, S_GRAPH_OUT, S_GRAPH_IN, S_GRAPH_RESULT_NODE,
+            S_GRAPH_RESULT_WEIGHT, S_GRAPH_SHORTEST_PATH,
+        )
+        dst = name_of(ins.dst) if isinstance(ins.dst, VReg) else "0"
+        src = opnd(ins.a) if isinstance(ins.a, VReg) else "0"
+        arg = opnd(ins.b) if isinstance(ins.b, VReg) else str(_to_i32(ins.payload))
+        if ins.family == F_INT64:
+            if ins.sysop in (S_EQ64, S_NE64, S_LT64, S_GT64, S_LE64, S_GE64):
+                sym = {S_EQ64: "==", S_NE64: "!=", S_LT64: "<", S_GT64: ">",
+                       S_LE64: "<=", S_GE64: ">="}[ins.sysop]
+                cast = "int64_t" if ins.typecode == T_I64 else "uint64_t"
+                return f"    {dst} = (({cast})({src}) {sym} ({cast})({arg})) ? 1 : 0;"
+            if ins.sysop in (S_MOV64, S_FROM_R32): return f"    {dst} = (uint64_t)({src});"
+            if ins.sysop == S_TO_R32: return f"    {dst} = (int64_t)(int32_t)(uint32_t)({src});"
+            if ins.sysop == S_MOVI64:
+                cast = "int64_t" if ins.typecode == T_I64 else "uint64_t"
+                return f"    {dst} = ({cast})(int64_t)({arg});"
+            sym = {S_ADD64: "+", S_SUB64: "-", S_MUL64: "*", S_AND64: "&",
+                   S_OR64: "|", S_XOR64: "^", S_SHL64: "<<", S_SHR64: ">>"}.get(ins.sysop)
+            if sym:
+                rhs = f"((uint64_t)({arg}) & 63u)" if ins.sysop in (S_SHL64, S_SHR64) else f"(uint64_t)({arg})"
+                lhs_cast = "int64_t" if ins.sysop == S_SHR64 and ins.typecode == T_I64 else "uint64_t"
+                return f"    {dst} = (uint64_t)(({lhs_cast})({src}) {sym} {rhs});"
+            if ins.sysop == S_DIV64:
+                cast = "int64_t" if ins.typecode == T_I64 else "uint64_t"
+                return f"    {dst} = ({arg}) ? (uint64_t)(({cast})({src}) / ({cast})({arg})) : 0;"
+        if ins.family == F_MEMORY:
+            loads = {S_LOAD8: 1, S_LOAD16: 2, S_LOAD32: 4, S_LOAD64: 8, S_LOAD_FIELD64: 8}
+            stores = {S_STORE8: 1, S_STORE16: 2, S_STORE32: 4, S_STORE64: 8,
+                      S_STORE_FIELD32: 4}
+            if ins.sysop in loads:
+                return f"    {dst} = pico_sys_load(ctx, (uint64_t)({src}) + (int32_t)({arg}), {loads[ins.sysop]});"
+            if ins.sysop in stores:
+                return f"    pico_sys_store(ctx, (uint64_t)({src}) + (int32_t)({arg}), {stores[ins.sysop]}, (uint64_t)({dst}));"
+            if ins.sysop == S_MEMCPY:
+                return (f"    if ((uint64_t)({dst}) + (uint64_t)({arg}) <= (uint64_t)ctx->mem_size && "
+                        f"(uint64_t)({src}) + (uint64_t)({arg}) <= (uint64_t)ctx->mem_size) "
+                        f"memmove(ctx->mem + (uint64_t)({dst}), ctx->mem + (uint64_t)({src}), (size_t)({arg}));")
+            if ins.sysop == S_MEMSET:
+                return (f"    if ((uint64_t)({dst}) + (uint64_t)({arg}) <= (uint64_t)ctx->mem_size) "
+                        f"memset(ctx->mem + (uint64_t)({dst}), (int)({src}) & 255, (size_t)({arg}));")
+        if ins.family == F_POINTER:
+            if ins.sysop in (S_LEA, S_PTR_ADD): return f"    {dst} = (uint64_t)({src}) + (int64_t)({arg});"
+            if ins.sysop == S_PTR_DIFF: return f"    {dst} = (uint64_t)({src}) - (uint64_t)({arg});"
+            if ins.sysop == S_PTR_INDEX:
+                return f"    {dst} = (uint64_t)({src}) + (uint64_t)({arg}) * (1u << {ins.typecode & 3});"
+        if ins.family == F_FRAME:
+            if ins.sysop == S_FRAME_ENTER:
+                return "    if (ctx->call_sp < PV_MAX_CALL) ctx->call_sp++; else ctx->fault = PV_FAULT_CALL_OVERFLOW;"
+            if ins.sysop == S_FRAME_LEAVE:
+                return "    if (ctx->call_sp > 0) ctx->call_sp--;"
+            if ins.sysop == S_ADDR_LOCAL:
+                return f"    {dst} = (uint64_t)ctx->mem_size - (uint64_t)ctx->call_sp * 65536u + (uint32_t)({arg});"
+            local_width = {S_LD_LOCAL32: 4, S_LD_LOCAL64: 8, S_ST_LOCAL32: 4, S_ST_LOCAL64: 8}
+            if ins.sysop in (S_LD_LOCAL32, S_LD_LOCAL64):
+                return f"    {dst} = pico_sys_load(ctx, (uint64_t)ctx->mem_size - (uint64_t)ctx->call_sp * 65536u + (uint32_t)({arg}), {local_width[ins.sysop]});"
+            if ins.sysop in (S_ST_LOCAL32, S_ST_LOCAL64):
+                return f"    pico_sys_store(ctx, (uint64_t)ctx->mem_size - (uint64_t)ctx->call_sp * 65536u + (uint32_t)({arg}), {local_width[ins.sysop]}, (uint64_t)({dst}));"
+        if ins.family in (F_STORAGE, F_GRAPH):
+            def hc(method, a="0", b="0"):
+                code = HOST_HOOK_CODES[("Storage", method)]
+                return f"pv_host2(ctx, 0x{code:X}, {a}, {b})"
+            pack = f"((uint64_t)({src}) & 0x3FFu)"
+            selector = f"(((uint64_t)({src}) >> 16) & 0xFFFFFFFFu)"
+            if ins.family == F_STORAGE:
+                if ins.sysop == S_WAL_OPEN:
+                    return f"    {dst} = {hc('Ready')} ? (1ULL << 60) : 0;"
+                if ins.sysop == S_WAL_PACK:
+                    return f"    {dst} = (1ULL << 60) | ((uint64_t)({arg}) & 0x3FFu);"
+                if ins.sysop == S_INDEX_OPEN:
+                    return f"    {dst} = (2ULL << 60) | ((uint64_t)({arg}) << 16) | {pack};"
+                if ins.sysop == S_FTS_OPEN:
+                    return f"    {dst} = (3ULL << 60) | ((uint64_t)({arg}) << 16) | {pack};"
+                wal_methods = {S_WAL_PUT: "PutCard", S_WAL_GET: "ReadExact",
+                               S_WAL_DELETE: "DeleteExact", S_WAL_EXISTS: "Exists",
+                               S_WAL_SCAN: "ScanNext"}
+                if ins.sysop in wal_methods:
+                    return f"    (void){hc('UsePack', pack)}; {dst} = {hc(wal_methods[ins.sysop], dst, arg)};"
+                if ins.sysop == S_WAL_CREATE:
+                    return (f"    (void){hc('UsePack', pack)}; {dst} = {hc('Exists', dst)} ? 3 : "
+                            f"{hc('PutCard', dst, arg)};")
+                if ins.sysop in (S_WAL_SYNC, S_WAL_RECOVER):
+                    return f"    {dst} = {hc('Sync' if ins.sysop == S_WAL_SYNC else 'Recover')};"
+                if ins.sysop == S_INDEX_UPSERT:
+                    return f"    {dst} = pico_sys_index_upsert((uint64_t)({src}), (uint32_t)({dst}), (uint32_t)({arg}));"
+                if ins.sysop == S_INDEX_DELETE:
+                    return f"    for(int __i=0;__i<256;__i++)if(pico_sys_index[__i].used&&pico_sys_index[__i].h==(uint64_t)({src})&&pico_sys_index[__i].record==(uint32_t)({dst}))pico_sys_index[__i].used=0; {dst}=1;"
+                if ins.sysop in (S_INDEX_EXACT, S_INDEX_REVERSE):
+                    return f"    {dst} = pico_sys_index_find((uint64_t)({src}), (uint32_t)({dst}));"
+                if ins.sysop == S_INDEX_RESULT:
+                    return f"    {dst} = ((uint32_t)({dst}) < pico_sys_result_count) ? pico_sys_results[(uint32_t)({dst})] : -1;"
+                fts_methods = {S_FTS_UPSERT: "FullTextUpsert", S_FTS_DELETE: "FullTextDelete",
+                               S_FTS_FIND: "FullTextFind", S_FTS_RESULT: "FullTextResult"}
+                if ins.sysop in fts_methods:
+                    prefix = f"(void){hc('UsePack', pack)}; (void){hc('FullTextField', selector)};"
+                    if ins.sysop == S_FTS_FIND: prefix += f" (void){hc('FullTextMode', arg)};"
+                    second = arg if ins.sysop == S_FTS_UPSERT else "0"
+                    return f"    {prefix} {dst} = {hc(fts_methods[ins.sysop], dst, second)};"
+            if ins.family == F_GRAPH:
+                if ins.sysop == S_GRAPH_OPEN:
+                    return f"    {dst} = (4ULL << 60) | ((uint64_t)({arg}) << 16) | {pack};"
+                prefix = f"(void){hc('UsePack', pack)}; (void){hc('GraphRelation', selector)};"
+                graph_methods = {S_GRAPH_SET_WEIGHT: "GraphWeightSet", S_GRAPH_ADD: "GraphAdd",
+                                 S_GRAPH_DELETE: "GraphDelete", S_GRAPH_WEIGHT: "GraphWeight",
+                                 S_GRAPH_OUT: "GraphOut", S_GRAPH_IN: "GraphOut",
+                                 S_GRAPH_RESULT_NODE: "GraphResultNode",
+                                 S_GRAPH_RESULT_WEIGHT: "GraphResultWeight"}
+                if ins.sysop in graph_methods:
+                    second = "1" if ins.sysop == S_GRAPH_IN else ("0" if ins.sysop == S_GRAPH_OUT else arg)
+                    return f"    {prefix} {dst} = {hc(graph_methods[ins.sysop], dst, second)};"
+                if ins.sysop == S_GRAPH_SHORTEST_PATH:
+                    return f"    {prefix} {dst} = {hc('GraphPath', dst, arg)};"
+        return f"    /* unsupported systems family={ins.family} op={ins.sysop} */"
     if op == "laddr":
         # Unreachable in practice: lower_to_c consumes the structured
         # `trycatch` node below directly (real goto), so a bare `laddr`
@@ -1881,6 +2060,133 @@ def _emit_js_inst(ins: Inst, jop, jname, resolve_jump, label_to_func,
         return ["return rt;"], True
     if op == "raise":
         return [f"/* raise {ins.imm} */"], False
+    if op == "system":
+        from picoscript_systems import (
+            F_INT64, F_MEMORY, F_POINTER, F_FRAME, F_STORAGE, F_GRAPH, T_I64,
+            S_MOV64, S_MOVI64, S_ADD64, S_SUB64, S_MUL64, S_DIV64,
+            S_AND64, S_OR64, S_XOR64, S_SHL64, S_SHR64, S_FROM_R32, S_TO_R32,
+            S_EQ64, S_NE64, S_LT64, S_GT64, S_LE64, S_GE64,
+            S_LOAD8, S_LOAD16, S_LOAD32, S_LOAD64,
+            S_STORE8, S_STORE16, S_STORE32, S_STORE64, S_MEMCPY, S_MEMSET,
+            S_LOAD_FIELD64, S_STORE_FIELD32,
+            S_LEA, S_PTR_ADD, S_PTR_DIFF, S_PTR_INDEX,
+            S_FRAME_ENTER, S_FRAME_LEAVE, S_ADDR_LOCAL,
+            S_WAL_OPEN, S_WAL_PACK, S_WAL_PUT, S_WAL_CREATE, S_WAL_GET,
+            S_WAL_DELETE, S_WAL_EXISTS, S_WAL_SCAN, S_WAL_SYNC, S_WAL_RECOVER,
+            S_INDEX_OPEN, S_INDEX_UPSERT, S_INDEX_DELETE, S_INDEX_EXACT,
+            S_INDEX_REVERSE, S_INDEX_RESULT,
+            S_FTS_OPEN, S_FTS_UPSERT, S_FTS_DELETE, S_FTS_FIND, S_FTS_RESULT,
+            S_GRAPH_OPEN, S_GRAPH_SET_WEIGHT, S_GRAPH_ADD, S_GRAPH_DELETE,
+            S_GRAPH_WEIGHT, S_GRAPH_OUT, S_GRAPH_IN, S_GRAPH_RESULT_NODE,
+            S_GRAPH_RESULT_WEIGHT, S_GRAPH_SHORTEST_PATH,
+        )
+        dst = jname(ins.dst) if isinstance(ins.dst, VReg) else "0"
+        src = jop(ins.a) if isinstance(ins.a, VReg) else "0"
+        arg = jop(ins.b) if isinstance(ins.b, VReg) else str(ins.payload & 0xFFFFFFFF)
+        barg = f"BigInt({arg})"
+        wrap = lambda expr: f"BigInt.asUintN(64, {expr})"
+        if ins.family == F_INT64:
+            if ins.sysop in (S_EQ64, S_NE64, S_LT64, S_GT64, S_LE64, S_GE64):
+                sym = {S_EQ64: "===", S_NE64: "!==", S_LT64: "<", S_GT64: ">",
+                       S_LE64: "<=", S_GE64: ">="}[ins.sysop]
+                left = f"BigInt.asIntN(64, BigInt({src}))" if ins.typecode == T_I64 else f"BigInt.asUintN(64, BigInt({src}))"
+                right = f"BigInt.asIntN(64, {barg})" if ins.typecode == T_I64 else f"BigInt.asUintN(64, {barg})"
+                return [f"{dst} = ({left} {sym} {right}) ? 1 : 0;"], False
+            if ins.sysop in (S_MOV64,): return [f"{dst} = {wrap(f'BigInt({src})')};"], False
+            if ins.sysop == S_FROM_R32: return [f"{dst} = BigInt(({src}) >>> 0);"], False
+            if ins.sysop == S_TO_R32: return [f"{dst} = Number(BigInt.asIntN(32, BigInt({src})));"], False
+            if ins.sysop == S_MOVI64: return [f"{dst} = {wrap(barg)};"], False
+            sym = {S_ADD64: "+", S_SUB64: "-", S_MUL64: "*", S_DIV64: "/",
+                   S_AND64: "&", S_OR64: "|", S_XOR64: "^", S_SHL64: "<<", S_SHR64: ">>"}.get(ins.sysop)
+            if sym:
+                left = f"BigInt.asIntN(64, BigInt({src}))" if ins.typecode == T_I64 and ins.sysop in (S_DIV64, S_SHR64) else f"BigInt({src})"
+                right = f"({barg} & 63n)" if ins.sysop in (S_SHL64, S_SHR64) else barg
+                if ins.sysop == S_DIV64:
+                    return [f"{dst} = ({right} !== 0n ? {wrap(f'{left} / {right}')} : 0n);"], False
+                return [f"{dst} = {wrap(f'{left} {sym} {right}')};"], False
+        if ins.family == F_MEMORY:
+            loads = {S_LOAD8: 1, S_LOAD16: 2, S_LOAD32: 4, S_LOAD64: 8, S_LOAD_FIELD64: 8}
+            stores = {S_STORE8: 1, S_STORE16: 2, S_STORE32: 4, S_STORE64: 8,
+                      S_STORE_FIELD32: 4}
+            ptr = f"(Number(BigInt({src})) + ({_to_i32(ins.payload)}))"
+            if ins.sysop in loads:
+                n = loads[ins.sysop]
+                return [f"{dst} = (() => {{ let v=0n,p={ptr}; for(let i=0;i<{n};i++) v|=BigInt(rt.mem[p+i]||0)<<BigInt(i*8); return v; }})();"], False
+            if ins.sysop in stores:
+                n = stores[ins.sysop]
+                return [f"{{ let v=BigInt({dst}),p={ptr}; for(let i=0;i<{n};i++) rt.mem[p+i]=Number((v>>BigInt(i*8))&255n); }}"], False
+            length = f"Number({barg})"
+            if ins.sysop == S_MEMSET:
+                return [f"rt.mem.fill(Number(BigInt({src})&255n), Number(BigInt({dst})), Number(BigInt({dst}))+{length});"], False
+            if ins.sysop == S_MEMCPY:
+                return [f"rt.mem.copyWithin(Number(BigInt({dst})), Number(BigInt({src})), Number(BigInt({src}))+{length});"], False
+        if ins.family == F_POINTER:
+            if ins.sysop in (S_LEA, S_PTR_ADD): return [f"{dst} = {wrap(f'BigInt({src}) + {barg}')};"], False
+            if ins.sysop == S_PTR_DIFF: return [f"{dst} = {wrap(f'BigInt({src}) - {barg}')};"], False
+            if ins.sysop == S_PTR_INDEX: return [f"{dst} = {wrap(f'BigInt({src}) + {barg} * BigInt({1 << (ins.typecode & 3)})')};"], False
+        if ins.family == F_FRAME:
+            if ins.sysop == S_FRAME_ENTER: return ["rt._sysDepth = (rt._sysDepth || 0) + 1;"], False
+            if ins.sysop == S_FRAME_LEAVE: return ["rt._sysDepth = Math.max(0, (rt._sysDepth || 1) - 1);"], False
+            if ins.sysop == S_ADDR_LOCAL:
+                return [f"{dst} = BigInt(rt.mem.length - (rt._sysDepth || 1) * 65536 + {_to_i32(ins.payload)});"], False
+        if ins.family in (F_STORAGE, F_GRAPH):
+            def jhc(method, a="0", b="0"):
+                code = HOST_HOOK_CODES[("Storage", method)]
+                return f"rt.host(0x{code:X}, {a}, {b})"
+            pack = f"Number(BigInt({src}) & 0x3FFn)"
+            selector = f"Number((BigInt({src}) >> 16n) & 0xFFFFFFFFn)"
+            narg, ndst = f"Number(BigInt({arg}) & 0xFFFFFFFFn)", f"Number(BigInt({dst}) & 0xFFFFFFFFn)"
+            if ins.family == F_STORAGE:
+                if ins.sysop == S_WAL_OPEN:
+                    return [f"{dst} = {jhc('Ready')} ? (1n << 60n) : 0n;"], False
+                if ins.sysop == S_WAL_PACK:
+                    return [f"{dst} = (1n << 60n) | (BigInt({arg}) & 0x3FFn);"], False
+                if ins.sysop == S_INDEX_OPEN:
+                    return [f"{dst} = (2n << 60n) | (BigInt({arg}) << 16n) | BigInt({pack});"], False
+                if ins.sysop == S_FTS_OPEN:
+                    return [f"{dst} = (3n << 60n) | (BigInt({arg}) << 16n) | BigInt({pack});"], False
+                wal_methods = {S_WAL_PUT: "PutCard", S_WAL_GET: "ReadExact",
+                               S_WAL_DELETE: "DeleteExact", S_WAL_EXISTS: "Exists",
+                               S_WAL_SCAN: "ScanNext"}
+                if ins.sysop in wal_methods:
+                    return [f"{jhc('UsePack', pack)}; {dst} = {jhc(wal_methods[ins.sysop], ndst, narg)};"], False
+                if ins.sysop == S_WAL_CREATE:
+                    return [f"{jhc('UsePack', pack)}; {dst} = {jhc('Exists', ndst)} ? 3 : {jhc('PutCard', ndst, narg)};"], False
+                if ins.sysop in (S_WAL_SYNC, S_WAL_RECOVER):
+                    return [f"{dst} = {jhc('Sync' if ins.sysop == S_WAL_SYNC else 'Recover')};"], False
+                if ins.sysop == S_INDEX_UPSERT:
+                    return [f"rt._sysIndex=rt._sysIndex||[]; rt._sysIndex=rt._sysIndex.filter(x=>!(x.h===BigInt({src})&&x.r==={ndst})); rt._sysIndex.push({{h:BigInt({src}),r:{ndst},v:{narg}}}); {dst}=1;"], False
+                if ins.sysop == S_INDEX_DELETE:
+                    return [f"rt._sysIndex=(rt._sysIndex||[]).filter(x=>!(x.h===BigInt({src})&&x.r==={ndst})); {dst}=1;"], False
+                if ins.sysop in (S_INDEX_EXACT, S_INDEX_REVERSE):
+                    return [f"rt._sysIndexResults=(rt._sysIndex||[]).filter(x=>x.h===BigInt({src})&&x.v==={ndst}).map(x=>x.r).sort((a,b)=>a-b); {dst}=rt._sysIndexResults.length;"], False
+                if ins.sysop == S_INDEX_RESULT:
+                    return [f"{dst}=((rt._sysIndexResults||[])[{ndst}] ?? -1);"], False
+                fts_methods = {S_FTS_UPSERT: "FullTextUpsert", S_FTS_DELETE: "FullTextDelete",
+                               S_FTS_FIND: "FullTextFind", S_FTS_RESULT: "FullTextResult"}
+                if ins.sysop in fts_methods:
+                    parts = [f"{jhc('UsePack', pack)}", f"{jhc('FullTextField', selector)}"]
+                    if ins.sysop == S_FTS_FIND: parts.append(jhc("FullTextMode", narg))
+                    second = narg if ins.sysop == S_FTS_UPSERT else "0"
+                    parts.append(f"{dst} = {jhc(fts_methods[ins.sysop], ndst, second)}")
+                    return ["; ".join(parts) + ";"], False
+            if ins.family == F_GRAPH:
+                if ins.sysop == S_GRAPH_OPEN:
+                    return [f"{dst} = (4n << 60n) | (BigInt({arg}) << 16n) | BigInt({pack});"], False
+                parts = [jhc("UsePack", pack), jhc("GraphRelation", selector)]
+                methods = {S_GRAPH_SET_WEIGHT: "GraphWeightSet", S_GRAPH_ADD: "GraphAdd",
+                           S_GRAPH_DELETE: "GraphDelete", S_GRAPH_WEIGHT: "GraphWeight",
+                           S_GRAPH_OUT: "GraphOut", S_GRAPH_IN: "GraphOut",
+                           S_GRAPH_RESULT_NODE: "GraphResultNode",
+                           S_GRAPH_RESULT_WEIGHT: "GraphResultWeight"}
+                if ins.sysop in methods:
+                    second = "1" if ins.sysop == S_GRAPH_IN else ("0" if ins.sysop == S_GRAPH_OUT else narg)
+                    parts.append(f"{dst} = {jhc(methods[ins.sysop], ndst, second)}")
+                    return ["; ".join(parts) + ";"], False
+                if ins.sysop == S_GRAPH_SHORTEST_PATH:
+                    parts.append(f"{dst} = {jhc('GraphPath', ndst, narg)}")
+                    return ["; ".join(parts) + ";"], False
+        return [f"/* unsupported systems family={ins.family} op={ins.sysop} */"], False
     if op == "laddr":
         # Unreachable in practice: lower_to_js consumes the structured
         # `trycatch` node above directly (real try/catch/throw), so a bare

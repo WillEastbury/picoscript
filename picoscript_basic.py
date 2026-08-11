@@ -62,6 +62,13 @@ from typing import List, Optional, Dict, Tuple
 
 from picoscript_il import ILBuilder, VReg, Imm, COND, COND_NEGATE, canon_host
 from picoscript_lang import encode_card_addr, resolve_named_constant
+from picoscript_system_intrinsics import lower_system_intrinsic, system_intrinsic_result_type
+from picoscript_systems import (
+    F_INT64, F_POINTER, S_MOV64, S_FROM_R32, S_TO_R32,
+    S_ADD64, S_SUB64, S_MUL64, S_DIV64,
+    S_EQ64, S_NE64, S_LT64, S_GT64, S_LE64, S_GE64,
+    S_PTR_ADD, S_PTR_DIFF, T_I64, T_U64, T_PTR,
+)
 
 PRINT_CARD = 0xFFFE   # scratch card used to pipe PRINT output
 
@@ -226,7 +233,7 @@ class Let:
     name: str; value: object
 @dataclass
 class Dim:
-    name: str; init: object          # init may be None
+    name: str; init: object; type_name: Optional[str] = None  # init may be None
 @dataclass
 class IncDec:
     name: str; delta: int            # +1 for INC, -1 for DEC
@@ -534,6 +541,13 @@ class Parser:
     def parse_dim(self) -> Dim:
         self.eat_kw("DIM")
         name = self.next().value
+        type_name = None
+        if self._peek_word() == "AS":
+            self._eat_word()
+            t = self.next()
+            if t.kind not in ("id", "kw"):
+                raise SyntaxError(f"line {t.line}: expected type name")
+            type_name = t.value
         init = None
         if self.peek().kind == "op" and self.peek().value == "=":
             self.next()
@@ -542,7 +556,7 @@ class Parser:
             self._eat_word(); self._expect_word("CARD")
             init = Call("Storage", "AddCard", [])
         self.end_line()
-        return Dim(name, init)
+        return Dim(name, init, type_name)
 
     # ── readable storage / device DSL (BASIC-idiomatic; lowers to canonical
     #    Storage.*/Gpio.* calls so bytecode is byte-identical with vm/picoc.js).
@@ -1095,6 +1109,59 @@ class Lowerer:
         # can be live at once (replaces the old 2-alternating-slot scheme).
         self._strpool: Dict[bytes, int] = {}
         self._strpool_top = 0x8000
+        # VRegs whose live value is held in the systems ISA's native-width X
+        # register class. Assignment must preserve these with MOV64 rather than
+        # silently routing them through the base machine's 32-bit R registers.
+        self._xvalues = set()
+        self.var_types: Dict[str, str] = {}
+        self.value_types: Dict[VReg, str] = {}
+
+    @staticmethod
+    def normalize_type(type_name: Optional[str]) -> Optional[str]:
+        if type_name is None:
+            return None
+        aliases = {
+            "INT": "i32", "INTEGER": "i32", "I32": "i32", "U32": "u32",
+            "I64": "i64", "INT64": "i64", "U64": "u64", "UINT64": "u64",
+            "PTR": "ptr", "POINTER": "ptr", "SIZE": "size", "SIZE_T": "size",
+            "OFFSET": "offset", "WAL": "wal", "INDEX": "index",
+            "POSTINGS": "postings", "GRAPH": "graph", "NODE": "node",
+            "SPAN": "span",
+        }
+        key = str(type_name).strip().upper()
+        if key not in aliases:
+            raise SyntaxError(f"unknown PicoScript type {type_name!r}")
+        return aliases[key]
+
+    @staticmethod
+    def is_x_type(type_name: Optional[str]) -> bool:
+        return type_name in {"i64", "u64", "ptr", "size", "offset", "wal",
+                             "index", "postings", "graph", "node"}
+
+    def value_type(self, value: VReg) -> str:
+        return self.value_types.get(value, "i32")
+
+    def mark_type(self, value: VReg, type_name: str) -> VReg:
+        self.value_types[value] = type_name
+        if self.is_x_type(type_name): self._xvalues.add(value)
+        else: self._xvalues.discard(value)
+        return value
+
+    def coerce_x(self, value: VReg, type_name="u64") -> VReg:
+        type_name = self.normalize_type(type_name) or "u64"
+        if self.is_x_type(self.value_type(value)):
+            return value
+        out = self.b.vreg()
+        self.b.system(F_INT64, S_FROM_R32, out, value,
+                      typecode=T_I64 if type_name == "i64" else T_U64)
+        return self.mark_type(out, type_name)
+
+    def coerce_r(self, value: VReg) -> VReg:
+        if not self.is_x_type(self.value_type(value)):
+            return value
+        out = self.b.vreg()
+        self.b.system(F_INT64, S_TO_R32, out, value, typecode=T_U64)
+        return self.mark_type(out, "i32")
 
     def var(self, name: str) -> VReg:
         key = name.upper()
@@ -1131,13 +1198,23 @@ class Lowerer:
             self.assign_to(self.var(s.name), s.value)
         elif isinstance(s, Dim):
             v = self.var(s.name)
+            declared = self.normalize_type(s.type_name)
+            if declared is not None:
+                self.var_types[s.name.upper()] = declared
             if s.init is None:
-                self.b.const(v, 0)
+                zero = self.b.vreg(); self.b.const(zero, 0)
+                self.assign_to(v, Num(0), declared)
             else:
-                self.assign_to(v, s.init)
+                self.assign_to(v, s.init, declared)
         elif isinstance(s, IncDec):
             v = self.var(s.name)
-            if s.delta == 1:
+            if self.is_x_type(self.value_type(v)):
+                one = self.b.vreg(); self.b.const(one, 1)
+                one = self.coerce_x(one, self.value_type(v))
+                self.b.system(F_INT64, S_ADD64 if s.delta == 1 else S_SUB64,
+                              v, v, one,
+                              T_I64 if self.value_type(v) == "i64" else T_U64)
+            elif s.delta == 1:
                 self.b.inc(v)
             else:
                 self.b.arith("sub", v, v, Imm(1))
@@ -1351,21 +1428,36 @@ class Lowerer:
         self.b.jmp(top)
         self.b.label(end)
 
-    def assign_to(self, dst: VReg, expr):
-        if isinstance(expr, Bin) and expr.op in _ARITH:
-            a = self.eval(expr.lhs)
-            if isinstance(expr.rhs, Num) and -32768 <= expr.rhs.value <= 65535:
-                self.b.arith(_ARITH[expr.op], dst, a, Imm(expr.rhs.value))
-                return
-            bb = self.eval(expr.rhs)
-            self.b.arith(_ARITH[expr.op], dst, a, bb)
-            return
-        self.b.mov(dst, self.eval(expr))
+    def assign_to(self, dst: VReg, expr, declared_type=None):
+        src = self.eval(expr)
+        key = dst.name.upper()
+        target_type = (self.normalize_type(declared_type) or self.var_types.get(key)
+                       or self.value_type(src))
+        if self.is_x_type(target_type):
+            src = self.coerce_x(src, target_type)
+            self.b.system(F_INT64, S_MOV64, dst, src, typecode=T_U64)
+            self.mark_type(dst, target_type)
+        else:
+            src = self.coerce_r(src)
+            self.mark_type(dst, target_type or "i32")
+            self.b.mov(dst, src)
+        self.var_types[key] = target_type or "i32"
 
     def branch_false(self, cond, false_label: str):
         if isinstance(cond, Cmp):
             a = self.eval(cond.lhs); b = self.eval(cond.rhs)
-            self.b.cmpbr(COND_NEGATE[cond.cond], a, b, false_label)
+            if self.is_x_type(self.value_type(a)) or self.is_x_type(self.value_type(b)):
+                typ = self.value_type(a) if self.is_x_type(self.value_type(a)) else self.value_type(b)
+                a, b = self.coerce_x(a, typ), self.coerce_x(b, typ)
+                result = self.b.vreg()
+                op = {"EQ": S_EQ64, "NE": S_NE64, "LT": S_LT64,
+                      "GT": S_GT64, "LE": S_LE64, "GE": S_GE64}[cond.cond]
+                self.b.system(F_INT64, op, result, a, b,
+                              T_I64 if typ == "i64" else T_U64)
+                self.mark_type(result, "i32")
+                self.b.cmpbr("Z", result, result, false_label)
+            else:
+                self.b.cmpbr(COND_NEGATE[cond.cond], a, b, false_label)
             return
         v = self.eval(cond)
         self.b.cmpbr("Z", v, v, false_label)
@@ -1374,7 +1466,18 @@ class Lowerer:
         """Emit a branch to true_label when `cond` is true (used by DO/LOOP)."""
         if isinstance(cond, Cmp):
             a = self.eval(cond.lhs); b = self.eval(cond.rhs)
-            self.b.cmpbr(cond.cond, a, b, true_label)
+            if self.is_x_type(self.value_type(a)) or self.is_x_type(self.value_type(b)):
+                typ = self.value_type(a) if self.is_x_type(self.value_type(a)) else self.value_type(b)
+                a, b = self.coerce_x(a, typ), self.coerce_x(b, typ)
+                result = self.b.vreg()
+                op = {"EQ": S_EQ64, "NE": S_NE64, "LT": S_LT64,
+                      "GT": S_GT64, "LE": S_LE64, "GE": S_GE64}[cond.cond]
+                self.b.system(F_INT64, op, result, a, b,
+                              T_I64 if typ == "i64" else T_U64)
+                self.mark_type(result, "i32")
+                self.b.cmpbr("NZ", result, result, true_label)
+            else:
+                self.b.cmpbr(cond.cond, a, b, true_label)
             return
         v = self.eval(cond)
         self.b.cmpbr("NZ", v, v, true_label)
@@ -1547,7 +1650,7 @@ class Lowerer:
         if isinstance(s.value, Str):
             self.b.host("Io", "Write", (self.emit_str_span(s.value.value),), None)
             return
-        v = self.eval(s.value)
+        v = self.coerce_r(self.eval(s.value))
         self.b.save(v, PRINT_CARD)
         self.b.pipe(v, PRINT_CARD)
 
@@ -1575,7 +1678,7 @@ class Lowerer:
     # -- expressions -----------------------------------------------------
     def eval(self, e) -> VReg:
         if isinstance(e, Num):
-            v = self.b.vreg(); self.b.const(v, e.value); return v
+            v = self.b.vreg(); self.b.const(v, e.value); return self.mark_type(v, "i32")
         if isinstance(e, Var):
             cv = self._resolve_constant(e.name)
             if cv is not None:
@@ -1586,14 +1689,26 @@ class Lowerer:
                 return self.eval_logical(e)
             if e.op == "MOD":
                 return self.eval_mod(e.lhs, e.rhs)
-            a = self.eval(e.lhs)
+            a, b = self.eval(e.lhs), self.eval(e.rhs)
+            at, bt = self.value_type(a), self.value_type(b)
+            if self.is_x_type(at) or self.is_x_type(bt):
+                result_type = at if self.is_x_type(at) else bt
+                a, b = self.coerce_x(a, result_type), self.coerce_x(b, result_type)
+                dst = self.b.vreg()
+                if result_type == "ptr" and e.op in ("+", "-"):
+                    self.b.system(F_POINTER, S_PTR_ADD if e.op == "+" else S_PTR_DIFF,
+                                  dst, a, payload=b, typecode=T_PTR)
+                else:
+                    op = {"+": S_ADD64, "-": S_SUB64, "*": S_MUL64, "/": S_DIV64}[e.op]
+                    self.b.system(F_INT64, op, dst, a, payload=b,
+                                  typecode=T_I64 if result_type == "i64" else T_U64)
+                return self.mark_type(dst, result_type)
             dst = self.b.vreg()
             if isinstance(e.rhs, Num) and -32768 <= e.rhs.value <= 65535:
                 self.b.arith(_ARITH[e.op], dst, a, Imm(e.rhs.value))
             else:
-                b = self.eval(e.rhs)
                 self.b.arith(_ARITH[e.op], dst, a, b)
-            return dst
+            return self.mark_type(dst, "i32")
         if isinstance(e, Cmp):
             return self.eval_bool(e)
         if isinstance(e, Ternary):
@@ -1649,15 +1764,39 @@ class Lowerer:
     def eval_bool(self, e: Cmp) -> VReg:
         a = self.eval(e.lhs); b = self.eval(e.rhs)
         dst = self.b.vreg()
+        if self.is_x_type(self.value_type(a)) or self.is_x_type(self.value_type(b)):
+            typ = self.value_type(a) if self.is_x_type(self.value_type(a)) else self.value_type(b)
+            a, b = self.coerce_x(a, typ), self.coerce_x(b, typ)
+            op = {"EQ": S_EQ64, "NE": S_NE64, "LT": S_LT64,
+                  "GT": S_GT64, "LE": S_LE64, "GE": S_GE64}[e.cond]
+            self.b.system(F_INT64, op, dst, a, payload=b,
+                          typecode=T_I64 if typ == "i64" else T_U64)
+            return self.mark_type(dst, "i32")
         true_l = self.b.new_label("bt"); end_l = self.b.new_label("be")
         self.b.cmpbr(e.cond, a, b, true_l)
         self.b.const(dst, 0); self.b.jmp(end_l)
         self.b.label(true_l); self.b.const(dst, 1)
         self.b.label(end_l)
-        return dst
+        return self.mark_type(dst, "i32")
 
     def lower_call(self, c: Call, want_value: bool) -> Optional[VReg]:
         ns, method = c.ns, c.method
+        if ns is None and method.lower() in {
+                "i32", "u32", "i64", "u64", "ptr", "size", "offset"}:
+            if len(c.args) != 1:
+                raise SyntaxError(f"{method} cast expects one value")
+            target = self.normalize_type(method)
+            value = self.eval(c.args[0])
+            return (self.coerce_x(value, target) if self.is_x_type(target)
+                    else self.coerce_r(value))
+        handled, result = lower_system_intrinsic(
+            self.b, self.eval, ns, method, c.args, want_value,
+            coerce_x=self.coerce_x, coerce_r=self.coerce_r)
+        if handled:
+            result_type = system_intrinsic_result_type(ns, method)
+            if result is not None and result_type is not None:
+                self.mark_type(result, result_type)
+            return result
         if ns is None:
             key = method.lower()
             subs = getattr(self, "_sub_names", set())

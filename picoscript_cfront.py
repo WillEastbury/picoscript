@@ -10,7 +10,8 @@ Supported surface
   // line comments and /* block comments */
   int x = 5;            // declaration (single global scope)
   int y;                // default 0
-  x = y + 3 * (x - 1);  // assignment, + - * / and parentheses
+  x = y + 3 * (x - 1);  // arithmetic and parentheses
+  x = (x << 3) | 7;     // native C bitwise syntax
   if (x < 10) { ... } else { ... }
   while (x > 0) { x = x - 1; }
   for (i = 0; i < 8; i = i + 1) { ... }
@@ -22,22 +23,202 @@ Supported surface
   r = Crypto.Sha256(a, b); // generic host call (<=2 reg args, optional result)
 
 Comparisons are first-class only inside if/while/for conditions, and may also be
-assigned (materialized to 0/1).  Everything is a 32-bit word (int64 in the C
-backend); there is one global variable scope shared across subroutines.
+assigned (materialized to 0/1). Everything is a 32-bit word unless an explicitly
+wide systems type is used.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import os
+import re
+from dataclasses import dataclass, field, fields, is_dataclass
 from typing import List, Optional, Tuple, Union, Dict
 
 from picoscript_il import ILBuilder, VReg, Imm, COND, COND_NEGATE, canon_host
-from picoscript_lang import encode_card_addr, resolve_named_constant
+from picoscript_lang import encode_card_addr, resolve_named_constant, HOST_HOOK_CODES
 from picoscript_basic import event_type_hash
+from picoscript_systems import (
+    F_INT64, F_MEMORY, F_POINTER, F_FRAME,
+    T_I64, T_U64, T_PTR, T_SIZE, T_OFFSET,
+    S_MOV64, S_MOVI64, S_ADD64, S_SUB64, S_MUL64, S_DIV64,
+    S_AND64, S_OR64, S_XOR64, S_SHL64, S_SHR64, S_FROM_R32, S_TO_R32,
+    S_EQ64, S_NE64, S_LT64, S_GT64, S_LE64, S_GE64,
+    S_LOAD8, S_LOAD16, S_LOAD32, S_LOAD64,
+    S_STORE8, S_STORE16, S_STORE32, S_STORE64,
+    S_MEMSET, S_PTR_ADD,
+    S_FRAME_ENTER, S_FRAME_LEAVE, S_ADDR_LOCAL,
+)
+
+
+_SYSTEM_HEADERS = {
+    "assert.h", "stdbool.h", "stddef.h", "stdint.h", "stdlib.h", "string.h",
+    "limits.h", "inttypes.h",
+}
+
+
+def _macro_expand_line(line: str, macros: Dict[str, str]) -> str:
+    """Expand object-like macros outside string/character literals.
+
+    PicoScript deliberately implements a bounded, deterministic preprocessing
+    subset: object macros, includes and conditional compilation. Function-like
+    macros remain rejected instead of attempting an incomplete C preprocessor.
+    """
+    out = []
+    i = 0
+    quote = None
+    while i < len(line):
+        c = line[i]
+        if quote:
+            out.append(c)
+            if c == "\\" and i + 1 < len(line):
+                out.append(line[i + 1]); i += 2; continue
+            if c == quote:
+                quote = None
+            i += 1; continue
+        if c in ('"', "'"):
+            quote = c; out.append(c); i += 1; continue
+        if c.isalpha() or c == "_":
+            j = i + 1
+            while j < len(line) and (line[j].isalnum() or line[j] == "_"):
+                j += 1
+            name = line[i:j]
+            out.append(macros.get(name, name))
+            i = j; continue
+        out.append(c); i += 1
+    return "".join(out)
+
+
+def _pp_condition(expr: str, macros: Dict[str, str]) -> bool:
+    expr = re.sub(r"defined\s*\(\s*([A-Za-z_]\w*)\s*\)",
+                  lambda m: "1" if m.group(1) in macros else "0", expr)
+    expr = re.sub(r"defined\s+([A-Za-z_]\w*)",
+                  lambda m: "1" if m.group(1) in macros else "0", expr)
+    expr = _macro_expand_line(expr, macros)
+    expr = re.sub(r"\b[A-Za-z_]\w*\b", "0", expr)
+    expr = expr.replace("&&", " and ").replace("||", " or ")
+    expr = re.sub(r"!(?!=)", " not ", expr)
+    if not re.fullmatch(r"[\s0-9a-fA-FxX()+\-*/%<>=!&|.^~notandor]+", expr):
+        raise SyntaxError(f"unsupported preprocessor expression {expr!r}")
+    try:
+        return bool(eval(expr, {"__builtins__": {}}, {}))
+    except Exception as exc:
+        raise SyntaxError(f"invalid preprocessor expression {expr!r}") from exc
+
+
+def preprocess_c(source: str, *, source_path: Optional[str] = None,
+                 include_resolver=None, defines: Optional[Dict[str, object]] = None,
+                 _seen=None) -> str:
+    """Apply PicoScript's deterministic C-preprocessor subset.
+
+    Supported: ``#include``, object-like ``#define``/``#undef``, ``#if``,
+    ``#ifdef``, ``#ifndef``, ``#elif``, ``#else``, ``#endif`` and ``#pragma
+    once``. Standard freestanding headers are recognized as type declarations
+    supplied by the dialect. Quoted includes resolve relative to source_path or
+    through include_resolver(name, angled).
+    """
+    # Recursive includes share the macro table, as in C; only the public entry
+    # copies caller-owned definitions.
+    macros = ({str(k): str(v) for k, v in (defines or {}).items()}
+              if _seen is None else defines)
+    seen = set() if _seen is None else _seen
+    logical = source.replace("\\\r\n", "").replace("\\\n", "")
+    out = []
+    pack_alignment = 0
+    # frame = [parent_active, this_active, any_branch_taken]
+    cond = []
+
+    def active():
+        return all(frame[1] for frame in cond)
+
+    for raw in logical.splitlines():
+        stripped = raw.lstrip()
+        if not stripped.startswith("#"):
+            line = _macro_expand_line(raw, macros) if active() else ""
+            if pack_alignment == 1 and "{" in line and re.search(r"\bstruct\s+", line):
+                line = re.sub(r"\bstruct\s+", "struct __attribute__((packed)) ", line, count=1)
+            out.append(line)
+            continue
+        directive = stripped[1:].strip()
+        word, _, rest = directive.partition(" ")
+        word = word.strip(); rest = rest.strip()
+        if word in ("if", "ifdef", "ifndef"):
+            parent = active()
+            if word == "ifdef":
+                take = rest in macros
+            elif word == "ifndef":
+                take = rest not in macros
+            else:
+                take = _pp_condition(rest, macros) if parent else False
+            cond.append([parent, parent and take, parent and take])
+        elif word == "elif":
+            if not cond: raise SyntaxError("#elif without #if")
+            frame = cond[-1]
+            take = frame[0] and not frame[2] and _pp_condition(rest, macros)
+            frame[1] = take; frame[2] = frame[2] or take
+        elif word == "else":
+            if not cond: raise SyntaxError("#else without #if")
+            frame = cond[-1]
+            take = frame[0] and not frame[2]
+            frame[1] = take; frame[2] = True
+        elif word == "endif":
+            if not cond: raise SyntaxError("#endif without #if")
+            cond.pop()
+        elif not active():
+            continue
+        elif word == "define":
+            name, sep, value = rest.partition(" ")
+            if "(" in name:
+                raise SyntaxError("function-like macros are not supported")
+            if not re.fullmatch(r"[A-Za-z_]\w*", name):
+                raise SyntaxError(f"invalid macro name {name!r}")
+            macros[name] = value.strip() if sep else "1"
+        elif word == "undef":
+            macros.pop(rest, None)
+        elif word == "include":
+            m = re.fullmatch(r'([<"])([^>"]+)[>"]', rest)
+            if not m: raise SyntaxError(f"invalid #include {rest!r}")
+            angled = m.group(1) == "<"; name = m.group(2)
+            if angled and name in _SYSTEM_HEADERS:
+                continue
+            text = None; child_path = None
+            if include_resolver is not None:
+                resolved = include_resolver(name, angled)
+                if isinstance(resolved, tuple): child_path, text = resolved
+                else: text = resolved
+            elif not angled and source_path:
+                child_path = os.path.abspath(os.path.join(os.path.dirname(source_path), name))
+                if os.path.isfile(child_path):
+                    with open(child_path, encoding="utf-8") as handle: text = handle.read()
+            if text is None:
+                raise SyntaxError(f"cannot resolve include {name!r}")
+            identity = child_path or name
+            if identity not in seen:
+                seen.add(identity)
+                out.append(preprocess_c(text, source_path=child_path,
+                                        include_resolver=include_resolver,
+                                        defines=macros, _seen=seen))
+        elif word == "pragma" and rest in ("once",):
+            continue
+        elif word == "pragma" and rest.startswith("pack"):
+            arg = rest[4:].strip().strip("()")
+            parts = [x.strip() for x in arg.split(",") if x.strip()]
+            if "pop" in parts:
+                pack_alignment = 0
+            elif parts and parts[-1].isdigit():
+                pack_alignment = int(parts[-1])
+            elif not parts:
+                pack_alignment = 0
+        else:
+            raise SyntaxError(f"unsupported preprocessor directive #{word}")
+    if cond:
+        raise SyntaxError("unterminated preprocessor conditional")
+    return "\n".join(out)
 
 # ── tokens ──────────────────────────────────────────────────────────────────
 
-KEYWORDS = {"int", "var", "void", "if", "else", "while", "for", "return",
+KEYWORDS = {"int", "var", "void", "char", "short", "long", "signed", "unsigned",
+            "bool", "struct", "typedef", "sizeof", "static", "extern", "volatile",
+            "if", "else", "while", "for", "return",
             "break", "continue", "switch", "case", "default", "do", "goto",
             "dispatch", "const", "enum", "try", "catch", "finally", "raise", "on"}
 
@@ -61,8 +242,9 @@ C_ALIASES = {
     "sha256":  ("Crypto", "Sha256"),
 }
 
-_TWO = {"==", "!=", "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/=", "%="}
-_ONE = set("+-*/%()<>=;,{}.!?:")
+_TWO = {"==", "!=", "<=", ">=", "&&", "||", "++", "--", "<<", ">>", "->",
+        "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="}
+_ONE = set("+-*/%()<>=;,{}.!?:&|^~[]")
 
 
 @dataclass
@@ -106,6 +288,18 @@ def tokenize(src: str) -> List[Tok]:
             toks.append(Tok("str", "".join(buf), i))
             i = j + 1
             continue
+        if c == "'":
+            j = i + 1
+            if j < n and src[j] == "\\":
+                esc = src[j + 1] if j + 1 < n else ""
+                value = {"n": 10, "r": 13, "t": 9, "0": 0,
+                         "\\": 92, "'": 39, '"': 34}.get(esc, ord(esc) if esc else 0)
+                j += 2
+            else:
+                value = ord(src[j]) if j < n else 0; j += 1
+            if j >= n or src[j] != "'":
+                raise SyntaxError(f"unterminated character literal at {i}")
+            toks.append(Tok("num", str(value), i)); i = j + 1; continue
         if c.isdigit() or (c == "0" and i + 1 < n and src[i + 1] in "xX"):
             j = i
             if src[j] == "0" and j + 1 < n and src[j + 1] in "xX":
@@ -115,7 +309,10 @@ def tokenize(src: str) -> List[Tok]:
             else:
                 while j < n and src[j].isdigit():
                     j += 1
-            toks.append(Tok("num", src[i:j], i))
+            while j < n and src[j] in "uUlL":
+                j += 1
+            spelling = src[i:j].rstrip("uUlL")
+            toks.append(Tok("num", spelling, i))
             i = j
             continue
         if c.isalpha() or c == "_":
@@ -163,12 +360,56 @@ class IncDec:
 @dataclass
 class Ternary:
     cond: object; then: object; els: object
+@dataclass(frozen=True)
+class CType:
+    name: str
+    pointers: int = 0
+    const: bool = False
+    func_params: tuple = ()
+    volatile: bool = False
+    @property
+    def is_function_pointer(self):
+        return bool(self.func_params)
+@dataclass
+class StructField:
+    name: str; ctype: CType; count: int = 1; offset: int = 0
+@dataclass
+class StructDef:
+    name: str; fields: list; packed: bool = False
+@dataclass
+class TypedefDef:
+    name: str; ctype: CType
+@dataclass
+class IndexRef:
+    base: object; index: object
+@dataclass
+class MemberRef:
+    base: object; field: str; through_pointer: bool = False
+@dataclass
+class AddressOf:
+    target: object
+@dataclass
+class Deref:
+    pointer: object
+@dataclass
+class SizeofExpr:
+    target: object; is_type: bool = False
+@dataclass
+class CastExpr:
+    ctype: CType; value: object
+@dataclass
+class WideValue:
+    lo: VReg
+    hi: Optional[VReg] = None       # retained for AST compatibility; systems ISA uses one X reg
 @dataclass
 class Call:
     ns: Optional[str]; method: str; args: list
 @dataclass
+class Invoke:
+    callee: object; args: list
+@dataclass
 class Decl:
-    name: str; init: object
+    name: str; init: object; ctype: Optional[CType] = None; count: int = 1
 @dataclass
 class ConstDecl:
     name: str; value: object
@@ -178,6 +419,9 @@ class EnumDecl:
 @dataclass
 class Assign:
     name: str; value: object
+@dataclass
+class Store:
+    target: object; value: object
 @dataclass
 class FieldAssign:
     obj: str; field: str; value: object
@@ -230,22 +474,32 @@ class OnBlock:
 @dataclass
 class Func:
     name: str; body: list; params: list = None   # params = parameter names (None = legacy)
+    param_types: list = None
+    return_type: Optional[CType] = None
 
 
 # ── parser (recursive descent + Pratt expressions) ──────────────────────────
 
 _PREC = {
-    "||": 1, "&&": 2,
-    "==": 3, "!=": 3, "<": 4, ">": 4, "<=": 4, ">=": 4,
-    "+": 5, "-": 5, "*": 6, "/": 6, "%": 6,
+    "||": 1, "&&": 2, "|": 3, "^": 4, "&": 5,
+    "==": 6, "!=": 6, "<": 7, ">": 7, "<=": 7, ">=": 7,
+    "<<": 8, ">>": 8, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10,
 }
-_COMPOUND = {"+=": "+", "-=": "-", "*=": "*", "/=": "/", "%=": "%"}
+_COMPOUND = {"+=": "+", "-=": "-", "*=": "*", "/=": "/", "%=": "%",
+             "&=": "&", "|=": "|", "^=": "^"}
 
 
 class Parser:
     def __init__(self, toks: List[Tok]):
         self.toks = toks
         self.i = 0
+        self.type_names = {
+            "int", "var", "void", "char", "short", "long", "signed", "unsigned",
+            "bool", "uint8_t", "int8_t", "uint16_t", "int16_t", "uint32_t",
+            "int32_t", "uint64_t", "int64_t", "size_t", "uintptr_t",
+        }
+        self.structs: Dict[str, StructDef] = {}
+        self.typedefs: Dict[str, CType] = {}
 
     def peek(self) -> Tok:
         if self.i >= len(self.toks):
@@ -276,35 +530,165 @@ class Parser:
 
     def parse_toplevel(self) -> object:
         t = self.peek()
-        # void name(params) { } subroutine (no return value)
-        if t.kind == "kw" and t.value == "void":
-            return self._parse_func_def()
-        # int name(params) { } function (with return value)
-        if t.kind == "kw" and t.value in ("int", "var"):
-            # Disambiguate: int name( => function def; int name = / int name ; => var decl
-            if (self.i + 2 < len(self.toks)
-                    and self.toks[self.i + 1].kind == "id"
-                    and self.toks[self.i + 2].value == "("):
+        if t.value == "typedef":
+            return self.parse_typedef()
+        if t.value == "struct" and self._is_struct_definition():
+            return self.parse_struct_definition()
+        if self.is_type_start(t):
+            mark = self.i
+            try:
+                ctype = self.parse_type()
+                while self.accept("*"):
+                    ctype = CType(ctype.name, ctype.pointers + 1, ctype.const,
+                                  ctype.func_params, ctype.volatile)
+                is_func = self.peek().kind == "id" and self.toks[self.i + 1].value == "("
+            except SyntaxError:
+                is_func = False
+            self.i = mark
+            if is_func:
                 return self._parse_func_def()
         return self.parse_stmt()
 
     def _parse_func_def(self) -> Func:
-        """Parse: (void|int|var) name ( params ) { body }"""
-        self.next()  # consume return type keyword
+        """Parse a typed C function definition."""
+        return_type = self.parse_type()
+        while self.accept("*"):
+            return_type = CType(return_type.name, return_type.pointers + 1,
+                                return_type.const, return_type.func_params, return_type.volatile)
         name = self.next().value
         self.expect("(")
-        params = []
+        params, param_types = [], []
         if not self.accept(")"):
+            if self.peek().value == "void" and self.toks[self.i + 1].value == ")":
+                self.next(); self.expect(")")
+                body = self.parse_block()
+                return Func(name, body, None, None, return_type)
             while True:
-                pt = self.peek()
-                if pt.kind == "kw" and pt.value in ("int", "var"):
-                    self.next()  # skip type prefix
-                params.append(self.next().value)
+                pt = self.parse_type()
+                pname, pt, _ = self.parse_declarator(pt)
+                params.append(pname); param_types.append(pt)
                 if not self.accept(","):
                     break
             self.expect(")")
         body = self.parse_block()
-        return Func(name, body, params if params else None)
+        return Func(name, body, params if params else None,
+                    param_types if param_types else None, return_type)
+
+    def is_type_start(self, tok: Optional[Tok] = None) -> bool:
+        tok = tok or self.peek()
+        return (tok.value in self.type_names or tok.value in self.typedefs
+                or tok.value in ("struct", "const", "volatile", "static", "extern"))
+
+    def parse_type(self) -> CType:
+        const = False; volatile = False
+        while self.peek().value in ("const", "static", "extern", "volatile"):
+            q = self.next().value
+            const = const or q == "const"; volatile = volatile or q == "volatile"
+        if self.accept("struct"):
+            name = self.next().value
+            base = CType("struct " + name, const=const, volatile=volatile)
+        else:
+            parts = []
+            while self.peek().value in ("signed", "unsigned", "short", "long"):
+                parts.append(self.next().value)
+            if self.peek().value in self.type_names or self.peek().value in self.typedefs:
+                parts.append(self.next().value)
+            if not parts:
+                raise SyntaxError(f"expected type at {self.peek().pos}")
+            spelling = " ".join(parts)
+            aliases = {
+                "unsigned char": "uint8_t", "signed char": "int8_t",
+                "unsigned short": "uint16_t", "short": "int16_t",
+                "signed short": "int16_t", "unsigned": "uint32_t",
+                "unsigned int": "uint32_t", "signed": "int",
+                "signed int": "int", "unsigned long": "uint32_t",
+                "long": "int32_t", "long int": "int32_t",
+                "unsigned long long": "uint64_t", "long long": "int64_t",
+            }
+            spelling = aliases.get(spelling, spelling)
+            if spelling in self.typedefs:
+                old = self.typedefs[spelling]
+                base = CType(old.name, old.pointers, const or old.const, old.func_params,
+                             volatile or old.volatile)
+            else:
+                base = CType(spelling, const=const, volatile=volatile)
+        return base
+
+    def parse_declarator(self, base: CType):
+        pointers = base.pointers
+        while self.accept("*"):
+            pointers += 1
+            self.accept("const")
+        if self.accept("(") and self.accept("*"):
+            name = self.next().value
+            self.expect(")"); self.expect("(")
+            params = []
+            if not self.accept(")"):
+                while True:
+                    params.append(self.parse_type())
+                    if self.peek().kind == "id": self.next()
+                    if not self.accept(","): break
+                self.expect(")")
+            return name, CType(base.name, pointers + 1, base.const, tuple(params), base.volatile), 1
+        name = self.next().value
+        count = 1
+        if self.accept("["):
+            count = self._eval_array_bound()
+            self.expect("]")
+        return name, CType(base.name, pointers, base.const, base.func_params, base.volatile), count
+
+    def _eval_array_bound(self):
+        if self.peek().kind == "num":
+            return int(self.next().value, 0)
+        name = self.next().value
+        raise SyntaxError(f"array bound {name!r} must be an integer literal")
+
+    def _is_struct_definition(self):
+        for tok in self.toks[self.i + 1:self.i + 12]:
+            if tok.value == "{": return True
+            if tok.value == ";": return False
+        return False
+
+    def _packed_attribute(self):
+        if self.peek().value != "__attribute__": return False
+        self.next(); self.expect("("); self.expect("(")
+        packed = self.next().value == "packed"
+        self.expect(")"); self.expect(")")
+        return packed
+
+    def parse_struct_definition(self, typedef_name=None):
+        self.expect("struct")
+        packed = self._packed_attribute()
+        tag = self.next().value if self.peek().kind == "id" else (typedef_name or "__anon")
+        packed = self._packed_attribute() or packed
+        self.expect("{")
+        fields = []
+        while not self.accept("}"):
+            ft = self.parse_type()
+            fn, ft, count = self.parse_declarator(ft)
+            self.expect(";")
+            fields.append(StructField(fn, ft, count))
+        packed = self._packed_attribute() or packed
+        alias = self.next().value if self.peek().kind == "id" else None
+        self.expect(";")
+        definition = StructDef(tag, fields, packed)
+        self.structs[tag] = definition
+        self.type_names.add("struct " + tag)
+        if alias:
+            self.typedefs[alias] = CType("struct " + tag)
+            self.type_names.add(alias)
+        return definition
+
+    def parse_typedef(self):
+        self.expect("typedef")
+        if self.peek().value == "struct" and self._is_struct_definition():
+            return self.parse_struct_definition()
+        base = self.parse_type()
+        name, ctype, _ = self.parse_declarator(base)
+        self.expect(";")
+        self.typedefs[name] = ctype
+        self.type_names.add(name)
+        return TypedefDef(name, ctype)
 
     def parse_block(self) -> List[object]:
         self.expect("{")
@@ -330,10 +714,17 @@ class Parser:
     def _parse_stmt(self) -> object:
         t = self.peek()
         if t.kind == "kw":
-            if t.value in ("int", "var"):
+            if self.is_type_start(t) and t.value not in ("const", "enum"):
                 return self.parse_decl()
             if t.value == "const":
-                return self.parse_const_decl()
+                # Preserve PicoScript's legacy compile-time `const int/var`.
+                # Qualified systems types are real typed, read-only objects.
+                if (self.i + 1 < len(self.toks)
+                        and self.toks[self.i + 1].value in ("int", "var")
+                        and self.i + 2 < len(self.toks)
+                        and self.toks[self.i + 2].kind == "id"):
+                    return self.parse_const_decl()
+                return self.parse_decl()
             if t.value == "enum":
                 return self.parse_enum_decl()
             if t.value == "if":
@@ -381,11 +772,13 @@ class Parser:
             name = self.next().value
             self.next()  # ':'
             return Label(name)
-        # typed active-record declaration: Order ord = Storage.GetCard(...);
+        # typed declaration (including the legacy active-record spelling).
         # Type name is documentation/schema identity for now; the variable stores
         # the current card id/handle returned by Storage.GetCard/QueryResult.
         if t.kind == "id" and self.toks[self.i + 1].kind == "id":
-            self.next()  # type name
+            if t.value in self.type_names or t.value in self.typedefs:
+                return self.parse_decl()
+            self.next()  # legacy schema/record type name
             return self.parse_decl_after_type()
         # active-record field assignment: ord.qty = 42; / ord.qty-- / ord.qty += 2
         if (t.kind == "id" and self.toks[self.i + 1].value == "."
@@ -417,6 +810,16 @@ class Parser:
             self.expect(";")
             return Assign(name, Bin(op, Var(name), v))
         expr = self.parse_expr()
+        if self.peek().value == "=" or self.peek().value in _COMPOUND:
+            op = self.next().value
+            rhs = self.parse_expr()
+            value = rhs if op == "=" else Bin(_COMPOUND[op], expr, rhs)
+            self.expect(";")
+            if isinstance(expr, Var):
+                return Assign(expr.name, value)
+            if isinstance(expr, FieldRef):
+                return FieldAssign(expr.obj, expr.field, value)
+            return Store(expr, value)
         self.expect(";")
         return ExprStmt(expr)
 
@@ -425,8 +828,13 @@ class Parser:
         return If(Num(1), body, None)  # bare block == always-true if (keeps scope flat)
 
     def parse_decl(self) -> Decl:
-        self.next()  # int / var
-        return self.parse_decl_after_type()
+        ctype = self.parse_type()
+        name, ctype, count = self.parse_declarator(ctype)
+        init = None
+        if self.accept("="):
+            init = self.parse_expr()
+        self.expect(";")
+        return Decl(name, init, ctype, count)
 
     def parse_const_decl(self) -> ConstDecl:
         self.next()  # const
@@ -594,13 +1002,13 @@ class Parser:
         return OnBlock(ns, method, body)
 
     def parse_decl_noeat_semicolon(self) -> Decl:
-        self.next()
-        name = self.next().value
+        ctype = self.parse_type()
+        name, ctype, count = self.parse_declarator(ctype)
         init = None
         if self.accept("="):
             init = self.parse_expr()
         self.expect(";")
-        return Decl(name, init)
+        return Decl(name, init, ctype, count)
 
     # -- expressions (Pratt) ---------------------------------------------
     def parse_expr(self, min_prec: int = 0) -> object:
@@ -629,19 +1037,49 @@ class Parser:
 
     def parse_unary(self) -> object:
         t = self.peek()
+        if t.value == "(" and self.i + 1 < len(self.toks) and self.is_type_start(self.toks[self.i + 1]):
+            self.next(); ct = self.parse_type()
+            while self.accept("*"):
+                ct = CType(ct.name, ct.pointers + 1, ct.const, ct.func_params, ct.volatile)
+            self.expect(")")
+            return CastExpr(ct, self.parse_unary())
         if t.kind == "op" and t.value in ("++", "--"):
             op = self.next().value
             return IncDec(op, self.parse_unary(), True)
-        if t.value in ("-", "!") and t.kind == "op":
+        if t.value in ("-", "!", "~") and t.kind == "op":
             op = self.next().value
             return Unary(op, self.parse_unary())
+        if t.value == "&" and t.kind == "op":
+            self.next(); return AddressOf(self.parse_unary())
+        if t.value == "*" and t.kind == "op":
+            self.next(); return Deref(self.parse_unary())
+        if t.value == "sizeof":
+            self.next()
+            if self.accept("("):
+                if self.is_type_start():
+                    ct = self.parse_type()
+                    while self.accept("*"):
+                        ct = CType(ct.name, ct.pointers + 1, ct.const, ct.func_params, ct.volatile)
+                    self.expect(")")
+                    return SizeofExpr(ct, True)
+                e = self.parse_expr(); self.expect(")")
+                return SizeofExpr(e, False)
+            return SizeofExpr(self.parse_unary(), False)
         return self.parse_atom()
 
     def parse_atom(self) -> object:
         node = self._parse_primary()
-        while self.peek().kind == "op" and self.peek().value in ("++", "--"):
-            op = self.next().value
-            node = IncDec(op, node, False)
+        while True:
+            if self.peek().value == "(":
+                node = Invoke(node, self.parse_args()); continue
+            if self.accept("["):
+                index = self.parse_expr(); self.expect("]")
+                node = IndexRef(node, index); continue
+            if self.accept("->"):
+                node = MemberRef(node, self.next().value, True); continue
+            if self.peek().kind == "op" and self.peek().value in ("++", "--"):
+                node = IncDec(self.next().value, node, False); continue
+            break
         return node
 
     def _parse_primary(self) -> object:
@@ -659,7 +1097,8 @@ class Parser:
                 method = self.next().value
                 if self.peek().value == "(":
                     args = self.parse_args()
-                    return Call(t.value, method, args)
+                    return (Call(t.value, method, args) if t.value[:1].isupper()
+                            else Invoke(FieldRef(t.value, method), args))
                 return FieldRef(t.value, method)
             if self.peek().value == "(":
                 args = self.parse_args()
@@ -684,9 +1123,15 @@ _CMP_OPS = {"<": "LT", ">": "GT", "<=": "LE", ">=": "GE", "==": "EQ", "!=": "NE"
 
 
 class Lowerer:
-    def __init__(self):
+    def __init__(self, structs=None, typedefs=None):
         self.b = ILBuilder()
         self.vars: Dict[str, VReg] = {}
+        self.var_types: Dict[str, CType] = {}
+        self.var_counts: Dict[str, int] = {}
+        self.memory_vars = set()
+        self.const_vars = set()
+        self.structs: Dict[str, StructDef] = dict(structs or {})
+        self.typedefs: Dict[str, CType] = dict(typedefs or {})
         self.funcs: List[Func] = []
         self.user_constants: Dict[str, int] = {}
         self.loop_stack: List[Tuple[str, str]] = []   # (continue_label, break_label)
@@ -696,17 +1141,235 @@ class Lowerer:
         # 2-alternating-slot scheme that clobbered a 3rd live literal.
         self._strpool: Dict[bytes, int] = {}
         self._strpool_top = 0x8000
+        self._heap_top = VReg("__c_heap_top__", pinned=True)
+        self._in_system_frame = False
+        self._frame_offsets = {}
+        self._current_func = None
+        self._global_names = set()
+
+    def type_size(self, ctype: Optional[CType]) -> int:
+        if ctype is None: return 4
+        if ctype.pointers or ctype.is_function_pointer: return 4
+        name = ctype.name
+        if name in self.typedefs:
+            return self.type_size(self.typedefs[name])
+        if name.startswith("struct "):
+            return self.layout_struct(name[7:])
+        return {"char": 1, "uint8_t": 1, "int8_t": 1, "bool": 1,
+                "short": 2, "uint16_t": 2, "int16_t": 2,
+                "uint64_t": 8, "int64_t": 8}.get(name, 4)
+
+    def layout_struct(self, name: str) -> int:
+        sd = self.structs.get(name)
+        if sd is None: raise SyntaxError(f"unknown struct {name!r}")
+        offset, max_align = 0, 1
+        for f in sd.fields:
+            size = self.type_size(f.ctype)
+            align = 1 if sd.packed else min(size, 4)
+            offset = (offset + align - 1) // align * align
+            f.offset = offset
+            offset += size * f.count; max_align = max(max_align, align)
+        return offset if sd.packed else (offset + max_align - 1) // max_align * max_align
+
+    def _ctype_key(self, name):
+        return name.lower()
+
+    def _symkey(self, name):
+        raw = self._ctype_key(name)
+        if (self._current_func and raw not in self._global_names
+                and not raw.startswith("__arg") and raw not in ("__ret__", "__c_heap_top__")):
+            return f"{self._current_func}::{raw}"
+        return raw
+
+    def _alloc(self, size) -> VReg:
+        out = self.b.vreg()
+        self.b.system(F_INT64, S_MOV64, out, self._heap_top, typecode=T_PTR)
+        if isinstance(size, int):
+            self.b.system(F_INT64, S_ADD64, self._heap_top, self._heap_top,
+                          payload=size, typecode=T_SIZE)
+        else:
+            n = size if isinstance(size, (VReg, WideValue)) else self.eval(size)
+            nx = n.lo if isinstance(n, WideValue) else self._x_from_r(n, T_SIZE)
+            self.b.system(F_INT64, S_ADD64, self._heap_top, self._heap_top,
+                          payload=nx, typecode=T_SIZE)
+        return out
+
+    def _addr_add(self, base: VReg, offset) -> VReg:
+        if isinstance(offset, int) and offset == 0: return base
+        out = self.b.vreg()
+        if isinstance(offset, int):
+            self.b.system(F_POINTER, S_PTR_ADD, out, base, payload=offset, typecode=T_PTR)
+        else:
+            ox = offset.lo if isinstance(offset, WideValue) else self._x_from_r(offset, T_SIZE)
+            self.b.system(F_POINTER, S_PTR_ADD, out, base, payload=ox, typecode=T_PTR)
+        return out
+
+    def _x_from_r(self, reg: VReg, typecode=T_U64):
+        out = self.b.vreg(); self.b.system(F_INT64, S_FROM_R32, out, reg, typecode=typecode)
+        return out
+
+    def _r_from_x(self, reg: VReg):
+        out = self.b.vreg(); self.b.system(F_INT64, S_TO_R32, out, reg, typecode=T_U64)
+        return out
+
+    def _sys_type(self, ctype):
+        if ctype and ctype.pointers: return T_PTR
+        if ctype and ctype.name in ("size_t",): return T_SIZE
+        if ctype and ctype.name in ("uint64_t",): return T_U64
+        if ctype and ctype.name in ("int64_t",): return T_I64
+        return T_U64
+
+    def load_typed(self, addr: VReg, ctype: CType):
+        size = self.type_size(ctype)
+        op = {1: S_LOAD8, 2: S_LOAD16, 4: S_LOAD32, 8: S_LOAD64}[size]
+        x = self.b.vreg(); self.b.system(F_MEMORY, op, x, addr, payload=0,
+                                         typecode=self._sys_type(ctype))
+        if size == 8: return WideValue(x)
+        if ctype.pointers and not ctype.is_function_pointer: return x
+        return self._r_from_x(x)
+
+    def store_typed(self, addr: VReg, ctype: CType, value):
+        size = self.type_size(ctype)
+        if ctype.is_function_pointer:
+            if isinstance(value, Var) and value.name.lower() in getattr(self, "_func_names", set()):
+                rv = self._const(self._function_id(value.name))
+            else:
+                rv = self.eval(value) if not isinstance(value, VReg) else value
+            x = self._x_from_r(rv, T_PTR)
+            op = {1: S_STORE8, 2: S_STORE16, 4: S_STORE32, 8: S_STORE64}[size]
+            self.b.system(F_MEMORY, op, x, addr, payload=0, typecode=T_PTR)
+            return
+        value = self.eval(value) if not isinstance(value, (VReg, WideValue)) else value
+        if isinstance(value, WideValue): x = value.lo
+        elif ctype.pointers: x = value
+        else: x = self._x_from_r(value, self._sys_type(ctype))
+        op = {1: S_STORE8, 2: S_STORE16, 4: S_STORE32, 8: S_STORE64}[size]
+        self.b.system(F_MEMORY, op, x, addr, payload=0, typecode=self._sys_type(ctype))
+
+    def as_wide(self, value):
+        if isinstance(value, WideValue): return value
+        if isinstance(value, Num):
+            lo = self.b.vreg()
+            self.b.system(F_INT64, S_MOVI64, lo, payload=value.value & 0xffffffff,
+                          typecode=T_U64)
+            high = (value.value >> 32) & 0xffffffff
+            if high:
+                hx = self.b.vreg(); self.b.system(F_INT64, S_MOVI64, hx, payload=high, typecode=T_U64)
+                self.b.system(F_INT64, S_SHL64, hx, hx, payload=32, typecode=T_U64)
+                merged = self.b.vreg(); self.b.system(F_INT64, S_OR64, merged, lo, payload=hx, typecode=T_U64)
+                lo = merged
+            return WideValue(lo)
+        v = self.eval(value) if not isinstance(value, VReg) else value
+        if isinstance(v, WideValue): return v
+        return WideValue(self._x_from_r(v))
+
+    def _zero_memory(self, addr: VReg, size):
+        zero = self.b.vreg(); self.b.system(F_INT64, S_MOVI64, zero, payload=0, typecode=T_U64)
+        if isinstance(size, int): payload = size
+        else:
+            n = size if isinstance(size, (VReg, WideValue)) else self.eval(size)
+            payload = n.lo if isinstance(n, WideValue) else self._x_from_r(n, T_SIZE)
+        self.b.system(F_MEMORY, S_MEMSET, addr, zero, payload=payload, typecode=T_SIZE)
+
+    def _function_id(self, name):
+        names = [f.name.lower() for f in self.funcs]
+        try: return names.index(name.lower()) + 1
+        except ValueError: raise SyntaxError(f"unknown callback function {name!r}")
+
+    def expr_type(self, e) -> Optional[CType]:
+        if isinstance(e, Var): return self.var_types.get(self._symkey(e.name))
+        if isinstance(e, CastExpr): return e.ctype
+        if isinstance(e, Bin):
+            left, right = self.expr_type(e.lhs), self.expr_type(e.rhs)
+            if left and (left.pointers or self.type_size(left) == 8): return left
+            if right and self.type_size(right) == 8: return right
+            return left or right
+        if isinstance(e, AddressOf):
+            t = self.expr_type(e.target) or CType("int")
+            return CType(t.name, t.pointers + 1, t.const, t.func_params, t.volatile)
+        if isinstance(e, Deref):
+            t = self.expr_type(e.pointer)
+            return CType(t.name, max(0, t.pointers - 1), t.const, t.func_params, t.volatile) if t else None
+        if isinstance(e, IndexRef):
+            t = self.expr_type(e.base)
+            return CType(t.name, max(0, t.pointers - 1), t.const, t.func_params, t.volatile) if t else None
+        if isinstance(e, (MemberRef, FieldRef)):
+            base = e.base if isinstance(e, MemberRef) else Var(e.obj)
+            bt = self.expr_type(base)
+            if bt:
+                name = bt.name[7:] if bt.name.startswith("struct ") else bt.name
+                sd = self.structs.get(name)
+                if sd:
+                    field = e.field
+                    for f in sd.fields:
+                        if f.name == field:
+                            if bt.const:
+                                return CType(f.ctype.name, f.ctype.pointers, True,
+                                             f.ctype.func_params, f.ctype.volatile)
+                            return f.ctype
+        return None
+
+    def lvalue(self, e):
+        if isinstance(e, Var):
+            key = self._symkey(e.name); ct = self.var_types.get(key, CType("int"))
+            if key not in self.memory_vars:
+                # Address-taken scalar: promote once into memory.
+                old = self.var(e.name); ptr = self._alloc(self.type_size(ct))
+                self.store_typed(ptr, ct, old)
+                self.b.system(F_INT64, S_MOV64, old, ptr, typecode=T_PTR)
+                self.memory_vars.add(key)
+            return self.var(e.name), ct
+        if isinstance(e, Deref):
+            return self.eval(e.pointer), self.expr_type(e) or CType("int")
+        if isinstance(e, IndexRef):
+            base = self.eval(e.base); ct = self.expr_type(e) or CType("int")
+            idx = self.eval(e.index); scaled = idx
+            size = self.type_size(ct)
+            if size != 1:
+                scaled = self.b.vreg(); self.b.arith("mul", scaled, idx, Imm(size))
+            return self._addr_add(base, scaled), ct
+        if isinstance(e, FieldRef):
+            return self.lvalue(MemberRef(Var(e.obj), e.field, False))
+        if isinstance(e, MemberRef):
+            bt = self.expr_type(e.base)
+            if bt is None: raise SyntaxError(f"cannot resolve member {e.field!r}")
+            name = bt.name[7:] if bt.name.startswith("struct ") else bt.name
+            sd = self.structs.get(name)
+            if sd is None: raise SyntaxError(f"{bt.name!r} is not a struct")
+            field = next((f for f in sd.fields if f.name == e.field), None)
+            if field is None: raise SyntaxError(f"struct {name!r} has no field {e.field!r}")
+            if e.through_pointer:
+                base = self.eval(e.base)
+            else:
+                base, _ = self.lvalue(e.base)
+            return self._addr_add(base, field.offset), field.ctype
+        raise SyntaxError("expression is not an addressable lvalue")
 
     def lower_program(self, prog: List[object]) -> List:
-        body = [s for s in prog if not isinstance(s, Func)]
+        body = [s for s in prog if not isinstance(s, (Func, StructDef, TypedefDef))]
+        self._global_names = {s.name.lower() for s in body if isinstance(s, Decl)}
         self.funcs = [s for s in prog if isinstance(s, Func)]
         self._func_names = {f.name.lower() for f in self.funcs}
         self._func_params = {f.name.lower(): (f.params or []) for f in self.funcs}
+        self._func_param_types = {f.name.lower(): (f.param_types or []) for f in self.funcs}
+        self.uses_heap = any(self._node_needs_heap(s) for s in prog)
+        recursive = any(self._calls_name(f.body, f.name.lower()) for f in self.funcs)
+        self.systems_mode = self.uses_heap or recursive
+        if self.uses_heap:
+            self.b.system(F_INT64, S_MOVI64, self._heap_top, payload=0x10000, typecode=T_PTR)
         for s in body:
             self.stmt(s)
         self.b.ret()
         for f in self.funcs:
             self.b.label(f"fn_{f.name.lower()}")
+            old_frame = self._in_system_frame
+            old_offsets = self._frame_offsets
+            old_func = self._current_func
+            self._current_func = f.name.lower()
+            self._in_system_frame = self.systems_mode
+            frame_size, self._frame_offsets = self._frame_layout(f)
+            if self._in_system_frame:
+                self.b.system(F_FRAME, S_FRAME_ENTER, payload=frame_size, typecode=0)
             # bind parameters: read from arg-passing regs into named locals
             for i, p in enumerate(f.params or []):
                 pv = self.var(p)
@@ -714,15 +1377,67 @@ class Lowerer:
                 self.b.mov(pv, av)
             for s in f.body:
                 self.stmt(s)
+            if self._in_system_frame:
+                self._emit_frame_leave()
             self.b.ret()
+            self._in_system_frame = old_frame
+            self._frame_offsets = old_offsets
+            self._current_func = old_func
         return self.b.insts
+
+    def _walk(self, node):
+        if is_dataclass(node):
+            yield node
+            for f in fields(node):
+                yield from self._walk(getattr(node, f.name))
+        elif isinstance(node, (list, tuple)):
+            for item in node: yield from self._walk(item)
+
+    def _calls_name(self, node, name):
+        return any(isinstance(x, Call) and x.ns is None and x.method.lower() == name
+                   for x in self._walk(node))
+
+    def _node_needs_heap(self, node):
+        for x in self._walk(node):
+            if isinstance(x, (StructDef, AddressOf, Deref, IndexRef, MemberRef, SizeofExpr)):
+                return True
+            if isinstance(x, Decl) and x.ctype and (x.count != 1 or x.ctype.pointers
+                    or x.ctype.name.startswith("struct ") or self.type_size(x.ctype) == 8
+                    or x.ctype.volatile):
+                return True
+            if isinstance(x, Call) and x.ns is None and x.method.lower() in ("malloc", "calloc", "free"):
+                return True
+        return False
+
+    def _frame_layout(self, func):
+        decls = {x.name.lower(): x for x in self._walk(func.body) if isinstance(x, Decl)}
+        addressed = {x.target.name.lower() for x in self._walk(func.body)
+                     if isinstance(x, AddressOf) and isinstance(x.target, Var)}
+        offset, layout = 0, {}
+        for name, d in decls.items():
+            if not d.ctype: continue
+            memory = (d.count != 1 or d.ctype.name.startswith("struct ")
+                      or self.type_size(d.ctype) == 8 or d.ctype.volatile or name in addressed)
+            if not memory: continue
+            size = self.type_size(d.ctype) * d.count
+            align = min(self.type_size(d.ctype), 8)
+            offset = (offset + align - 1) // align * align
+            layout[name] = offset; offset += size
+        return (offset + 7) // 8 * 8, layout
+
+    def _emit_frame_leave(self):
+        ret = self.var("__ret__")
+        payload = self._heap_top if self.uses_heap else 0
+        self.b.system(F_FRAME, S_FRAME_LEAVE, ret, payload=payload, typecode=1)
 
     # -- variables -------------------------------------------------------
     def var(self, name: str) -> VReg:
-        key = name.lower()                          # variables: case-insensitive
+        key = self._symkey(name)                    # variables: case-insensitive, function-scoped
         v = self.vars.get(key)
         if v is None:
-            v = VReg(name, pinned=True)
+            # Function-scoped C locals become real native locals.  On bytecode
+            # targets FRAME_ENTER/LEAVE preserves their allocated R/X slots.
+            v = VReg(name, pinned="::" not in key)
             self.vars[key] = v
         return v
 
@@ -733,18 +1448,60 @@ class Lowerer:
             self.b.cur_pos = p           # INV-25: attribute emitted IL to this statement
         if isinstance(s, Decl):
             v = self.var(s.name)
-            if s.init is not None:
-                self.assign_to(v, s.init)
+            sym = self._symkey(s.name); raw = self._ctype_key(s.name)
+            if s.ctype is not None:
+                self.var_types[sym] = s.ctype
+                self.var_counts[sym] = s.count
+                if s.ctype.const: self.const_vars.add(sym)
+            memory = (s.count != 1 or (s.ctype and (s.ctype.name.startswith("struct ")
+                      or self.type_size(s.ctype) == 8 or s.ctype.volatile)) or raw in self._frame_offsets)
+            if memory:
+                self.memory_vars.add(sym)
+                if raw in self._frame_offsets:
+                    self.b.system(F_FRAME, S_ADDR_LOCAL, v,
+                                  payload=self._frame_offsets[raw], typecode=T_PTR)
+                else:
+                    allocated = self._alloc(self.type_size(s.ctype) * s.count)
+                    self.b.system(F_INT64, S_MOV64, v, allocated, typecode=T_PTR)
+                if s.init is not None:
+                    self.store_typed(v, s.ctype, s.init)
+                else:
+                    self._zero_memory(v, self.type_size(s.ctype) * s.count)
+            elif s.init is not None:
+                if s.ctype and s.ctype.is_function_pointer and isinstance(s.init, Var):
+                    self.b.const(v, self._function_id(s.init.name))
+                elif s.ctype and s.ctype.pointers:
+                    value = self.eval(s.init)
+                    value = value.lo if isinstance(value, WideValue) else value
+                    self.b.system(F_INT64, S_MOV64, v, value, typecode=T_PTR)
+                else:
+                    self.assign_to(v, s.init)
             else:
                 self.b.const(v, 0)
         elif isinstance(s, ConstDecl):
+            self.const_vars.add(self._symkey(s.name))
             self._define_constant(s.name, s.value)
         elif isinstance(s, EnumDecl):
             self._define_enum(s.enum_name, s.members)
         elif isinstance(s, Assign):
-            self.assign_to(self.var(s.name), s.value)
+            sym = self._symkey(s.name)
+            if sym in self.const_vars:
+                raise SyntaxError(f"assignment to const variable {s.name!r}")
+            if sym in self.memory_vars:
+                self.store_typed(self.var(s.name), self.var_types[sym], s.value)
+            else:
+                self.assign_to(self.var(s.name), s.value)
+        elif isinstance(s, Store):
+            addr, ctype = self.lvalue(s.target)
+            if ctype.const: raise SyntaxError("assignment through const lvalue")
+            self.store_typed(addr, ctype, s.value)
         elif isinstance(s, FieldAssign):
-            self.assign_field(s.obj, s.field, s.value)
+            if self.expr_type(Var(s.obj)) and self.expr_type(FieldRef(s.obj, s.field)):
+                addr, ctype = self.lvalue(FieldRef(s.obj, s.field))
+                if ctype.const: raise SyntaxError("assignment through const lvalue")
+                self.store_typed(addr, ctype, s.value)
+            else:
+                self.assign_field(s.obj, s.field, s.value)
         elif isinstance(s, If):
             self.lower_if(s)
         elif isinstance(s, While):
@@ -766,6 +1523,8 @@ class Lowerer:
                 rv = self.eval(s.value)
                 # convention: retval lives in the routine's value; mirror to VReg ret
                 self.b.mov(self.var("__ret__"), rv)
+            if self._in_system_frame:
+                self._emit_frame_leave()
             self.b.ret()
         elif isinstance(s, ExprStmt):
             if s.expr is not None:
@@ -869,6 +1628,8 @@ class Lowerer:
         if isinstance(expr, Unary):
             if expr.op == "-":
                 return -self._eval_const_expr(expr.operand)
+            if expr.op == "~":
+                return ~(self._eval_const_expr(expr.operand))
             raise SyntaxError(f"unsupported unary op {expr.op!r} in constant expression")
         if isinstance(expr, Bin):
             a = self._eval_const_expr(expr.lhs)
@@ -887,6 +1648,16 @@ class Lowerer:
                 if b == 0:
                     raise SyntaxError("modulo by zero in constant expression")
                 return a - int(a / b) * b
+            if expr.op == "&":
+                return a & b
+            if expr.op == "|":
+                return a | b
+            if expr.op == "^":
+                return a ^ b
+            if expr.op == "<<":
+                return a << (b & 31)
+            if expr.op == ">>":
+                return a >> (b & 31)
         raise SyntaxError(f"unsupported constant expression {type(expr).__name__}")
 
     def _define_constant(self, name: str, value_expr):
@@ -1052,6 +1823,10 @@ class Lowerer:
     def branch_false(self, cond, false_label: str):
         """Emit a branch to false_label when `cond` is false (fall through if true)."""
         if isinstance(cond, Bin) and cond.op in _CMP_OPS:
+            lt, rt = self.expr_type(cond.lhs), self.expr_type(cond.rhs)
+            if ((lt and self.type_size(lt) == 8) or (rt and self.type_size(rt) == 8)
+                    or self.eval_literal_wide(cond.lhs) or self.eval_literal_wide(cond.rhs)):
+                v = self.eval(cond); self.b.cmpbr("Z", v, v, false_label); return
             a = self.eval(cond.lhs)
             b = self.eval(cond.rhs)
             self.b.cmpbr(COND_NEGATE[_CMP_OPS[cond.op]], a, b, false_label)
@@ -1062,19 +1837,52 @@ class Lowerer:
     # -- expressions -----------------------------------------------------
     def eval(self, e, want_value: bool = True) -> Optional[VReg]:
         if isinstance(e, Num):
+            if e.value > 0xffffffff or e.value < -0x80000000:
+                return self.as_wide(e)
             v = self.b.vreg(); self.b.const(v, e.value); return v
         if isinstance(e, Var):
             cv = self._resolve_constant(e.name)
             if cv is not None:
                 v = self.b.vreg(); self.b.const(v, cv); return v
+            key = self._symkey(e.name)
+            if key in self.memory_vars:
+                ct = self.var_types[key]
+                if self.var_counts.get(key, 1) != 1 or ct.name.startswith("struct "):
+                    return self.var(e.name)       # array/struct decay to its address
+                return self.load_typed(self.var(e.name), ct)
             return self.var(e.name)
         if isinstance(e, Bin):
+            lt, rt = self.expr_type(e.lhs), self.expr_type(e.rhs)
+            if e.op in ("+", "-") and lt and lt.pointers and not (rt and rt.pointers):
+                a = self.eval(e.lhs); b = self.eval(e.rhs)
+                if isinstance(a, WideValue): a = a.lo
+                scale = self.type_size(CType(lt.name, lt.pointers - 1, lt.const, lt.func_params, lt.volatile))
+                if scale != 1:
+                    scaled = self.b.vreg(); self.b.arith("mul", scaled, b, Imm(scale)); b = scaled
+                bx = self._x_from_r(b, T_SIZE)
+                dst = self.b.vreg(); self.b.system(F_INT64, S_ADD64 if e.op == "+" else S_SUB64,
+                                                    dst, a, payload=bx, typecode=T_PTR)
+                return dst
+            if ((lt and self.type_size(lt) == 8) or (rt and self.type_size(rt) == 8)
+                    or self.eval_literal_wide(e.lhs) or self.eval_literal_wide(e.rhs)):
+                if e.op in _CMP_OPS:
+                    return self.eval_wide_compare(e.op, e.lhs, e.rhs, lt or rt)
+                if e.op in ("+", "-", "*", "/", "&", "|", "^", "<<", ">>"):
+                    return self.eval_wide_arith(e.op, e.lhs, e.rhs)
             if e.op in _CMP_OPS:
                 return self.eval_bool(e)
             if e.op in ("&&", "||"):
                 return self.eval_logical(e)
             if e.op == "%":
                 return self.eval_mod(e.lhs, e.rhs)
+            if e.op in ("&", "|", "^", "<<", ">>"):
+                a = self.eval(e.lhs)
+                b = self.eval(e.rhs)
+                dst = self.b.vreg()
+                method = {"&": "And", "|": "Or", "^": "Xor",
+                          "<<": "Shl", ">>": "Sar"}[e.op]
+                self.b.host("Bits", method, (a, b), dst)
+                return dst
             a = self.eval(e.lhs)
             dst = self.b.vreg()
             if isinstance(e.rhs, Num) and -32768 <= e.rhs.value <= 65535:
@@ -1096,11 +1904,56 @@ class Lowerer:
             if e.op == "!":
                 inner = self.eval(e.operand)
                 return self.eval_bool(Bin("==", _RawVReg(inner), Num(0)))
+            if e.op == "~":
+                inner = self.eval(e.operand)
+                dst = self.b.vreg()
+                self.b.host("Bits", "Not", (inner,), dst)
+                return dst
         if isinstance(e, Call):
             return self.lower_call(e, want_value)
+        if isinstance(e, Invoke):
+            target = self.eval(e.callee)
+            if isinstance(target, WideValue): target = self._r_from_x(target.lo)
+            return self.lower_indirect_target(target, e.args, want_value)
+        if isinstance(e, CastExpr):
+            source_type = self.expr_type(e.value)
+            value = self.eval(e.value)
+            if e.ctype.pointers:
+                if isinstance(value, WideValue): return value.lo
+                if source_type and source_type.pointers: return value
+                return self._x_from_r(value, T_PTR)
+            if self.type_size(e.ctype) == 8:
+                return value if isinstance(value, WideValue) else WideValue(
+                    value if source_type and source_type.pointers else self._x_from_r(value,
+                        T_I64 if e.ctype.name == "int64_t" else T_U64))
+            if isinstance(value, WideValue): value = self._r_from_x(value.lo)
+            elif source_type and source_type.pointers: value = self._r_from_x(value)
+            size = self.type_size(e.ctype)
+            if size < 4:
+                masked = self.b.vreg()
+                self.b.host("Bits", "And", (value, self._const((1 << (size * 8)) - 1)), masked)
+                value = masked
+            return value
+        if isinstance(e, AddressOf):
+            if isinstance(e.target, Var) and e.target.name.lower() in getattr(self, "_func_names", set()):
+                return self._const(self._function_id(e.target.name))
+            return self.lvalue(e.target)[0]
+        if isinstance(e, Deref):
+            addr, ct = self.lvalue(e); return self.load_typed(addr, ct)
+        if isinstance(e, IndexRef):
+            addr, ct = self.lvalue(e); return self.load_typed(addr, ct)
+        if isinstance(e, MemberRef):
+            addr, ct = self.lvalue(e); return self.load_typed(addr, ct)
+        if isinstance(e, SizeofExpr):
+            ct = e.target if e.is_type else self.expr_type(e.target)
+            count = (self.var_counts.get(self._symkey(e.target.name), 1)
+                     if isinstance(e.target, Var) else 1)
+            return self._const(self.type_size(ct) * count)
         if isinstance(e, Str):
             return self.emit_str_span(e.value)
         if isinstance(e, FieldRef):
+            if self.expr_type(e) is not None:
+                addr, ct = self.lvalue(e); return self.load_typed(addr, ct)
             cv = self._resolve_constant(f"{e.obj}.{e.field}")
             if cv is not None:
                 v = self.b.vreg(); self.b.const(v, cv); return v
@@ -1113,6 +1966,27 @@ class Lowerer:
         if isinstance(e, _RawVReg):
             return e.v
         raise SyntaxError(f"cannot evaluate {e}")
+
+    def eval_literal_wide(self, e):
+        return isinstance(e, Num) and (e.value > 0xffffffff or e.value < -0x80000000)
+
+    def eval_wide_arith(self, op, lhs, rhs):
+        a, b = self.as_wide(lhs), self.as_wide(rhs)
+        out = self.b.vreg()
+        sysop = {"+": S_ADD64, "-": S_SUB64, "*": S_MUL64, "/": S_DIV64,
+                 "&": S_AND64, "|": S_OR64, "^": S_XOR64,
+                 "<<": S_SHL64, ">>": S_SHR64}[op]
+        self.b.system(F_INT64, sysop, out, a.lo, payload=b.lo, typecode=T_U64)
+        return WideValue(out)
+
+    def eval_wide_compare(self, op, lhs, rhs, ctype=None):
+        a, b = self.as_wide(lhs), self.as_wide(rhs)
+        out = self.b.vreg()
+        sysop = {"==": S_EQ64, "!=": S_NE64, "<": S_LT64, ">": S_GT64,
+                 "<=": S_LE64, ">=": S_GE64}[op]
+        self.b.system(F_INT64, sysop, out, a.lo, payload=b.lo,
+                      typecode=T_I64 if ctype and ctype.name == "int64_t" else T_U64)
+        return out
 
     def eval_mod(self, lhs, rhs) -> VReg:
         a = self.eval(lhs); b = self.eval(rhs)
@@ -1144,8 +2018,19 @@ class Lowerer:
 
     def eval_incdec(self, e: IncDec) -> VReg:
         if not isinstance(e.target, Var):
-            raise SyntaxError("++/-- requires a variable")
+            try:
+                addr, ct = self.lvalue(e.target)
+            except SyntaxError as exc:
+                raise SyntaxError("++/-- requires a variable or addressable lvalue") from exc
+            if ct.const: raise SyntaxError("increment/decrement through const lvalue")
+            old = self.load_typed(addr, ct)
+            if isinstance(old, WideValue): raise SyntaxError("wide ++/-- is not yet supported")
+            new = self.b.vreg(); self.b.arith("add" if e.op == "++" else "sub", new, old, Imm(1))
+            self.store_typed(addr, ct, new)
+            return new if e.prefix else old
         v = self.var(e.target.name)
+        if self._symkey(e.target.name) in self.const_vars:
+            raise SyntaxError(f"increment/decrement of const variable {e.target.name!r}")
         if e.prefix:
             if e.op == "++":
                 self.b.inc(v)
@@ -1197,18 +2082,29 @@ class Lowerer:
                 self.b.pipe(v, 0xFFFE)
                 return None
             key = method.lower()
+            if key == "malloc":
+                if len(c.args) != 1: raise SyntaxError("malloc requires one size argument")
+                return self._alloc(c.args[0])
+            if key == "calloc":
+                if len(c.args) != 2: raise SyntaxError("calloc requires count and size")
+                count = self.eval(c.args[0]); unit = self.eval(c.args[1]); size = self.b.vreg()
+                self.b.arith("mul", size, count, unit)
+                ptr = self._alloc(size); self._zero_memory(ptr, size); return ptr
+            if key == "free":
+                # PicoScript's deterministic C heap is a bounded bump arena.
+                # Individual free is intentionally a safe no-op; its storage is
+                # reclaimed when the program/VM arena is reset.
+                if len(c.args) != 1: raise SyntaxError("free requires one pointer")
+                self.eval(c.args[0])
+                return self._const(0) if want_value else None
             if key in C_ALIASES and key not in getattr(self, "_func_names", set()):
                 a_ns, a_m = C_ALIASES[key]
                 return self.lower_call(Call(a_ns, a_m, c.args), want_value)
-            # pass arguments via arg-passing regs
-            params = self._func_params.get(key, [])
-            for i, arg in enumerate(c.args):
-                av = self.var(f"__arg{i}__")
-                self.assign_to(av, arg)
-            self.b.call(f"fn_{method.lower()}")
-            if want_value:
-                return self.var("__ret__")
-            return None
+            sym = self._symkey(key)
+            if key not in getattr(self, "_func_names", set()) and sym in self.var_types \
+                    and self.var_types[sym].is_function_pointer:
+                return self.lower_indirect_call(key, c.args, want_value)
+            return self.emit_direct_call(key, c.args, want_value)
         # Net.*  (namespace + method case-insensitive)
         if ns.upper() == "NET":
             m = method.upper()
@@ -1228,6 +2124,9 @@ class Lowerer:
                 pass
             if m in ("STATUS", "TYPE", "BODY", "CLOSE", "HEADER"):
                 return None
+            cns, cm = canon_host(ns, method)
+            if (cns, cm) not in HOST_HOOK_CODES:
+                raise SyntaxError(f"unknown {ns}.{method}")
         # Storage.Load/Save/Pipe(tenant, pack, card, reg)
         if ns.upper() == "STORAGE" and method.upper() in ("LOAD", "SAVE", "PIPE"):
             tenant, pack, card = (_intlit(c.args[0]), _intlit(c.args[1]), _intlit(c.args[2]))
@@ -1241,6 +2140,19 @@ class Lowerer:
             else:
                 self.b.pipe(reg, addr)
             return reg
+        # Typed systems view over the portable two-word Block size ABI.
+        # Providers keep returning low/high R values; PicoScript-C exposes one
+        # native U64 X value without widening the Block binding itself.
+        if ns.upper() == "BLOCK" and method.upper() == "SIZE":
+            if c.args: raise SyntaxError("Block.Size takes no arguments")
+            lo_r, hi_r = self.b.vreg(), self.b.vreg()
+            self.b.host("Block", "SizeLow", (), lo_r)
+            self.b.host("Block", "SizeHigh", (), hi_r)
+            lo, hi = self._x_from_r(lo_r), self._x_from_r(hi_r)
+            self.b.system(F_INT64, S_SHL64, hi, hi, payload=32, typecode=T_U64)
+            out = self.b.vreg()
+            self.b.system(F_INT64, S_OR64, out, lo, payload=hi, typecode=T_U64)
+            return WideValue(out)
         # Active-record storage sugar. These do not add VM hooks; they lower to
         # the existing UsePack/EditCard/SetField/GetField/QueryCard primitives.
         if ns.upper() == "STORAGE" and method.upper() == "GETCARD":
@@ -1273,6 +2185,43 @@ class Lowerer:
         dst = self.b.vreg() if want_value else None
         self.b.host(ns, method, tuple(argregs), dst)
         return dst
+
+    def emit_direct_call(self, key, args, want_value):
+        if key not in getattr(self, "_func_names", set()):
+            raise SyntaxError(f"unknown function {key!r}")
+        # Stage every argument before touching shared ABI slots. This makes
+        # nested calls such as f(g(x), h(y)) deterministic and re-entrant.
+        staged = [self.eval(arg) for arg in args]
+        for i, value in enumerate(staged):
+            if isinstance(value, WideValue):
+                raise SyntaxError("uint64_t function arguments require pointer passing")
+            self.b.mov(self.var(f"__arg{i}__"), value)
+        self.b.call(f"fn_{key}")
+        if want_value:
+            out = self.b.vreg(); self.b.mov(out, self.var("__ret__")); return out
+        return None
+
+    def lower_indirect_call(self, var_name, args, want_value):
+        return self.lower_indirect_target(self.var(var_name), args, want_value)
+
+    def lower_indirect_target(self, target, args, want_value):
+        candidates = [f for f in self.funcs
+                      if len(f.params or []) == len(args)]
+        if not candidates: raise SyntaxError("callback has no compatible target")
+        staged = [self.eval(arg) for arg in args]
+        out = self.b.vreg() if want_value else None
+        end = self.b.new_label("cbend")
+        for f in candidates:
+            nxt = self.b.new_label("cbnext")
+            self.b.cmpbr("NE", target, self._const(self._function_id(f.name)), nxt)
+            for i, value in enumerate(staged):
+                self.b.mov(self.var(f"__arg{i}__"), value)
+            self.b.call(f"fn_{f.name.lower()}")
+            if out is not None: self.b.mov(out, self.var("__ret__"))
+            self.b.jmp(end); self.b.label(nxt)
+        if out is not None: self.b.const(out, 0)
+        self.b.label(end)
+        return out
 
     def emit_str_span(self, text: str):
         """Materialize a string literal as a span over its interned constant-pool
@@ -1316,8 +2265,12 @@ def _strlit(node) -> str:
 
 # ── public API ──────────────────────────────────────────────────────────────
 
-def compile_c(source: str):
+def compile_c(source: str, *, source_path: Optional[str] = None,
+              include_resolver=None, defines: Optional[Dict[str, object]] = None):
     """C-syntax source -> PicoIL instruction list."""
+    source = preprocess_c(source, source_path=source_path,
+                          include_resolver=include_resolver, defines=defines)
     toks = tokenize(source)
-    prog = Parser(toks).parse_program()
-    return Lowerer().lower_program(prog)
+    parser = Parser(toks)
+    prog = parser.parse_program()
+    return Lowerer(parser.structs, parser.typedefs).lower_program(prog)
