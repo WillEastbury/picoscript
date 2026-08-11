@@ -12,7 +12,7 @@
 /* Module container (INV-23): wire format shared with pico_module.py / picovm.js. */
 #define PV_MODULE_MAGIC 0x50534331
 #define PV_MODULE_ABI_VERSION 1
-#define PV_HOOK_TABLE_VERSION 0x2AE7BB7B
+#define PV_HOOK_TABLE_VERSION 0x9C1BBBA3
 
 #define PV_HOOK_KERNEL_WAITIRQ                   0x01
 #define PV_HOOK_KERNEL_WAITSWIRQ                 0x02
@@ -337,7 +337,9 @@
 #define PV_HOOK_UI_SETVALUE                      0x192
 #define PV_HOOK_UI_SERIALIZE                     0x193
 #define PV_HOOK_STORAGE_SETSLICE                 0x1A0
+#define PV_HOOK_PARQUET_ISVALID                  0x1A0
 #define PV_HOOK_STORAGE_CARDLEN                  0x1A1
+#define PV_HOOK_PARQUET_FOOTERLENGTH             0x1A1
 #define PV_HOOK_STORAGE_READSLICE                0x1A2
 #define PV_HOOK_STORAGE_WRITESLICE               0x1A3
 #define PV_HOOK_STORAGE_ISUSERPACK               0x1A4
@@ -601,12 +603,42 @@
 #define PV_HOOK_MOE_SELECTEDCOUNT                0x388
 #define PV_HOOK_MOE_SELECTEDEXPERT               0x389
 #define PV_HOOK_CATQ_CALIBRATETARGET             0x38A
+#define PV_HOOK_DB_READ                          0x400
+#define PV_HOOK_DB_INSERT                        0x401
+#define PV_HOOK_DB_WRITE                         0x402
+#define PV_HOOK_DB_UPDATE                        0x403
+#define PV_HOOK_DB_DELETE                        0x404
+#define PV_HOOK_DB_PATCH                         0x405
+#define PV_HOOK_DB_SYNC                          0x406
+#define PV_HOOK_DB_RECOVER                       0x407
+#define PV_HOOK_DB_ADDINDEX                      0x408
+#define PV_HOOK_DB_REMOVEINDEX                   0x409
+#define PV_HOOK_DB_REBUILDINDEX                  0x40A
+#define PV_HOOK_DB_INDEXSTATE                    0x40B
+#define PV_HOOK_DB_RESOLVEKEY                    0x40C
+#define PV_HOOK_DB_RESOLVEPACK                   0x40D
+#define PV_HOOK_DB_SEEK                          0x40E
+#define PV_HOOK_DB_QUERY                         0x40F
+#define PV_HOOK_DB_NEXT                          0x410
+#define PV_HOOK_DB_BATCH                         0x411
+#define PV_HOOK_DB_MATERIALIZE                   0x412
+#define PV_HOOK_DB_CLOSE                         0x413
+#define PV_HOOK_DB_FROM                          0x414
+#define PV_HOOK_DB_FIELD                         0x415
+#define PV_HOOK_DB_CONST                         0x416
+#define PV_HOOK_DB_EQ                            0x417
+#define PV_HOOK_DB_WHERE                         0x420
+#define PV_HOOK_DB_SELECT                        0x421
+#define PV_HOOK_DB_ORDER                         0x422
+#define PV_HOOK_DB_LIMIT                         0x423
+#define PV_HOOK_DB_EXECUTE                       0x424
+#define PV_HOOK_DB_PLAN                          0x425
 
 /* Highest defined host-hook code. The compiler never emits a code above
  * this, so pv_default_host uses it to tell a defined-but-unbound host-
  * fillable primitive (INV-18 default: 0 / NOT_FOUND, mirroring
  * picoscript_vm.py / picovm.js) from a genuinely unknown hook id in
  * malformed bytecode, which fails closed (PV_FAULT_BAD_HOOK). */
-#define PV_HOOK_CODE_MAX 0x38A
+#define PV_HOOK_CODE_MAX 0x425
 
 #endif

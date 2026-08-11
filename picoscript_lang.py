@@ -865,7 +865,17 @@ HOST_HOOK_CODES = {
     ("Storage", "GetFieldStr"): 0x6D,
     ("Storage", "QueryResult"): 0x6E,
     ("Storage", "Ready"):       0x6F,
-    # Forge read-only data binding (host-registered, RBAC-projected). Lookup a
+    # PicoWAL public database/query ABI.
+    ("Db", "Read"): 0x0400, ("Db", "Insert"): 0x0401, ("Db", "Write"): 0x0402,
+    ("Db", "Update"): 0x0403, ("Db", "Delete"): 0x0404, ("Db", "Patch"): 0x0405,
+    ("Db", "Sync"): 0x0406, ("Db", "Recover"): 0x0407, ("Db", "AddIndex"): 0x0408,
+    ("Db", "RemoveIndex"): 0x0409, ("Db", "RebuildIndex"): 0x040A, ("Db", "IndexState"): 0x040B,
+    ("Db", "ResolveKey"): 0x040C, ("Db", "ResolvePack"): 0x040D, ("Db", "Seek"): 0x040E,
+    ("Db", "Query"): 0x040F, ("Db", "Next"): 0x0410, ("Db", "Batch"): 0x0411,
+    ("Db", "Materialize"): 0x0412, ("Db", "Close"): 0x0413, ("Db", "From"): 0x0414,
+    ("Db", "Field"): 0x0415, ("Db", "Const"): 0x0416, ("Db", "Eq"): 0x0417,
+    ("Db", "Where"): 0x0420, ("Db", "Select"): 0x0421, ("Db", "Order"): 0x0422,
+    ("Db", "Limit"): 0x0423, ("Db", "Execute"): 0x0424, ("Db", "Plan"): 0x0425,    # Forge read-only data binding (host-registered, RBAC-projected). Lookup a
     # record then read its fields; lets validation/hooks "load related" data.
     ("Data", "Lookup"):         0x0300,   # rs1=entity span rs2=id span -> rd=handle (0=none)
     ("Data", "FieldNum"):       0x0301,   # rs1=handle rs2=field span   -> rd=int
@@ -1484,6 +1494,8 @@ HOST_HOOK_CODES = {
     ("Ui", "SetId"):            0x0191,   # rs1=node rs2=controlId        rd=ok
     ("Ui", "SetValue"):         0x0192,   # rs1=node rs2=value            rd=ok
     ("Ui", "Serialize"):        0x0193,   # rs1=root                      rd=span (PicoWire bytes)
+    ("Parquet", "IsValid"):      0x01A0,
+    ("Parquet", "FooterLength"): 0x01A1,
 }
 HOST_HOOK_NAMES = {v: k for k, v in HOST_HOOK_CODES.items()}
 
@@ -3581,3 +3593,5 @@ if __name__ == "__main__":
     print("  • Write in Python, colleague reads it in C#. Same card.")
     print("  • All CRLF terminated for universal compatibility")
     print("=" * 65)
+
+
