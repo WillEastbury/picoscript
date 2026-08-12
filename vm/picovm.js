@@ -147,6 +147,7 @@
     this._cardProvider = opts.cardProvider || null;
     this._contextProvider = opts.contextProvider || null;
     this._environmentProvider = opts.environmentProvider || null;
+    this._identityProvider = opts.identityProvider || null;
     this.networkRequest = {
       timeoutMs: opts.timeoutMs | 0,
       maxReadBytes: opts.maxReadBytes | 0,
@@ -443,7 +444,8 @@
     var nsHandler = nsDispatchTable()[hostNs];
     var provider = hostNs === "Card" ? this._cardProvider :
       (hostNs === "Context" ? this._contextProvider :
-       (hostNs === "Environment" ? this._environmentProvider : null));
+       (hostNs === "Environment" ? this._environmentProvider :
+        ((hostNs === "Auth" || hostNs === "X509") ? this._identityProvider : null)));
     if (provider && this._providerCall(provider, hostNs, hostMethod, rd, rs1, rs2)) return;
     if (nsHandler && nsHandler.call(this, hostMethod, rd, rs1, rs2)) return;
     if (hostNs === "CatQ" || hostNs === "Async" || hostNs === "Shard" || hostNs === "MoE") {

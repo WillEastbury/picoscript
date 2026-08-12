@@ -1286,7 +1286,8 @@ class HostApi:
     """
 
     def __init__(self, compute_provider=None, network_provider=None, fixed_time=None,
-                 card_provider=None, context_provider=None, environment_provider=None):
+                 card_provider=None, context_provider=None, environment_provider=None,
+                 identity_provider=None):
         self.queues: Dict[int, List[int]] = {}
         self.rng_state = 0x2545F4914F6CDD1D
         self.caps = CAP_ALL          # granted binding capabilities (INV-17); host restricts to gate
@@ -1302,6 +1303,7 @@ class HostApi:
         self.card_provider = card_provider
         self.context_provider = context_provider
         self.environment_provider = environment_provider
+        self.identity_provider = identity_provider
         self.provider_request = ProviderRequest()
         self.tensor_handles = TensorHandleTable()
         self.fixed_time = None if fixed_time is None else int(fixed_time)
@@ -1686,6 +1688,8 @@ class HostApi:
             "Card": self.card_provider,
             "Context": self.context_provider,
             "Environment": self.environment_provider,
+            "Auth": self.identity_provider,
+            "X509": self.identity_provider,
         }.get(ns)
         if provider is not None and self._provider_call(provider, vm, ns, method, rd, rs1, rs2):
             return
