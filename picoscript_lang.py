@@ -134,6 +134,18 @@ NAMESPACE_MAP = {
         "ReadSlice":        OP_NOOP,
         "WriteSlice":       OP_NOOP,
     },
+    "Db": {
+        "Read": OP_NOOP, "Insert": OP_NOOP, "Write": OP_NOOP,
+        "Update": OP_NOOP, "Delete": OP_NOOP, "Patch": OP_NOOP,
+        "Sync": OP_NOOP, "Recover": OP_NOOP,
+        "AddIndex": OP_NOOP, "RemoveIndex": OP_NOOP, "RebuildIndex": OP_NOOP,
+        "IndexState": OP_NOOP, "ResolveKey": OP_NOOP, "ResolvePack": OP_NOOP,
+        "Seek": OP_NOOP, "Query": OP_NOOP, "Next": OP_NOOP, "Batch": OP_NOOP,
+        "Materialize": OP_NOOP, "Close": OP_NOOP, "From": OP_NOOP,
+        "Field": OP_NOOP, "Const": OP_NOOP, "Eq": OP_NOOP,
+        "Where": OP_NOOP, "Select": OP_NOOP, "Order": OP_NOOP,
+        "Limit": OP_NOOP, "Execute": OP_NOOP, "Plan": OP_NOOP,
+    },
     "Block": {
         "Ready": OP_NOOP, "BlockSize": OP_NOOP, "SizeLow": OP_NOOP,
         "SizeHigh": OP_NOOP, "SetOffset": OP_NOOP, "Read": OP_NOOP,
@@ -883,7 +895,12 @@ HOST_HOOK_CODES = {
     ("Db", "Materialize"): 0x0412, ("Db", "Close"): 0x0413, ("Db", "From"): 0x0414,
     ("Db", "Field"): 0x0415, ("Db", "Const"): 0x0416, ("Db", "Eq"): 0x0417,
     ("Db", "Where"): 0x0420, ("Db", "Select"): 0x0421, ("Db", "Order"): 0x0422,
-    ("Db", "Limit"): 0x0423, ("Db", "Execute"): 0x0424, ("Db", "Plan"): 0x0425,    # Forge read-only data binding (host-registered, RBAC-projected). Lookup a
+    ("Db", "Limit"): 0x0423, ("Db", "Execute"): 0x0424, ("Db", "Plan"): 0x0425,
+    # Compatibility aliases used by the PicoWAL source façade. These share the
+    # Db durability ABI so older Storage-based programs compile unchanged.
+    ("Storage", "Sync"): 0x0406,
+    ("Storage", "Recover"): 0x0407,
+    # Forge read-only data binding (host-registered, RBAC-projected). Lookup a
     # record then read its fields; lets validation/hooks "load related" data.
     ("Data", "Lookup"):         0x0300,   # rs1=entity span rs2=id span -> rd=handle (0=none)
     ("Data", "FieldNum"):       0x0301,   # rs1=handle rs2=field span   -> rd=int
@@ -895,6 +912,34 @@ HOST_HOOK_CODES = {
     ("Storage", "ReadSlice"):   0x01A2,
     ("Storage", "WriteSlice"):  0x01A3,
     ("Storage", "IsUserPack"):  0x01A4,
+    # PicoWAL card façade hooks used by host/picowal/picowal.pico.
+    ("Storage", "PutCard"):     0x01A5,
+    ("Storage", "ReadExact"):   0x01A6,
+    ("Storage", "DeleteExact"): 0x01A7,
+    ("Storage", "Exists"):      0x01A8,
+    ("Storage", "ScanNext"):    0x01A9,
+    ("Storage", "Sync"):        0x01AA,
+    ("Storage", "Recover"):     0x01AB,
+    ("Storage", "FullTextField"):  0x0500,
+    ("Storage", "FullTextMode"):   0x0501,
+    ("Storage", "FullTextUpsert"): 0x0502,
+    ("Storage", "FullTextDelete"): 0x0503,
+    ("Storage", "FullTextFind"):   0x0504,
+    ("Storage", "FullTextResult"): 0x0505,
+    ("Storage", "GraphRelation"):  0x0506,
+    ("Storage", "GraphWeightSet"): 0x0507,
+    ("Storage", "GraphAdd"):       0x0508,
+    ("Storage", "GraphDelete"):    0x0509,
+    ("Storage", "GraphWeight"):    0x050A,
+    ("Storage", "GraphOut"):       0x050B,
+    ("Storage", "GraphResultNode"): 0x050C,
+    ("Storage", "GraphResultWeight"): 0x050D,
+    ("Storage", "GraphPath"):      0x050E,
+    ("Storage", "PageBegin"):      0x050F,
+    ("Storage", "PageAdd"):        0x0510,
+    ("Storage", "PageSeal"):       0x0511,
+    ("Storage", "PageVerify"):     0x0512,
+    ("Storage", "PageData"):       0x0513,
     # Query helper builders from picowal PR78 (bounded relation query helpers).
     ("Query", "BuildLookupFilter"): 0x01C0,
     ("Query", "BuildManyToManyMap"): 0x01C1,
@@ -1509,8 +1554,10 @@ HOST_HOOK_CODES = {
     ("Ui", "SetId"):            0x0191,   # rs1=node rs2=controlId        rd=ok
     ("Ui", "SetValue"):         0x0192,   # rs1=node rs2=value            rd=ok
     ("Ui", "Serialize"):        0x0193,   # rs1=root                      rd=span (PicoWire bytes)
-    ("Parquet", "IsValid"):      0x01A0,
-    ("Parquet", "FooterLength"): 0x01A1,
+    # Parquet hooks use a separate extension range; 0x01A0-0x01A4 is reserved
+    # for Storage slice operations.
+    ("Parquet", "IsValid"):      0x01C8,
+    ("Parquet", "FooterLength"): 0x01C9,
 }
 HOST_HOOK_NAMES = {v: k for k, v in HOST_HOOK_CODES.items()}
 
@@ -2481,7 +2528,7 @@ class Compiler:
             return self._compile_flow(opcode, method, args, pc)
         elif namespace == "Net":
             return self._compile_net(method, args, pc)
-        elif namespace in ("Kernel", "Queue", "Random", "Memory", "Span", "Descriptor", "Lease", "Context", "Io", "Block"):
+        elif namespace in ("Kernel", "Queue", "Random", "Memory", "Span", "Descriptor", "Lease", "Context", "Io", "Block", "Db"):
             return self._compile_host_hook(namespace, method, args, pc)
         else:
             raise SyntaxError(f"Unhandled namespace '{namespace}' at line {pc}")
@@ -2975,6 +3022,19 @@ class Compiler:
                 rs1, rs2 = v0, v1
             else:
                 assert False, f"_compile_host_hook: unhandled Storage method {method!r}"
+        elif namespace == "Db":
+            parsed = [parse_arg(arg) for arg in args]
+            if any(mode != "reg" for mode, _ in parsed):
+                raise SyntaxError(f"Db.{method} arguments must be registers")
+            values = [value for _, value in parsed]
+            if len(values) == 3:
+                rs1, rs2, rd = values
+            elif len(values) == 2:
+                rs1, rd = values
+            elif len(values) == 1:
+                rd = values[0]
+            else:
+                raise SyntaxError(f"Db.{method} requires one, two, or three register args")
 
         if namespace == "Block":
             parsed = [parse_arg(a) for a in args]
@@ -3060,6 +3120,10 @@ def disassemble(words):
                 elif namespace == "Span":
                     if method == "Make":
                         lines.append(f"    Span.Make(R{rs1}, R{rs2}, R{rd});")
+                    elif method in ("Len", "Materialize"):
+                        lines.append(f"    Span.{method}(R{rs1}, R{rd});")
+                    elif method in ("Get", "Append"):
+                        lines.append(f"    Span.{method}(R{rs1}, R{rs2}, R{rd});")
                     else:
                         lines.append(f"    Span.Slice(R{rs1}, R{rs2}, R{rd});")
                 elif namespace == "Descriptor":
@@ -3225,6 +3289,10 @@ def decompile_basic(words):
                 elif namespace == "Span":
                     if method == "Make":
                         lines.append(f"{lineno} SPAN MAKE, R{rs1}, R{rs2}, R{rd}")
+                    elif method in ("Len", "Materialize"):
+                        lines.append(f"{lineno} SPAN {method.upper()}, R{rs1}, R{rd}")
+                    elif method in ("Get", "Append"):
+                        lines.append(f"{lineno} SPAN {method.upper()}, R{rs1}, R{rs2}, R{rd}")
                     else:
                         lines.append(f"{lineno} SPAN SLICE, R{rs1}, R{rs2}, R{rd}")
                 elif namespace == "Descriptor":
@@ -3361,6 +3429,10 @@ def decompile_python(words):
                 elif namespace == "Span":
                     if method == "Make":
                         lines.append(f"span.make(r{rs1}, r{rs2}, r{rd})")
+                    elif method in ("Len", "Materialize"):
+                        lines.append(f"span.{method.lower()}(r{rs1}, r{rd})")
+                    elif method in ("Get", "Append"):
+                        lines.append(f"span.{method.lower()}(r{rs1}, r{rs2}, r{rd})")
                     else:
                         lines.append(f"span.slice(r{rs1}, r{rs2}, r{rd})")
                 elif namespace == "Descriptor":
@@ -3636,5 +3708,3 @@ if __name__ == "__main__":
     print("  • Write in Python, colleague reads it in C#. Same card.")
     print("  • All CRLF terminated for universal compatibility")
     print("=" * 65)
-
-

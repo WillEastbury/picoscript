@@ -1351,6 +1351,7 @@ uint32_t pv_hook_cap(int hook)
     if ((hook >= 0x15 && hook <= 0x1F) || hook == 0x38 || hook == 0x39) return PV_CAP_NET;  /* Resp.* */
     if (hook == PV_HOOK_RANDOM_U32) return PV_CAP_RANDOM;    /* Random.U32 */
     if ((hook >= 0x60 && hook <= 0x6F) || (hook >= 0x1A0 && hook <= 0x1AB) ||
+        (hook >= 0x500 && hook <= 0x513) ||
         (hook >= 0x3B0 && hook <= 0x3DC)) return PV_CAP_STORAGE; /* Storage/Block */
     if (hook >= 0xB0 && hook <= 0xBE) return PV_CAP_TIME;    /* DateTime.* incl. Year/Month/Day */
     if (hook >= 0xC0 && hook <= 0xC6) return PV_CAP_ENV;     /* Locale.* */
@@ -2698,6 +2699,41 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
     if (pv_host_provider_dispatch_hook &&
         pv_host_provider_dispatch_hook(ctx, hook, rd, rs1, rs2))
         return;
+    /* Db.* is the explicit-pack façade over the provider-neutral Storage ABI.
+     * The destination register doubles as the input span for write/update,
+     * preserving the two-input/one-output host-call shape. */
+    if (pv_storage_hook && hook >= PV_HOOK_DB_READ && hook <= PV_HOOK_DB_RECOVER) {
+        int handled = 1;
+        switch (hook) {
+        case PV_HOOK_DB_INSERT:
+            handled = pv_storage_hook(ctx, PV_HOOK_STORAGE_ADDCARD, rd, rs1, rs2);
+            break;
+        case PV_HOOK_DB_READ:
+            pv_storage_hook(ctx, PV_HOOK_STORAGE_USEPACK, rd, rs1, rs2);
+            handled = pv_storage_hook(ctx, PV_HOOK_STORAGE_READEXACT, rd, rs2, 0);
+            break;
+        case PV_HOOK_DB_WRITE:
+        case PV_HOOK_DB_UPDATE:
+        case PV_HOOK_DB_PATCH:
+            pv_storage_hook(ctx, PV_HOOK_STORAGE_USEPACK, rd, rs1, rs2);
+            handled = pv_storage_hook(ctx, PV_HOOK_STORAGE_PUTCARD, rd, rs2, rd);
+            break;
+        case PV_HOOK_DB_DELETE:
+            pv_storage_hook(ctx, PV_HOOK_STORAGE_USEPACK, rd, rs1, rs2);
+            handled = pv_storage_hook(ctx, PV_HOOK_STORAGE_DELETEEXACT, rd, rs2, 0);
+            break;
+        case PV_HOOK_DB_SYNC:
+            handled = pv_storage_hook(ctx, PV_HOOK_STORAGE_SYNC, rd, 0, 0);
+            break;
+        case PV_HOOK_DB_RECOVER:
+            handled = pv_storage_hook(ctx, PV_HOOK_STORAGE_RECOVER, rd, 0, 0);
+            break;
+        default:
+            handled = 0;
+            break;
+        }
+        if (handled) return;
+    }
     /* In-VM multi-target emulators (pure DateTime, Gpio/Stream/Ui, Auth, …). */
     {
         extern int pv_emu_dispatch(pv_ctx *ctx, int hook, int rd, int rs1, int rs2);
@@ -2721,7 +2757,8 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
      * native binary compile in its own pack/card store (e.g. file-backed or
      * PicoWAL) without coupling it to the runtime. */
     if (pv_storage_hook &&
-        ((hook >= 0x60 && hook <= 0x6F) || (hook >= 0x1A0 && hook <= 0x1AB) ||
+        ((hook >= 0x60 && hook <= 0x6F) || (hook >= 0x1A0 && hook <= 0x1BF) ||
+         (hook >= 0x500 && hook <= 0x513) ||
          (hook >= 0x3B0 && hook <= 0x3C3))) {
         if (pv_storage_hook(ctx, hook, rd, rs1, rs2)) return;
     }
@@ -3087,12 +3124,12 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         return;
     }
     if (hook == PV_HOOK_RANDOM_U32) {
-        uint64_t x = ctx->rng_state;
+        uint32_t x = (uint32_t)ctx->rng_state;
         x ^= (x << 13) & MASK32;
         x ^= (x >> 7);
         x ^= (x << 17) & MASK32;
         ctx->rng_state = x;
-        ctx->regs[rd] = (int32_t)(uint32_t)(x & MASK32);
+        ctx->regs[rd] = (int32_t)x;
         return;
     }
     if (hook == PV_HOOK_QUEUE_ENQUEUE) {
@@ -3225,25 +3262,33 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         return;
     }
     if (hook == PV_HOOK_SPAN_LEN) {
-        ctx->regs[rd] = pv_span_n(ctx, ctx->regs[rs1]);
+        int h = ctx->regs[rs1];
+        ctx->regs[rd] = pv_span_n(ctx, h);
+        ctx->host_status = (h > 0 && h < ctx->span_count) ? 0 : 1;
         return;
     }
     if (hook == PV_HOOK_SPAN_GET) {
         int h = ctx->regs[rs1];
         int32_t idx = ctx->regs[rs2];
         int32_t l = pv_span_n(ctx, h);
-        ctx->regs[rd] = (idx >= 0 && idx < l)
+        int valid = h > 0 && h < ctx->span_count && idx >= 0 && idx < l;
+        ctx->regs[rd] = valid
                       ? (int32_t)pv_arena_get(ctx, pv_span_p(ctx, h) + (uint32_t)idx) : 0;
+        ctx->host_status = valid ? 0 : 1;
         return;
     }
     if (hook == PV_HOOK_SPAN_APPEND) {
         int dh = ctx->regs[rs1], sh = ctx->regs[rs2];
         int32_t dl = pv_span_n(ctx, dh), sl = pv_span_n(ctx, sh);
-        if (dl < 0 || sl < 0) { ctx->regs[rd] = 0; return; }
+        if (dh <= 0 || dh >= ctx->span_count || sh <= 0 || sh >= ctx->span_count ||
+            dl < 0 || sl < 0) {
+            ctx->regs[rd] = 0; ctx->host_status = 1; return;
+        }
         uint32_t out = 0;
         for (uint32_t i = 0; i < (uint32_t)dl; ++i) pv_arena_put(ctx, &out, pv_arena_get(ctx, pv_span_p(ctx, dh) + i));
         for (uint32_t i = 0; i < (uint32_t)sl; ++i) pv_arena_put(ctx, &out, pv_arena_get(ctx, pv_span_p(ctx, sh) + i));
         ctx->regs[rd] = pv_arena_finish(ctx, out);
+        ctx->host_status = ctx->regs[rd] ? 0 : 7;
         return;
     }    if (hook == PV_HOOK_IO_WRITE) {
         int h = ctx->regs[rs1];

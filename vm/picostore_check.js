@@ -15,5 +15,15 @@ process.stdin.on("end", () => {
     store.query("p", q).map((e) => [e[0], e[1]])
   );
   const roundtrip = ids.map((id) => store.read("p", id));
-  process.stdout.write(JSON.stringify({ hexes, results, roundtrip, ids }));
+  const contract = new STORE.PicoStore();
+  const schema = { fields: [
+    { id: 1, name: "qty", type: "INT32", required: true },
+    { id: 2, name: "sku", type: "TEXT" }
+  ] };
+  const schemaInfo = contract.registerSchema(7, schema);
+  const contractId = contract.create(7, { qty: 3, sku: "A" });
+  process.stdout.write(JSON.stringify({
+    hexes, results, roundtrip, ids,
+    contract: { schema: schemaInfo, id: contractId, card: contract.read(7, contractId) }
+  }));
 });

@@ -1242,7 +1242,7 @@ class HostApi:
     reproducible.
     """
 
-    def __init__(self, compute_provider=None, network_provider=None):
+    def __init__(self, compute_provider=None, network_provider=None, fixed_time=None):
         self.queues: Dict[int, List[int]] = {}
         self.rng_state = 0x2545F4914F6CDD1D
         self.caps = CAP_ALL          # granted binding capabilities (INV-17); host restricts to gate
@@ -1255,6 +1255,7 @@ class HostApi:
         self.handlers: Dict[tuple, Callable] = {}
         self.compute_provider = compute_provider
         self.network_provider = network_provider
+        self.fixed_time = None if fixed_time is None else int(fixed_time)
         # Deterministic raw block device for reference/conformance runs.
         self.block_data = bytearray(64 * 1024)
         self.block_size = 512
@@ -1605,7 +1606,15 @@ class HostApi:
             hook = HOST_HOOK_CODES.get((ns, method), 0)
             raise PicoFault(PV_FAULT_CAPABILITY, getattr(vm, "cur_pc", 0), hook,
                             f"capability denied: {ns}.{method} requires an ungranted binding")
-        # Db is the internal database ABI. Keep the reference VM compatible with\n        # existing PicoWAL-backed Storage handlers while hosts migrate.\n        if ns == "Db":\n            db_storage = {"Read": "ReadExact", "Insert": "PutCard", "Write": "PutCard",\n                          "Update": "UpdateCard", "Delete": "DeleteExact", "Patch": "PatchCard",\n                          "Sync": "Sync", "Recover": "Recover"}\n            storage_method = db_storage.get(method)\n            if storage_method is not None:\n                return self._storage(vm, storage_method, rd, rs1, rs2)\n            # Builder/definition hooks are provider-defined until a structured\n            # planner is installed; return a deterministic unsupported status.\n            vm.regs[rd] = 0\n            self.host_status = 1\n            return\n        if ns == "Status" and method == "Last":      # INV-18: read out-of-band fallible-hook status
+        # Db is the internal database ABI. Keep the reference VM compatible with
+        # existing PicoWAL-backed Storage handlers while hosts migrate.
+        if ns == "Db":
+            if self._db(vm, method, rd, rs1, rs2):
+                return
+            vm.regs[rd] = 0
+            self.host_status = 1
+            return
+        if ns == "Status" and method == "Last":      # INV-18: read out-of-band fallible-hook status
             vm.regs[rd] = self.host_status & MASK32
             return
         fn = self.handlers.get((ns, method))
@@ -1624,11 +1633,12 @@ class HostApi:
                 return
         # Built-in defaults for a few common hooks.
         if ns == "Random" and method == "U32":
-            x = self.rng_state
+            x = self.rng_state & MASK32
             x ^= (x << 13) & MASK32
-            x ^= (x >> 7)
+            x &= MASK32
+            x ^= x >> 7
             x ^= (x << 17) & MASK32
-            self.rng_state = x & 0xFFFFFFFFFFFFFFFF
+            self.rng_state = x & MASK32
             vm.regs[rd] = x & MASK32
             return
         if ns == "Queue" and method == "Enqueue":
@@ -1740,11 +1750,14 @@ class HostApi:
         if ns == "Span" and method == "Len":
             s = vm.spans[vm.regs[rs1]] if vm.regs[rs1] < len(vm.spans) else None
             vm.regs[rd] = s["len"] if s else 0
+            self.host_status = 0 if s else 1
             return
         if ns == "Span" and method == "Get":
             s = vm.spans[vm.regs[rs1]] if vm.regs[rs1] < len(vm.spans) else {"ptr": 0, "len": 0}
             idx = _sx32(vm.regs[rs2])
-            vm.regs[rd] = vm.mem[s["ptr"] + idx] if 0 <= idx < s["len"] else 0
+            valid = 0 <= idx < s["len"]
+            vm.regs[rd] = vm.mem[s["ptr"] + idx] if valid else 0
+            self.host_status = 0 if valid else 1
             return
         if ns == "Span" and method == "Append":
             dst = vm.spans[vm.regs[rs1]] if 0 <= vm.regs[rs1] < len(vm.spans) else None
@@ -2228,6 +2241,23 @@ class HostApi:
         # Pure-integer Maths ops; the transcendentals are fixed-point Q16.16 (CORDIC,
         # byte-identical across Python/C/JS -- see _q16_* above and vm/picovm.{c,js}).
         R = vm.regs
+        if method in ("Random", "RandomRange"):
+            x = self.rng_state & MASK32
+            x ^= (x << 13) & MASK32
+            x &= MASK32
+            x ^= x >> 7
+            x ^= (x << 17) & MASK32
+            self.rng_state = x & MASK32
+            if method == "Random":
+                R[rd] = (x & MASK32) >> 16
+            else:
+                lo, hi = _sx32(R[rs1]), _sx32(R[rs2])
+                if lo > hi:
+                    lo, hi = hi, lo
+                span = (hi - lo + 1) & MASK32
+                R[rd] = lo if span == 0 else lo + ((x & MASK32) % span)
+            self.host_status = 0
+            return True
         if method == "Sin":
             R[rd] = _q16_sincos(_sx32(R[rs1]))[0] & MASK32; return True
         if method == "Cos":
@@ -4086,6 +4116,52 @@ class HostApi:
             vm.regs[rd] = 1; return True
         return False
 
+    def _db(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        """Execute the explicit-pack Db CRUD subset over the raw card store."""
+        pack = _sx32(vm.regs[rs1])
+        if method == "Insert":
+            if pack < 0 or pack > 0x3FF:
+                vm.regs[rd] = 0
+                self.host_status = 2
+                return True
+            ids = [cid for p, cid in self.blob_cards if p == str(pack)]
+            card_id = max(ids, default=0) + 1
+            self.blob_cards[(str(pack), card_id)] = bytearray(self._span_raw(vm, vm.regs[rs2]))
+            vm.regs[rd] = card_id
+            self.host_status = 0
+            return True
+        card_id = _sx32(vm.regs[rs2])
+        if pack < 0 or pack > 0x3FF or card_id < 0 or card_id > 0x3FFFFF:
+            vm.regs[rd] = 0
+            self.host_status = 2
+            return method in ("Read", "Insert", "Write", "Update", "Delete", "Patch")
+        if method == "Read":
+            data = self.blob_cards.get((str(pack), card_id))
+            vm.regs[rd] = self._new_span_bytes(vm, bytes(data)) if data is not None else 0
+            self.host_status = 0 if data is not None else 1
+            return True
+        if method in ("Write", "Update", "Patch"):
+            data = self._span_raw(vm, vm.regs[rd])
+            key = (str(pack), card_id)
+            if key not in self.blob_cards:
+                vm.regs[rd] = 0
+                self.host_status = 1
+            else:
+                self.blob_cards[key] = bytearray(data)
+                vm.regs[rd] = 0
+                self.host_status = 0
+            return True
+        if method == "Delete":
+            existed = self.blob_cards.pop((str(pack), card_id), None) is not None
+            vm.regs[rd] = 1 if existed else 0
+            self.host_status = 0 if existed else 1
+            return True
+        if method in ("Sync", "Recover"):
+            vm.regs[rd] = 0
+            self.host_status = 0
+            return True
+        return False
+
     def _storage(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
         """Execute a Storage.* card op. Returns True if handled.
 
@@ -5357,11 +5433,13 @@ class HostApi:
     # -- DateTime core (UTC epoch-seconds storage) -----------------------------
     def _datetime(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
         import datetime
+        now = (self.fixed_time if self.fixed_time is not None
+               else int(datetime.datetime.now(datetime.timezone.utc).timestamp()))
         if method == "UtcNow" or method == "Now":
-            vm.regs[rd] = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) & MASK32
+            vm.regs[rd] = now & MASK32
             return True
         if method == "UnixTimestamp":
-            vm.regs[rd] = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) & MASK32
+            vm.regs[rd] = now & MASK32
             return True
         if method == "Parse":
             raw = self._span_str(vm, vm.regs[rs1]).strip()
@@ -5604,7 +5682,8 @@ class PicoVM:
 
     def __init__(self, host: Optional[HostApi] = None, max_steps: int = 1_000_000,
                  arena_bytes: int = ARENA_BYTES, caps: Optional[int] = None,
-                 seed: Optional[int] = None, no_alloc: Optional[bool] = None):
+                 seed: Optional[int] = None, no_alloc: Optional[bool] = None,
+                 fixed_time: Optional[int] = None):
         self.regs: List[int] = [0] * isa_num_regs()
         self.cards: Dict[int, int] = {}
         self.call_stack: List[int] = []
@@ -5622,6 +5701,8 @@ class PicoVM:
             self.host.cap_ceiling = caps
         if seed is not None:                 # host-injected Random.U32 seed (INV-15)
             self.host.rng_state = seed
+        if fixed_time is not None:
+            self.host.fixed_time = int(fixed_time)
         if no_alloc is not None:             # hot-path no-allocation mode (INV-5)
             self.host.no_alloc = no_alloc
         self.max_steps = max_steps

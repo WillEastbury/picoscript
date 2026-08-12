@@ -120,7 +120,8 @@ Descriptor.CopyBatch(batch)  // Batch transfer
 
 **Memory/Lease Primitives:**
 - `Memory.*` (6 methods) — ArenaInit, ArenaAlloc, ArenaReset, ArenaStats, Peek, Poke
-- `Span.*` (2 methods) — Make, Slice
+- `Span.*` (6 methods) — Make, Slice, Materialize, Len, Get, and Append in
+  the extended host-hook contract
 - `Descriptor.*` (6 methods) — Make, SetFlags, GetPtr, GetLen, GetFlags, CopyBatch
 - `Lease.*` (6 methods) — Acquire, Release, Validate, CachedValidate, GetSpan, GetTypeHint
 
@@ -254,6 +255,8 @@ LET random_value = Random.U32()  -- Returns 0-4294967295
 **Conformance:** L5+
 
 **Backend-Agnostic Card/Pack Operations:**
+- Pack identifiers are stable, schema versions are explicit, and duplicate or
+  incompatible registrations return deterministic status values.
 - `Storage.GetSchemaForPack(pack_id)` → Schema definition
 - `Storage.SetSchemaForPack(pack_id, schema)` → Define schema
 - `Storage.AddCard(pack_id, card_id, data)` → Insert record
@@ -264,10 +267,13 @@ LET random_value = Random.U32()  -- Returns 0-4294967295
 - `Storage.QueryCard(pack_id, query)` → Query records
 - `Storage.SetSlice(offset, len)`, `Storage.CardLen(card)`, `Storage.ReadSlice(card)`, `Storage.WriteSlice(card, span)` → range access for large/blob cards
 - C-style active-record sugar (`Storage.GetCard`, dot fields, `Storage.SaveCard`, `Storage.QueryCards`) → schema-backed authoring layer over the Storage hooks
+- `Db.*` CRUD aliases use the same provider contract with explicit pack IDs;
+  `Sync` and `Recover` publish/reopen the last complete generation.
 
 **Backend:**
-- Initially Picowal (embedded card store)
-- Pluggable: S3, database, or custom storage
+- In-memory `PicoStore` and journal-backed file/PicoWAL providers
+- Native PicoWAL and PIOS/WALFS adapters
+- Pluggable custom providers with the same status and recovery semantics
 
 ---
 
