@@ -237,6 +237,18 @@ extern pv_media_fn pv_media_hook;
 typedef int (*pv_bitlinear_fn)(pv_ctx *ctx, int hook, int rd, int rs1, int rs2);
 extern pv_bitlinear_fn pv_bitlinear_hook;
 
+/* Optional physical-card provider. Implementations must return bounded spans,
+ * never expose raw device identifiers without authorization, and use
+ * PV_CARD_* statuses through ctx->host_status. */
+typedef int (*pv_card_fn)(pv_ctx *ctx, int hook, int rd, int rs1, int rs2);
+extern pv_card_fn pv_card_hook;
+
+/* Optional live request-context provider. The default request fields remain
+ * usable for native HTTP workers; this seam supports PIOS/kernel contexts and
+ * redacted host adapters without changing the ISA. */
+typedef int (*pv_context_fn)(pv_ctx *ctx, int hook, int rd, int rs1, int rs2);
+extern pv_context_fn pv_context_hook;
+
 /* Optional multi-target host provider (time / entropy / environment).
  * Installed by host/pv_host_provider.c via pv_host_install(). Freestanding
  * builds leave this NULL; pure hooks and stubs behave as before. */

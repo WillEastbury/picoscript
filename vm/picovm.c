@@ -197,6 +197,8 @@ pv_compute_fn pv_compute_hook = 0;
 pv_net_fn pv_net_hook = 0;
 pv_media_fn pv_media_hook = 0;
 pv_bitlinear_fn pv_bitlinear_hook = 0;
+pv_card_fn pv_card_hook = 0;
+pv_context_fn pv_context_hook = 0;
 pv_host_provider_dispatch_fn pv_host_provider_dispatch_hook = 0;
 static int pv_span_make(pv_ctx *ctx, uint32_t ptr, int32_t len)
 {
@@ -2694,6 +2696,13 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
     /* INV-17: bindings are not ambient -- deny the hook unless its class is granted. */
     uint32_t need = pv_hook_cap(hook);
     if (need && !(ctx->caps & need)) { pv_set_fault(ctx, PV_FAULT_CAPABILITY, ctx->cur_pc, hook); return; }
+    if (pv_card_hook && hook >= PV_HOOK_CARD_READ && hook <= PV_HOOK_CARD_ADDRESS &&
+        pv_card_hook(ctx, hook, rd, rs1, rs2))
+        return;
+    if (pv_context_hook && hook >= PV_HOOK_CONTEXT_GETVERB &&
+        hook <= PV_HOOK_CONTEXT_GETTRACEID &&
+        pv_context_hook(ctx, hook, rd, rs1, rs2))
+        return;
     if (((hook >= PV_HOOK_TENSOR_MAP && hook <= PV_HOOK_SHARD_SAVE) ||
          (hook >= PV_HOOK_TENSOR_ADD && hook <= PV_HOOK_TENSOR_RELEASE)) &&
         pv_tensor_request_status(&ctx->tensor_request) != PV_TENSOR_OK) {

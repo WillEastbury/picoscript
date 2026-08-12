@@ -1285,7 +1285,8 @@ class HostApi:
     reproducible.
     """
 
-    def __init__(self, compute_provider=None, network_provider=None, fixed_time=None):
+    def __init__(self, compute_provider=None, network_provider=None, fixed_time=None,
+                 card_provider=None, context_provider=None, environment_provider=None):
         self.queues: Dict[int, List[int]] = {}
         self.rng_state = 0x2545F4914F6CDD1D
         self.caps = CAP_ALL          # granted binding capabilities (INV-17); host restricts to gate
@@ -1298,6 +1299,9 @@ class HostApi:
         self.handlers: Dict[tuple, Callable] = {}
         self.compute_provider = compute_provider
         self.network_provider = network_provider
+        self.card_provider = card_provider
+        self.context_provider = context_provider
+        self.environment_provider = environment_provider
         self.provider_request = ProviderRequest()
         self.tensor_handles = TensorHandleTable()
         self.fixed_time = None if fixed_time is None else int(fixed_time)
@@ -1677,6 +1681,13 @@ class HostApi:
             return
         if ns == "Status" and method == "Last":      # INV-18: read out-of-band fallible-hook status
             vm.regs[rd] = self.host_status & MASK32
+            return
+        provider = {
+            "Card": self.card_provider,
+            "Context": self.context_provider,
+            "Environment": self.environment_provider,
+        }.get(ns)
+        if provider is not None and self._provider_call(provider, vm, ns, method, rd, rs1, rs2):
             return
         fn = self.handlers.get((ns, method))
         if fn is not None:
