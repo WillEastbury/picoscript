@@ -2694,6 +2694,13 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
     /* INV-17: bindings are not ambient -- deny the hook unless its class is granted. */
     uint32_t need = pv_hook_cap(hook);
     if (need && !(ctx->caps & need)) { pv_set_fault(ctx, PV_FAULT_CAPABILITY, ctx->cur_pc, hook); return; }
+    if (((hook >= PV_HOOK_TENSOR_MAP && hook <= PV_HOOK_SHARD_SAVE) ||
+         (hook >= PV_HOOK_TENSOR_ADD && hook <= PV_HOOK_TENSOR_RELEASE)) &&
+        pv_tensor_request_status(&ctx->tensor_request) != PV_TENSOR_OK) {
+        ctx->regs[rd] = 0;
+        ctx->host_status = pv_tensor_request_status(&ctx->tensor_request);
+        return;
+    }
     /* Multi-target host provider (Time / Random / Environment). Optional;
      * freestanding builds leave the hook NULL and fall through to stubs. */
     if (pv_host_provider_dispatch_hook &&

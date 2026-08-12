@@ -25,6 +25,7 @@ from typing import Callable, Dict, List, Optional
 import picoscript as isa
 import picocompress
 import picobrotli
+from picoscript_tensor import ProviderRequest, TensorHandleTable, TensorStatus
 from picoscript_lang import (
     HOST_HOOK_BASE,
     EXT_HOST_HOOK_BASE,
@@ -1255,6 +1256,8 @@ class HostApi:
         self.handlers: Dict[tuple, Callable] = {}
         self.compute_provider = compute_provider
         self.network_provider = network_provider
+        self.provider_request = ProviderRequest()
+        self.tensor_handles = TensorHandleTable()
         self.fixed_time = None if fixed_time is None else int(fixed_time)
         # Deterministic raw block device for reference/conformance runs.
         self.block_data = bytearray(64 * 1024)
@@ -1568,9 +1571,25 @@ class HostApi:
     def register(self, ns: str, method: str, fn: Callable):
         self.handlers[(ns, method)] = fn
 
+    def configure_provider_request(self, *, workspace_bytes=0, workspace_limit=0,
+                                   deadline_ticks=0, cancel_token=0,
+                                   capability_mask=0):
+        self.provider_request = ProviderRequest(
+            int(workspace_bytes), int(workspace_limit), int(deadline_ticks),
+            int(cancel_token), int(capability_mask),
+        )
+
+    def cancel_provider_request(self):
+        self.provider_request.cancel()
+
     def _provider_call(self, provider, vm: "PicoVM", ns: str, method: str, rd, rs1, rs2) -> bool:
         if provider is None:
             return False
+        request_status = self.provider_request.status()
+        if request_status != TensorStatus.OK:
+            vm.regs[rd] = 0
+            self.host_status = int(request_status)
+            return True
         call = getattr(provider, "call", None)
         if call is None:
             call = provider

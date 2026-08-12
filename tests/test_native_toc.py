@@ -27,11 +27,24 @@ from picoscript_vm import PicoVM  # noqa: E402
 VM_DIR = os.path.join(ROOT, "vm")
 VM_EXE = os.path.join(VM_DIR, "picovm_run.exe")
 BUILD = os.path.join(ROOT, ".test_build_toc")
+RUNTIME_SOURCES = [
+    os.path.join(VM_DIR, "picovm.c"),
+    os.path.join(VM_DIR, "picovm_emu.c"),
+    os.path.join(VM_DIR, "picovm_crypto_ext.c"),
+    os.path.join(VM_DIR, "pv_tensor_abi.c"),
+    os.path.join(VM_DIR, "picotls", "crypto", "ed25519.c"),
+    os.path.join(VM_DIR, "picotls", "crypto", "sha512.c"),
+    os.path.join(ROOT, "host", "pv_auth_store.c"),
+]
 
 
 def build_c_vm():
     cmd = [sys.executable, "-m", "ziglang", "cc", "-std=c99", "-O2",
-           os.path.join(VM_DIR, "picovm.c"), os.path.join(VM_DIR, "picovm_run.c"), "-o", VM_EXE]
+           f"-I{VM_DIR}", *RUNTIME_SOURCES,
+           os.path.join(VM_DIR, "picovm_run.c")]
+    if os.name == "nt":
+        cmd.append("-lws2_32")
+    cmd.extend(["-o", VM_EXE])
     r = subprocess.run(cmd, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
 
@@ -57,7 +70,10 @@ def c_native_out(il, slot):
     with open(cfile, "w", encoding="utf-8") as f:
         f.write(csrc)
     cmd = [sys.executable, "-m", "ziglang", "cc", "-std=c99", "-O2",
-           f"-I{VM_DIR}", cfile, os.path.join(VM_DIR, "picovm.c"), "-o", exe]
+           f"-I{VM_DIR}", cfile, *RUNTIME_SOURCES]
+    if os.name == "nt":
+        cmd.append("-lws2_32")
+    cmd.extend(["-o", exe])
     r = subprocess.run(cmd, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     out = subprocess.run([exe], capture_output=True, text=True)
@@ -145,6 +161,12 @@ def main():
               "int m = Span.Materialize(sl); int ml = Span.Len(m); Io.WriteByte(ml);"
               "int g0 = Span.Get(m, 0); Io.WriteByte(g0);")
         check(sp, b"cdef|" + bytes([4, 99]), "span_ops")
+
+        sa = (setbytes(1000, b"ab") + setbytes(1010, b"CD") +
+              "int a = Span.Make(1000, 2); int b = Span.Make(1010, 2);"
+              "int c = Span.Append(a, b); Io.Write(c); Io.WriteByte(Status.Last());"
+              "int z = Span.Get(c, 9); Io.WriteByte(z); Io.WriteByte(Status.Last());")
+        check(sa, b"abCD" + bytes([0, 0, 1]), "span_append")
 
         # Number.* : Parse / ToString / ToHex / Abs.
         nm = (setbytes(1000, b"255") + setbytes(1020, b"-9") +

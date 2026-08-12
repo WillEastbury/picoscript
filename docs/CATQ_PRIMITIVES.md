@@ -1,5 +1,9 @@
 # CAT-Q accelerator primitives
 
+Provider-backed CAT-Q operations use the shared tensor descriptor, handle
+ownership, workspace, cancellation, and status contract in
+[`TENSOR_PROVIDER_ABI.md`](TENSOR_PROVIDER_ABI.md).
+
 PicoScript exposes CAT-Q as coarse host-backed superinstructions. The executable
 pipeline is written in the C-syntax PicoScript dialect; CUDA, QPU, NEON, CPU, or
 another host backend supplies the execution substrate beneath those operations.

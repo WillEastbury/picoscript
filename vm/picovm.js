@@ -129,6 +129,7 @@
     this.caps = (opts.caps !== undefined) ? (opts.caps >>> 0) : CAP_ALL;  // granted bindings (INV-17)
     this.capCeiling = (opts.capCeiling !== undefined) ? (opts.capCeiling >>> 0) : this.caps;
     this._seed = (opts.seed !== undefined) ? (opts.seed >>> 0) : null;     // host-injected Random.U32 seed (INV-15)
+    this._fixedTime = (opts.fixedTime !== undefined) ? (opts.fixedTime | 0) : null;
     this.noAlloc = !!opts.noAlloc;          // hot-path no-allocation mode (INV-5)
     // Optional external card store (PicoWAL). Must expose get(addr)->int and
     // set(addr,int); when present it persists across reset()/load(), modelling a
@@ -143,8 +144,32 @@
     this._streamProvider = opts.streamProvider || null;
     this._computeProvider = opts.computeProvider || null;
     this._networkProvider = opts.networkProvider || null;
+    this.providerRequest = {
+      workspaceBytes: opts.workspaceBytes | 0,
+      workspaceLimit: opts.workspaceLimit | 0,
+      deadlineTicks: opts.deadlineTicks | 0,
+      cancelToken: opts.cancelToken | 0,
+      capabilityMask: opts.providerCapabilityMask >>> 0,
+      cancelled: false
+    };
     this.reset();
   }
+
+  PicoVM.prototype.configureProviderRequest = function (opts) {
+    opts = opts || {};
+    this.providerRequest = {
+      workspaceBytes: opts.workspaceBytes | 0,
+      workspaceLimit: opts.workspaceLimit | 0,
+      deadlineTicks: opts.deadlineTicks | 0,
+      cancelToken: opts.cancelToken | 0,
+      capabilityMask: opts.capabilityMask >>> 0,
+      cancelled: false
+    };
+  };
+
+  PicoVM.prototype.cancelProviderRequest = function () {
+    this.providerRequest.cancelled = true;
+  };
 
   PicoVM.prototype.reset = function () {
     this.regs = new Int32Array(16);
@@ -363,7 +388,7 @@
         "Shard": nsWrap(P._computeHost, "Shard"), "Net": P._netHost,
         "Attention": P._attention, "Tokenizer": P._tokenizer, "Model": P._model, "Kv": P._kv,
         "Sampling": P._sampling, "Resp": P._resp, "Query": P._queryHelpers, "Search": P._search,
-        "Storage": P._storage, "Gpio": P._gpio, "Device": P._device, "Stream": P._stream,
+        "Storage": P._storage, "Db": P._db, "Gpio": P._gpio, "Device": P._device, "Stream": P._stream,
         "Assert": P._assert, "Event": P._event, "Ui": P._ui, "String": P._stringlib, "Span": P._spanlib,
         "Number": P._numberlib, "Decimal": P._decimallib, "Template": P._templatelib,
         "Maths": P._mathslib, "Compress": P._compresslib, "Crypto": P._cryptolib,
@@ -438,11 +463,19 @@
       this.spans.push({ ptr: dst, len: sm.len });
       this.regs[rd] = this.spans.length - 1; return;
     }
-    if (name === "Span.Len") { var sl = this.spans[this.regs[rs1]]; this.regs[rd] = sl ? sl.len : 0; return; }
+    if (name === "Span.Len") {
+      var sl = this.spans[this.regs[rs1]];
+      this.regs[rd] = sl ? sl.len : 0;
+      this.hostStatus = sl ? 0 : 1;
+      return;
+    }
     if (name === "Span.Get") {
       var sg = this.spans[this.regs[rs1]] || { ptr: 0, len: 0 };
       var idx = this.regs[rs2] | 0;
-      this.regs[rd] = (idx >= 0 && idx < sg.len) ? this.mem[sg.ptr + idx] : 0; return;
+      var valid = idx >= 0 && idx < sg.len;
+      this.regs[rd] = valid ? this.mem[sg.ptr + idx] : 0;
+      this.hostStatus = valid ? 0 : 1;
+      return;
     }
     // ---- Arena scopes: Mark / Rewind / Reset the bump arena ----------------
     if (name === "Arena.Mark") {
@@ -1115,6 +1148,23 @@
   }
 
   PicoVM.prototype._mathslib = function (method, rd, rs1, rs2) {
+    if (method === "Random" || method === "RandomRange") {
+      var rx = this.rng >>> 0;
+      rx ^= (rx << 13); rx >>>= 0;
+      rx ^= (rx >>> 7);
+      rx ^= (rx << 17); rx >>>= 0;
+      this.rng = rx >>> 0;
+      if (method === "Random") {
+        this.regs[rd] = (rx >>> 16) | 0;
+      } else {
+        var rlo = this.regs[rs1] | 0, rhi = this.regs[rs2] | 0;
+        if (rlo > rhi) { var rtmp = rlo; rlo = rhi; rhi = rtmp; }
+        var rspan = (rhi - rlo + 1) >>> 0;
+        this.regs[rd] = rspan === 0 ? rlo : (rlo + (rx % rspan)) | 0;
+      }
+      this.hostStatus = 0;
+      return true;
+    }
     if (method === "Sin") { this.regs[rd] = q16Sincos(this.regs[rs1] | 0)[0] | 0; return true; }
     if (method === "Cos") { this.regs[rd] = q16Sincos(this.regs[rs1] | 0)[1] | 0; return true; }
     if (method === "Tan") { this.regs[rd] = q16Tan(this.regs[rs1] | 0) | 0; return true; }
@@ -2179,6 +2229,12 @@
   // UTF-8 byte-spans the program builds in arena memory.
   PicoVM.prototype._providerCall = function (provider, ns, method, rd, rs1, rs2) {
     if (!provider) return false;
+    var request = this.providerRequest;
+    if (request.cancelled) { this.regs[rd] = 0; this.hostStatus = 9; return true; }
+    if (request.workspaceBytes < 0 || request.workspaceLimit < 0 ||
+        (request.workspaceLimit && request.workspaceBytes > request.workspaceLimit)) {
+      this.regs[rd] = 0; this.hostStatus = request.workspaceLimit ? 11 : 2; return true;
+    }
     var fn = (typeof provider === "function") ? provider : provider.call;
     if (typeof fn !== "function") return false;
     var result = fn.call(provider, ns, method, this.regs[rs1] | 0, this.regs[rs2] | 0, this);
@@ -2466,6 +2522,47 @@
     return false;
   };
 
+  // ---- Db.* explicit-pack raw card CRUD ---------------------------
+  PicoVM.prototype._db = function (method, rd, rs1, rs2) {
+    if (!this._st) this._storage("Ready", 0, 0, 0);
+    var st = this._st, pack = this.regs[rs1] | 0, key, id, data;
+    if (pack < 0 || pack > 0x3FF) { this.regs[rd] = 0; this.hostStatus = 2; return true; }
+    if (method === "Insert") {
+      id = 1;
+      Object.keys(st.blobs).forEach(function (name) {
+        var prefix = String(pack) + ":", value = String(name);
+        if (value.indexOf(prefix) === 0) id = Math.max(id, Number(value.slice(prefix.length)) + 1);
+      });
+      st.blobs[pack + ":" + id] = this._spanBytes(this.regs[rs2]);
+      this.regs[rd] = id; this.hostStatus = 0; return true;
+    }
+    id = this.regs[rs2] | 0; key = pack + ":" + id;
+    if (id < 0 || id > 0x3FFFFF) { this.regs[rd] = 0; this.hostStatus = 2; return true; }
+    if (method === "Read") {
+      data = st.blobs[key];
+      this.regs[rd] = data ? this._newSpanBytes(data) : 0;
+      this.hostStatus = data ? 0 : 1; return true;
+    }
+    if (method === "Write" || method === "Update" || method === "Patch") {
+      if (!Object.prototype.hasOwnProperty.call(st.blobs, key)) {
+        this.regs[rd] = 0; this.hostStatus = 1;
+      } else {
+        st.blobs[key] = this._spanBytes(this.regs[rd]);
+        this.regs[rd] = 0; this.hostStatus = 0;
+      }
+      return true;
+    }
+    if (method === "Delete") {
+      var existed = Object.prototype.hasOwnProperty.call(st.blobs, key);
+      if (existed) delete st.blobs[key];
+      this.regs[rd] = existed ? 1 : 0; this.hostStatus = existed ? 0 : 1; return true;
+    }
+    if (method === "Sync" || method === "Recover") {
+      this.regs[rd] = 0; this.hostStatus = 0; return true;
+    }
+    return false;
+  };
+
   // ---- Storage.* card CRUD/query over PicoStore ---------------------------
   PicoVM.prototype._storage = function (method, rd, rs1, rs2) {
     if (!this._st) {
@@ -2523,6 +2620,46 @@
     if (method === "QueryResult") {
       var qi = this.regs[rs1] | 0;
       this.regs[rd] = (qi >= 0 && qi < st.results.length) ? st.results[qi] : 0; return true;
+    }
+    if (method === "PutCard") {
+      var pcid = this.regs[rs1] | 0, pkey = pack + ":" + pcid;
+      var validCard = st.pack >= 0 && st.pack <= 0x3FF && pcid >= 0 && pcid <= 0x3FFFFF;
+      if (validCard) st.blobs[pkey] = this._spanBytes(this.regs[rs2]);
+      this.regs[rd] = validCard ? 0 : 1;
+      return true;
+    }
+    if (method === "ReadExact") {
+      var xkey = pack + ":" + (this.regs[rs1] | 0);
+      this.regs[rd] = Object.prototype.hasOwnProperty.call(st.blobs, xkey)
+        ? this._newSpanBytes(st.blobs[xkey]) : 0;
+      return true;
+    }
+    if (method === "DeleteExact") {
+      var dkey = pack + ":" + (this.regs[rs1] | 0);
+      var existed = Object.prototype.hasOwnProperty.call(st.blobs, dkey);
+      if (existed) delete st.blobs[dkey];
+      this.regs[rd] = existed ? 1 : 0;
+      return true;
+    }
+    if (method === "Exists") {
+      var ekey = pack + ":" + (this.regs[rs1] | 0);
+      this.regs[rd] = Object.prototype.hasOwnProperty.call(st.blobs, ekey) ? 1 : 0;
+      return true;
+    }
+    if (method === "ScanNext") {
+      var after = this.regs[rs1] | 0, ids = [];
+      Object.keys(st.blobs).forEach(function (key) {
+        var prefix = pack + ":", text = String(key);
+        if (text.indexOf(prefix) !== 0) return;
+        var id = Number(text.slice(prefix.length));
+        if (Number.isInteger(id) && id > after) ids.push(id);
+      });
+      ids.sort(function (a, b) { return a - b; });
+      this.regs[rd] = ids.length ? ids[0] : 0xFFFFFFFF;
+      return true;
+    }
+    if (method === "Sync" || method === "Recover") {
+      this.regs[rd] = 0; return true;
     }
     if (method === "SetSlice") {
       st.sliceOffset = Math.max(0, this.regs[rs1] | 0);
@@ -3326,7 +3463,7 @@
   // -- DateTime core (UTC epoch-seconds storage) ----------------------------
   PicoVM.prototype._datetime = function (method, rd, rs1, rs2) {
     if (method === "UtcNow" || method === "Now" || method === "UnixTimestamp") {
-      this.regs[rd] = (Date.now() / 1000) | 0;
+      this.regs[rd] = this._fixedTime !== null ? this._fixedTime : (Date.now() / 1000) | 0;
       return true;
     }
     if (method === "Parse") {

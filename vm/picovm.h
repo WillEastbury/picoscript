@@ -139,6 +139,45 @@ enum {
 
 typedef struct pv_ctx pv_ctx;
 
+enum {
+    PV_TENSOR_OK = 0,
+    PV_TENSOR_INVALID_HANDLE = 1,
+    PV_TENSOR_INVALID_ARGUMENT = 2,
+    PV_TENSOR_EMPTY = 3,
+    PV_TENSOR_ALLOCATION_FAILED = 7,
+    PV_TENSOR_UNSUPPORTED_DEVICE = 8,
+    PV_TENSOR_CANCELLED = 9,
+    PV_TENSOR_TIMEOUT = 10,
+    PV_TENSOR_WORKSPACE_EXHAUSTED = 11,
+    PV_TENSOR_FORMAT_MISMATCH = 12,
+    PV_TENSOR_SHARD_CORRUPT = 13
+};
+
+typedef struct {
+    uint32_t workspace_ptr;
+    uint32_t workspace_bytes;
+    uint32_t workspace_limit;
+    uint32_t deadline_ticks;
+    uint32_t cancel_token;
+    uint32_t capability_mask;
+    uint8_t cancelled;
+} pv_tensor_request;
+
+typedef struct {
+    uint8_t version;
+    uint8_t dtype;
+    uint8_t rank;
+    uint8_t flags;
+    uint32_t byte_offset;
+    uint32_t byte_length;
+    uint32_t dimensions[8];
+    int32_t strides[8];
+} pv_tensor_descriptor;
+
+int pv_tensor_descriptor_decode(const uint8_t *data, uint32_t length,
+                                pv_tensor_descriptor *out);
+int pv_tensor_request_status(const pv_tensor_request *request);
+
 /* Host-hook callback for OP_NOOP host hooks (Random/Queue/Storage/etc.).
  * `hook` is the low byte of imm16; operands are register indices + imm16. */
 typedef void (*pv_host_fn)(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16);
@@ -233,6 +272,7 @@ struct pv_ctx {
 
     int64_t   retval;
     uint64_t  rng_state;
+    pv_tensor_request tensor_request;
 
     long      steps;
     long      max_steps;
