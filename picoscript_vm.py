@@ -1499,6 +1499,7 @@ class HostApi:
         self._ns_dispatch: Dict[str, Callable] = {
             "Map": self._map_hook,
             "Tensor": self._tensor,
+            "Media": self._media,
             "CatQ": lambda vm, method, rd, rs1, rs2: self._compute_host(vm, "CatQ", method, rd, rs1, rs2),
             "Async": lambda vm, method, rd, rs1, rs2: self._compute_host(vm, "Async", method, rd, rs1, rs2),
             "Shard": lambda vm, method, rd, rs1, rs2: self._compute_host(vm, "Shard", method, rd, rs1, rs2),
@@ -3545,6 +3546,66 @@ class HostApi:
             vm.regs[rd] = self._new_span_bytes(vm, self._i32be_pack(vals))
             return True
         return False
+
+    def _media(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
+        if not hasattr(self, "media_width"):
+            self.media_width = 0
+            self.media_height = 0
+        if method == "SetShape":
+            width, height = _sx32(vm.regs[rs1]), _sx32(vm.regs[rs2])
+            ok = 0 < width <= 16384 and 0 < height <= 16384 and width * height <= 16 * 1024 * 1024
+            if ok:
+                self.media_width, self.media_height = width, height
+            vm.regs[rd] = 1 if ok else 0
+            self.host_status = 0 if ok else 2
+            return True
+        if method == "HasAccel" or method == "HasHevc":
+            vm.regs[rd] = 0
+            self.host_status = 0
+            return True
+        if method in ("HevcConfigure", "HevcDecode"):
+            vm.regs[rd] = 0
+            self.host_status = 8
+            return True
+        width, height = getattr(self, "media_width", 0), getattr(self, "media_height", 0)
+        pixels = width * height
+        source = self._span_raw(vm, vm.regs[rs1])
+        if width <= 0 or height <= 0 or len(source) < pixels:
+            vm.regs[rd] = 0
+            self.host_status = 2
+            return True
+        if method in ("H264Residual", "H264Restore", "GrayXorResidual", "GrayXorRestore"):
+            other = self._span_raw(vm, vm.regs[rs2])
+            if len(other) < pixels:
+                vm.regs[rd] = 0
+                self.host_status = 2
+                return True
+        out = bytearray(pixels)
+        if method in ("GrayDeltaEncode", "GrayDeltaDecode"):
+            for row in range(height):
+                previous = 0
+                offset = row * width
+                for col in range(width):
+                    index = offset + col
+                    if method == "GrayDeltaEncode":
+                        out[index] = (source[index] - previous) & 0xFF
+                        previous = source[index]
+                    else:
+                        previous = (previous + source[index]) & 0xFF
+                        out[index] = previous
+        elif method in ("H264Residual", "H264Restore", "GrayXorResidual", "GrayXorRestore"):
+            for index in range(pixels):
+                if method.startswith("GrayXor"):
+                    out[index] = source[index] ^ other[index]
+                elif method == "H264Residual":
+                    out[index] = (source[index] - other[index]) & 0xFF
+                else:
+                    out[index] = (source[index] + other[index]) & 0xFF
+        else:
+            return False
+        vm.regs[rd] = self._new_span_bytes(vm, out)
+        self.host_status = 0
+        return True
 
     @staticmethod
     def _ternary_weight(packed: bytes, idx: int) -> int:

@@ -409,7 +409,7 @@
     if (!T) {
       var P = PicoVM.prototype;
       T = PicoVM._NS_DISPATCH_TABLE = {
-        "Map": P._mapHook, "Tensor": P._tensor, "BitLinear": P._bitlinear, "Quant": P._quant,
+        "Map": P._mapHook, "Tensor": P._tensor, "Media": P._media, "BitLinear": P._bitlinear, "Quant": P._quant,
         "CatQ": nsWrap(P._computeHost, "CatQ"), "Async": nsWrap(P._computeHost, "Async"),
         "Shard": nsWrap(P._computeHost, "Shard"), "Net": P._netHost,
         "Attention": P._attention, "Tokenizer": P._tokenizer, "Model": P._model, "Kv": P._kv,
@@ -2347,6 +2347,56 @@
       this.regs[rd] = this._newSpanBytes(packI32(res)); return true;
     }
     return false;
+  };
+
+  PicoVM.prototype._media = function (method, rd, rs1, rs2) {
+    if (this.mediaWidth === undefined) { this.mediaWidth = 0; this.mediaHeight = 0; }
+    if (method === "SetShape") {
+      var width = this.regs[rs1] | 0, height = this.regs[rs2] | 0;
+      var ok = width > 0 && height > 0 && width <= 16384 && height <= 16384 &&
+        width * height <= 16 * 1024 * 1024;
+      if (ok) { this.mediaWidth = width; this.mediaHeight = height; }
+      this.regs[rd] = ok ? 1 : 0; this.hostStatus = ok ? 0 : 2; return true;
+    }
+    if (method === "HasAccel" || method === "HasHevc") {
+      this.regs[rd] = 0; this.hostStatus = 0; return true;
+    }
+    if (method === "HevcConfigure" || method === "HevcDecode") {
+      this.regs[rd] = 0; this.hostStatus = 8; return true;
+    }
+    var width2 = this.mediaWidth | 0, height2 = this.mediaHeight | 0;
+    var pixels = width2 * height2, source = this._spanBytes(this.regs[rs1]);
+    if (width2 <= 0 || height2 <= 0 || source.length < pixels) {
+      this.regs[rd] = 0; this.hostStatus = 2; return true;
+    }
+    var other = null;
+    if (method === "H264Residual" || method === "H264Restore" ||
+        method === "GrayXorResidual" || method === "GrayXorRestore") {
+      other = this._spanBytes(this.regs[rs2]);
+      if (other.length < pixels) { this.regs[rd] = 0; this.hostStatus = 2; return true; }
+    }
+    var out = new Array(pixels), row, col, index, previous;
+    if (method === "GrayDeltaEncode" || method === "GrayDeltaDecode") {
+      for (row = 0; row < height2; row++) {
+        previous = 0;
+        for (col = 0; col < width2; col++) {
+          index = row * width2 + col;
+          if (method === "GrayDeltaEncode") {
+            out[index] = (source[index] - previous) & 255; previous = source[index];
+          } else {
+            previous = (previous + source[index]) & 255; out[index] = previous;
+          }
+        }
+      }
+    } else if (method === "H264Residual" || method === "H264Restore" ||
+               method === "GrayXorResidual" || method === "GrayXorRestore") {
+      for (index = 0; index < pixels; index++) {
+        if (method.indexOf("GrayXor") === 0) out[index] = source[index] ^ other[index];
+        else if (method === "H264Residual") out[index] = (source[index] - other[index]) & 255;
+        else out[index] = (source[index] + other[index]) & 255;
+      }
+    } else return false;
+    this.regs[rd] = this._newSpanBytes(out); this.hostStatus = 0; return true;
   };
   function ternaryWeight(packed, idx) { if (((idx / 4) | 0) >= packed.length) return 0; var code = (packed[(idx / 4) | 0] >>> ((idx & 3) * 2)) & 3; return code === 1 ? 1 : (code === 2 ? -1 : 0); }
   function decodeRowSpec(spec, defStart, defCount, maxRows) {
