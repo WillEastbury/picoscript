@@ -85,6 +85,27 @@ enum {
     PV_OP_RETURN = 0xC, PV_OP_WAIT = 0xD, PV_OP_RAISE = 0xE, PV_OP_DSP = 0xF
 };
 
+enum {
+    PV_NET_OK = 0,
+    PV_NET_INVALID_HANDLE = 1,
+    PV_NET_INVALID_ARGUMENT = 2,
+    PV_NET_TIMEOUT = 3,
+    PV_NET_DISCONNECTED = 4,
+    PV_NET_UNAVAILABLE = 5,
+    PV_NET_ADDRESS_ERROR = 6,
+    PV_NET_WOULD_BLOCK = 7,
+    PV_NET_CANCELLED = 8,
+    PV_NET_POOL_EXHAUSTED = 9
+};
+
+typedef struct {
+    uint32_t timeout_ms;
+    uint32_t max_read_bytes;
+    uint32_t pool_limit;
+    uint32_t cancel_token;
+    uint8_t cancelled;
+} pv_net_request;
+
 /* addressing / branch-mode encodings (bits [19:16]) */
 enum { PV_ADDR_IMM = 0x0, PV_ADDR_REG = 0x1, PV_ADDR_REG_OFF = 0x3 };
 enum {
@@ -273,6 +294,7 @@ struct pv_ctx {
     int64_t   retval;
     uint64_t  rng_state;
     pv_tensor_request tensor_request;
+    pv_net_request net_request;
 
     long      steps;
     long      max_steps;

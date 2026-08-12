@@ -144,6 +144,13 @@
     this._streamProvider = opts.streamProvider || null;
     this._computeProvider = opts.computeProvider || null;
     this._networkProvider = opts.networkProvider || null;
+    this.networkRequest = {
+      timeoutMs: opts.timeoutMs | 0,
+      maxReadBytes: opts.maxReadBytes | 0,
+      poolLimit: opts.poolLimit | 0,
+      cancelToken: opts.cancelToken | 0,
+      cancelled: false
+    };
     this.providerRequest = {
       workspaceBytes: opts.workspaceBytes | 0,
       workspaceLimit: opts.workspaceLimit | 0,
@@ -169,6 +176,21 @@
 
   PicoVM.prototype.cancelProviderRequest = function () {
     this.providerRequest.cancelled = true;
+  };
+
+  PicoVM.prototype.configureNetworkRequest = function (opts) {
+    opts = opts || {};
+    this.networkRequest = {
+      timeoutMs: opts.timeoutMs | 0,
+      maxReadBytes: opts.maxReadBytes | 0,
+      poolLimit: opts.poolLimit | 0,
+      cancelToken: opts.cancelToken | 0,
+      cancelled: false
+    };
+  };
+
+  PicoVM.prototype.cancelNetworkRequest = function () {
+    this.networkRequest.cancelled = true;
   };
 
   PicoVM.prototype.reset = function () {

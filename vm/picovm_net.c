@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#ifndef _WIN32
+#include <errno.h>
+#endif
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -15,6 +18,7 @@ typedef SOCKET pv_socket_t;
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <sys/time.h>
 #include <sys/socket.h>
 #include <unistd.h>
 typedef int pv_socket_t;
@@ -28,11 +32,35 @@ static pv_socket_t pv_net_sockets[PV_NET_MAX_SOCKETS];
 static uint8_t pv_net_used[PV_NET_MAX_SOCKETS];
 static int pv_net_ready;
 
+static int pv_net_cancelled(pv_ctx *ctx, int rd)
+{
+    if (!ctx || !ctx->net_request.cancelled) return 0;
+    ctx->regs[rd] = 0;
+    ctx->host_status = PV_NET_CANCELLED;
+    return 1;
+}
+
+static void pv_net_timeout(pv_socket_t sock, uint32_t timeout_ms)
+{
+    if (timeout_ms == 0) return;
+#ifdef _WIN32
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms));
+#else
+    struct timeval value;
+    value.tv_sec = (time_t)(timeout_ms / 1000U);
+    value.tv_usec = (suseconds_t)((timeout_ms % 1000U) * 1000U);
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &value, sizeof(value));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &value, sizeof(value));
+#endif
+}
+
 static int pv_net_put(pv_socket_t sock)
 {
     int i;
     for (i = 1; i < PV_NET_MAX_SOCKETS; i++) {
         if (!pv_net_used[i]) {
+            if (pv_net_sockets[i] == PV_INVALID_SOCKET) continue;
             pv_net_used[i] = 1;
             pv_net_sockets[i] = sock;
             return i;
@@ -122,12 +150,14 @@ int pv_net_socket_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
     int a = ctx->regs[rs1];
     int b = ctx->regs[rs2];
     pv_socket_t sock;
+    if (pv_net_cancelled(ctx, rd)) return 1;
 
     if (hook == PV_HOOK_NET_LISTEN) {
         struct sockaddr_in addr;
         int yes = 1;
         sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock == PV_INVALID_SOCKET) goto fail_scalar;
+        pv_net_timeout(sock, ctx->net_request.timeout_ms);
         setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&yes, sizeof(yes));
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
@@ -169,6 +199,7 @@ int pv_net_socket_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         for (it = result; it; it = it->ai_next) {
             sock = socket(it->ai_family, it->ai_socktype, it->ai_protocol);
             if (sock == PV_INVALID_SOCKET) continue;
+            pv_net_timeout(sock, ctx->net_request.timeout_ms);
             if (connect(sock, it->ai_addr, (int)it->ai_addrlen) == 0) break;
             pv_close_socket(sock);
             sock = PV_INVALID_SOCKET;
@@ -188,6 +219,9 @@ int pv_net_socket_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         base = ctx->arena_top;
         if (base > (uint32_t)ctx->mem_size) goto fail_span;
         max_bytes = b > 0 ? b : 65536;
+        if (ctx->net_request.max_read_bytes > 0 &&
+            (uint32_t)max_bytes > ctx->net_request.max_read_bytes)
+            max_bytes = (int32_t)ctx->net_request.max_read_bytes;
         if ((uint32_t)max_bytes > (uint32_t)ctx->mem_size - base)
             max_bytes = (int32_t)((uint32_t)ctx->mem_size - base);
         got = recv(sock, (char *)(ctx->mem + base), max_bytes, 0);
@@ -235,10 +269,10 @@ int pv_net_socket_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
 
 fail_span:
     ctx->regs[rd] = pv_net_finish_span(ctx, ctx->arena_top, 0);
-    ctx->host_status = 1;
+    ctx->host_status = PV_NET_UNAVAILABLE;
     return 1;
 fail_scalar:
     ctx->regs[rd] = 0;
-    ctx->host_status = 1;
+    ctx->host_status = PV_NET_UNAVAILABLE;
     return 1;
 }

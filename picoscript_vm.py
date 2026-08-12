@@ -1156,8 +1156,21 @@ class SocketNetworkProvider:
 
     def __init__(self, bind_host: str = "127.0.0.1"):
         self.bind_host = bind_host
+        self.timeout_ms = 0
+        self.max_read_bytes = 65536
+        self.pool_limit = 64
+        self.cancelled = False
         self._next_handle = 1
         self._sockets: Dict[int, object] = {}
+
+    def configure(self, *, timeout_ms=0, max_read_bytes=65536, pool_limit=64):
+        self.timeout_ms = max(0, int(timeout_ms))
+        self.max_read_bytes = max(1, int(max_read_bytes))
+        self.pool_limit = max(1, int(pool_limit))
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
 
     def _put(self, sock) -> int:
         handle = self._next_handle
@@ -1179,8 +1192,12 @@ class SocketNetworkProvider:
 
         if namespace != "Net":
             return None
+        if self.cancelled:
+            return (8, 0)
         try:
             if method == "Listen":
+                if len(self._sockets) >= self.pool_limit:
+                    return (9, 0)
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.bind((self.bind_host, max(0, int(a))))
@@ -1190,9 +1207,12 @@ class SocketNetworkProvider:
                 listener = self._sockets.get(int(a))
                 if listener is None:
                     return (1, 0)
+                if len(self._sockets) >= self.pool_limit:
+                    return (9, 0)
                 old_timeout = listener.gettimeout()
-                if int(b) > 0:
-                    listener.settimeout(int(b) / 1000.0)
+                timeout_ms = int(b) if int(b) > 0 else self.timeout_ms
+                if timeout_ms > 0:
+                    listener.settimeout(timeout_ms / 1000.0)
                 try:
                     conn, _ = listener.accept()
                 except socket.timeout:
@@ -1201,25 +1221,45 @@ class SocketNetworkProvider:
                     listener.settimeout(old_timeout)
                 return self._put(conn)
             if method == "Connect":
+                if len(self._sockets) >= self.pool_limit:
+                    return (9, 0)
                 endpoint = host._span_str(vm, int(a)).strip()
                 port = int(b)
                 if port <= 0 and ":" in endpoint:
                     endpoint, raw_port = endpoint.rsplit(":", 1)
                     port = int(raw_port)
-                conn = socket.create_connection((endpoint or "127.0.0.1", port))
+                conn = socket.create_connection(
+                    (endpoint or "127.0.0.1", port),
+                    timeout=(self.timeout_ms / 1000.0 if self.timeout_ms else None),
+                )
                 return self._put(conn)
             if method in ("Read", "RecvSpan"):
                 conn = self._sockets.get(int(a))
                 if conn is None:
                     return (1, b"")
-                return conn.recv(max(1, int(b) if int(b) > 0 else 65536))
+                if self.timeout_ms:
+                    conn.settimeout(self.timeout_ms / 1000.0)
+                try:
+                    return conn.recv(min(
+                        max(1, int(b) if int(b) > 0 else self.max_read_bytes),
+                        self.max_read_bytes,
+                    ))
+                except socket.timeout:
+                    return (3, b"")
             if method in ("Write", "SendSpan"):
                 conn = self._sockets.get(int(a))
                 if conn is None:
                     return (1, 0)
                 payload = host._span_raw(vm, int(b))
-                conn.sendall(payload)
-                return len(payload)
+                if self.timeout_ms:
+                    conn.settimeout(self.timeout_ms / 1000.0)
+                sent = 0
+                while sent < len(payload):
+                    count = conn.send(payload[sent:])
+                    if count <= 0:
+                        return (4, sent)
+                    sent += count
+                return sent
             if method == "Shutdown":
                 sock = self._sockets.pop(int(a), None)
                 if sock is None:
@@ -1228,9 +1268,11 @@ class SocketNetworkProvider:
                 return 1
             if method in ("PoolSize", "Register"):
                 return 1
+        except socket.timeout:
+            return (3, b"" if method in ("Read", "RecvSpan") else 0)
         except OSError as exc:
             host.log.append(f"Net.{method} failed: {exc}")
-            return (1, b"" if method in ("Read", "RecvSpan") else 0)
+            return (5, b"" if method in ("Read", "RecvSpan") else 0)
         return None
 
 
