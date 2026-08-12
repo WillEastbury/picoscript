@@ -26,6 +26,10 @@ A single reference table for "does X work on Y". Two independent axes:
 
 ## 1. Control-flow / statement keywords by dialect
 
+Host-bound namespace status is generated from
+[`PROVIDER_MANIFEST.json`](PROVIDER_MANIFEST.json); use
+`python tools/provider_conformance.py --json` for the target-by-target report.
+
 | Feature | BASIC | Python | English | COBOL | Report | Functional | C-style | v1 |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | If / While / For | Y | Y | Y | Y | Y | Y | Y | Y |
@@ -129,8 +133,18 @@ same code), and — the architecturally riskiest case — a **genuine VM fault**
 
 ## 3. Host namespaces by runtime (Python VM / JS VM+native-JS / C VM+native-C)
 
-71 namespaces are registered in `HOST_HOOK_CODES` (70 verified in an earlier
-pass; `Decimal` added since — see its row below). Status below was verified
+### Database façade / PicoWAL status
+
+The current milestone has a shared public namespace surface and registered
+`Db.*` hook definitions across the compiler and generated runtime tables.
+PicoWAL is the execution substrate for the C/native path: exact index seeks,
+legacy query parsing, result iteration, bounded batch/materialization, and
+deterministic plan status reuse the existing overlay/index buffers. Python and
+JavaScript retain compatibility routing for CRUD; schema binding, the full
+structured planner, and complete CRUD/provider parity are not yet complete.
+
+
+79 namespaces and 633 hooks are registered in `HOST_HOOK_CODES`. Status below was verified
 directly (grep for each runtime's actual dispatch branches — `if ns == "X"` in
 `picoscript_vm.py`, `name.indexOf("X.")` in `vm/picovm.js`, hook-code-range
 checks in `vm/picovm.c`), not inferred from documentation claims. **Updated
@@ -148,6 +162,7 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Auth | 10 | Stub | Stub | Stub | Host-injected by design — needs identity provider/trust store + entropy. Every method now returns a defined 0/empty-span default (previously silently fell through). |
 | Base64 | 4 | Y | Y | Y | |
 | Binary | 6 | Y | Y | Y | PSC1/BSO1 card <-> Map |
+| **Block** | **13** | **Y (fixed)** | **Y (fixed)** | **Y (fixed)** | Raw block-device API: readiness, geometry, 64-bit offset/LBA split, bounded read/write, resize, sync, and status; compiler hook ABI and disassembly are covered by `tests/test_block_primitives.py`. |
 | BitLinear | 8 | Y | Y | Y | |
 | Bits | 7 | Y | Y | Y | |
 | Capability | 3 | Y | Y | Y | |
@@ -177,7 +192,7 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Locale | 7 | Y | Y | Y | Needs `tzdata` on Windows for non-empty `zoneinfo` — see note below |
 | Log | 5 | Y | Y | **Y (fixed)** | Real `Log.*` subsystem — **now on all 3 runtimes**. C VM uses a fixed-size table (`PV_MAX_LOGS=128`), consistent with this embedded runtime's other handle tables (Map/Descriptor/Lease/Fifo) — a bounded vs. Python/JS's unbounded dict, not a behavioral difference at any realistic scale. |
 | Map | 27 | Y | Y | Y | |
-| Maths | 12 | Partial | Partial | Partial | `Sin/Cos/Tan/Log/Log10/Exp` (Q16.16 CORDIC), `Power/Sqrt/Clamp/Lerp` implemented; `Random`/`RandomRange` host-injected (entropy) |
+| Maths | 12 | Partial | Partial | Partial | `Sin/Cos/Tan/Log/Log10/Exp` (Q16.16 CORDIC), `Power/Sqrt/Clamp/Lerp` implemented; seeded `Random`/`RandomRange` reference paths now exist, while live entropy remains provider-backed |
 | Media | 11 | Provider | Provider | **Y (real)** | Host/device media acceleration surface; native C provides deterministic grayscale delta, residual, and XOR fallbacks while HEVC remains provider-backed. |
 | Memory | 9 | Y | Y | Y | |
 | Model | 12 | Y | Y | Y | |
@@ -188,7 +203,7 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Principal | 3 | Y | Y | Y | |
 | Process | 8 | Y | Y | Y | |
 | Quant | 5 | Y | Y | Y | |
-| Query | 2 | Y | Y | Y | |
+| Query | 29 | Partial | Partial | **Y (planner bridge)** | Public structured façade lowers to `Db.*`; PicoWAL C adapter routes `Seek/Query/Next/Batch/Materialize/Plan` into existing exact-index, query-result, and fallback scan paths. Builder IR and full cursor semantics remain in progress. |
 | Queue | 5 | Y | Y | Y | `DequeueBatch`/`EnqueueBatch` are docs/CONFORMANCE_LEVELS.md's "L3: Optional" batch-container API ("no correctness impact if omitted") -- explicit 0 default on all 3 runtimes (was a silent fallthrough leaving `rd` untouched; fixed this pass) rather than a full v2 batch-container implementation, which is a separate, deliberately deferred design question. |
 | Random | 1 | Y (seeded, non-deterministic by design) | Y | Y | |
 | Req | 13 | Y | Y | Y | Host-fed request context; native C has a real HTTP server (`docs/NATIVE_HTTP_SERVER.md`) |
@@ -201,6 +216,8 @@ explicit, documented default (0 / empty span) on all three runtimes — see
 | Span | 5 | Y | Y | Y | |
 | Status | 1 | Y | Y | Y | |
 | Storage | 21 | Y | Y | Y | Card-store; host-injected persistence backend, in-VM logic is pure |
+| Update | 8 | **ABI** | **ABI** | **ABI** | Public CRUD façade; compiler emits internal `Db.*` hooks. C/PicoWAL adapter currently bridges query-side operations; full CRUD façade parity is in progress. |
+| Definition | 6 | **ABI** | **ABI** | **ABI** | Public pack/index definition façade; hook codes and compiler surface exist. Persistent overlay registration/rebuild behavior is host/PicoWAL work in progress. |
 | Stream | 8 | Y | Y | Y | |
 | String | 14 | Y | Y | Y | `Split`/`Join` are **new, real implementations this pass** (see below) — Map-backed multi-value result, byte-identical on all 3 runtimes. |
 | Template | 2 | Y | Y | Y | |

@@ -17,3 +17,10 @@ jobs:
           python3 picoscript_lang.py
           python3 picoscript.py
           python3 picoscript_opcodes.py
+      - name: Generate provider conformance matrix
+        run: python3 tools/provider_conformance.py --json > provider-conformance.json
+      - name: Publish provider conformance matrix
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-conformance
+          path: provider-conformance.json

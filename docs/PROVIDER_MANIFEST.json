@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "status_values": {
+    "implemented": "Reference semantics are available without a host provider.",
+    "provider-backed": "A provider must be installed for the target.",
+    "unsupported": "The target returns an explicit unsupported status.",
+    "intentionally-unavailable": "The target is a deliberate deployment restriction."
+  },
+  "targets": {
+    "null": {
+      "kind": "deterministic",
+      "provider": "pv_host_null",
+      "security": "no live identity, network, device, or secret access"
+    },
+    "python": {
+      "kind": "reference",
+      "provider": "HostApi",
+      "security": "capability-gated; live providers are explicitly injected"
+    },
+    "javascript": {
+      "kind": "browser/reference",
+      "provider": "injected PicoVM providers",
+      "security": "capability-gated; browser APIs are never ambient"
+    },
+    "native-posix": {
+      "kind": "hosted",
+      "provider": "pv_host_platform",
+      "security": "OS/provider capabilities are explicit"
+    },
+    "native-windows": {
+      "kind": "hosted",
+      "provider": "pv_host_platform",
+      "security": "Win32/provider capabilities are explicit"
+    },
+    "pios": {
+      "kind": "freestanding",
+      "provider": "pv_host_pios",
+      "security": "kernel IPC/SVC only; no worker syscalls"
+    }
+  },
+  "families": {
+    "pure": {
+      "status": "implemented",
+      "ownership": "arena-backed spans or scalar values",
+      "limits": "fixed VM arena and instruction budget",
+      "security": "none beyond VM bounds"
+    },
+    "host": {
+      "status": "provider-backed",
+      "ownership": "provider-owned handles or caller-visible spans",
+      "limits": "provider manifest and request budget",
+      "security": "capability-gated"
+    }
+  },
+  "namespace_family": {
+    "Auth": "host",
+    "Card": "host",
+    "Context": "host",
+    "Environment": "host",
+    "Http": "host",
+    "Net": "host",
+    "Req": "host",
+    "Resp": "host",
+    "X509": "host",
+    "Async": "host",
+    "CatQ": "host",
+    "MoE": "host",
+    "Shard": "host",
+    "Media": "host",
+    "Storage": "host",
+    "Search": "host",
+    "Tensor": "host",
+    "BitLinear": "host"
+  },
+  "method_overrides": {
+    "DateTime.Now": "host",
+    "DateTime.UtcNow": "host",
+    "DateTime.UnixTimestamp": "host",
+    "Maths.Random": "host",
+    "Maths.RandomRange": "host",
+    "Crypto.RandomBytes": "host",
+    "Tensor.SetShape": "pure",
+    "Tensor.DotI8": "pure",
+    "Tensor.MatVecI8": "pure",
+    "Tensor.AddI32": "pure",
+    "Tensor.MulI32": "pure",
+    "Tensor.ScaleI32": "pure",
+    "Tensor.ReluI32": "pure",
+    "Tensor.RmsNormI32": "pure",
+    "Tensor.RoPEI32": "pure",
+    "Tensor.SoftmaxI32": "pure",
+    "Tensor.ArgMaxI32": "pure",
+    "BitLinear.SetShape": "pure",
+    "BitLinear.HasFormat": "pure",
+    "BitLinear.MatVecTernary": "pure",
+    "BitLinear.MatVecBitmap": "pure",
+    "BitLinear.MatVecBase3": "pure",
+    "Quant.QuantI8": "pure",
+    "Quant.DequantI8": "pure",
+    "Quant.AbsMax": "pure",
+    "Quant.ApplyScale": "pure",
+    "Quant.GroupScale": "pure"
+  }
+}
