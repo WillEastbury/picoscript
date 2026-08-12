@@ -114,6 +114,20 @@ pv_catq_install();
 pv_net_install_socket_provider();
 ```
 
+Provider selection is explicit:
+
+| Provider | Implementation | Status |
+|---|---|---|
+| scalar/reference | `picoscript_vm.py`, `vm/picovm.c`, `vm/picovm.js` | deterministic |
+| hosted native CPU | `vm/picovm_catq.c` | provider-backed |
+| CUDA | `vm/picovm_catq_cuda.cu` | capability-gated |
+| PIOS/RP2350 | injected kernel provider | provider-backed when installed |
+
+All providers use the request workspace and status values from
+`TENSOR_PROVIDER_ABI.md`. Invalid descriptors, unavailable devices, cancelled
+requests, workspace exhaustion, and corrupt shard input must return an explicit
+non-zero status and leave the destination unpublished.
+
 Build the executable C-PicoScript workflow with:
 
 ```powershell

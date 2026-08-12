@@ -8,6 +8,9 @@ sys.path.insert(0, ROOT)
 
 from picoscript_tensor import (ProviderRequest, TensorDescriptor, TensorDType,
                                TensorHandleTable, TensorStatus)
+from picoscript_cfront import compile_c
+from picoscript_il import lower_to_bytecode_safe
+from picoscript_vm import HostApi, PicoVM
 
 
 def test_descriptor_round_trip_and_validation():
@@ -60,3 +63,19 @@ process.stdout.write(JSON.stringify(d));
         "byteOffset": 8, "byteLength": 16,
         "dimensions": [4, 2], "strides": [2, 1],
     }
+
+
+def test_provider_request_blocks_cancelled_compute_before_provider_call():
+    calls = []
+
+    def provider(namespace, method, left, right, *, vm, host):
+        calls.append((namespace, method))
+        return 99
+
+    host = HostApi(compute_provider=provider)
+    host.configure_provider_request(workspace_bytes=16, workspace_limit=8)
+    vm = PicoVM(host=host).run(lower_to_bytecode_safe(
+        compile_c('int value = Tensor.Map("weights", "dtype=bf16"); Io.WriteByte(Status.Last());')
+    ))
+    assert calls == []
+    assert b"".join(vm.output) == bytes([11])
