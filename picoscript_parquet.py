@@ -40,6 +40,17 @@ class RowGroupDescriptor:
     column_count: int
 
 
+@dataclass(frozen=True)
+class PageHeader:
+    page_type: int
+    uncompressed_size: int
+    compressed_size: int
+    crc: int | None
+    data_header: dict | None
+    dictionary_header: dict | None
+    data_header_v2: dict | None
+
+
 class ParquetError(ValueError):
     pass
 
@@ -279,6 +290,19 @@ def describe_file_metadata(metadata: FileMetaData):
             int(item.get(6, 0)), len(columns),
         ))
     return tuple(schema), tuple(row_groups)
+
+
+def decode_page_header(data: bytes) -> PageHeader:
+    raw = CompactReader(data, max_binary=0).read_value(CompactType.STRUCT)
+    page_type = int(raw.get(1, -1))
+    uncompressed = int(raw.get(2, -1))
+    compressed = int(raw.get(3, -1))
+    if page_type < 0 or uncompressed < 0 or compressed < 0:
+        raise ParquetError("invalid Parquet page header sizes")
+    return PageHeader(
+        page_type, uncompressed, compressed, raw.get(4),
+        raw.get(5), raw.get(7), raw.get(8),
+    )
 
 
 def read_rows(path, start=0, limit=None):

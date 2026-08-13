@@ -1,7 +1,7 @@
 import pytest
 
 from picoscript_parquet import (CompactReader, CompactType, FileMetaData, ThriftError,
-                                decode_file_metadata, describe_file_metadata)
+                                decode_file_metadata, describe_file_metadata, decode_page_header)
 
 
 def test_compact_reader_decodes_fields_lists_and_binary():
@@ -46,3 +46,14 @@ def test_schema_and_row_group_descriptors_are_bounded():
     )
     descriptors = describe_file_metadata(metadata)
     assert descriptors[0][0].name == "l"
+
+
+def test_page_header_decodes_sizes_and_data_header():
+    # type=DATA_PAGE(0), uncompressed=10, compressed=8, data-page header struct.
+    data = bytes([0x51, 0x00, 0x51, 0x14, 0x51, 0x10,
+                  0xC2, 0x51, 0x02, 0x00, 0x00])
+    header = decode_page_header(data)
+    assert header.page_type == 0
+    assert header.uncompressed_size == 10
+    assert header.compressed_size == 8
+    assert header.data_header == {1: 1}
