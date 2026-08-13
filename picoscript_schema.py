@@ -18,7 +18,7 @@ def generate_struct(schema, name="Record"):
         elif kind == "INT64":
             type_name = "int64"
         elif kind.startswith("TEXT[") or kind.startswith("BYTES["):
-            type_name = kind.lower().replace("TEXT", "text").replace("BYTES", "byte")
+            type_name = kind.lower().replace("bytes", "byte")
         elif kind == "SPAN":
             raise ValueError(f"field {field.name} is variable-width; use a fixed bound")
         else:

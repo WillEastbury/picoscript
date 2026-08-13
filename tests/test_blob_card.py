@@ -16,7 +16,7 @@ def test_blob_card_schema_and_lazy_view():
     assert generate_struct(schema, "blobCard").splitlines() == [
         "struct blobCard {",
         "    @id(0) int id;",
-        "    @id(1) byte[16777216] data;",
+        "    @id(1) byte[1024] data;",
         "}",
     ]
     store = PicoStore()
