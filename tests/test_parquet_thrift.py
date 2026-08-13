@@ -1,7 +1,8 @@
 import pytest
 
 from picoscript_parquet import (CompactReader, CompactType, FileMetaData, ThriftError,
-                                decode_file_metadata, describe_file_metadata, decode_page_header)
+                                decode_file_metadata, describe_file_metadata, decode_page_header,
+                                decode_plain, decode_rle_bitpacked)
 
 
 def test_compact_reader_decodes_fields_lists_and_binary():
@@ -57,3 +58,10 @@ def test_page_header_decodes_sizes_and_data_header():
     assert header.uncompressed_size == 10
     assert header.compressed_size == 8
     assert header.data_header == {1: 1}
+
+
+def test_plain_and_rle_bitpacked_page_bodies():
+    assert decode_plain((1).to_bytes(4, "little") + (-2).to_bytes(4, "little", signed=True),
+                        "INT32", 2) == [1, -2]
+    # RLE header (run=3 => 6) followed by value 2.
+    assert decode_rle_bitpacked(bytes([6, 2]), 2, 3) == [2, 2, 2]

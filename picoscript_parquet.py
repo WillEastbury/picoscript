@@ -305,6 +305,94 @@ def decode_page_header(data: bytes) -> PageHeader:
     )
 
 
+def decode_plain(data: bytes, physical_type: str, value_count: int):
+    """Decode retained plain-encoded Parquet values without external codecs."""
+    if value_count < 0:
+        raise ParquetError("negative value count")
+    raw = memoryview(bytes(data))
+    pos = 0
+    result = []
+    formats = {
+        "INT32": ("<i", 4), "INT64": ("<q", 8),
+        "FLOAT": ("<f", 4), "DOUBLE": ("<d", 8),
+    }
+    if physical_type == "BOOLEAN":
+        for index in range(value_count):
+            if index // 8 >= len(raw):
+                raise ParquetError("plain boolean page truncated")
+            result.append(bool((raw[index // 8] >> (index & 7)) & 1))
+        return result
+    if physical_type in formats:
+        fmt, width = formats[physical_type]
+        if value_count * width > len(raw):
+            raise ParquetError("plain page truncated")
+        for _ in range(value_count):
+            result.append(struct.unpack_from(fmt, raw, pos)[0])
+            pos += width
+        return result
+    if physical_type in ("BYTE_ARRAY", "UTF8"):
+        for _ in range(value_count):
+            if pos + 4 > len(raw):
+                raise ParquetError("plain byte-array page truncated")
+            length = struct.unpack_from("<I", raw, pos)[0]
+            pos += 4
+            if length > len(raw) - pos:
+                raise ParquetError("plain byte-array value truncated")
+            value = bytes(raw[pos:pos + length]); pos += length
+            result.append(value.decode("utf-8", "replace") if physical_type == "UTF8" else value)
+        return result
+    raise ParquetError(f"unsupported plain physical type: {physical_type}")
+
+
+def decode_rle_bitpacked(data: bytes, bit_width: int, value_count: int):
+    """Decode Parquet RLE/bit-packed hybrid values with bounded output."""
+    if bit_width < 0 or bit_width > 32 or value_count < 0:
+        raise ParquetError("invalid RLE/bit-packed bounds")
+    raw = memoryview(bytes(data))
+    pos = 0
+    out = []
+    width = max(1, (bit_width + 7) // 8)
+    while len(out) < value_count:
+        header = 0
+        shift = 0
+        while True:
+            if pos >= len(raw) or shift >= 35:
+                raise ParquetError("RLE header truncated")
+            byte = raw[pos]; pos += 1
+            header |= (byte & 0x7F) << shift
+            if not byte & 0x80:
+                break
+            shift += 7
+        if header & 1 == 0:
+            run = header >> 1
+            if run <= 0 or pos + width > len(raw):
+                raise ParquetError("invalid RLE run")
+            value = int.from_bytes(raw[pos:pos + width], "little")
+            pos += width
+            out.extend([value] * min(run, value_count - len(out)))
+        else:
+            groups = header >> 1
+            bytes_needed = groups * 4
+            if groups <= 0 or pos + bytes_needed > len(raw):
+                raise ParquetError("invalid bit-packed run")
+            bits = 0
+            available = 0
+            if bit_width == 0:
+                out.extend([0] * min(groups * 8, value_count - len(out)))
+                pos += bytes_needed
+                continue
+            for byte in raw[pos:pos + bytes_needed]:
+                bits |= byte << available
+                available += 8
+                while available >= bit_width and len(out) < value_count:
+                    mask = (1 << bit_width) - 1 if bit_width else 0
+                    out.append((bits & mask) if bit_width else 0)
+                    bits >>= bit_width
+                    available -= bit_width
+            pos += bytes_needed
+    return out
+
+
 def read_rows(path, start=0, limit=None):
     import pyarrow.parquet as pq
     table = pq.read_table(path)
