@@ -27,7 +27,7 @@ import json
 from typing import Callable, Dict, List, Optional, Tuple
 
 from picoserializer import serialize_card, deserialize_card, to_hex, from_hex
-from picoscript_schema import BlobCardView, schema_from_struct
+from picoscript_schema import BlobCardView, TypedCardView, schema_from_struct
 
 DEFAULT_MAX_CARD_BYTES = 4096
 
@@ -512,6 +512,16 @@ class PicoStore:
             return None
         self.last_status = STATUS_OK
         return BlobCardView(int(card_id), from_hex(encoded))
+
+    def read_typed(self, pack: str, card_id: int, schema) -> Optional[TypedCardView]:
+        """Return a lazy schema-validated view over an existing card."""
+        pack = self._pack_name(pack)
+        encoded = self.b.get(f"{pack}:card:{card_id}")
+        if not encoded:
+            self.last_status = STATUS_NOT_FOUND
+            return None
+        self.last_status = STATUS_OK
+        return TypedCardView(int(card_id), from_hex(encoded), schema)
 
     def read(self, pack: str, card_id: int) -> Optional[dict]:
         pack = self._pack_name(pack)

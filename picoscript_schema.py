@@ -38,6 +38,8 @@ def schema_from_struct(struct_def, pack_id=0, schema_id=0, version=1):
             type_name, width = "INT32", 4
         elif kind in ("BYTE", "BYTES", "CHAR", "UINT8_T", "INT8_T"):
             type_name, width = "BYTES", 1
+        elif kind in ("INT64", "UINT64"):
+            type_name, width = "INT64", 8
         elif kind == "TEXT":
             type_name, width = "TEXT", 1
         else:
@@ -82,3 +84,35 @@ class BlobCardView:
 
     def as_record(self):
         return {"id": self.id, "data": bytes(self.data)}
+
+
+@dataclass
+class TypedCardView:
+    """Lazy schema-checked view over the existing self-describing card bytes."""
+
+    card_id: int
+    encoded: bytes
+    schema: Schema
+    _record: dict | None = None
+
+    def _decode(self):
+        if self._record is None:
+            record = deserialize_card(self.encoded)
+            expected = {field.name: field for field in self.schema.fields}
+            unknown = set(record) - set(expected)
+            if unknown:
+                raise ValueError(f"card has unknown fields: {sorted(unknown)}")
+            missing = [
+                field.name for field in expected.values()
+                if field.name not in record
+            ]
+            if missing:
+                raise ValueError(f"card is missing fields: {missing}")
+            self._record = record
+        return self._record
+
+    def get(self, field_name):
+        return self._decode()[self.schema.bind(field_name).name]
+
+    def copy(self):
+        return dict(self._decode())

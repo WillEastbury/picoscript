@@ -3,7 +3,8 @@ import subprocess
 
 from picostore import PicoStore
 from picoscript_cfront import Parser, tokenize
-from picoscript_schema import blob_card_schema, generate_struct, schema_from_struct
+from picoscript_schema import blob_card_schema, generate_struct, schema_from_struct, TypedCardView
+from picoscript_query import Field, Schema
 from picoserializer import deserialize_card, serialize_card, to_hex
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -80,3 +81,23 @@ process.stdout.write(JSON.stringify({id: view.id, data: Array.from(view.data),
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout == '{"id":1,"data":[1,2,3],"limit":8}'
+
+
+def test_typed_view_decodes_on_demand_and_supports_int64():
+    encoded = serialize_card({"id": 7, "balance": 1 << 40})
+    schema = Schema(1, 2, 1, (
+        Field("id", 0, "INT32", 0),
+        Field("balance", 1, "INT64", 4),
+    ))
+    view = TypedCardView(7, encoded, schema)
+    assert view.get("balance") == 1 << 40
+    assert view.copy()["id"] == 7
+    script = """
+const S = require('./vm/picoserializer.js');
+const r = S.deserializeCard(S.serializeCard({id: 7, balance: 1099511627776n}));
+process.stdout.write(String(r.balance));
+"""
+    result = subprocess.run(["node", "-e", script], cwd=ROOT,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == str(1 << 40)

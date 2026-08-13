@@ -6,7 +6,7 @@
   else root.PicoSerializer = P;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
-  var MAGIC = 0x50534331, T_INT = 1, T_STR = 2, T_BYTES = 3;
+  var MAGIC = 0x50534331, T_INT = 1, T_STR = 2, T_BYTES = 3, T_INT64 = 4;
   var MAX_BYTES_FIELD = 16 * 1024 * 1024;
   var enc = new TextEncoder(), dec = new TextDecoder();
 
@@ -31,7 +31,17 @@
       if (typeof v === "boolean") v = v ? 1 : 0;
       if (typeof v === "number") {
         var x = v | 0;
-        out.push(T_INT, (x >>> 24) & 255, (x >>> 16) & 255, (x >>> 8) & 255, x & 255);
+        if (v >= -2147483648 && v < 2147483648) {
+          out.push(T_INT, (x >>> 24) & 255, (x >>> 16) & 255, (x >>> 8) & 255, x & 255);
+        } else {
+          var big = BigInt(Math.trunc(v));
+          out.push(T_INT64);
+          for (var bi = 7; bi >= 0; bi--) out.push(Number((big >> BigInt(bi * 8)) & 255n));
+        }
+      } else if (typeof v === "bigint") {
+        if (v < -(1n << 63n) || v >= (1n << 63n)) throw new Error("integer field exceeds int64");
+        out.push(T_INT64);
+        for (var bgi = 7; bgi >= 0; bgi--) out.push(Number((v >> BigInt(bgi * 8)) & 255n));
       } else if (typeof v === "string") {
         var vb = utf8(v);
         if (vb.length > 0xFFFF) throw new Error("string field too long");
@@ -62,6 +72,12 @@
       if (t === T_INT) {
         var x = ((buf[pos] << 24) | (buf[pos + 1] << 16) | (buf[pos + 2] << 8) | buf[pos + 3]) | 0;
         pos += 4; rec[name] = x;
+      } else if (t === T_INT64) {
+        var bigValue = 0n;
+        for (var ii = 0; ii < 8; ii++) bigValue = (bigValue << 8n) | BigInt(buf[pos++]);
+        if (bigValue & (1n << 63n)) bigValue -= 1n << 64n;
+        rec[name] = bigValue >= -9007199254740991n && bigValue <= 9007199254740991n
+          ? Number(bigValue) : bigValue;
       } else if (t === T_STR) {
         var vlen = (buf[pos] << 8) | buf[pos + 1]; pos += 2;
         rec[name] = dec.decode(new Uint8Array(buf.slice(pos, pos + vlen))); pos += vlen;
@@ -81,5 +97,5 @@
   function toHex(b) { return b.map(function (x) { return ("0" + (x & 255).toString(16)).slice(-2); }).join(""); }
   function fromHex(s) { var a = []; for (var i = 0; i + 1 < s.length; i += 2) a.push(parseInt(s.substr(i, 2), 16)); return a; }
 
-  return { serializeCard: serializeCard, deserializeCard: deserializeCard, toHex: toHex, fromHex: fromHex, MAGIC: MAGIC, T_BYTES: T_BYTES };
+  return { serializeCard: serializeCard, deserializeCard: deserializeCard, toHex: toHex, fromHex: fromHex, MAGIC: MAGIC, T_BYTES: T_BYTES, T_INT64: T_INT64 };
 });

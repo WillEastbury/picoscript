@@ -25,6 +25,7 @@ MAGIC = 0x50534331            # "PSC1"
 T_INT = 1
 T_STR = 2
 T_BYTES = 3
+T_INT64 = 4
 MAX_BYTES_FIELD = 16 * 1024 * 1024
 
 
@@ -44,8 +45,14 @@ def serialize_card(record: dict) -> bytes:
         if isinstance(v, bool):
             v = int(v)
         if isinstance(v, int):
-            out.append(T_INT)
-            out += (v & 0xFFFFFFFF).to_bytes(4, "big")
+            if -(1 << 31) <= v < (1 << 31):
+                out.append(T_INT)
+                out += (v & 0xFFFFFFFF).to_bytes(4, "big")
+            elif -(1 << 63) <= v < (1 << 63):
+                out.append(T_INT64)
+                out += (v & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "big")
+            else:
+                raise ValueError("integer field exceeds int64")
         elif isinstance(v, str):
             vb = v.encode("utf-8")
             if len(vb) > 0xFFFF:
@@ -80,6 +87,9 @@ def deserialize_card(buf) -> dict:
         if t == T_INT:
             raw = int.from_bytes(buf[pos:pos + 4], "big"); pos += 4
             rec[name] = raw - 0x100000000 if raw & 0x80000000 else raw
+        elif t == T_INT64:
+            raw = int.from_bytes(buf[pos:pos + 8], "big"); pos += 8
+            rec[name] = raw - 0x10000000000000000 if raw & (1 << 63) else raw
         elif t == T_STR:
             vlen = int.from_bytes(buf[pos:pos + 2], "big"); pos += 2
             rec[name] = buf[pos:pos + vlen].decode("utf-8"); pos += vlen
