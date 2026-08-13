@@ -2,7 +2,9 @@ import pytest
 
 from picoscript_parquet import (CompactReader, CompactType, FileMetaData, ThriftError,
                                 decode_file_metadata, describe_file_metadata, decode_page_header,
-                                decode_plain, decode_rle_bitpacked)
+                                decode_plain, decode_rle_bitpacked,
+                                decode_dictionary_page, decode_dictionary_indices,
+                                decode_dictionary_values, decompress_page)
 
 
 def test_compact_reader_decodes_fields_lists_and_binary():
@@ -65,3 +67,12 @@ def test_plain_and_rle_bitpacked_page_bodies():
                         "INT32", 2) == [1, -2]
     # RLE header (run=3 => 6) followed by value 2.
     assert decode_rle_bitpacked(bytes([6, 2]), 2, 3) == [2, 2, 2]
+
+
+def test_dictionary_indices_and_builtin_codecs():
+    dictionary = decode_dictionary_page(
+        (1).to_bytes(4, "little") + (2).to_bytes(4, "little"), "INT32", 2
+    )
+    indices = decode_dictionary_indices(bytes([6, 1]), 2, 3)
+    assert decode_dictionary_values(dictionary, indices) == [2, 2, 2]
+    assert decompress_page(b"plain", "UNCOMPRESSED") == b"plain"

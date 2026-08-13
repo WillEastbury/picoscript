@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 import struct
+import zlib
 
 
 @dataclass(frozen=True)
@@ -391,6 +392,45 @@ def decode_rle_bitpacked(data: bytes, bit_width: int, value_count: int):
                     available -= bit_width
             pos += bytes_needed
     return out
+
+
+def decode_dictionary_page(data: bytes, physical_type: str, value_count: int):
+    """Decode a plain-encoded Parquet dictionary page."""
+    return decode_plain(data, physical_type, value_count)
+
+
+def decode_dictionary_indices(data: bytes, dictionary_size: int, value_count: int):
+    if dictionary_size <= 0:
+        raise ParquetError("dictionary must contain values")
+    width = max(1, (dictionary_size - 1).bit_length())
+    indices = decode_rle_bitpacked(data, width, value_count)
+    if any(index >= dictionary_size for index in indices):
+        raise ParquetError("dictionary index out of range")
+    return indices
+
+
+def decode_dictionary_values(dictionary, indices):
+    try:
+        return [dictionary[index] for index in indices]
+    except (IndexError, TypeError) as exc:
+        raise ParquetError("invalid dictionary index") from exc
+
+
+def decompress_page(data: bytes, codec: str, *, max_output=64 * 1024 * 1024):
+    """Decode the dependency-free codec subset used by retained pages."""
+    codec = str(codec).upper()
+    if codec == "UNCOMPRESSED":
+        output = bytes(data)
+    elif codec in ("GZIP", "DEFLATE"):
+        try:
+            output = zlib.decompress(data, 31 if codec == "GZIP" else -15)
+        except zlib.error as exc:
+            raise ParquetError("compressed page is malformed") from exc
+    else:
+        raise ParquetError(f"unsupported page codec: {codec}")
+    if len(output) > max_output:
+        raise ParquetError("decompressed page exceeds limit")
+    return output
 
 
 def read_rows(path, start=0, limit=None):

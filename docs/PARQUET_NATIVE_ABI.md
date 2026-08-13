@@ -8,6 +8,7 @@ body primitives:
 3. schema and row-group descriptors;
 4. page-header sizes/types and nested data-page headers;
 5. plain values and RLE/bit-packed hybrid values.
+6. dictionary pages, dictionary indices, and bounded retained-page codecs.
 
 All readers enforce input, nesting, container, value-count, and output bounds.
 Compression codecs and dictionary/page-index integration remain provider
