@@ -1,4 +1,4 @@
-from picoscript_query import CursorSnapshot, Field, Query, Schema
+from picoscript_query import CursorSnapshot, Field, Query, Schema, TypedCursor
 
 
 def test_schema_binding_digest_and_typed_plan():
@@ -48,3 +48,16 @@ def test_query_ir_is_canonical_and_plan_preserves_residuals():
     assert plan["index"] == ["HASH", 1]
     assert plan["residual"] == ("GT", ("FIELD", 2, "INT32"), ("CONST", 0))
     assert query.serialize() == query.serialize()
+
+
+def test_typed_cursor_lifetime_exhaustion_copy_and_close():
+    cursor = TypedCursor(lambda: iter([(1, {"v": 10}), (2, {"v": 20})]), max_rows=2)
+    target = {}
+    assert cursor.next() and cursor.card_id() == 1
+    current = cursor.current()
+    assert current is not None and cursor.copy_current(target) and target == {"v": 10}
+    assert cursor.next() and not current.valid
+    assert cursor.next() is False and cursor.status == TypedCursor.EOF
+    assert cursor.reset() and cursor.next() and cursor.card_id() == 1
+    cursor.close()
+    assert cursor.current() is None and cursor.status == TypedCursor.NOT_FOUND

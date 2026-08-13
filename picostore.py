@@ -28,6 +28,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from picoserializer import serialize_card, deserialize_card, to_hex, from_hex
 from picoscript_schema import BlobCardView, TypedCardView, schema_from_struct
+from picoscript_query import TypedCursor
 
 DEFAULT_MAX_CARD_BYTES = 4096
 
@@ -577,6 +578,9 @@ class PicoStore:
     def query(self, pack: str, q: str) -> List[Tuple[int, dict]]:
         pred = compile_query(q)
         return [(cid, rec) for cid, rec in self.all(pack) if pred(rec)]
+
+    def cursor(self, pack: str, q: str = "", *, max_rows=4096):
+        return TypedCursor(lambda: iter(self.query(pack, q)), max_rows=max_rows)
 
     def card_bytes_hex(self, pack: str, card_id: int) -> Optional[str]:
         pack = self._pack_name(pack)

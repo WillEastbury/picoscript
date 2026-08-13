@@ -201,3 +201,77 @@ class CursorSnapshot:
             return False
         target.clear(); target.update(self.record)
         return True
+
+
+class TypedCursor:
+    """Bounded cursor with explicit current-record invalidation semantics."""
+
+    OK = 0
+    NOT_FOUND = 1
+    INVALID = 2
+    EOF = 3
+
+    def __init__(self, source, *, max_rows=4096):
+        self._source_factory = source if callable(source) else lambda: iter(source)
+        self.max_rows = int(max_rows)
+        if self.max_rows <= 0:
+            raise ValueError("cursor max_rows must be positive")
+        self._iterator = iter(())
+        self._position = 0
+        self._current = None
+        self._closed = False
+        self.status = self.OK
+        self.reset()
+
+    def reset(self):
+        if self._closed:
+            self.status = self.NOT_FOUND
+            return False
+        if self._current is not None:
+            self._current.invalidate()
+        self._iterator = iter(self._source_factory())
+        self._position = 0
+        self._current = None
+        self.status = self.OK
+        return True
+
+    def next(self):
+        if self._current is not None:
+            self._current.invalidate()
+        self._current = None
+        if self._closed:
+            self.status = self.NOT_FOUND
+            return False
+        if self._position >= self.max_rows:
+            self.status = self.EOF
+            return False
+        try:
+            value = next(self._iterator)
+        except StopIteration:
+            self.status = self.EOF
+            return False
+        self._position += 1
+        self._current = CursorSnapshot(dict(value[1]), value[0])
+        self.status = self.OK
+        return True
+
+    def current(self):
+        if self._closed or self._current is None or not self._current.valid:
+            self.status = self.NOT_FOUND
+            return None
+        return self._current
+
+    def card_id(self):
+        current = self.current()
+        return current.card_id if current is not None else 0
+
+    def copy_current(self, target):
+        current = self.current()
+        if current is None:
+            return False
+        return current.copy_current(target)
+
+    def close(self):
+        self._closed = True
+        self._current = None
+        self.status = self.NOT_FOUND
