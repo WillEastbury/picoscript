@@ -24,6 +24,8 @@ from __future__ import annotations
 MAGIC = 0x50534331            # "PSC1"
 T_INT = 1
 T_STR = 2
+T_BYTES = 3
+MAX_BYTES_FIELD = 16 * 1024 * 1024
 
 
 def serialize_card(record: dict) -> bytes:
@@ -51,6 +53,13 @@ def serialize_card(record: dict) -> bytes:
             out.append(T_STR)
             out += len(vb).to_bytes(2, "big")
             out += vb
+        elif isinstance(v, (bytes, bytearray, memoryview)):
+            vb = bytes(v)
+            if len(vb) > MAX_BYTES_FIELD:
+                raise ValueError("byte field too long")
+            out.append(T_BYTES)
+            out += len(vb).to_bytes(4, "big")
+            out += vb
         else:
             raise ValueError(f"unsupported field type for {k!r}: {type(v).__name__}")
     return bytes(out)
@@ -74,6 +83,11 @@ def deserialize_card(buf) -> dict:
         elif t == T_STR:
             vlen = int.from_bytes(buf[pos:pos + 2], "big"); pos += 2
             rec[name] = buf[pos:pos + vlen].decode("utf-8"); pos += vlen
+        elif t == T_BYTES:
+            vlen = int.from_bytes(buf[pos:pos + 4], "big"); pos += 4
+            if vlen > MAX_BYTES_FIELD or pos + vlen > len(buf):
+                raise ValueError("byte field is truncated or too large")
+            rec[name] = bytes(buf[pos:pos + vlen]); pos += vlen
         else:
             raise ValueError(f"unknown field type {t}")
     return rec

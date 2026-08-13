@@ -27,6 +27,9 @@ import json
 from typing import Callable, Dict, List, Optional, Tuple
 
 from picoserializer import serialize_card, deserialize_card, to_hex, from_hex
+from picoscript_schema import BlobCardView
+
+DEFAULT_MAX_CARD_BYTES = 4096
 
 
 # ── key/value byte backend ───────────────────────────────────────────────────
@@ -292,17 +295,22 @@ class PicoStore:
         pack = self._pack_name(pack)
         if self.b.get(self._pack_meta_key(pack)) is None:
             self.b.set(self._pack_meta_key(pack), json.dumps(
-                {"id": pack, "name": pack}, sort_keys=True, separators=(",", ":")
+                {"id": pack, "name": pack, "max_card_bytes": DEFAULT_MAX_CARD_BYTES},
+                sort_keys=True, separators=(",", ":")
             ))
         return pack
 
-    def create_pack(self, pack_id, name=None) -> str:
+    def create_pack(self, pack_id, name=None, max_card_bytes=None) -> str:
         pack = self._pack_name(pack_id)
         if self.b.get(self._pack_meta_key(pack)) is not None:
             self.last_status = STATUS_DUPLICATE
             raise DuplicatePackError(pack)
+        limit = DEFAULT_MAX_CARD_BYTES if max_card_bytes is None else int(max_card_bytes)
+        if limit <= 0:
+            raise ValueError("max_card_bytes must be positive")
         self.b.set(self._pack_meta_key(pack), json.dumps(
-            {"id": pack, "name": str(name if name is not None else pack)},
+            {"id": pack, "name": str(name if name is not None else pack),
+             "max_card_bytes": limit},
             sort_keys=True, separators=(",", ":")
         ))
         self.last_status = STATUS_OK
@@ -414,6 +422,10 @@ class PicoStore:
 
     def _validate_record(self, pack, record):
         schema = self.schema(pack)
+        pack_info = self.pack_info(pack)
+        if pack_info and "data" in record and isinstance(record["data"], (bytes, bytearray, memoryview)):
+            if len(record["data"]) > int(pack_info.get("max_card_bytes", DEFAULT_MAX_CARD_BYTES)):
+                raise ValueError("blobCard data exceeds pack max_card_bytes")
         if schema is None or "fields" not in schema["schema"]:
             return
         fields = schema["schema"]["fields"]
@@ -433,6 +445,8 @@ class PicoStore:
                 raise ValueError(f"field {name} must be an integer")
             if kind in ("STRING", "TEXT", "SPAN") and not isinstance(value, str):
                 raise ValueError(f"field {name} must be text")
+            if kind.startswith("BYTES") and not isinstance(value, (bytes, bytearray, memoryview)):
+                raise ValueError(f"field {name} must be bytes")
 
     def sync(self) -> int:
         sync = getattr(self.b, "sync", None)
@@ -468,6 +482,23 @@ class PicoStore:
         return card_id
 
     insert = create
+
+    def create_blob(self, pack: str, payload, card_id: Optional[int] = None) -> int:
+        """Insert an implicit blobCard without decoding its payload."""
+        pack = self._ensure_pack(pack)
+        if card_id is None:
+            card_id = int(self.b.get(f"{pack}:next") or "1")
+        return self.create(pack, {"id": int(card_id), "data": bytes(payload)}, card_id)
+
+    def read_blob(self, pack: str, card_id: int) -> Optional[BlobCardView]:
+        """Return a lazy blobCard view over the serialized card bytes."""
+        pack = self._pack_name(pack)
+        encoded = self.b.get(f"{pack}:card:{card_id}")
+        if not encoded:
+            self.last_status = STATUS_NOT_FOUND
+            return None
+        self.last_status = STATUS_OK
+        return BlobCardView(int(card_id), from_hex(encoded))
 
     def read(self, pack: str, card_id: int) -> Optional[dict]:
         pack = self._pack_name(pack)

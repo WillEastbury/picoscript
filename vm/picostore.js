@@ -88,6 +88,7 @@
   }
 
   var STATUS = { OK: 0, NOT_FOUND: 1, INVALID: 2, DUPLICATE: 3, CONFLICT: 4, CORRUPT: 5 };
+  var DEFAULT_MAX_CARD_BYTES = 4096;
   function packName(pack) {
     var value = String(pack);
     if (!value || value.indexOf(":") >= 0) throw new Error("pack identifiers must be non-empty and colon-free");
@@ -132,13 +133,15 @@
     _schemaKey: function (pack) { return "pack:" + packName(pack) + ":schema"; },
     _ensurePack: function (pack) {
       pack = packName(pack);
-      if (this.b.get(this._packMetaKey(pack)) === null) this.b.set(this._packMetaKey(pack), JSON.stringify({ id: pack, name: pack }));
+      if (this.b.get(this._packMetaKey(pack)) === null) this.b.set(this._packMetaKey(pack), JSON.stringify({ id: pack, name: pack, max_card_bytes: DEFAULT_MAX_CARD_BYTES }));
       return pack;
     },
-    createPack: function (pack, name) {
+    createPack: function (pack, name, maxCardBytes) {
       pack = packName(pack);
       if (this.b.get(this._packMetaKey(pack)) !== null) { this.lastStatus = STATUS.DUPLICATE; throw new Error("duplicate pack: " + pack); }
-      this.b.set(this._packMetaKey(pack), JSON.stringify({ id: pack, name: name === undefined ? pack : String(name) }));
+      var limit = maxCardBytes === undefined ? DEFAULT_MAX_CARD_BYTES : Number(maxCardBytes);
+      if (limit <= 0) throw new Error("max_card_bytes must be positive");
+      this.b.set(this._packMetaKey(pack), JSON.stringify({ id: pack, name: name === undefined ? pack : String(name), max_card_bytes: limit }));
       this.lastStatus = STATUS.OK; return pack;
     },
     packInfo: function (pack) {
@@ -178,6 +181,11 @@
     },
     _validateRecord: function (pack, record) {
       var current = this.schema(pack), fields, allowed = {};
+      var info = this.packInfo(pack);
+      if (info && record.data instanceof Uint8Array &&
+          record.data.length > Number(info.max_card_bytes || DEFAULT_MAX_CARD_BYTES)) {
+        throw new Error("blobCard data exceeds pack max_card_bytes");
+      }
       if (!current || !current.schema || !Array.isArray(current.schema.fields)) return;
       fields = current.schema.fields;
       fields.forEach(function (field) { allowed[field.name] = field; });
@@ -204,6 +212,17 @@
       return id;
     },
     insert: function (pack, record, cardId) { return this.create(pack, record, cardId); },
+    createBlob: function (pack, payload, cardId) {
+      pack = this._ensurePack(pack);
+      var id = cardId === undefined ? parseInt(this.b.get(pack + ":next") || "1", 10) : Number(cardId);
+      return this.create(pack, { id: id, data: payload instanceof Uint8Array ? payload : Uint8Array.from(payload) }, id);
+    },
+    readBlob: function (pack, id) {
+      var record = this.read(pack, id);
+      if (record === null) return null;
+      if (!(record.data instanceof Uint8Array)) throw new Error("blobCard data field is not bytes");
+      return { id: Number(id), data: record.data };
+    },
     read: function (pack, id) { var h = this.b.get(pack + ":card:" + id); return h ? SER.deserializeCard(SER.fromHex(h)) : null; },
     update: function (pack, id, record) { pack = this._ensurePack(pack); this._validateRecord(pack, record); if (this._ids(pack).indexOf(id) < 0) { this.lastStatus = STATUS.NOT_FOUND; return false; } this.b.set(pack + ":card:" + id, SER.toHex(SER.serializeCard(record))); this.lastStatus = STATUS.OK; return true; },
     patch: function (pack, id, fields) { var r = this.read(pack, id); if (!r) return false; for (var k in fields) r[k] = fields[k]; return this.update(pack, id, r); },

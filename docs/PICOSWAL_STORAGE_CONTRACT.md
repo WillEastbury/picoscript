@@ -15,6 +15,13 @@ version, and field definition. Replacing a schema requires an explicitly
 higher version and migration permission; incompatible changes otherwise return
 `CONFLICT`.
 
+A schema-less pack has the implicit fixed record shape `blobCard`:
+`@id(0) int id` and `@id(1) byte[] data`. The pack manifest stores
+`max_card_bytes` (4 KiB by default for new reference packs); writes above that
+bound fail before serialization. The payload is exposed as a lazy bounded span
+view, so decoding a blobCard does not copy its data unless the caller requests
+a record copy.
+
 ## CRUD
 
 `Insert`/`AddCard` allocates the next unused positive card ID. `Read` returns a

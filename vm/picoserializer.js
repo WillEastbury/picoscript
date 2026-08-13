@@ -6,7 +6,8 @@
   else root.PicoSerializer = P;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
-  var MAGIC = 0x50534331, T_INT = 1, T_STR = 2;
+  var MAGIC = 0x50534331, T_INT = 1, T_STR = 2, T_BYTES = 3;
+  var MAX_BYTES_FIELD = 16 * 1024 * 1024;
   var enc = new TextEncoder(), dec = new TextDecoder();
 
   function utf8(s) { return enc.encode(s); }
@@ -36,6 +37,12 @@
         if (vb.length > 0xFFFF) throw new Error("string field too long");
         out.push(T_STR, (vb.length >>> 8) & 255, vb.length & 255);
         for (var j = 0; j < vb.length; j++) out.push(vb[j]);
+      } else if (v instanceof Uint8Array || Array.isArray(v)) {
+        var raw = v instanceof Uint8Array ? Array.from(v) : v;
+        if (raw.length > MAX_BYTES_FIELD) throw new Error("byte field too long");
+        out.push(T_BYTES, (raw.length >>> 24) & 255, (raw.length >>> 16) & 255,
+                 (raw.length >>> 8) & 255, raw.length & 255);
+        for (var k = 0; k < raw.length; k++) out.push(raw[k] & 255);
       } else {
         throw new Error("unsupported field type for " + k);
       }
@@ -58,6 +65,12 @@
       } else if (t === T_STR) {
         var vlen = (buf[pos] << 8) | buf[pos + 1]; pos += 2;
         rec[name] = dec.decode(new Uint8Array(buf.slice(pos, pos + vlen))); pos += vlen;
+      } else if (t === T_BYTES) {
+        var blen = ((buf[pos] * 0x1000000) + (buf[pos + 1] << 16) +
+                    (buf[pos + 2] << 8) + buf[pos + 3]) >>> 0;
+        pos += 4;
+        if (blen > MAX_BYTES_FIELD || pos + blen > buf.length) throw new Error("byte field truncated");
+        rec[name] = new Uint8Array(buf.slice(pos, pos + blen)); pos += blen;
       } else {
         throw new Error("unknown field type " + t);
       }
@@ -68,5 +81,5 @@
   function toHex(b) { return b.map(function (x) { return ("0" + (x & 255).toString(16)).slice(-2); }).join(""); }
   function fromHex(s) { var a = []; for (var i = 0; i + 1 < s.length; i += 2) a.push(parseInt(s.substr(i, 2), 16)); return a; }
 
-  return { serializeCard: serializeCard, deserializeCard: deserializeCard, toHex: toHex, fromHex: fromHex, MAGIC: MAGIC };
+  return { serializeCard: serializeCard, deserializeCard: deserializeCard, toHex: toHex, fromHex: fromHex, MAGIC: MAGIC, T_BYTES: T_BYTES };
 });
