@@ -14,6 +14,7 @@
 #define PW_SCRIPT_MAX_EDGES 512u
 #define PW_SCRIPT_INDEX_PACK 4094
 #define PW_SCRIPT_EVENT_MAX 4096u
+#define PW_SCRIPT_MAX_DEFINITIONS 64u
 
 static pw_index_t g_index;
 static pw_index_key_t g_keys[PW_SCRIPT_MAX_KEYS];
@@ -34,6 +35,12 @@ static uint8_t g_fts_cards[PW_SCRIPT_MAX_GRAPHS][PW_SCRIPT_MAX_EDGES][PW_SCRIPT_
 static uint16_t g_fts_lens[PW_SCRIPT_MAX_GRAPHS][PW_SCRIPT_MAX_EDGES];
 static uint16_t g_fts_pack[PW_SCRIPT_MAX_GRAPHS];
 static uint8_t g_fts_field[PW_SCRIPT_MAX_GRAPHS];
+typedef struct {
+    uint8_t used, kind;
+    uint16_t pack, field;
+    uint32_t id, generation;
+} pw_definition;
+static pw_definition g_definitions[PW_SCRIPT_MAX_DEFINITIONS];
 
 typedef struct {
     uint8_t used;
@@ -73,9 +80,56 @@ static void persist_event(pv_ctx *ctx,uint8_t kind,uint16_t pack,uint8_t field,u
     ctx->regs[1]=saved1;ctx->regs[2]=saved2;ctx->regs[0]=saved0;
 }
 
+static uint32_t definition_id(uint16_t pack, uint8_t kind, uint16_t field)
+{
+    uint32_t h = 2166136261u;
+    h = (h ^ pack) * 16777619u;
+    h = (h ^ kind) * 16777619u;
+    h = (h ^ field) * 16777619u;
+    return h ? h : 1u;
+}
+
+static int definition_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
+{
+    if (hook == PV_HOOK_DB_ADDINDEX) {
+        uint16_t pack = (uint16_t)g_selected_pack;
+        uint16_t field = (uint16_t)ctx->regs[rs1];
+        uint8_t kind = (uint8_t)ctx->regs[rs2];
+        uint32_t id = definition_id(pack, kind, field);
+        int slot = -1;
+        if (kind < 1 || kind > 7) { ctx->regs[rd] = 0; ctx->host_status = 2; return 1; }
+        for (int i=0;i<(int)PW_SCRIPT_MAX_DEFINITIONS;i++) if (g_definitions[i].used && g_definitions[i].id==id) slot=i;
+        if (slot < 0) for (int i=0;i<(int)PW_SCRIPT_MAX_DEFINITIONS;i++) if (!g_definitions[i].used) { slot=i; break; }
+        if (slot < 0) { ctx->regs[rd] = 0; ctx->host_status = 9; return 1; }
+        g_definitions[slot]=(pw_definition){1,kind,pack,field,id,1};
+        uint8_t payload[8]; put32(payload, field); put32(payload+4, 1);
+        persist_event(ctx,10,pack,kind,id,payload,8);
+        ctx->regs[rd] = (int32_t)id; ctx->host_status = 0; return 1;
+    }
+    if (hook == PV_HOOK_DB_RESOLVEKEY) {
+        ctx->regs[rd] = (int32_t)definition_id((uint16_t)g_selected_pack,
+                                                (uint8_t)ctx->regs[rs2],
+                                                (uint16_t)ctx->regs[rs1]);
+        ctx->host_status = 0; return 1;
+    }
+    if (hook == PV_HOOK_DB_RESOLVEPACK || hook == PV_HOOK_DB_INDEXSTATE ||
+        hook == PV_HOOK_DB_REBUILDINDEX || hook == PV_HOOK_DB_REMOVEINDEX) {
+        uint32_t id=(uint32_t)ctx->regs[rs1]; int slot=-1;
+        for(int i=0;i<(int)PW_SCRIPT_MAX_DEFINITIONS;i++)if(g_definitions[i].used&&g_definitions[i].id==id)slot=i;
+        if(slot<0){ctx->regs[rd]=0;ctx->host_status=1;return 1;}
+        if(hook==PV_HOOK_DB_RESOLVEPACK)ctx->regs[rd]=g_definitions[slot].pack;
+        else if(hook==PV_HOOK_DB_INDEXSTATE)ctx->regs[rd]=g_definitions[slot].generation;
+        else if(hook==PV_HOOK_DB_REBUILDINDEX){g_definitions[slot].generation++;ctx->regs[rd]=1;ctx->host_status=0;}
+        else {g_definitions[slot].used=0;ctx->regs[rd]=1;ctx->host_status=0;}
+        return 1;
+    }
+    return 0;
+}
+
 static void apply_event(const uint8_t *raw,uint32_t n)
 {
     if(n<10u)return;uint8_t kind=raw[0];uint16_t pack=get16(raw+1);uint8_t field=raw[3];uint32_t id=get32(raw+4);uint16_t len=get16(raw+8);if((uint32_t)len+10u>n)return;
+    if(kind==10u&&len>=8u){int slot=-1;for(int i=0;i<(int)PW_SCRIPT_MAX_DEFINITIONS;i++)if(g_definitions[i].used&&g_definitions[i].id==id){slot=i;break;}if(slot<0)for(int i=0;i<(int)PW_SCRIPT_MAX_DEFINITIONS;i++)if(!g_definitions[i].used){slot=i;break;}if(slot>=0){g_definitions[slot].used=1;g_definitions[slot].kind=field;g_definitions[slot].pack=pack;g_definitions[slot].field=(uint16_t)get32(raw+10);g_definitions[slot].id=id;g_definitions[slot].generation=get32(raw+14);}return;}
     if(kind<=2){int slot=-1,free_slot=-1;for(int i=0;i<(int)PW_SCRIPT_MAX_GRAPHS;i++){if(g_fts_pack[i]==pack&&g_fts_field[i]==field){slot=i;break;}if(!g_fts_pack[i]&&free_slot<0)free_slot=i;}if(slot<0)slot=free_slot;if(slot<0||id>=PW_SCRIPT_MAX_EDGES)return;g_fts_pack[slot]=pack;g_fts_field[slot]=field;pw_schema_t s;text_schema(&s,pack,field);uint8_t old[PW_SCRIPT_MAX_TEXT+6];uint16_t oldlen=0;if(g_fts_lens[slot][id])oldlen=card_text(old,field,g_fts_cards[slot][id],g_fts_lens[slot][id]);if(kind==1){(void)pw_index_card_update(&g_index,pack,id,&s,oldlen?old:NULL,oldlen,raw+10,len);memcpy(g_fts_cards[slot][id],raw+10,len>PW_SCRIPT_MAX_TEXT?PW_SCRIPT_MAX_TEXT:len);g_fts_lens[slot][id]=len>PW_SCRIPT_MAX_TEXT?PW_SCRIPT_MAX_TEXT:len;}else{(void)pw_index_card_update(&g_index,pack,id,&s,oldlen?old:raw+10,oldlen?oldlen:len,NULL,0);g_fts_lens[slot][id]=0;}return;}
     if(kind>=3){pw_graph_state *g=graph_state(pack,field,1);if(!g)return;int slot=(int)(id%PW_SCRIPT_MAX_EDGES);pw_schema_t s;memset(&s,0,sizeof(s));s.pack=g->synthetic_pack;s.field_count=3;for(int i=0;i<3;i++){s.fields[i].ordinal=(uint8_t)i;s.fields[i].type=0x06;}if(kind==3){(void)pw_index_card_update(&g_index,g->synthetic_pack,id,&s,g->edge_used[slot]?g->edge_cards[slot]:NULL,g->edge_used[slot]?g->edge_lens[slot]:0,raw+10,len);memcpy(g->edge_cards[slot],raw+10,len);g->edge_lens[slot]=len;g->edge_ids[slot]=id;g->edge_used[slot]=1;}else{(void)pw_index_card_update(&g_index,g->synthetic_pack,id,&s,g->edge_cards[slot],g->edge_lens[slot],NULL,0);g->edge_used[slot]=0;} }
 }
@@ -134,7 +188,7 @@ void pwf_portable_indexes_init(void)
 {
     pw_index_init(&g_index,g_keys,PW_SCRIPT_MAX_KEYS,g_postings,PW_SCRIPT_MAX_POSTINGS);
     memset(g_results,0,sizeof(g_results)); memset(g_weights,0,sizeof(g_weights));
-    memset(g_fts_lens,0,sizeof(g_fts_lens)); memset(g_graphs,0,sizeof(g_graphs));
+    memset(g_fts_lens,0,sizeof(g_fts_lens)); memset(g_graphs,0,sizeof(g_graphs)); memset(g_definitions,0,sizeof(g_definitions));
     memset(g_fts_pack,0,sizeof(g_fts_pack)); memset(g_fts_field,0,sizeof(g_fts_field));
     g_result_count=0; g_last_access=5; g_cursor_index=0; g_cursor_card=0; g_field=0; g_mode=0; g_next_event=0; g_loaded=0;
 }
@@ -281,6 +335,10 @@ static int hook_db_query(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
 }
 int pwf_portable_index_hook(pv_ctx *ctx,int hook,int rd,int rs1,int rs2)
 {
+    if (hook >= PV_HOOK_DB_ADDINDEX && hook <= PV_HOOK_DB_RESOLVEPACK) {
+        ensure_loaded(ctx);
+        if (definition_hook(ctx,hook,rd,rs1,rs2)) return 1;
+    }
     if (hook >= PV_HOOK_DB_SEEK && hook <= PV_HOOK_DB_CARDID) {
         ensure_loaded(ctx);
         if (hook_db_query(ctx,hook,rd,rs1,rs2)) return 1;
