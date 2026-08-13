@@ -6,6 +6,8 @@
 #include "picovm.h"
 #include "picovm_pool.h"
 #include "storage_file.h"
+#include "storage_index_portable.h"
+#include "pv_host_provider.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,11 +30,15 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--data") == 0 && i + 1 < argc) data_path = argv[++i];
     }
 
+    /* Hosted Time / Random / Environment (Win or POSIX). */
+    pv_host_install(pv_host_platform());
+
     if (pwf_storage_open(data_path) != 0) {
         fprintf(stderr, "failed to open storage file: %s\n", data_path);
         return 1;
     }
-    pv_storage_hook = pv_storage_file_hook;
+    pwf_portable_indexes_init();
+    pv_storage_hook = pwf_portable_storage_hook;
 
     if (pv_pool_init(&pool, port, workers, dispatch) != 0) {
         fprintf(stderr, "server init failed\n");

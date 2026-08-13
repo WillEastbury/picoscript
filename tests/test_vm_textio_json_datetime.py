@@ -241,6 +241,12 @@ def test_datetime_utcnow():
     assert result > 1700000000  # After 2023
 
 
+def test_datetime_fixed_clock():
+    src = "print(DateTime.UtcNow()); print(DateTime.Now()); print(DateTime.UnixTimestamp());"
+    words = lower_to_bytecode_safe(compile_c(src))
+    assert out_ints(PicoVM(fixed_time=1704067200).run(words)) == [1704067200] * 3
+
+
 def test_datetime_add_days():
     """DateTime.AddDays adds 86400 seconds per day."""
     src = """

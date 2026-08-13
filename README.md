@@ -41,13 +41,44 @@ decoded `text:` line when the output bytes are printable.
 
 ## Current state
 
-- **Stable bytecode ISA:** 16 opcodes, deterministic host-hook model.
-- **Four frontends:** C-style, BASIC, Python-style, and English all lower to the
-  same PicoIL.
-- **Five execution paths:** Python VM, JS VM, C VM, native C, and native JS.
+- **Stable base bytecode ISA:** 16 opcodes with a deterministic host-hook model;
+  systems extensions are defined separately from the frozen base ISA.
+- **Shared compiler pipeline:** C-style, BASIC, Python-style, and English
+  frontends lower to the same PicoIL, with additional dialects documented
+  separately.
+- **Three VMs plus two transpilation targets:** Python, JavaScript, and C
+  interpreters are the runtime implementations; native C and JavaScript are
+  generated targets that delegate host operations to their corresponding
+  runtime implementations.
 - **In-browser portal:** the compiler and VM run directly from GitHub Pages.
 
+Schema-bound storage, structured query planning, provider parity, and native
+Parquet decoding remain active work. The current Python/JavaScript storage
+facades and hosted Parquet helpers are compatibility/reference surfaces, not
+the completed portable storage or Parquet contracts.
+
 GitHub mirror: https://github.com/WillEastbury/picoscript
+
+## Runtime data invariant
+
+> The PicoScript implementation stores lexical rules, dictionary data, corpus records, statistics, provenance, checkpoints, and full-text index state in PicoWAL/PicoScript cards. SQLite is not part of that runtime data path.
+
+## TODO: schema-bound structs, typed cursors, and first-class query semantics
+
+Implement a lean, statically resolved database model over PicoWAL packs/cards:
+
+- Bind PicoScript structs deterministically to pack schemas (`pack_id`, `schema_id`, `schema_version`, field IDs, field types, layouts).
+- Support typed card views/reads/copies, pointer/span-based variable fields, and bounded-memory `Cursor[T]` streaming with explicit pointer lifetime and `CopyCurrent` semantics.
+- Lower typed predicates (`EQ`, `NE`, `LT`, `LTE`, `GT`, `GTE`, boolean composition, projection, ordering, limits, full-text, positional, and graph predicates) to compact structured query IR.
+- Extend the existing PicoWAL planner to select hash, ordered, positional/full-text, and graph overlays deterministically, with scan fallback and no heavyweight cost optimizer.
+- Keep CRUD explicit; indexes remain overlays over ordinary cards; full-text,
+  graph, PicoWeb, and other application consumers use the same substrate.
+- Keep the hot path allocation-conscious and suitable for PIOS/RP2350 using caller-owned storage, fixed cursor scratch, arenas, spans, and mapped/decompressed page views.
+- Expose the shared semantics through C-style, BASIC, Python-style, and English frontends as the implementation matures.
+
+Hard constraints: no reflection, runtime type discovery, dynamic field-name lookup on typed paths, property enumeration, hidden metadata walkers, runtime expression inspection, implicit persistence, SQL, general-purpose dynamic query strings, automatic schema migration, heap-heavy materialization, or database-specific ISA instructions. Unknown/dynamic schemas must use an explicit `CardView` and field IDs rather than weakening typed paths.
+
+Definition of done: schema-bound structs resolve field IDs/types without runtime name lookup; typed span-based card access and bounded typed cursors work; query IR is verifiable; registered indexes are selected deterministically; full-text and graph results flow through ordinary typed cursors; writes remain explicit; and parity is covered across Python, JavaScript/playground, C VM, and native paths where supported.
 
 ## Scope
 
@@ -78,6 +109,8 @@ PicoScript runs inside picoweb/PIOS as deterministic, bounded userland logic for
 | `tools/catq_plan.c` | dependency-free Qwen3.5/GPT-OSS tensor+activation manifest compiler → executable C-PicoScript CAT-Q plan |
 | `picoscript_metrics.py` | IL/bytecode size, opcode histogram, static + (profiled) dynamic cycle estimates, C/JS backend sizes |
 | `vm/picovm.h` `vm/picovm.c` | portable **C VM** for bare metal (RP2354B/PIOS); freestanding-clean. Native `Req.*`/`Resp.*`, `pv_storage_hook` |
+| `host/pv_host_provider.*` | **Multi-target host providers** (null / Win / POSIX / PIOS) for Time, Random, Environment — see [docs/HOST_PROVIDER.md](docs/HOST_PROVIDER.md) |
+| `host/block/pv_block.*` | **Raw block primitives**: mmap (Win/POSIX) + WALFS LBA (PIOS/sim) — see [docs/BLOCK_PRIMITIVES.md](docs/BLOCK_PRIMITIVES.md) |
 | `vm/picovm_pool.c` `vm/picovm_pool.h` | thread-pooled **native HTTP server** runtime (accept loop, HTTP parse, per-worker arena). See `docs/NATIVE_HTTP_SERVER.md` |
 | `vm/picovm_catq.c` `vm/picovm_catq.h` | dependency-free native CAT-Q tensor/optimization/ternary/shard provider |
 | `vm/picovm_net.c` `vm/picovm_net.h` | optional hosted raw socket provider for PicoScript servers and clients |
@@ -85,7 +118,8 @@ PicoScript runs inside picoweb/PIOS as deterministic, bounded userland logic for
 | `vm/picoc.js` | **In-browser compiler**: all four frontends → bytecode (byte-identical to Python) |
 | `vm/pico_hooks.h` `vm/pico_hooks.js` | auto-generated host-hook codes (kept in sync with `picoscript_lang.py`) |
 | `picoserializer.py` `vm/picoserializer.js` | **PicoBinarySerializer** for cards (magic `PSC1`, self-describing, deterministic field order); byte-identical Python/JS pair |
-| `picostore.py` `vm/picostore.js` | **PicoStore**: pack CRUD (create/read/update/patch/delete/all) + **card query language** (`field OP value [AND\|OR ...]`); result-identical Python/JS pair |
+| `picostore.py` `vm/picostore.js` | **PicoStore**: pack CRUD (create/read/update/patch/delete/all) + **card query language** (`NOT`, `AND`, `OR`, comparisons); result-identical Python/JS pair |
+| `picoscript_parquet.py` | Dependency-free Compact-Thrift primitives plus hosted Parquet inspection helpers; native metadata/page decoding remains in progress |
 | `docs/playground.html` | **Playground + language guide**: compile/run/step all four styles live in-browser |
 | `gen_playground.py` | builds `docs/playground.html` from compiled, verified examples |
 | `gen_site.py` | builds the consolidated GitHub Pages site `docs/index.html` (guide, playground, HTTP/TCP simulator, **Cards/Query/Spans** data engine, reference docs) |

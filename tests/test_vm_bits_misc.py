@@ -115,3 +115,27 @@ def test_span_len():
     """Span.Len returns length."""
     src = 'int s = "test"; int n = Span.Len(s); print(n);'
     assert run(src) == [4]
+
+
+def test_span_append_and_status():
+    """Span.Append preserves order and reports success."""
+    src = """
+int left = "ab";
+int right = "CD";
+int joined = Span.Append(left, right);
+Io.Write(joined);
+Io.WriteByte(Status.Last());
+"""
+    vm = PicoVM().run(lower_to_bytecode_safe(compile_c(src)))
+    assert b"".join(vm.output) == b"abCD\x00"
+
+
+def test_span_bounds_set_status():
+    """Invalid span access returns zero and reports INVALID."""
+    src = """
+int s = "a";
+int value = Span.Get(s, 1);
+print(value);
+print(Status.Last());
+"""
+    assert run(src) == [0, 1]

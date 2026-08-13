@@ -56,10 +56,25 @@ The single most important property: **the bytecode is the contract.**
   `tests/test_workflow_frontend.py` validates the Python reference. Canonical
   workflow cases (`array_sum → 100`, `array_filter → 32`) agree across all three.
 
+## Multi-target host providers (Win / Linux-WSL / PIOS)
+
+Host-injected bindings (time, entropy, environment) are **not** baked into the
+VM. They install through `host/pv_host_provider.h`:
+
+| Provider | Use |
+|----------|-----|
+| `pv_host_null()` | Deterministic CI / replay |
+| `pv_host_platform()` | Windows or Linux/WSL hosted |
+| `pv_host_pios()` | PIOS kernel IPC skeleton |
+
+See [HOST_PROVIDER.md](HOST_PROVIDER.md). Pure hooks remain in `picovm.c` and
+are identical on every target.
+
 ## Where to start
 
 - **Play:** `docs/playground.html` — write in any surface (including the visual
   **Workflow** designer), compile, run, and step through the bytecode.
 - **Language:** [LANGUAGE_SPEC.md](../LANGUAGE_SPEC.md), [PRIMITIVES.md](PRIMITIVES.md), [HOOK_REFERENCE.md](HOOK_REFERENCE.md).
+- **Host providers:** [HOST_PROVIDER.md](HOST_PROVIDER.md).
 - **Workflow dialect:** [WORKFLOW_DIALECT.md](WORKFLOW_DIALECT.md).
 - **What's next:** [ROADMAP.md](ROADMAP.md).

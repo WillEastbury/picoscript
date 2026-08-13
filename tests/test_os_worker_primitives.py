@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import shutil
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,7 +31,7 @@ def _run_py(src):
 def _run_js(src):
     words = lower_to_bytecode_safe(compile_c(src))
     inp = f"{len(words)}\n" + "\n".join(f"{w:08x}" for w in words) + "\n"
-    r = subprocess.run(["node", os.path.join(VM_DIR, "picovm_run.js")],
+    r = subprocess.run([shutil.which("node") or r"C:\Program Files\nodejs\node.exe", os.path.join(VM_DIR, "picovm_run.js")],
                        input=inp, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     for line in r.stdout.splitlines():
@@ -284,3 +285,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

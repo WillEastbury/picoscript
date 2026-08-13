@@ -108,22 +108,24 @@ def test_net_type_empty_string():
         cv1('Net.Type("");')
 
 
-def test_net_listen_unhandled():
-    """Net.Listen() is in NAMESPACE_MAP but not in _compile_net dispatch → SyntaxError (line 2333)."""
-    with pytest.raises(SyntaxError, match="[Uu]nknown Net method"):
+def test_net_listen_requires_register_abi():
+    with pytest.raises(SyntaxError, match="requires two input registers and one destination register"):
         cv1("Net.Listen();")
 
 
-def test_net_accept_unhandled():
-    """Net.Accept() → SyntaxError (line 2333)."""
-    with pytest.raises(SyntaxError, match="[Uu]nknown Net method"):
+def test_net_accept_requires_register_abi():
+    with pytest.raises(SyntaxError, match="requires two input registers and one destination register"):
         cv1("Net.Accept();")
 
 
-def test_net_shutdown_unhandled():
-    """Net.Shutdown() → SyntaxError."""
-    with pytest.raises(SyntaxError):
+def test_net_shutdown_requires_register_abi():
+    with pytest.raises(SyntaxError, match="requires two input registers and one destination register"):
         cv1("Net.Shutdown();")
+
+
+def test_net_raw_hooks_compile_with_register_arguments():
+    words = Compiler().compile("Net.Listen(R0, R1, R2);\nNet.Accept(R2, R1, R0);\nNet.Shutdown(R0, R1, R2);")
+    assert words
 
 
 def test_net_register_unhandled():

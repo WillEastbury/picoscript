@@ -193,9 +193,9 @@ support) is what has now changed.
 ## Host namespace / runtime parity — a different axis entirely
 
 Separately from *frontend/grammar* parity above, `docs/NAMESPACE_STATUS.md`
-documents namespace/method gaps across the **five execution paths** (Python
-VM, JS VM, C VM, native-C transpile, native-JS transpile) — this is a runtime
-capability question, not a surface-syntax one:
+documents namespace/method gaps across the **three VMs and two transpilation
+targets** (Python/JS/C VMs plus native-C and native-JS output) — this is a
+runtime capability question, not a surface-syntax one:
 - **External nondeterministic state** (`DateTime.Now`, `Environment.*`,
   `Maths.Random`, live `Context.*`) is host-injected by design, not a VM
   primitive gap.
@@ -203,7 +203,8 @@ capability question, not a surface-syntax one:
   has no native 64-bit integers.
 - **3-argument ops** (`Clamp`, `Lerp`) are ABI-limited (2-in/1-out host
   hooks) rather than missing outright.
-- Everything else marked "pure" in that doc is confirmed on all five paths.
+- Everything else marked "pure" in that doc is confirmed across the supported
+  VM and transpilation-target paths.
 
 ## Update: the exception engine is now real
 
@@ -219,19 +220,13 @@ for loading a label's address as a value). Scope actually delivered:
   byte-identical bytecode, so implementing this once at the IL/bytecode
   layer covers both). Nested try/except, genuine VM faults, and script-level
   `Raise` are all covered by `tests/test_exception_engine.py`.
-- **Still not done, and explicitly rejected rather than silently
-  mis-compiled**: the native C transpile (`lower_to_c`) and native JS
-  transpile (`lower_to_js`) backends — neither has a PC-addressable /
-  fault-catching model compatible with this mechanism yet (see
-  `docs/EXCEPTION_ENGINE.md`'s "Scope" section for why). Feeding a program
-  using `TryExcept`/`Raise` to `--as c` or `--as js` (native) now raises a
-  clear `ValueError` naming the limitation, instead of emitting silently
-  wrong code.
-- **Still not done**: propagating `TRY`/`EXCEPT`/`RAISE`/`ON` grammar to
-  English/COBOL/Report/Functional, or building `TryExcept`/`Raise`/`OnBlock`
-  support in the JS `BLowerer` (`vm/picoc.js`) — this remains a real,
-  separate task (see point 4 below, which is otherwise unchanged: the JS
-  compiler still can't parse or lower these at all, from any dialect).
+- **Native transpilation is supported**: `lower_to_c` uses structured
+  `goto`/label output with explicit raise propagation, while `lower_to_js`
+  uses JavaScript exception handling. Both are covered by the native exception
+  tests described in `docs/EXCEPTION_ENGINE.md`.
+- **Frontend coverage remains separate**: propagating
+  `TRY`/`EXCEPT`/`RAISE`/`ON` grammar to every extended dialect, and supporting
+  those constructs in the browser compiler, remain separate frontend tasks.
 
 ## Bottom line
 

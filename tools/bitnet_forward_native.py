@@ -13,7 +13,9 @@ scheduler) drives PicoScript-compiled kernels over a model in arena memory.
 from __future__ import annotations
 
 import ctypes
+import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 
@@ -63,8 +65,23 @@ def _build_dll():
         f.write(lower_to_c(il, func_name="pico_matvec", emit_main=False))
     with open(shim, "w", encoding="utf-8") as f:
         f.write(SHIM)
-    cmd = [sys.executable, "-m", "ziglang", "cc", "-O3", "-shared", f"-I{VM_DIR}",
-           entry, shim, os.path.join(VM_DIR, "picovm.c"), "-o", dll]
+    zig = shutil.which("zig")
+    clang = shutil.which("clang") or (r"C:\Program Files\LLVM\bin\clang.exe"
+                                      if os.path.isfile(r"C:\Program Files\LLVM\bin\clang.exe") else None)
+    if zig:
+        cmd = [zig, "cc"]
+    elif importlib.util.find_spec("ziglang") is not None:
+        cmd = [sys.executable, "-m", "ziglang", "cc"]
+    elif clang:
+        cmd = [clang]
+    else:
+        raise RuntimeError("native BitNet build requires Zig or Clang")
+    cmd += ["-O3", "-shared"]
+    if os.name == "nt": cmd += ["-msse4.2"]
+    cmd += [f"-I{VM_DIR}", entry, shim,
+            os.path.join(VM_DIR, "picovm.c"), os.path.join(VM_DIR, "picovm_emu.c"),
+            os.path.join(VM_DIR, "picovm_crypto_ext.c"),
+            os.path.join(ROOT, "host", "pv_auth_store.c"), "-o", dll]
     r = subprocess.run(cmd, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     _DLL_PATH = dll

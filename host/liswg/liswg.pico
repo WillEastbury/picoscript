@@ -1,0 +1,99 @@
+/* liswg.pico -- deterministic scalar LISWG substrate.
+ *
+ * This module deliberately depends only on public PicoWAL functions from
+ * picowal.pico. Amplitudes and graph weights are signed Q14 integers. The
+ * first implementation exposes inspectable ingress and one-hop wavefront
+ * operations; topology learning and sparse egress build on the same storage
+ * boundary without gaining direct host access. Q14 keeps unity (16384)
+ * representable as a positive PicoScript immediate on every lowering path.
+ */
+
+int liswg_ingress_count(int document_pack, int field, int token) {
+    return pw_fulltext_find(document_pack, field, token, 1, 0);
+}
+
+int liswg_ingress_document(int index) {
+    return pw_fulltext_result(index);
+}
+
+/* Memory.* is byte-addressed. Pack signed graph amplitudes explicitly so the
+ * diagnostic surface does not silently truncate Q14 values. */
+int liswg_memory_set_i32(int address, int value) {
+    Memory.Set(address, value);
+    Memory.Set(address + 1, value >> 8);
+    Memory.Set(address + 2, value >> 16);
+    Memory.Set(address + 3, value >> 24);
+    return value;
+}
+
+int liswg_memory_get_i32(int address) {
+    return Memory.Get(address) |
+           (Memory.Get(address + 1) << 8) |
+           (Memory.Get(address + 2) << 16) |
+           (Memory.Get(address + 3) << 24);
+}
+
+/* Propagate one source into caller-owned Memory arrays. Returns the number of
+ * retained entries. Nodes are written at node_base+i and signed amplitudes at
+ * amplitude_base+i. Negative edges therefore remain inhibitory. */
+/* Initial scalar reference uses unity source/context gain and fixed bounded
+ * diagnostic buffers: nodes at 100, amplitudes at 120. Later multi-hop
+ * orchestration can rewrite those buffers between calls. */
+int liswg_wavefront_hop(int edge_pack, int relation, int source, int capacity) {
+    int count = pw_graph_out(edge_pack, relation, source);
+    int retained = count;
+    if (retained > capacity) { retained = capacity; }
+    int i = 0;
+    while (i < retained) {
+        int node = pw_graph_result_node(i);
+        Memory.Set(100 + i, node);
+        int weight = pw_graph_result_weight(i);
+        /* Unity Q14 source/context makes the first-hop amplitude the signed
+         * edge weight exactly. Store immediately across nested API calls. */
+        liswg_memory_set_i32(120 + i * 4, weight);
+        i = i + 1;
+    }
+    return retained;
+}
+
+int liswg_wavefront_node(int index) {
+    return Memory.Get(100 + index);
+}
+
+int liswg_wavefront_amplitude(int index) {
+    return liswg_memory_get_i32(120 + index * 4);
+}
+
+/* UNKNOWN is an epistemic gate, not a normal competing concept. It opens only
+ * when support is insufficient, contradiction is excessive, or the best two
+ * amplitudes fail to separate by the requested margin. */
+int liswg_unknown_gate(int best, int runner_up, int contradiction,
+                       int independent_support, int minimum_support,
+                       int confidence_margin, int contradiction_limit) {
+    if (independent_support < minimum_support) { return 1; }
+    if (contradiction > contradiction_limit) { return 1; }
+    if (best - runner_up < confidence_margin) { return 1; }
+    return 0;
+}
+
+int liswg_credit_edge(int edge_pack, int relation, int source, int destination,
+                      int source_amplitude, int context_gain,
+                      int reward, int eligibility, int learning_rate) {
+    int weight = pw_graph_weight(edge_pack, relation, source, destination);
+    int contribution = (source_amplitude * weight) / 16384;
+    contribution = (contribution * context_gain) / 16384;
+    int delta = (learning_rate * contribution) / 16384;
+    delta = (delta * reward) / 16384;
+    delta = (delta * eligibility) / 16384;
+    return pw_graph_set_weight(edge_pack, relation, source, destination, weight + delta);
+}
+
+int liswg_diag_wavefront(int node_base, int amplitude_base, int count) {
+    int i = 0;
+    while (i < count) {
+        print(Memory.Get(node_base + i));
+        print(liswg_memory_get_i32(amplitude_base + i * 4));
+        i = i + 1;
+    }
+    return count;
+}

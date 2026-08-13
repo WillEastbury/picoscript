@@ -63,8 +63,10 @@ host/PIOS kernel must supply them (as it does for the request context):
 - `DateTime.Now` / `UtcNow` (and "now" timestamps) — wall clock.
 - `Environment.*` (OS version, CPU count, memory, hostname, timezone, pids,
   elapsed time) — host/OS facts.
-- `Maths.Random` / `RandomRange`, `Crypto.RandomBytes` — entropy. (`Random.U32`
-  is deliberately seeded from clock + a startup offset, i.e. non-deterministic.)
+- `Maths.Random` / `RandomRange`, `Crypto.RandomBytes` — entropy. `Maths.*`
+  random operations use the VM's seeded xorshift stream when no provider is
+  installed; `Random.U32` remains the raw stream operation. Live entropy is
+  provider-backed and capability-gated.
 - `Context.*` (user, remote addr, client cert, headers…) and `Locale` state —
   the live request/connection and host locale.
 

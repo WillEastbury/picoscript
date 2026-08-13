@@ -1,121 +1,62 @@
-# PIOS host-binding contracts — work for the PIOS build agent
+# PIOS host bindings for PicoScript VM
 
-**Audience:** the agent that builds the PIOS kernel / EL1 runtime. The PicoScript VMs
-(`picoscript_vm.py`, `vm/picovm.c`, `vm/picovm.js`) are pure and deterministic; the
-bindings below are **genuinely host-injected** and cannot be implemented in the VM. This
-spec defines their contracts so the kernel can provide them without breaking determinism,
-parity, or the invariants.
+PIOS is not a syscall host. PicoScript host hooks on PIOS are expected to route
+through kernel-owned transports already present in the system:
 
-Guiding rules (from `docs/INVARIANTS.md` and the binding invariants):
-- **"Bindings are not ambient"** (INV-17): every hook here is gated by a capability class;
-  a capsule without the grant faults `PV_FAULT_CAPABILITY`=8 *before* dispatch (already
-  enforced by the VM classifier — the kernel only supplies the implementation).
-- **Hooks are the only outside world** (INV-3) and **every hook has a typed contract**
-  (INV-4) and **typed failures** (INV-18, via the `Status.Last` channel).
-- **Async message ABI**: a binding call is a post to the kernel IPC mailbox/FIFO with an
-  optional sleep on the return FIFO — no syscalls / privilege transitions in the worker.
-- **Deterministic mode** (INV-15): when the capsule runs with an injected seed / frozen
-  clock, these bindings must be replaced by the deterministic providers (seeded RNG,
-  fixed clock, recorded IO) so replay is byte-identical.
-- Every shared object a binding hands back **must declare OWNER, CACHEABILITY, LIFETIME,
-  SYNCHRONIZATION MODEL** (see the per-binding tables).
+- time / timers -> kernel clock / scheduler
+- random -> kernel entropy / DRBG service
+- net -> kernel socket / FIFO reply path
+- http ingress -> existing `uhttp_bridge`
+- x509 / key material -> kernel `x509.c` store and TLS binding path
 
-The VM ships **deterministic stubs** for these today (so tests and replay work); the kernel
-provides the real, capability-gated implementations.
+Current PicoScript C host-provider contract:
 
----
+- `PV_HOOK_CRYPTO_RANDOMBYTES`
+  - source: kernel RNG / deterministic DRBG under policy
+  - hosted status: documented skeleton (`host_status = 1`)
+  - PIOS build status: wired to `crypto_random_bytes`
 
-## 1. Time — `DateTime.*` (capability: `TIME` = 1<<4)
+- `PV_HOOK_NET_LISTEN`, `PV_HOOK_NET_ACCEPT`, `PV_HOOK_NET_READ`,
+  `PV_HOOK_NET_WRITE`, `PV_HOOK_NET_SHUTDOWN`, `PV_HOOK_NET_POOLSIZE`,
+  `PV_HOOK_NET_REGISTER`, `PV_HOOK_NET_RECVSPAN`
+  - source: user-core `sock_*` wrappers over the existing `CORE_NET` FIFO path
+  - hosted status: documented skeleton (`host_status = 1`)
+  - PIOS build status: wired
+  - current shape:
+    - `Listen(port, backlog) -> fd`
+    - `Accept(fd) -> accepted_fd`
+    - `Read(fd, max_bytes) -> span`
+    - `RecvSpan(fd, max_bytes) -> span`
+    - `Write(fd, span) -> bytes_written`
+    - `Shutdown(fd) -> 1|0`
+    - `PoolSize() -> active_udp_socket_count`
+    - `Register(port) -> udp_fd`
+  - `Connect` remains reserved until its VM-side argument contract is fixed
 
-| Hook (example) | in → out | contract |
-|----------------|----------|----------|
-| `DateTime.NowUnix()` | () → int (seconds) | monotone within a request; **frozen** in deterministic mode |
-| `DateTime.NowMillis()` | () → int (ms, Q… raw int) | same source as NowUnix |
-| `DateTime.Format(spanFmt, tsInt)` | (span, int) → span | pure given inputs; no clock read |
+- `PV_HOOK_X509_FETCHCERTIFICATE`, `PV_HOOK_X509_GENERATECSR`,
+  `PV_HOOK_X509_GETCERTINFO`, `PV_HOOK_X509_ISCERTVALID`,
+  `PV_HOOK_X509_GETKEYHANDLE`
+  - source: kernel `x509.c` store and TLS binding state
+  - hosted status: documented skeleton (`host_status = 1`)
+  - PIOS build status: wired
+  - current shape:
+    - `FetchCertificate(_) -> current cert DER span`
+    - `GenerateCSR(common_name) -> CSR DER span`
+    - `GetCertInfo(_) -> current subject string span`
+    - `IsCertValid(_) -> 1|0`
+    - `GetKeyHandle(_) -> key fingerprint`
+  - other `X509.*` hooks remain reserved until a stable opaque-handle contract is defined
 
-- OWNER: kernel clock service. CACHEABILITY: value is a snapshot copy (not a live page).
-  LIFETIME: the returned int is owned by the caller (immutable). SYNC: read-only snapshot,
-  no shared mutable state.
-- Failure: if the clock is unavailable, set `Status.Last = 1` and return 0 (no trap).
-- Determinism: in seeded/replay mode the kernel returns the recorded/frozen value.
+- `PV_HOOK_HTTP_REQUEST .. PV_HOOK_HTTP_RESPBODY`
+  - hosted egress HTTP/TLS should layer on the net + x509 services above
+  - inbound HTTP serving remains the kernel-owned `uhttp_bridge` path
 
-## 2. Randomness — `Maths.Random`/`Maths.RandomRange`, `Crypto.RandomBytes` (capability: `RANDOM` = 1<<2)
+Status code convention for the PIOS path:
 
-| Hook | in → out | contract |
-|------|----------|----------|
-| `Maths.Random()` | () → int (Q16.16 in [0,1)) | from the capsule's RNG stream |
-| `Maths.RandomRange(lo, hi)` | (int, int) → int | uniform in [lo,hi]; lo,hi are register ints |
-| `Crypto.RandomBytes(nInt, dstSpan)` | (int, span) → span | fills a leased span with CSPRNG bytes |
+- `host_status = 0` -> hook handled successfully
+- `host_status = 1` -> provider present but service unavailable / operation failed
+- `host_status = 2` -> bad arguments
+- `host_status = 3` -> reserved / unsupported hook shape
 
-- OWNER: the capsule's RNG stream (per-capsule, seeded at spawn). CACHEABILITY: N/A (values
-  copied out). LIFETIME: returned span is caller-owned (arena). SYNC: the RNG state is
-  per-capsule, single-owner — never shared across cores.
-- Determinism (INV-15): the seed is injectable (`PICOVM_SEED` mirrors this); replay must
-  reproduce the exact stream. The CSPRNG used for `Crypto.RandomBytes` MUST also be seedable
-  in deterministic mode (a deterministic DRBG) so traces replay.
-- **Security**: `Crypto.RandomBytes` must be a CSPRNG in production (not the Maths PRNG).
-
-## 3. Files / persistent storage — `Storage.*` beyond the in-VM card store (capability: `STORAGE` = 1<<3)
-
-The VM has an in-memory card store for tests. Real persistence is the kernel's.
-
-| Hook (example) | in → out | contract |
-|----------------|----------|----------|
-| `Storage.AddCard()` / `Storage.EditCard(id)` | → id / id → id | select/create the current record card |
-| `Storage.SetField/GetField` | field span + value / field span → value | typed field access on the current card |
-| `Storage.QueryCard(querySpan)` / `QueryResult(i)` | query → count / index → id | bounded result set |
-| `Storage.SetSlice(offset,len)` / `ReadSlice(card)` | window + card → span | range read for large/blob cards |
-| `Storage.WriteSlice(card, span)` / `CardLen(card)` | card+span → ok / card → len | range write and length |
-
-- Active-record C-style source (`Order ord = Storage.GetCard(pack,id); ord.qty = 42;`)
-  is compiler sugar over the current-card hooks above; production persistence still
-  comes from the kernel storage service.
-- OWNER: kernel storage service holds the backing pages; the worker gets a **validated
-  lease** (`pooldesc`), never a raw pointer. CACHEABILITY: must match the kernel's mapping
-  attributes for that page — *if the kernel maps it non-cacheable, the worker mapping is
-  non-cacheable too* (no conflicting attributes, ever). LIFETIME: lease is scope-bound —
-  auto-released at handler scope exit or on kernel revoke (INV-8). SYNC: copy-in/copy-out
-  or single-writer lease; no shared mutable file buffer across capsules.
-- Failure: missing card / revoked lease → `Status.Last` typed code, not a magic value.
-
-## 4. Sockets / network — `Net.*` and the `Req`/`Resp` binding (capability: `NET` = 1<<5)
-
-Inbound/outbound bytes are the kernel's message-boundary authority (see
-`docs/PIOS_IO_BINDING.md`, I1). `Net.*` for client sockets:
-
-| Hook (example) | in → out | contract |
-|----------------|----------|----------|
-| `Net.Connect(hostSpan, portInt)` | (span, int) → int conn-id | async: posts CONNECT, sleeps on return FIFO |
-| `Net.Send(connInt, dataSpan)` | (int, span) → int | enqueues a body descriptor; may flush |
-| `Net.Recv(connInt, maxInt)` | (int, int) → span (leased) | pulls a pooldesc; blocks via FIFO |
-| `Net.Close(connInt)` | (int) → () | releases the connection descriptor |
-
-- OWNER: kernel network stack owns sockets + buffers; the worker holds a connection
-  **descriptor** with linear ownership (INV-13 — one owner at a time, moves via FIFO).
-  CACHEABILITY: leased payload spans mirror the kernel's DMA buffer attributes exactly.
-  LIFETIME: connection descriptor released on `Close` or scope exit; **poison + generation
-  bump on release** (any later use faults). SYNC: all socket state changes are **messages**
-  to the kernel (no direct poking of kernel socket fields); barriers are part of the FIFO
-  ABI (INV-17 of the binding spec).
-- No request smuggling: the worker gets a length-bounded body it physically cannot read
-  past (I1). Reorder/seal/phase rules are the kernel's (see `PIOS_IO_BINDING.md`).
-
----
-
-## Cross-cutting requirements
-
-1. **Capability gating is already in the VM** — the kernel must honour the same class bits
-   (`PV_CAP_*` in `vm/picovm.h`, mirrored in Python/JS) so a denied binding faults
-   identically on every path. Adding a new binding ⇒ add its class to the classifier in all
-   three VMs (and bump nothing else).
-2. **Typed failures** — every fallible binding sets the `Status.Last` channel (0=OK and a
-   typed non-zero on failure); never return a magic value the script can't distinguish.
-3. **No hidden allocation in hot bindings** (INV-5) — request-path bindings declare arena
-   use or are forbidden; honour `no_alloc` mode.
-4. **Deterministic providers** — in seeded/replay mode every binding here is swapped for a
-   deterministic implementation so a recorded trace replays byte-for-byte.
-5. **Structured traps** — a fault in a binding carries `code/pc/detail` (INV-25) and the
-   kernel adds `capsule_id`/`binding_id` (see `docs/INV25_PIOS_TRACE.md`).
-
-Until these land, the namespaces above remain VM-side **deterministic stubs**; production
-behaviour is the kernel's to provide under the contracts here.
+This keeps the ABI stable while wiring only the parts that already map cleanly
+onto real PIOS services.

@@ -36,7 +36,7 @@ int s = Maths.Sin(RAD_PER_DEG_Q16 * 90);
 | Namespace | Methods | Notes |
 |-----------|---------|-------|
 | `Memory` | `Set`, `Get`, `ArenaInit`, `ArenaAlloc`, `ArenaReset`, `ArenaStats`, `Peek`, `Poke` | Byte-addressable arena and lower-level memory hooks. Prefer string literals/spans unless byte-by-byte work is the point. |
-| `Span` | `Make`, `Slice`, `Materialize`, `Len`, `Get`, `Append` | A `span` is the byte-array handle. `Slice` is zero-copy; `Materialize` copies into a new contiguous span. `Append` combines two spans, reusing destination capacity when available and otherwise returning a new span with an explicit status. |
+| `Span` | `Make`, `Slice`, `Materialize`, `Len`, `Get`, `Append` | A `span` is an arena handle. `Slice` is a borrowed zero-copy view; `Materialize` and `Append` return arena-owned spans. `Append` preserves the destination bytes followed by the source bytes. Exact-size spans have no spare capacity, so append allocates a new span unless a provider supplies reusable capacity. |
 | `Io` | `Write`, `WriteByte` | Output bytes/spans. |
 
 Example:
@@ -46,6 +46,16 @@ int data = "hello";          // string literal -> UTF-8 span
 print(Span.Len(data));       // 5
 Io.Write(Span.Slice(data, 1));
 ```
+
+`Span.Len(span, out)` returns the byte length and `Span.Get(span, index, out)`
+returns one unsigned byte. Invalid handles and out-of-range indexes return zero
+and set `Status.Last` to `1` (`INVALID`); successful operations set it to `0`.
+`Span.Append(destination, source, out)` returns the resulting span handle and
+sets `Status.Last` to `0` on success, `1` for an invalid handle, or `7`
+(`ALLOC`) when the bounded arena cannot hold the result. The source and
+destination are read before the result is published, so aliasing is safe.
+Handles and arena-backed results remain valid until the enclosing arena is
+rewound or reset.
 
 ## Strings
 

@@ -147,6 +147,36 @@ def test_decompile_python_output():
     assert len(result) > 0
 
 
+def test_decompile_span_hooks_preserves_method_and_arity():
+    """Span decompilers must not render every hook as Span.Slice."""
+    methods = [
+        ("Len", 1, 0, 2),
+        ("Get", 1, 2, 3),
+        ("Materialize", 1, 0, 2),
+        ("Append", 1, 2, 3),
+    ]
+    words = [
+        encode_instruction(
+            OP_NOOP,
+            rd=rd,
+            rs1=rs1,
+            rs2=rs2,
+            imm16=EXT_HOST_HOOK_BASE | HOST_HOOK_CODES[("Span", method)],
+        )
+        for method, rs1, rs2, rd in methods
+    ]
+    csharp = disassemble(words)
+    basic = decompile_basic(words)
+    python = decompile_python(words)
+    for method, _, _, _ in methods:
+        assert f"Span.{method}" in csharp
+        assert f"SPAN {method.upper()}" in basic
+        assert f"span.{method.lower()}" in python
+    assert "Span.Slice" not in csharp
+    assert "SPAN SLICE" not in basic
+    assert "span.slice" not in python
+
+
 def test_decompile_python_indented():
     """decompile_python formats control flow with indentation."""
     c = Compiler()

@@ -1,0 +1,140 @@
+/* picowal.pico -- stable PicoWAL card API for PicoScript's C dialect.
+ *
+ * Values are 32-bit PicoScript integers. Card payloads are span handles and
+ * file positions stay inside the host storage binding, so the language value
+ * model does not need to widen. A host must implement the Storage hooks used
+ * below; the bundled Python, JavaScript, and native file hosts do so.
+ *
+ * Status values intentionally match the portable C behavioural oracle:
+ *   0 OK, 1 INVALID, 2 NOT_FOUND, 3 EXISTS, 4 IO_ERROR,
+ *   5 CORRUPT, 6 FULL, 7 BUFFER_TOO_SMALL, 8 INDEX_INCOMPLETE.
+ */
+
+int pw_open() {
+    if (Storage.Ready()) { return 0; }
+    return 4;
+}
+
+int pw_close() {
+    return Storage.Sync();
+}
+
+int pw_put(int pack, int record, int data, int create_only) {
+    if (pack < 0 || pack > 1023 || record < 0 || record > 4194303) { return 1; }
+    Storage.UsePack(pack);
+    if (create_only && Storage.Exists(record)) { return 3; }
+    return Storage.PutCard(record, data);
+}
+
+int pw_get(int pack, int record) {
+    if (pack < 0 || pack > 1023 || record < 0 || record > 4194303) { return 0; }
+    Storage.UsePack(pack);
+    return Storage.ReadExact(record);
+}
+
+int pw_delete(int pack, int record) {
+    if (pack < 0 || pack > 1023 || record < 0 || record > 4194303) { return 1; }
+    Storage.UsePack(pack);
+    if (Storage.DeleteExact(record)) { return 0; }
+    return 2;
+}
+
+int pw_exists(int pack, int record) {
+    if (pack < 0 || pack > 1023 || record < 0 || record > 4194303) { return 0; }
+    Storage.UsePack(pack);
+    return Storage.Exists(record);
+}
+
+/* Return the smallest live record greater than `after`, or -1 at end. Start
+ * a scan with after=-1. The caller owns iteration state and result storage. */
+int pw_scan(int pack, int after) {
+    if (pack < 0 || pack > 1023) { return -1; }
+    Storage.UsePack(pack);
+    return Storage.ScanNext(after);
+}
+
+int pw_sync() {
+    return Storage.Sync();
+}
+
+int pw_recover() {
+    return Storage.Recover();
+}
+
+/* Rebuildable positional full-text overlay. Modes: 0 OR, 1 AND, 2 phrase,
+ * 3 bounded NEAR. Results are deterministic ascending document ids. */
+int pw_fulltext_upsert(int pack, int document, int field, int text) {
+    Storage.UsePack(pack);
+    Storage.FullTextField(field);
+    return Storage.FullTextUpsert(document, text);
+}
+
+int pw_fulltext_delete(int pack, int document, int field) {
+    Storage.UsePack(pack);
+    Storage.FullTextField(field);
+    return Storage.FullTextDelete(document);
+}
+
+int pw_fulltext_find(int pack, int field, int query, int mode, int near_distance) {
+    Storage.UsePack(pack);
+    Storage.FullTextField(field);
+    Storage.FullTextMode(Bits.Or(Bits.Shl(mode, 16), Bits.And(near_distance, 65535)));
+    return Storage.FullTextFind(query);
+}
+
+int pw_fulltext_result(int index) {
+    return Storage.FullTextResult(index);
+}
+
+/* Signed directed graph overlay. edge_pack selects an independent graph;
+ * relation participates in exact edge identity and adjacency filtering. */
+int pw_graph_add_edge(int edge_pack, int relation, int source, int destination, int weight) {
+    Storage.UsePack(edge_pack);
+    Storage.GraphRelation(relation);
+    Storage.GraphWeightSet(weight);
+    return Storage.GraphAdd(source, destination);
+}
+
+int pw_graph_set_weight(int edge_pack, int relation, int source, int destination, int weight) {
+    return pw_graph_add_edge(edge_pack, relation, source, destination, weight);
+}
+
+int pw_graph_delete_edge(int edge_pack, int relation, int source, int destination) {
+    Storage.UsePack(edge_pack);
+    Storage.GraphRelation(relation);
+    return Storage.GraphDelete(source, destination);
+}
+
+int pw_graph_weight(int edge_pack, int relation, int source, int destination) {
+    Storage.UsePack(edge_pack);
+    Storage.GraphRelation(relation);
+    return Storage.GraphWeight(source, destination);
+}
+
+int pw_graph_out(int edge_pack, int relation, int source) {
+    Storage.UsePack(edge_pack);
+    Storage.GraphRelation(relation);
+    return Storage.GraphOut(source, 0);
+}
+
+int pw_graph_in(int edge_pack, int relation, int destination) {
+    Storage.UsePack(edge_pack);
+    Storage.GraphRelation(relation);
+    return Storage.GraphOut(destination, 1);
+}
+
+int pw_graph_result_node(int index) {
+    return Storage.GraphResultNode(index);
+}
+
+int pw_graph_result_weight(int index) {
+    return Storage.GraphResultWeight(index);
+}
+
+/* Immutable 16 KiB logical-page construction. layout=0 is row encoding and
+ * layout=1 is column encoding. PageData returns the sealed page span. */
+int pw_page_begin(int page, int layout) { return Storage.PageBegin(page, layout); }
+int pw_page_add(int key, int value) { return Storage.PageAdd(key, value); }
+int pw_page_seal() { return Storage.PageSeal(); }
+int pw_page_verify(int page_data) { return Storage.PageVerify(page_data); }
+int pw_page_data() { return Storage.PageData(); }

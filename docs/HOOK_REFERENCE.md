@@ -1,4 +1,4 @@
-# PicoScript Hook Reference (587 hooks, 76 namespaces)
+# PicoScript Hook Reference (660 hooks, 79 namespaces)
 
 Complete reference for all host hooks in the PicoScript 16-opcode ISA.
 Each hook is a deterministic primitive callable from any of the 7 language surfaces.
@@ -7,10 +7,10 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 
 | Metric | Value |
 |--------|-------|
-| Total hooks | 587 |
-| Namespaces | 76 |
+| Total hooks | 660 |
+| Namespaces | 79 |
 | Language surfaces | 7 (C, BASIC, Python, English, COBOL, Report, Functional) |
-| Execution paths | 5 (Python VM, JS VM, C VM, native C, native JS) |
+| Runtime model | 3 VMs (Python, JS, C) plus 2 transpilation targets (native C, native JS) |
 
 ---
 
@@ -62,9 +62,9 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | Span.Make() | 0x0040 | |
 | Span.Slice() | 0x0041 | |
 | Span.Materialize() | 0x0042 | |
-| Span.Len() | 0x0043 | |
-| Span.Get() | 0x0044 | |
-| Span.Append() | 0x0108 | Appends source bytes to destination, reusing capacity or allocating a new span; returns status. |
+| Span.Len() | 0x0043 | Returns length; invalid handles return 0 and set `Status.Last` to `INVALID` (1). |
+| Span.Get() | 0x0044 | Returns an unsigned byte; invalid handles/bounds return 0 and set `Status.Last` to `INVALID` (1). |
+| Span.Append() | 0x0108 | Returns destination bytes followed by source bytes; invalid handles set `INVALID` (1), arena exhaustion sets `ALLOC` (7), and successful calls set 0. |
 
 ### Descriptor.* (6 hooks)
 
@@ -731,6 +731,24 @@ Each hook is a deterministic primitive callable from any of the 7 language surfa
 | CatQ.Ternarize() | 0x0377 | Produce ternary weights. |
 | CatQ.Pack() | 0x0378 | Pack ternary weights and scaling metadata. |
 | CatQ.CalibrateTarget() | 0x038A | Attach a target tensor to a calibration context. |
+
+### Block.* (13 hooks)
+
+| Method | Code | Description |
+|--------|------|-------------|
+| Block.Ready() | 0x03D0 | Test whether the block device is mounted and usable. |
+| Block.BlockSize() | 0x03D1 | Return the device block size in bytes. |
+| Block.SizeLow() | 0x03D2 | Return the low 32 bits of device size. |
+| Block.SizeHigh() | 0x03D3 | Return the high 32 bits of device size. |
+| Block.SetOffset() | 0x03D4 | Set the byte offset using low/high 32-bit registers. |
+| Block.Read() | 0x03D5 | Read a bounded byte span from the current offset. |
+| Block.Write() | 0x03D6 | Write a bounded byte span at the current offset. |
+| Block.Sync() | 0x03D7 | Flush pending device writes. |
+| Block.Resize() | 0x03D8 | Resize the device using low/high 32-bit registers. |
+| Block.SetLba() | 0x03D9 | Set the current logical block address. |
+| Block.ReadBlocks() | 0x03DA | Read a bounded number of whole blocks. |
+| Block.WriteBlocks() | 0x03DB | Write a bounded number of whole blocks. |
+| Block.Status() | 0x03DC | Return the last block-device status code. |
 
 ### Async.* (3 hooks)
 
