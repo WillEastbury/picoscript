@@ -1,6 +1,7 @@
 import pytest
 
-from picoscript_parquet import CompactReader, CompactType, ThriftError, decode_file_metadata
+from picoscript_parquet import (CompactReader, CompactType, FileMetaData, ThriftError,
+                                decode_file_metadata, describe_file_metadata)
 
 
 def test_compact_reader_decodes_fields_lists_and_binary():
@@ -36,3 +37,12 @@ def test_file_metadata_footer_decodes_without_pyarrow():
     assert metadata.version == 1
     assert metadata.num_rows == 2
     assert metadata.created_by == "pico"
+
+
+def test_schema_and_row_group_descriptors_are_bounded():
+    metadata = FileMetaData(
+        1, ({1: 6, 3: 1, 4: b"l", 9: 1},),
+        0, ({2: 12, 3: 4, 6: 10, 1: ({})},), "pico", {},
+    )
+    descriptors = describe_file_metadata(metadata)
+    assert descriptors[0][0].name == "l"

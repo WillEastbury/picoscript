@@ -23,6 +23,23 @@ class FileMetaData:
     raw: dict
 
 
+@dataclass(frozen=True)
+class SchemaDescriptor:
+    name: str
+    physical_type: int | None
+    repetition_type: int | None
+    logical_type: object
+    field_id: int | None
+
+
+@dataclass(frozen=True)
+class RowGroupDescriptor:
+    rows: int
+    total_byte_size: int
+    total_compressed_size: int
+    column_count: int
+
+
 class ParquetError(ValueError):
     pass
 
@@ -237,6 +254,31 @@ def decode_file_metadata(data: bytes) -> FileMetaData:
         )
     except (ThriftError, TypeError, ValueError) as exc:
         raise ParquetError("invalid FileMetaData footer") from exc
+
+
+def describe_file_metadata(metadata: FileMetaData):
+    """Expose bounded schema and row-group descriptors from FileMetaData."""
+    schema = []
+    for item in metadata.schema:
+        if not isinstance(item, dict):
+            raise ParquetError("malformed schema element")
+        name = item.get(4, b"")
+        if isinstance(name, bytes):
+            name = name.decode("utf-8", "replace")
+        schema.append(SchemaDescriptor(
+            str(name), item.get(1), item.get(3), item.get(10),
+            item.get(9),
+        ))
+    row_groups = []
+    for item in metadata.row_groups:
+        if not isinstance(item, dict):
+            raise ParquetError("malformed row group")
+        columns = item.get(1, ())
+        row_groups.append(RowGroupDescriptor(
+            int(item.get(3, 0)), int(item.get(2, 0)),
+            int(item.get(6, 0)), len(columns),
+        ))
+    return tuple(schema), tuple(row_groups)
 
 
 def read_rows(path, start=0, limit=None):
