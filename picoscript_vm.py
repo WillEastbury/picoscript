@@ -1348,6 +1348,9 @@ class HostApi:
         self.gpio: Dict[int, dict] = {}   # reference GPIO emulator: pin -> {dir,pull,value}
         self.schemas: Dict[int, bytes] = {}   # per-pack typed-field schema span bytes (0x60/0x61)
         self.blob_cards: Dict[tuple, bytearray] = {}  # (pack, card) -> large-card bytes for slice tests/sim
+        self.db_cursor_id = 0
+        self.db_cursor_ids: List[int] = []
+        self.db_cursor_pos = 0
         self.slice_offset = 0
         self.slice_len = 0
         # Reference DMA-ring emulator (Device.*/Stream.*): deterministic fake ring.
@@ -4256,6 +4259,33 @@ class HostApi:
     def _db(self, vm: "PicoVM", method: str, rd, rs1, rs2) -> bool:
         """Execute the explicit-pack Db CRUD subset over the raw card store."""
         pack = _sx32(vm.regs[rs1])
+        if method == "Query":
+            self.db_cursor_ids = sorted(
+                cid for current_pack, cid in self.blob_cards if current_pack == str(pack)
+            )[:4096]
+            self.db_cursor_pos = 0
+            self.db_cursor_id = 0
+            vm.regs[rd] = len(self.db_cursor_ids)
+            self.host_status = 0
+            return True
+        if method == "Next":
+            if self.db_cursor_pos >= len(self.db_cursor_ids):
+                self.db_cursor_id = 0
+                vm.regs[rd] = 0
+                self.host_status = 3
+            else:
+                self.db_cursor_id = self.db_cursor_ids[self.db_cursor_pos]
+                self.db_cursor_pos += 1
+                vm.regs[rd] = self.db_cursor_id
+                self.host_status = 0
+            return True
+        if method == "Close":
+            self.db_cursor_ids = []
+            self.db_cursor_pos = 0
+            self.db_cursor_id = 0
+            vm.regs[rd] = 1
+            self.host_status = 0
+            return True
         if method == "Insert":
             if pack < 0 or pack > 0x3FF:
                 vm.regs[rd] = 0
@@ -4274,6 +4304,15 @@ class HostApi:
             return method in ("Read", "Insert", "Write", "Update", "Delete", "Patch")
         if method == "Read":
             data = self.blob_cards.get((str(pack), card_id))
+            vm.regs[rd] = self._new_span_bytes(vm, bytes(data)) if data is not None else 0
+            self.host_status = 0 if data is not None else 1
+            return True
+        if method == "CardId":
+            vm.regs[rd] = self.db_cursor_id
+            self.host_status = 0 if self.db_cursor_id else 3
+            return True
+        if method == "Current":
+            data = self.blob_cards.get((str(pack), self.db_cursor_id))
             vm.regs[rd] = self._new_span_bytes(vm, bytes(data)) if data is not None else 0
             self.host_status = 0 if data is not None else 1
             return True

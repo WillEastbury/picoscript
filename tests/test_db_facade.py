@@ -38,3 +38,19 @@ process.stdout.write(String.fromCharCode(...vm.mem.slice(span.ptr, span.ptr + sp
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout == "abc"
+
+
+def test_db_cursor_current_and_card_id():
+    source = """
+int a = Db.Insert(7, "one");
+int b = Db.Insert(7, "two");
+Db.Query(7);
+int first = Db.Next();
+int body = Db.Current(7);
+Io.WriteByte(Db.CardId());
+Io.Write(body);
+int second = Db.Next();
+Io.WriteByte(Db.CardId());
+"""
+    vm = PicoVM().run(lower_to_bytecode_safe(compile_c(source)))
+    assert b"".join(vm.output) == b"\x01one\x02"

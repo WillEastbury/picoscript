@@ -145,6 +145,7 @@ NAMESPACE_MAP = {
         "Field": OP_NOOP, "Const": OP_NOOP, "Eq": OP_NOOP,
         "Where": OP_NOOP, "Select": OP_NOOP, "Order": OP_NOOP,
         "Limit": OP_NOOP, "Execute": OP_NOOP, "Plan": OP_NOOP,
+        "Current": OP_NOOP, "CardId": OP_NOOP,
     },
     "Block": {
         "Ready": OP_NOOP, "BlockSize": OP_NOOP, "SizeLow": OP_NOOP,
@@ -896,6 +897,7 @@ HOST_HOOK_CODES = {
     ("Db", "Field"): 0x0415, ("Db", "Const"): 0x0416, ("Db", "Eq"): 0x0417,
     ("Db", "Where"): 0x0420, ("Db", "Select"): 0x0421, ("Db", "Order"): 0x0422,
     ("Db", "Limit"): 0x0423, ("Db", "Execute"): 0x0424, ("Db", "Plan"): 0x0425,
+    ("Db", "Current"): 0x0426, ("Db", "CardId"): 0x0427,
     # Compatibility aliases used by the PicoWAL source façade. These share the
     # Db durability ABI so older Storage-based programs compile unchanged.
     ("Storage", "Sync"): 0x0406,

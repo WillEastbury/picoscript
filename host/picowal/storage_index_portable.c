@@ -22,6 +22,8 @@ static uint32_t g_results[PW_SCRIPT_MAX_RESULTS];
 static int32_t g_weights[PW_SCRIPT_MAX_RESULTS];
 static uint32_t g_result_count;
 static int32_t g_last_access = 5; /* 1 HASH, 2 ORDERED, 3 FULLTEXT, 4 GRAPH, 5 SCAN */
+static uint32_t g_cursor_index;
+static int32_t g_cursor_card;
 static uint32_t g_next_event;
 static uint8_t g_loaded;
 static uint8_t g_field;
@@ -134,7 +136,7 @@ void pwf_portable_indexes_init(void)
     memset(g_results,0,sizeof(g_results)); memset(g_weights,0,sizeof(g_weights));
     memset(g_fts_lens,0,sizeof(g_fts_lens)); memset(g_graphs,0,sizeof(g_graphs));
     memset(g_fts_pack,0,sizeof(g_fts_pack)); memset(g_fts_field,0,sizeof(g_fts_field));
-    g_result_count=0; g_last_access=5; g_field=0; g_mode=0; g_next_event=0; g_loaded=0;
+    g_result_count=0; g_last_access=5; g_cursor_index=0; g_cursor_card=0; g_field=0; g_mode=0; g_next_event=0; g_loaded=0;
 }
 
 static int hook_fts(pv_ctx *ctx,int hook,int rd,int rs1,int rs2)
@@ -223,11 +225,30 @@ static int hook_db_query(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         /* Query handle currently carries a legacy query-span handle.  This
          * deliberately reuses the Storage parser until the structured plan
          * serializer is enabled by the host. */
-        g_last_access = 5;
+        g_last_access = 5; g_cursor_index = 0; g_cursor_card = 0;
         return pv_storage_file_hook(ctx, 0x67, rd, rs1, rs2);
     }
     if (hook == PV_HOOK_DB_NEXT) {
-        return pv_storage_file_hook(ctx, 0x6E, rd, rs1, rs2);
+        if (g_cursor_index >= g_result_count) {
+            ctx->regs[rd] = 0; ctx->host_status = 3;
+        } else {
+            g_cursor_card = g_results[g_cursor_index++];
+            ctx->regs[rd] = g_cursor_card; ctx->host_status = 0;
+        }
+        return 1;
+    }
+    if (hook == PV_HOOK_DB_CARDID) {
+        ctx->regs[rd] = g_cursor_card;
+        ctx->host_status = g_cursor_card ? 0 : 3;
+        return 1;
+    }
+    if (hook == PV_HOOK_DB_CURRENT) {
+        ctx->regs[rs1] = g_selected_pack;
+        ctx->regs[rs2] = g_cursor_card;
+        if (!g_cursor_card) {
+            ctx->regs[rd] = 0; ctx->host_status = 3; return 1;
+        }
+        return pv_storage_file_hook(ctx, 0x66, rd, rs1, rs2);
     }
     if (hook == PV_HOOK_DB_BATCH || hook == PV_HOOK_DB_MATERIALIZE) {
         /* Existing result buffer is already bounded and deterministic.  Batch
@@ -260,7 +281,7 @@ static int hook_db_query(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
 }
 int pwf_portable_index_hook(pv_ctx *ctx,int hook,int rd,int rs1,int rs2)
 {
-    if (hook >= PV_HOOK_DB_SEEK && hook <= PV_HOOK_DB_PLAN) {
+    if (hook >= PV_HOOK_DB_SEEK && hook <= PV_HOOK_DB_CARDID) {
         ensure_loaded(ctx);
         if (hook_db_query(ctx,hook,rd,rs1,rs2)) return 1;
     }

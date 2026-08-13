@@ -338,12 +338,39 @@
 #define PV_HOOK_UI_SETVALUE                      0x192
 #define PV_HOOK_UI_SERIALIZE                     0x193
 #define PV_HOOK_STORAGE_SETSLICE                 0x1A0
-#define PV_HOOK_PARQUET_ISVALID                  0x1A0
+#define PV_HOOK_PARQUET_ISVALID                  0x1C8
 #define PV_HOOK_STORAGE_CARDLEN                  0x1A1
-#define PV_HOOK_PARQUET_FOOTERLENGTH             0x1A1
+#define PV_HOOK_PARQUET_FOOTERLENGTH             0x1C9
 #define PV_HOOK_STORAGE_READSLICE                0x1A2
 #define PV_HOOK_STORAGE_WRITESLICE               0x1A3
 #define PV_HOOK_STORAGE_ISUSERPACK               0x1A4
+#define PV_HOOK_STORAGE_PUTCARD                  0x1A5
+#define PV_HOOK_STORAGE_READEXACT                0x1A6
+#define PV_HOOK_STORAGE_DELETEEXACT              0x1A7
+#define PV_HOOK_STORAGE_EXISTS                   0x1A8
+#define PV_HOOK_STORAGE_SCANNEXT                 0x1A9
+#define PV_HOOK_STORAGE_SYNC                     0x1AA
+#define PV_HOOK_STORAGE_RECOVER                  0x1AB
+#define PV_HOOK_STORAGE_FULLTEXTFIELD            0x500
+#define PV_HOOK_STORAGE_FULLTEXTMODE             0x501
+#define PV_HOOK_STORAGE_FULLTEXTUPSERT           0x502
+#define PV_HOOK_STORAGE_FULLTEXTDELETE           0x503
+#define PV_HOOK_STORAGE_FULLTEXTFIND             0x504
+#define PV_HOOK_STORAGE_FULLTEXTRESULT           0x505
+#define PV_HOOK_STORAGE_GRAPHRELATION            0x506
+#define PV_HOOK_STORAGE_GRAPHWEIGHTSET           0x507
+#define PV_HOOK_STORAGE_GRAPHADD                 0x508
+#define PV_HOOK_STORAGE_GRAPHDELETE              0x509
+#define PV_HOOK_STORAGE_GRAPHWEIGHT              0x50A
+#define PV_HOOK_STORAGE_GRAPHOUT                 0x50B
+#define PV_HOOK_STORAGE_GRAPHRESULTNODE          0x50C
+#define PV_HOOK_STORAGE_GRAPHRESULTWEIGHT        0x50D
+#define PV_HOOK_STORAGE_GRAPHPATH                0x50E
+#define PV_HOOK_STORAGE_PAGEBEGIN                0x50F
+#define PV_HOOK_STORAGE_PAGEADD                  0x510
+#define PV_HOOK_STORAGE_PAGESEAL                 0x511
+#define PV_HOOK_STORAGE_PAGEVERIFY               0x512
+#define PV_HOOK_STORAGE_PAGEDATA                 0x513
 #define PV_HOOK_REQ_SETSLICE                     0x1B0
 #define PV_HOOK_REQ_BODYSLICE                    0x1B1
 #define PV_HOOK_REQ_BODYLEN                      0x1B2
@@ -647,6 +674,8 @@
 #define PV_HOOK_DB_LIMIT                         0x423
 #define PV_HOOK_DB_EXECUTE                       0x424
 #define PV_HOOK_DB_PLAN                          0x425
+#define PV_HOOK_DB_CURRENT                       0x426
+#define PV_HOOK_DB_CARDID                        0x427
 
 /* Highest defined host-hook code. The compiler never emits a code above
  * this, so pv_default_host uses it to tell a defined-but-unbound host-

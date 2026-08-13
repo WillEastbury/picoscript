@@ -2607,7 +2607,25 @@
   PicoVM.prototype._db = function (method, rd, rs1, rs2) {
     if (!this._st) this._storage("Ready", 0, 0, 0);
     var st = this._st, pack = this.regs[rs1] | 0, key, id, data;
+    if (!st.cursorIds) { st.cursorIds = []; st.cursorPos = 0; st.cursorId = 0; }
     if (pack < 0 || pack > 0x3FF) { this.regs[rd] = 0; this.hostStatus = 2; return true; }
+    if (method === "Query") {
+      st.cursorIds = Object.keys(st.blobs).map(function (name) {
+        return name.indexOf(String(pack) + ":") === 0 ? Number(name.slice(String(pack).length + 1)) : -1;
+      }).filter(function (value) { return value >= 0; }).sort(function (a, b) { return a - b; }).slice(0, 4096);
+      st.cursorPos = 0; st.cursorId = 0; this.regs[rd] = st.cursorIds.length; this.hostStatus = 0; return true;
+    }
+    if (method === "Next") {
+      if (st.cursorPos >= st.cursorIds.length) { st.cursorId = 0; this.regs[rd] = 0; this.hostStatus = 3; }
+      else { st.cursorId = st.cursorIds[st.cursorPos++]; this.regs[rd] = st.cursorId; this.hostStatus = 0; }
+      return true;
+    }
+    if (method === "CardId") { this.regs[rd] = st.cursorId; this.hostStatus = st.cursorId ? 0 : 3; return true; }
+    if (method === "Current") {
+      data = st.blobs[pack + ":" + st.cursorId];
+      this.regs[rd] = data ? this._newSpanBytes(data) : 0; this.hostStatus = data ? 0 : 3; return true;
+    }
+    if (method === "Close") { st.cursorIds = []; st.cursorPos = 0; st.cursorId = 0; this.regs[rd] = 1; this.hostStatus = 0; return true; }
     if (method === "Insert") {
       id = 1;
       Object.keys(st.blobs).forEach(function (name) {
