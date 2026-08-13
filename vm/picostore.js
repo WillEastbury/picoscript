@@ -100,7 +100,7 @@
     var names = {}, ids = {}, fields = schema.fields.map(function (field, i) {
       if (!field || !field.name) throw new Error("schema field must have a name");
       var id = field.id === undefined ? i + 1 : Number(field.id), name = String(field.name);
-      if (id < 1 || names[name] || ids[id]) throw new Error("schema fields must have unique positive ids and names");
+      if (id < 0 || names[name] || ids[id]) throw new Error("schema fields must have unique non-negative ids and names");
       names[name] = true; ids[id] = true;
       return { id: id, name: name, type: String(field.type || "ANY").toUpperCase(), required: !!field.required };
     });

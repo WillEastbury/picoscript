@@ -27,7 +27,7 @@ import json
 from typing import Callable, Dict, List, Optional, Tuple
 
 from picoserializer import serialize_card, deserialize_card, to_hex, from_hex
-from picoscript_schema import BlobCardView
+from picoscript_schema import BlobCardView, schema_from_struct
 
 DEFAULT_MAX_CARD_BYTES = 4096
 
@@ -353,8 +353,8 @@ class PicoStore:
                 raise ValueError("schema field must have a name")
             name = str(field["name"])
             field_id = int(field.get("id", index + 1))
-            if name in names or field_id in ids or field_id < 1:
-                raise ValueError("schema fields must have unique positive ids and names")
+            if name in names or field_id in ids or field_id < 0:
+                raise ValueError("schema fields must have unique non-negative ids and names")
             names.add(name); ids.add(field_id)
             normalized.append({
                 "id": field_id,
@@ -397,6 +397,19 @@ class PicoStore:
         ))
         self.last_status = STATUS_OK
         return value
+
+    def bind_struct(self, pack, struct_def, *, version=1, migrate=False):
+        """Register or validate a parsed fixed-layout struct as the pack schema."""
+        schema = schema_from_struct(struct_def, pack_id=0, schema_id=0, version=version)
+        fields = [{
+            "id": field.field_id,
+            "name": field.name,
+            "type": field.type,
+            "required": True,
+        } for field in schema.fields]
+        return self.register_schema(
+            pack, {"fields": fields}, version=version, migrate=migrate
+        )
 
     def schema(self, pack):
         raw = self.b.get(self._schema_key(pack))
