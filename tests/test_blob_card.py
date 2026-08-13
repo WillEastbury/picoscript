@@ -2,7 +2,7 @@ import os
 import subprocess
 
 from picostore import PicoStore
-from picoscript_schema import blob_card_schema
+from picoscript_schema import blob_card_schema, generate_struct
 from picoserializer import deserialize_card, serialize_card, to_hex
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -12,6 +12,12 @@ def test_blob_card_schema_and_lazy_view():
     schema = blob_card_schema(7, 1024)
     assert [(field.name, field.field_id, field.offset) for field in schema.fields] == [
         ("id", 0, 0), ("data", 1, 4)
+    ]
+    assert generate_struct(schema, "blobCard").splitlines() == [
+        "struct blobCard {",
+        "    @id(0) int id;",
+        "    @id(1) byte[16777216] data;",
+        "}",
     ]
     store = PicoStore()
     store.create_pack("raw", max_card_bytes=32)
