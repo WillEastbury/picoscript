@@ -55,7 +55,7 @@ def _with_lines(tokens, line=1):
 
 def test_tokenize_rejects_unexpected_char():
     with pytest.raises(SyntaxError, match="unexpected char"):
-        tokenize("@")
+        tokenize("$")
 
 
 def test_parse_stmt_handles_none_attrless_and_unknown_keyword_nodes():
@@ -143,8 +143,10 @@ def test_prefix_incdec_not_and_invalid_target_paths():
     assert any(ins.op == "sub" and ins.dst.name == "x" for ins in il)
     with pytest.raises(SyntaxError, match=r"\+\+/-- requires a variable"):
         Lowerer().eval_incdec(IncDec("++", Num(1), True))
-    with pytest.raises(SyntaxError, match="cannot evaluate"):
-        Lowerer().eval(Unary("~", Num(1)))
+    lowerer = Lowerer()
+    lowerer.eval(Unary("~", Num(1)))
+    assert any(ins.op == "host" and ins.ns == "Bits" and ins.method == "Not"
+               for ins in lowerer.b.insts)
 
 
 def test_local_calls_aliases_print_string_net_header_storage_and_net_errors():
@@ -203,8 +205,7 @@ def test_constant_expression_helpers_cover_success_and_failure_cases():
         lowerer._eval_const_expr(FieldRef("E", "MISSING"))
     with pytest.raises(SyntaxError, match="unsupported unary op '!' in constant expression"):
         lowerer._eval_const_expr(Unary("!", Num(1)))
-    with pytest.raises(SyntaxError, match="unsupported constant expression Bin"):
-        lowerer._eval_const_expr(Bin("^", Num(1), Num(2)))
+    assert lowerer._eval_const_expr(Bin("^", Num(1), Num(2))) == 3
     with pytest.raises(SyntaxError, match="unsupported constant expression"):
         lowerer._eval_const_expr(Str("x"))
 

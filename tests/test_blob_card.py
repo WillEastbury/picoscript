@@ -2,7 +2,8 @@ import os
 import subprocess
 
 from picostore import PicoStore
-from picoscript_schema import blob_card_schema, generate_struct
+from picoscript_cfront import Parser, tokenize
+from picoscript_schema import blob_card_schema, generate_struct, schema_from_struct
 from picoserializer import deserialize_card, serialize_card, to_hex
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,6 +47,23 @@ process.stdout.write(S.toHex(b));
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout == to_hex(encoded)
+
+
+def test_c_struct_annotations_generate_schema_layout():
+    parser = Parser(tokenize("""
+struct User {
+    @id(0) int id;
+    @id(1) text[40] name;
+    @id(2) int flags;
+};
+"""))
+    program = parser.parse_program()
+    schema = schema_from_struct(program[0], pack_id=7, schema_id=9)
+    assert [(field.name, field.field_id, field.offset, field.type) for field in schema.fields] == [
+        ("id", 0, 0, "INT32"),
+        ("name", 1, 4, "TEXT[40]"),
+        ("flags", 2, 44, "INT32"),
+    ]
 
 
 def test_javascript_blob_pack_limit_and_view():

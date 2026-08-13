@@ -28,6 +28,27 @@ def generate_struct(schema, name="Record"):
     return "\n".join(lines)
 
 
+def schema_from_struct(struct_def, pack_id=0, schema_id=0, version=1):
+    """Convert a parsed fixed-layout C struct into a deterministic Schema."""
+    fields = []
+    offset = 0
+    for field in sorted(struct_def.fields, key=lambda item: item.field_id):
+        kind = field.ctype.name.upper()
+        if kind in ("INT", "INT32", "UINT32"):
+            type_name, width = "INT32", 4
+        elif kind in ("BYTE", "BYTES", "CHAR", "UINT8_T", "INT8_T"):
+            type_name, width = "BYTES", 1
+        elif kind == "TEXT":
+            type_name, width = "TEXT", 1
+        else:
+            raise ValueError(f"unsupported fixed struct field type: {field.ctype.name}")
+        if field.count <= 0:
+            raise ValueError("struct field count must be positive")
+        fields.append(Field(field.name, field.field_id, f"{type_name}[{field.count}]" if field.count != 1 else type_name, offset))
+        offset += width * field.count
+    return Schema(int(pack_id), int(schema_id), int(version), tuple(fields))
+
+
 def blob_card_schema(pack_id=0, max_bytes=16 * 1024 * 1024):
     """Return the implicit schema for a schema-less pack."""
     if max_bytes <= 0:

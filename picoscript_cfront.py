@@ -244,7 +244,7 @@ C_ALIASES = {
 
 _TWO = {"==", "!=", "<=", ">=", "&&", "||", "++", "--", "<<", ">>", "->",
         "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="}
-_ONE = set("+-*/%()<>=;,{}.!?:&|^~[]")
+_ONE = set("+-*/%()<>=;,{}.!?:&|^~[]@")
 
 
 @dataclass
@@ -372,7 +372,7 @@ class CType:
         return bool(self.func_params)
 @dataclass
 class StructField:
-    name: str; ctype: CType; count: int = 1; offset: int = 0
+    name: str; ctype: CType; count: int = 1; offset: int = 0; field_id: int = 0
 @dataclass
 class StructDef:
     name: str; fields: list; packed: bool = False
@@ -495,6 +495,7 @@ class Parser:
         self.i = 0
         self.type_names = {
             "int", "var", "void", "char", "short", "long", "signed", "unsigned",
+            "text", "byte", "bytes",
             "bool", "uint8_t", "int8_t", "uint16_t", "int16_t", "uint32_t",
             "int32_t", "uint64_t", "int64_t", "size_t", "uintptr_t",
         }
@@ -664,10 +665,29 @@ class Parser:
         self.expect("{")
         fields = []
         while not self.accept("}"):
+            field_id = len(fields)
+            if self.accept("@"):
+                annotation = self.next().value
+                if annotation != "id":
+                    raise SyntaxError(f"unknown struct annotation @{annotation}")
+                self.expect("(")
+                token = self.next()
+                if token.kind != "num":
+                    raise SyntaxError("@id requires an integer field id")
+                field_id = int(token.value, 0)
+                self.expect(")")
             ft = self.parse_type()
+            prefix_count = 1
+            if self.accept("["):
+                prefix_count = self._eval_array_bound()
+                self.expect("]")
             fn, ft, count = self.parse_declarator(ft)
+            if prefix_count != 1:
+                if count != 1:
+                    raise SyntaxError("struct field has two array bounds")
+                count = prefix_count
             self.expect(";")
-            fields.append(StructField(fn, ft, count))
+            fields.append(StructField(fn, ft, count, field_id=field_id))
         packed = self._packed_attribute() or packed
         alias = self.next().value if self.peek().kind == "id" else None
         self.expect(";")
@@ -1155,7 +1175,8 @@ class Lowerer:
             return self.type_size(self.typedefs[name])
         if name.startswith("struct "):
             return self.layout_struct(name[7:])
-        return {"char": 1, "uint8_t": 1, "int8_t": 1, "bool": 1,
+        return {"char": 1, "byte": 1, "bytes": 1, "text": 1,
+                "uint8_t": 1, "int8_t": 1, "bool": 1,
                 "short": 2, "uint16_t": 2, "int16_t": 2,
                 "uint64_t": 8, "int64_t": 8}.get(name, 4)
 
