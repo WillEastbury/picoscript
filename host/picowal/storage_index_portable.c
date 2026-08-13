@@ -21,6 +21,7 @@ static pw_index_posting_t g_postings[PW_SCRIPT_MAX_POSTINGS];
 static uint32_t g_results[PW_SCRIPT_MAX_RESULTS];
 static int32_t g_weights[PW_SCRIPT_MAX_RESULTS];
 static uint32_t g_result_count;
+static int32_t g_last_access = 5; /* 1 HASH, 2 ORDERED, 3 FULLTEXT, 4 GRAPH, 5 SCAN */
 static uint32_t g_next_event;
 static uint8_t g_loaded;
 static uint8_t g_field;
@@ -133,7 +134,7 @@ void pwf_portable_indexes_init(void)
     memset(g_results,0,sizeof(g_results)); memset(g_weights,0,sizeof(g_weights));
     memset(g_fts_lens,0,sizeof(g_fts_lens)); memset(g_graphs,0,sizeof(g_graphs));
     memset(g_fts_pack,0,sizeof(g_fts_pack)); memset(g_fts_field,0,sizeof(g_fts_field));
-    g_result_count=0; g_field=0; g_mode=0; g_next_event=0; g_loaded=0;
+    g_result_count=0; g_last_access=5; g_field=0; g_mode=0; g_next_event=0; g_loaded=0;
 }
 
 static int hook_fts(pv_ctx *ctx,int hook,int rd,int rs1,int rs2)
@@ -222,6 +223,7 @@ static int hook_db_query(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         /* Query handle currently carries a legacy query-span handle.  This
          * deliberately reuses the Storage parser until the structured plan
          * serializer is enabled by the host. */
+        g_last_access = 5;
         return pv_storage_file_hook(ctx, 0x67, rd, rs1, rs2);
     }
     if (hook == PV_HOOK_DB_NEXT) {
@@ -241,8 +243,7 @@ static int hook_db_query(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         return 1;
     }
     if (hook == PV_HOOK_DB_PLAN) {
-        /* 1 = index-backed result set, 0 = scan/legacy parser fallback. */
-        ctx->regs[rd] = g_result_count ? 1 : 0;
+        ctx->regs[rd] = g_last_access;
         return 1;
     }
     if (hook == PV_HOOK_DB_SEEK) {
@@ -251,6 +252,7 @@ static int hook_db_query(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
         g_result_count = pw_index_exact(&g_index, (uint16_t)g_selected_pack,
                                         (uint8_t)ctx->regs[rs1], value, 4,
                                         g_results, PW_SCRIPT_MAX_RESULTS);
+        g_last_access = 1;
         ctx->regs[rd] = (int32_t)g_result_count;
         return 1;
     }
@@ -278,4 +280,3 @@ int pwf_portable_storage_hook(pv_ctx *ctx,int hook,int rd,int rs1,int rs2)
     if (pwf_portable_index_hook(ctx,hook,rd,rs1,rs2)) return 1;
     return pv_storage_file_hook(ctx,hook,rd,rs1,rs2);
 }
-
