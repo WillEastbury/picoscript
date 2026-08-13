@@ -13,6 +13,16 @@ class ParquetMetadata:
     rows: int = 0
 
 
+@dataclass(frozen=True)
+class FileMetaData:
+    version: int
+    schema: tuple
+    num_rows: int
+    row_groups: tuple
+    created_by: str
+    raw: dict
+
+
 class ParquetError(ValueError):
     pass
 
@@ -205,6 +215,28 @@ def inspect_bytes(data: bytes) -> ParquetMetadata:
 
 def inspect(path):
     return inspect_bytes(Path(path).read_bytes())
+
+
+def decode_file_metadata(data: bytes) -> FileMetaData:
+    """Decode the Compact-Thrift FileMetaData footer without pyarrow."""
+    envelope = bytes(data)
+    if len(envelope) < 12 or envelope[:4] != b"PAR1" or envelope[-4:] != b"PAR1":
+        raise ParquetError("invalid PAR1 envelope")
+    footer_length = struct.unpack_from("<I", envelope, len(envelope) - 8)[0]
+    if footer_length > len(envelope) - 12:
+        raise ParquetError("footer exceeds file envelope")
+    start = len(envelope) - 8 - footer_length
+    try:
+        raw = CompactReader(envelope[start:start + footer_length]).read_value(CompactType.STRUCT)
+        created = raw.get(6, b"")
+        if isinstance(created, bytes):
+            created = created.decode("utf-8", "replace")
+        return FileMetaData(
+            int(raw.get(1, 0)), tuple(raw.get(2, ())), int(raw.get(3, 0)),
+            tuple(raw.get(4, ())), str(created), raw,
+        )
+    except (ThriftError, TypeError, ValueError) as exc:
+        raise ParquetError("invalid FileMetaData footer") from exc
 
 
 def read_rows(path, start=0, limit=None):

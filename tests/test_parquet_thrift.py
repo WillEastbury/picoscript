@@ -1,6 +1,6 @@
 import pytest
 
-from picoscript_parquet import CompactReader, CompactType, ThriftError
+from picoscript_parquet import CompactReader, CompactType, ThriftError, decode_file_metadata
 
 
 def test_compact_reader_decodes_fields_lists_and_binary():
@@ -21,3 +21,18 @@ def test_compact_reader_rejects_truncation_and_limits():
         CompactReader(b"\x55").read_value(CompactType.STRUCT)
     with pytest.raises(ThriftError):
         CompactReader(b"\x81\x80\x80\x80\x80\x01", max_binary=2).read_value(CompactType.STRUCT)
+
+
+def test_file_metadata_footer_decodes_without_pyarrow():
+    thrift = bytes([
+        0x51, 0x02,             # version = 1
+        0x62, 0x04,             # num_rows = 2
+        0x83, 0x04,             # field 6, binary length 4
+        0x70, 0x69, 0x63, 0x6F,
+        0x00,
+    ])
+    envelope = b"PAR1" + thrift + len(thrift).to_bytes(4, "little") + b"PAR1"
+    metadata = decode_file_metadata(envelope)
+    assert metadata.version == 1
+    assert metadata.num_rows == 2
+    assert metadata.created_by == "pico"
