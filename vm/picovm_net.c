@@ -30,6 +30,8 @@ typedef int pv_socket_t;
 
 static pv_socket_t pv_net_sockets[PV_NET_MAX_SOCKETS];
 static uint8_t pv_net_used[PV_NET_MAX_SOCKETS];
+static struct sockaddr_in pv_net_peers[PV_NET_MAX_SOCKETS];
+static uint8_t pv_net_peer_valid[PV_NET_MAX_SOCKETS];
 static int pv_net_ready;
 
 static int pv_net_cancelled(pv_ctx *ctx, int rd)
@@ -137,6 +139,7 @@ void pv_net_socket_cleanup(void)
         if (pv_net_used[i]) {
             pv_close_socket(pv_net_sockets[i]);
             pv_net_used[i] = 0;
+            pv_net_peer_valid[i] = 0;
         }
     }
 #ifdef _WIN32
@@ -256,6 +259,130 @@ int pv_net_socket_hook(pv_ctx *ctx, int hook, int rd, int rs1, int rs2)
 #endif
         pv_close_socket(sock);
         pv_net_used[a] = 0;
+        pv_net_peer_valid[a] = 0;
+        ctx->regs[rd] = 1;
+        ctx->host_status = 0;
+        return 1;
+    }
+    if (hook == PV_HOOK_NET_DATAGRAMBIND) {
+        struct sockaddr_in addr;
+        int yes = 1;
+        sock = socket(AF_INET, SOCK_DGRAM, 0);
+        if (sock == PV_INVALID_SOCKET) goto fail_scalar;
+        pv_net_timeout(sock, ctx->net_request.timeout_ms);
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&yes, sizeof(yes));
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        addr.sin_port = htons((uint16_t)(a < 0 ? 0 : a));
+        if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+            pv_close_socket(sock);
+            goto fail_scalar;
+        }
+        {
+            int handle = pv_net_put(sock);
+            if (!handle) {
+                pv_close_socket(sock);
+                goto fail_scalar;
+            }
+            pv_net_peer_valid[handle] = 0;
+            ctx->regs[rd] = handle;
+            ctx->host_status = 0;
+            return 1;
+        }
+    }
+    if (hook == PV_HOOK_NET_DATAGRAMRECV) {
+        struct sockaddr_in peer;
+#ifdef _WIN32
+        int peer_len = (int)sizeof(peer);
+#else
+        socklen_t peer_len = (socklen_t)sizeof(peer);
+#endif
+        int32_t max_bytes;
+        int got;
+        uint32_t base;
+        sock = pv_net_get(a);
+        if (sock == PV_INVALID_SOCKET || !ctx->mem || ctx->no_alloc)
+            goto fail_span;
+        pv_net_timeout(sock, ctx->net_request.timeout_ms);
+        base = ctx->arena_top;
+        if (base > (uint32_t)ctx->mem_size)
+            goto fail_span;
+        max_bytes = b > 0 ? b : 65536;
+        if (ctx->net_request.max_read_bytes > 0 &&
+            (uint32_t)max_bytes > ctx->net_request.max_read_bytes)
+            max_bytes = (int32_t)ctx->net_request.max_read_bytes;
+        if ((uint32_t)max_bytes > (uint32_t)ctx->mem_size - base)
+            max_bytes = (int32_t)((uint32_t)ctx->mem_size - base);
+        got = recvfrom(sock, (char *)(ctx->mem + base), max_bytes, 0,
+                       (struct sockaddr *)&peer, &peer_len);
+        if (got < 0)
+            goto fail_span;
+        pv_net_peers[a] = peer;
+        pv_net_peer_valid[a] = 1;
+        ctx->regs[rd] = pv_net_finish_span(ctx, base, got);
+        ctx->host_status = ctx->regs[rd] ? 0 : 1;
+        return 1;
+    }
+    if (hook == PV_HOOK_NET_DATAGRAMPEER) {
+        uint32_t base;
+        sock = pv_net_get(a);
+        if (sock == PV_INVALID_SOCKET || !pv_net_peer_valid[a] ||
+            !ctx->mem || ctx->no_alloc)
+            goto fail_span;
+        base = ctx->arena_top;
+        if (base > (uint32_t)ctx->mem_size ||
+            (uint32_t)ctx->mem_size - base < 6U)
+            goto fail_span;
+        memcpy(ctx->mem + base, &pv_net_peers[a].sin_addr.s_addr, 4U);
+        memcpy(ctx->mem + base + 4U, &pv_net_peers[a].sin_port, 2U);
+        ctx->regs[rd] = pv_net_finish_span(ctx, base, 6);
+        ctx->host_status = ctx->regs[rd] ? 0 : 1;
+        return 1;
+    }
+    if (hook == PV_HOOK_NET_DATAGRAMSETPEER) {
+        const uint8_t *ptr;
+        int32_t len;
+        struct sockaddr_in peer;
+        sock = pv_net_get(a);
+        if (sock == PV_INVALID_SOCKET || !pv_net_span(ctx, b, &ptr, &len) ||
+            len != 6)
+            goto fail_scalar;
+        memset(&peer, 0, sizeof(peer));
+        peer.sin_family = AF_INET;
+        memcpy(&peer.sin_addr.s_addr, ptr, 4U);
+        memcpy(&peer.sin_port, ptr + 4U, 2U);
+        pv_net_peers[a] = peer;
+        pv_net_peer_valid[a] = 1;
+        ctx->regs[rd] = 1;
+        ctx->host_status = 0;
+        return 1;
+    }
+    if (hook == PV_HOOK_NET_DATAGRAMSEND) {
+        const uint8_t *ptr;
+        int32_t len;
+        sock = pv_net_get(a);
+        if (sock == PV_INVALID_SOCKET || !pv_net_peer_valid[a] ||
+            !pv_net_span(ctx, b, &ptr, &len))
+            goto fail_scalar;
+        {
+            int sent = sendto(sock, (const char *)ptr, len, 0,
+                              (const struct sockaddr *)&pv_net_peers[a],
+                              sizeof(pv_net_peers[a]));
+            if (sent < 0)
+                goto fail_scalar;
+            ctx->regs[rd] = sent;
+            ctx->host_status = 0;
+            return 1;
+        }
+    }
+    if (hook == PV_HOOK_NET_DATAGRAMCLOSE) {
+        sock = pv_net_get(a);
+        if (sock == PV_INVALID_SOCKET)
+            goto fail_scalar;
+        pv_close_socket(sock);
+        pv_net_used[a] = 0;
+        pv_net_peer_valid[a] = 0;
         ctx->regs[rd] = 1;
         ctx->host_status = 0;
         return 1;

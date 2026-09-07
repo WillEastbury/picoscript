@@ -1374,7 +1374,9 @@ uint32_t pv_hook_cap(int hook)
     if (hook >= 0x2B0 && hook <= 0x2B3) return PV_CAP_CAPSULE_EXEC; /* Capsule.* */
     if (hook >= 0x370 && hook <= 0x37B) return PV_CAP_DEVICE;  /* Tensor host/CatQ/Async */
     if (hook >= 0x37C && hook <= 0x37D) return PV_CAP_STORAGE; /* Shard.* */
-    if ((hook >= 0x2E0 && hook <= 0x2E6) || (hook >= 0x37E && hook <= 0x380)) return PV_CAP_NET; /* Net.* */
+    if ((hook >= 0x2E0 && hook <= 0x2E6) ||
+        (hook >= 0x37E && hook <= 0x380) ||
+        (hook >= 0x38B && hook <= 0x390)) return PV_CAP_NET; /* Net.* */
     if (hook >= 0x360 && hook <= 0x36A) return PV_CAP_DEVICE; /* Media.* */
     if (hook == 0x381) return PV_CAP_DEVICE; /* BitLinear.MatVecCatQ */
     if (hook >= 0x382 && hook <= 0x386) return PV_CAP_DEVICE; /* Tensor F32 ops */
@@ -2803,9 +2805,12 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         return;
     }
     if ((hook >= PV_HOOK_NET_LISTEN && hook <= PV_HOOK_NET_REGISTER) ||
-        (hook >= PV_HOOK_NET_CONNECT && hook <= PV_HOOK_NET_RECVSPAN)) {
+        (hook >= PV_HOOK_NET_CONNECT && hook <= PV_HOOK_NET_RECVSPAN) ||
+        (hook >= PV_HOOK_NET_DATAGRAMBIND && hook <= PV_HOOK_NET_DATAGRAMCLOSE)) {
         if (pv_net_hook && pv_net_hook(ctx, hook, rd, rs1, rs2)) return;
-        ctx->regs[rd] = (hook == PV_HOOK_NET_READ || hook == PV_HOOK_NET_RECVSPAN)
+        ctx->regs[rd] = (hook == PV_HOOK_NET_READ || hook == PV_HOOK_NET_RECVSPAN ||
+                         hook == PV_HOOK_NET_DATAGRAMRECV ||
+                         hook == PV_HOOK_NET_DATAGRAMPEER)
             ? pv_arena_finish(ctx, 0) : 0;
         ctx->host_status = 1;
         return;
@@ -3101,9 +3106,12 @@ void pv_default_host(pv_ctx *ctx, int hook, int rd, int rs1, int rs2, int imm16)
         return;
     }
     if ((hook >= PV_HOOK_NET_LISTEN && hook <= PV_HOOK_NET_REGISTER) ||
-        (hook >= PV_HOOK_NET_CONNECT && hook <= PV_HOOK_NET_RECVSPAN)) {
+        (hook >= PV_HOOK_NET_CONNECT && hook <= PV_HOOK_NET_RECVSPAN) ||
+        (hook >= PV_HOOK_NET_DATAGRAMBIND && hook <= PV_HOOK_NET_DATAGRAMCLOSE)) {
         if (pv_net_hook && pv_net_hook(ctx, hook, rd, rs1, rs2)) return;
-        ctx->regs[rd] = (hook == PV_HOOK_NET_READ || hook == PV_HOOK_NET_RECVSPAN)
+        ctx->regs[rd] = (hook == PV_HOOK_NET_READ || hook == PV_HOOK_NET_RECVSPAN ||
+                         hook == PV_HOOK_NET_DATAGRAMRECV ||
+                         hook == PV_HOOK_NET_DATAGRAMPEER)
             ? pv_arena_finish(ctx, 0) : 0;
         ctx->host_status = 1;
         return;

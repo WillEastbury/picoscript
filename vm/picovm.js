@@ -3376,6 +3376,7 @@
     "Context.GetRequestId": 1, "Context.GetClientCert": 1, "Context.GetTraceId": 1,
     "Environment.GetOsVersion": 1, "Environment.GetHostname": 1, "Environment.GetTimeZone": 1,
     "Net.Read": 1, "Net.RecvSpan": 1,
+    "Net.DatagramRecv": 1, "Net.DatagramPeer": 1,
     "X509.FetchCertificate": 1, "X509.GenerateCSR": 1, "X509.GenerateKeyPair": 1,
     "X509.GetCertInfo": 1
   };

@@ -393,6 +393,12 @@ NAMESPACE_MAP = {
         "Connect": OP_NOOP,  # Raw socket client connect
         "SendSpan": OP_NOOP, # Send a span over a connected socket
         "RecvSpan": OP_NOOP, # Receive bytes as a span
+        "DatagramBind": OP_NOOP, # Bind a bounded UDP socket
+        "DatagramRecv": OP_NOOP, # Receive one UDP payload
+        "DatagramPeer": OP_NOOP, # Read the last peer endpoint span
+        "DatagramSetPeer": OP_NOOP, # Set the destination endpoint span
+        "DatagramSend": OP_NOOP, # Send to the selected peer
+        "DatagramClose": OP_NOOP, # Close a UDP socket
     },
     "Kernel": {
         "WaitIRQ":       OP_NOOP,  # Host hook surface
@@ -1257,6 +1263,14 @@ HOST_HOOK_CODES = {
     ("Net", "Connect"):          0x037E,   # rs1=host/address span rs2=port rd=conn
     ("Net", "SendSpan"):         0x037F,   # rs1=conn rs2=span            rd=bytes sent
     ("Net", "RecvSpan"):         0x0380,   # rs1=conn rs2=max bytes       rd=span
+    # Bounded UDP/datagram primitives. Endpoint spans are six bytes:
+    # IPv4 address in network order followed by port in network order.
+    ("Net", "DatagramBind"):     0x038B,   # rs1=port                    rd=handle
+    ("Net", "DatagramRecv"):     0x038C,   # rs1=handle rs2=max bytes     rd=payload span
+    ("Net", "DatagramPeer"):     0x038D,   # rs1=handle                   rd=endpoint span
+    ("Net", "DatagramSetPeer"):  0x038E,   # rs1=handle rs2=endpoint span rd=ok
+    ("Net", "DatagramSend"):     0x038F,   # rs1=handle rs2=payload span  rd=bytes sent
+    ("Net", "DatagramClose"):    0x0390,   # rs1=handle                   rd=ok
     # Log.* (0x02F0-0x02F4): deterministic, script-visible tracing/audit log.
     # See docs/LOGGING.md. Append-only {level, message span} table keyed by a
     # monotonic sequence id -- no wall-clock timestamp (host-injected/
