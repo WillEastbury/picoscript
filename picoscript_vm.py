@@ -1162,6 +1162,7 @@ class SocketNetworkProvider:
         self.cancelled = False
         self._next_handle = 1
         self._sockets: Dict[int, object] = {}
+        self._datagram_peers: Dict[int, tuple] = {}
 
     def configure(self, *, timeout_ms=0, max_read_bytes=65536, pool_limit=64):
         self.timeout_ms = max(0, int(timeout_ms))
@@ -1186,6 +1187,7 @@ class SocketNetworkProvider:
         for sock in list(self._sockets.values()):
             sock.close()
         self._sockets.clear()
+        self._datagram_peers.clear()
 
     def call(self, namespace, method, a, b, *, vm, host):
         import socket
@@ -1262,6 +1264,64 @@ class SocketNetworkProvider:
                 return sent
             if method == "Shutdown":
                 sock = self._sockets.pop(int(a), None)
+                if sock is None:
+                    return (1, 0)
+                sock.close()
+                return 1
+            if method == "DatagramBind":
+                if len(self._sockets) >= self.pool_limit:
+                    return (9, 0)
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind((self.bind_host, max(0, int(a))))
+                handle = self._put(sock)
+                if not handle:
+                    sock.close()
+                    return (9, 0)
+                self._datagram_peers[handle] = None
+                return handle
+            if method == "DatagramRecv":
+                sock = self._sockets.get(int(a))
+                if sock is None or int(a) not in self._datagram_peers:
+                    return (1, b"")
+                if self.timeout_ms:
+                    sock.settimeout(self.timeout_ms / 1000.0)
+                try:
+                    payload, peer = sock.recvfrom(min(
+                        max(1, int(b) if int(b) > 0 else self.max_read_bytes),
+                        self.max_read_bytes,
+                    ))
+                except socket.timeout:
+                    return (3, b"")
+                self._datagram_peers[int(a)] = peer
+                return payload
+            if method == "DatagramPeer":
+                peer = self._datagram_peers.get(int(a))
+                if peer is None:
+                    return (4, b"")
+                return socket.inet_aton(peer[0]) + int(peer[1]).to_bytes(2, "big")
+            if method == "DatagramSetPeer":
+                sock = self._sockets.get(int(a))
+                raw = host._span_raw(vm, int(b))
+                if sock is None or int(a) not in self._datagram_peers or len(raw) != 6:
+                    return (1, 0)
+                self._datagram_peers[int(a)] = (
+                    socket.inet_ntoa(bytes(raw[:4])),
+                    int.from_bytes(bytes(raw[4:6]), "big"),
+                )
+                return 1
+            if method == "DatagramSend":
+                sock = self._sockets.get(int(a))
+                peer = self._datagram_peers.get(int(a))
+                payload = host._span_raw(vm, int(b))
+                if sock is None or peer is None or int(a) not in self._datagram_peers:
+                    return (1, 0)
+                if self.timeout_ms:
+                    sock.settimeout(self.timeout_ms / 1000.0)
+                return sock.sendto(bytes(payload), peer)
+            if method == "DatagramClose":
+                sock = self._sockets.pop(int(a), None)
+                self._datagram_peers.pop(int(a), None)
                 if sock is None:
                     return (1, 0)
                 sock.close()
@@ -5095,6 +5155,7 @@ class HostApi:
         ("Context", "GetRequestId"), ("Context", "GetClientCert"), ("Context", "GetTraceId"),
         ("Environment", "GetOsVersion"), ("Environment", "GetHostname"), ("Environment", "GetTimeZone"),
         ("Net", "Read"), ("Net", "RecvSpan"),
+        ("Net", "DatagramRecv"), ("Net", "DatagramPeer"),
         ("X509", "FetchCertificate"), ("X509", "GenerateCSR"), ("X509", "GenerateKeyPair"),
         ("X509", "GetCertInfo"),
     }

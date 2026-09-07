@@ -58,3 +58,26 @@ lane rather than silently returning success without a resource.
 
 HTTP provider work consumes this transport contract rather than defining a
 second socket or timeout model.
+
+## Datagram binding
+
+The providers expose bounded UDP operations:
+
+| Hook | Inputs | Result |
+|---|---|---|
+| `Net.DatagramBind(port)` | local UDP port, `0` for ephemeral | opaque datagram handle |
+| `Net.DatagramRecv(handle, max_bytes)` | handle and receive cap | payload span; records the source peer |
+| `Net.DatagramPeer(handle)` | handle | six-byte endpoint span: IPv4 network-order bytes plus port |
+| `Net.DatagramSetPeer(handle, endpoint)` | handle and endpoint span | `1` on success |
+| `Net.DatagramSend(handle, payload)` | handle and payload span | accepted byte count |
+| `Net.DatagramClose(handle)` | handle | `1` on success |
+
+The endpoint span is exactly four IPv4 bytes followed by a two-byte
+network-order port. Receive lengths are clamped by `max_read_bytes`, and all
+operations use the existing timeout, cancellation, opaque-handle, and
+`Status.Last` rules. Providers must not expose raw socket pointers or reuse a
+closed handle successfully.
+
+DHCP/PXE services can construct an explicit peer endpoint in script. DHCP
+authorization remains script-visible and should default-deny unknown client
+MACs; capture mode may record pending MACs without granting a lease.

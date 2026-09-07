@@ -33,6 +33,15 @@ Current PicoScript C host-provider contract:
     - `Register(port) -> udp_fd`
   - `Connect` remains reserved until its VM-side argument contract is fixed
 
+- `PV_HOOK_NET_DATAGRAMBIND` .. `PV_HOOK_NET_DATAGRAMCLOSE`
+  - source: the same provider-owned UDP socket path, with bounded payload spans
+  - endpoint spans are six bytes: IPv4 network-order address plus network-order port
+  - `DatagramRecv` records the last peer, `DatagramPeer` returns it, and
+  `DatagramSetPeer` selects a destination for `DatagramSend`
+  - DHCP/PXE policy remains in PicoScript: unknown client MACs are denied by
+  default, capture mode records pending MACs, and an explicit allowlist entry
+  is required before a reply/lease is emitted
+
 - `PV_HOOK_X509_FETCHCERTIFICATE`, `PV_HOOK_X509_GENERATECSR`,
   `PV_HOOK_X509_GETCERTINFO`, `PV_HOOK_X509_ISCERTVALID`,
   `PV_HOOK_X509_GETKEYHANDLE`
