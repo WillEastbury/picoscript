@@ -85,6 +85,15 @@ meta-block (WBITS=16, **no** static dictionary, **no** context modeling), with a
 uncompressed meta-block fallback for incompressible data — plus a matching decoder for
 the subset it emits (and uncompressed meta-blocks).
 
+The Python and JavaScript `decode`/`decompress` buffer APIs default to a
+**16 MiB cumulative decoded-output limit**. Python accepts `max_output_size=...`;
+JavaScript accepts the limit as its second argument. Limits must be finite,
+non-negative integers; callers can explicitly request a larger limit. A block
+that would exceed the remaining output budget is rejected before materializing
+it. VM calls instead use the remaining arena capacity and report status `2`
+with an empty span on malformed or over-budget data. These byte limits do not
+turn VM instruction budgets into deadlines within codec host calls.
+
 We deliberately do **not** chase byte-identity with Google's encoder (that would mean
 re-cloning its quality levels, block-splitting search, context-map clustering and the
 122 KiB static dictionary — tens of thousands of lines chasing a moving target). Instead

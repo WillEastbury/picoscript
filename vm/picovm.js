@@ -826,8 +826,16 @@
     for (var i = 0; i < s.len; i++) out[i] = this.mem[s.ptr + i];
     return out;
   };
+  PicoVM.prototype._checkSpanAllocation = function (size) {
+    if (this.noAlloc) throw picoFault(FAULT.ALLOC, this.pc, size, "arena allocation in no-alloc mode");
+    var remaining = this.mem.length - this.arenaTop;
+    if (this.arenaTop < 0 || size > remaining) {
+      throw picoFault(FAULT.ALLOC, this.pc, size, "arena allocation exceeds capacity");
+    }
+    return remaining;
+  };
   PicoVM.prototype._newSpanBytes = function (bytes) {
-    if (this.noAlloc) { var e = new Error("arena allocation in no-alloc mode"); e.fault = 9; e.pc = this.pc | 0; e.detail = bytes.length | 0; throw e; }  // INV-5
+    this._checkSpanAllocation(bytes.length);
     var dst = this.arenaTop; this.arenaTop += bytes.length;
     for (var i = 0; i < bytes.length; i++) this.mem[dst + i] = bytes[i] & 255;
     this.spans.push({ ptr: dst, len: bytes.length });
@@ -1352,8 +1360,10 @@
       this.regs[rd] = this._newSpanBytes(Array.from(PicoBrotli.encode(Uint8Array.from(src)))); return true;
     }
     if (method === "BrotliDecompress") {
-      try { this.regs[rd] = this._newSpanBytes(Array.from(PicoBrotli.decode(Uint8Array.from(src)))); this.host_status = 0; }
-      catch (e) { this.host_status = 2; this.regs[rd] = this._newSpanBytes([]); }
+      var remaining = this._checkSpanAllocation(0), decoded;
+      try { decoded = PicoBrotli.decode(Uint8Array.from(src), remaining); this.host_status = 0; }
+      catch (e) { this.host_status = 2; decoded = []; }
+      this.regs[rd] = this._newSpanBytes(decoded);
       return true;
     }
     if (method === "DeflateCompress" || method === "DeflateDecompress" || method === "GzipCompress" || method === "GzipDecompress") {

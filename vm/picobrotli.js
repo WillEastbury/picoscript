@@ -17,6 +17,7 @@
   "use strict";
 
   var MAX_HUFF_BITS = 15;
+  var MAX_DECODE_BYTES = 16 * 1024 * 1024;
   var HASH_BITS = 15;
   var HASH_SIZE = 1 << HASH_BITS;
   var WIN_SIZE = 1 << 16;
@@ -636,7 +637,11 @@
     return off + extra + 1;
   }
 
-  function decode(input) {
+  function decode(input, maxOutputSize) {
+    if (maxOutputSize === undefined) maxOutputSize = MAX_DECODE_BYTES;
+    if (!Number.isSafeInteger(maxOutputSize) || maxOutputSize < 0) {
+      throw new RangeError("maxOutputSize must be a non-negative safe integer");
+    }
     var data = (input instanceof Uint8Array) ? input : Uint8Array.from(input);
     var r = new BitR(data);
     var out = [];
@@ -658,6 +663,7 @@
       var mlenM1 = r.read(nibbles * 4);
       if (mlenM1 < 0) throw new Error("truncated");
       var mlen = mlenM1 + 1;
+      if (mlen > maxOutputSize - out.length) throw new Error("decoded output exceeds limit");
 
       if (!islast) {
         var isuncompressed = r.read(1);
@@ -716,9 +722,9 @@
         var dist = decodeDistance(r, dc);
         if (dist < 0) throw new Error("bad distance");
         if (dist === 0 || dist > out.length) throw new Error("bad back-distance");
+        if (copyLen > end - out.length) throw new Error("copy overflow");
         var src = out.length - dist;
         for (i = 0; i < copyLen; i++) out.push(out[src + i]);
-        if (out.length > end) throw new Error("copy overflow");
       }
     }
   }

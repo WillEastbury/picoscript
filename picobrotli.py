@@ -15,6 +15,7 @@ from __future__ import annotations
 
 MASK32 = 0xFFFFFFFF
 MAX_HUFF_BITS = 15
+MAX_DECODE_BYTES = 16 * 1024 * 1024
 
 # LZ77 parameters (mirror picobrotli.c)
 HASH_BITS = 15
@@ -894,7 +895,10 @@ def _decode_distance(r, dc):
     return off + extra + 1
 
 
-def decode(data) -> bytes:
+def decode(data, max_output_size: int = MAX_DECODE_BYTES) -> bytes:
+    """Decode with a cumulative output limit, checked before materialization."""
+    if not isinstance(max_output_size, int) or max_output_size < 0:
+        raise ValueError("max_output_size must be a non-negative integer")
     data = bytes(data)
     r = _BitR(data)
     out = bytearray()
@@ -921,6 +925,8 @@ def decode(data) -> bytes:
         if mlen_m1 is None:
             raise ValueError("truncated")
         mlen = mlen_m1 + 1
+        if mlen > max_output_size - len(out):
+            raise ValueError("decoded output exceeds limit")
 
         if not islast:
             isuncompressed = r.read(1)
@@ -984,16 +990,13 @@ def _decode_compressed_meta(r, mlen, out):
             dist = _decode_distance(r, dc)
             if dist is None:
                 raise ValueError("bad distance")
-            if dist == 0 or dist > len(out) or len(out) + copy_len > end + (mlen):
-                # match-copy bounds (mirror copy_match: dist<=pos, pos+len<=cap)
-                pass
             if dist == 0 or dist > len(out):
                 raise ValueError("bad back-distance")
+            if copy_len > end - len(out):
+                raise ValueError("copy overflow")
             src = len(out) - dist
             for i in range(copy_len):
                 out.append(out[src + i])
-            if len(out) > end:
-                raise ValueError("copy overflow")
 
 
 # Public buffer API aliases (parallel to picocompress: compress/decompress)
@@ -1001,5 +1004,5 @@ def compress(data) -> bytes:
     return encode(data)
 
 
-def decompress(data) -> bytes:
-    return decode(data)
+def decompress(data, max_output_size: int = MAX_DECODE_BYTES) -> bytes:
+    return decode(data, max_output_size=max_output_size)

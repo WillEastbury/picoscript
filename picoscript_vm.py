@@ -2024,10 +2024,18 @@ class HostApi:
         s = vm.spans[h]
         return bytes(vm.mem[s["ptr"]:s["ptr"] + s["len"]])
 
-    def _new_span_bytes(self, vm: "PicoVM", data: bytes) -> int:
+    def _check_span_allocation(self, vm: "PicoVM", size: int = 0) -> int:
         if self.no_alloc:                                   # INV-5: hot-path allocation is a fault
-            raise PicoFault(code=9, pc=getattr(vm, "pc", 0), detail=len(data),
+            raise PicoFault(code=9, pc=getattr(vm, "pc", 0), detail=size,
                             message="arena allocation in no-alloc mode")
+        remaining = min(vm.arena_bytes, len(vm.mem)) - vm.arena_top
+        if vm.arena_top < 0 or size > remaining:
+            raise PicoFault(code=9, pc=getattr(vm, "pc", 0), detail=size,
+                            message="arena allocation exceeds capacity")
+        return remaining
+
+    def _new_span_bytes(self, vm: "PicoVM", data: bytes) -> int:
+        self._check_span_allocation(vm, len(data))
         dst = vm.arena_top
         vm.mem[dst:dst + len(data)] = data
         vm.arena_top += len(data)
@@ -2455,9 +2463,10 @@ class HostApi:
         if method == "BrotliCompress":
             vm.regs[rd] = self._new_span_bytes(vm, picobrotli.encode(src)); return True
         if method == "BrotliDecompress":
+            remaining = self._check_span_allocation(vm)
             try:
-                res = picobrotli.decode(src); self.host_status = 0
-            except Exception:  # pragma: no branch — picobrotli raises on bad data
+                res = picobrotli.decode(src, max_output_size=remaining); self.host_status = 0
+            except ValueError:
                 res = b""; self.host_status = 2
             vm.regs[rd] = self._new_span_bytes(vm, res); return True
         # Real DEFLATE (RFC 1951) + gzip (RFC 1952), built into the runtime.
