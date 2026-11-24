@@ -123,6 +123,8 @@ def build_namespace_data():
     from picoscript_vm import PicoVM
 
     def is_impl(ns, method, code):
+        if ns == 'Timer' and method == 'On':
+            return False  # host-delivered event, not a guest-callable hook
         b = ILBuilder()
         d = b.vreg()
         b.host(ns, method, (Imm(0), Imm(0)), dst=d)
@@ -891,7 +893,7 @@ var GROUPS=[
   {name:'AI & Hardware',items:idxList(['AI tensors: matvec + bitlinear','Model block slices'])},
   {name:'Encoding',items:idxList(['Encoding round-trips'])},
   {name:'Functions & Errors',items:idxList(['Testing: PSUnit assertions (Assert.*)','Error handling (try / except)'])},
-  {name:'OS & Web Hooks',items:idxList(['OS-worker: Process + Timer','Base64 + Req.Param (web hooks)'])}
+  {name:'OS & Web Hooks',items:idxList(['OS-worker: Process + Timer','Base64 + Req.Param (web hooks)','Timer.Once/Every: named on Timer.On events'])}
 ];
 function buildGuideTree(){
   var html='';

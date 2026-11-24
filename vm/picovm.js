@@ -3110,14 +3110,14 @@
     if (!this._tmr) this._tmr = { seq: 0, timers: {}, elapsedMs: 0 };
     var t = this._tmr;
     if (ns === "Timer") {
-      if (method === "After") {
+      if (method === "After" || method === "Once") {
         t.seq++; var ms = this.regs[rs1] >>> 0;
-        t.timers[t.seq] = { ms: ms, repeat: false, remaining: ms, active: true };
+        t.timers[t.seq] = { ms: ms, repeat: false, remaining: ms, active: true, eventId: this.regs[rs2] >>> 0 };
         this.regs[rd] = t.seq; return true;
       }
       if (method === "Every") {
         t.seq++; var ms2 = this.regs[rs1] >>> 0;
-        t.timers[t.seq] = { ms: ms2, repeat: true, remaining: ms2, active: true };
+        t.timers[t.seq] = { ms: ms2, repeat: true, remaining: ms2, active: true, eventId: this.regs[rs2] >>> 0 };
         this.regs[rd] = t.seq; return true;
       }
       if (method === "Cancel") {
@@ -3143,10 +3143,14 @@
           while (ti2.remaining <= 0 && ti2.active) {
             fired++;
             e.seq++;
-            e.recs[e.seq] = { type: 100, target: h, data: null, span: 0 };
+            var eventId = ti2.eventId >>> 0;
+            e.recs[e.seq] = { type: eventId ? 0x9162950D : 100, target: eventId || h, data: null, span: 0 };
             e.queue.push(e.seq);
-            if (ti2.repeat) ti2.remaining += ti2.ms;
-            else { ti2.active = false; break; }
+            if (ti2.repeat) {
+              if (!ti2.ms) ti2.active = false;
+              else if (eventId) ti2.remaining += (Math.floor(-ti2.remaining / ti2.ms) + 1) * ti2.ms;
+              else ti2.remaining += ti2.ms;
+            } else { ti2.active = false; break; }
           }
         }
         this.regs[rd] = fired; return true;

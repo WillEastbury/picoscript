@@ -1369,7 +1369,7 @@ uint32_t pv_hook_cap(int hook)
     if (hook >= 0x188 && hook <= 0x193) return PV_CAP_UI;      /* Ui.* */
     if ((hook >= 0x1D0 && hook <= 0x1DF) || (hook >= 0x200 && hook <= 0x20B)) return PV_CAP_STORAGE; /* Search.* over card packs */
     if (hook >= 0x280 && hook <= 0x28B) return PV_CAP_PROCESS; /* Process + Env */
-    if (hook >= 0x290 && hook <= 0x294) return PV_CAP_TIMER;   /* Timer + Scheduler */
+    if (hook >= 0x290 && hook <= 0x295) return PV_CAP_TIMER;   /* Timer + Scheduler */
     if (hook >= 0x2A0 && hook <= 0x2A6) return PV_CAP_PRINCIPAL; /* Principal/Capability/Sandbox */
     if (hook >= 0x2B0 && hook <= 0x2B3) return PV_CAP_CAPSULE_EXEC; /* Capsule.* */
     if (hook >= 0x370 && hook <= 0x37B) return PV_CAP_DEVICE;  /* Tensor host/CatQ/Async */

@@ -474,11 +474,13 @@
 #define PV_HOOK_ENV_SET                          0x289
 #define PV_HOOK_ENV_COUNT                        0x28A
 #define PV_HOOK_ENV_KEY                          0x28B
-#define PV_HOOK_TIMER_AFTER                      0x290
+#define PV_HOOK_TIMER_ONCE                       0x290
+#define PV_HOOK_TIMER_AFTER                      PV_HOOK_TIMER_ONCE
 #define PV_HOOK_TIMER_EVERY                      0x291
 #define PV_HOOK_TIMER_CANCEL                     0x292
 #define PV_HOOK_TIMER_ELAPSED                    0x293
 #define PV_HOOK_SCHEDULER_TICK                   0x294
+#define PV_HOOK_TIMER_ON                         0x295
 #define PV_HOOK_PRINCIPAL_CURRENT                0x2A0
 #define PV_HOOK_PRINCIPAL_HASROLE                0x2A1
 #define PV_HOOK_PRINCIPAL_CLAIMS                 0x2A2

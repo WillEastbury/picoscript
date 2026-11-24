@@ -319,6 +319,18 @@ def _emit_step(step, t, steps, pos, indent, ctx: _Ctx):
     elif t == "WAIT":
         out.append(_pad(indent) + "Timer.After(%s)." % emit_operand(step.get("ms", 0), warnings, "WAIT ms"))
         warnings.append("WAIT: Timer.After schedules but does not block the VM")
+    elif t in ("TIMER_ONCE", "TIMER_EVERY", "TIMER_CANCEL"):
+        if t == "TIMER_CANCEL":
+            call = "Timer.Cancel(%s)" % emit_operand(step.get("handle", 0), warnings, "TIMER_CANCEL handle")
+        else:
+            method = "Once" if t == "TIMER_ONCE" else "Every"
+            delay = emit_operand(step.get("ms", 0), warnings, t + " ms")
+            event = emit_operand(step.get("event", 0), warnings, t + " event")
+            call = "Timer.%s(%s, %s)" % (method, delay, event)
+        if step.get("result"):
+            out.append(_pad(indent) + "Set %s to %s." % (sanitize_id(step["result"]), call))
+        else:
+            out.append(_pad(indent) + call + ".")
     elif t in ("RAISE", "EMIT"):
         ev = emit_operand(step.get("event", 0), warnings, "RAISE event")
         tgt = emit_operand(step.get("target", 0), warnings, "RAISE target") if step.get("target") is not None else "0"
@@ -381,7 +393,7 @@ def _resolve_array(step, indent, ctx: _Ctx, label: str):
 def _emit_on(step, steps, pos, indent, ctx: _Ctx):
     """ON/SUBSCRIBE <event>: drain the Event.* queue and run the handler body for
     each matching event. Lowers to a bounded drain loop over the pending count."""
-    ev = emit_operand(step.get("event", 0), ctx.warnings, "ON event")
+    ev = "-1855810291" if str(step.get("event", "")).lower() == "timer.on" else emit_operand(step.get("event", 0), ctx.warnings, "ON event")
     var = sanitize_id(step.get("var") or "event")
     loop = "_on%d" % ctx.temp_n
     ctx.temp_n += 1
