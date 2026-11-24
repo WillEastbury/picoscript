@@ -283,6 +283,23 @@ BareMetal.WorkflowPico = (() => {
         warnings.push('WAIT: Timer.After schedules but does not block the VM');
         break;
 
+      case 'TIMER_ONCE':
+      case 'TIMER_EVERY':
+      case 'TIMER_CANCEL': {
+        var timerCall;
+        if (type === 'TIMER_CANCEL') {
+          timerCall = 'Timer.Cancel(' + emitOperand(step.handle == null ? 0 : step.handle, warnings, 'TIMER_CANCEL handle') + ')';
+        } else {
+          var method = type === 'TIMER_ONCE' ? 'Once' : 'Every';
+          var ms = emitOperand(step.ms == null ? 0 : step.ms, warnings, type + ' ms');
+          var eventId = emitOperand(step.event == null ? 0 : step.event, warnings, type + ' event');
+          timerCall = 'Timer.' + method + '(' + ms + ', ' + eventId + ')';
+        }
+        if (step.result) out.push(pad(indent) + 'Set ' + sanitizeId(step.result) + ' to ' + timerCall + '.');
+        else out.push(pad(indent) + timerCall + '.');
+        break;
+      }
+
       case 'RAISE':
       case 'EMIT':
         if (step.schema && Array.isArray(step.schema.fields) && step.schema.fields.length) {
@@ -461,7 +478,7 @@ BareMetal.WorkflowPico = (() => {
   }
 
   function emitOn(step, steps, pos, indent, ctx) {
-    var ev = emitOperand(step.event == null ? 0 : step.event, ctx.warnings, 'ON event');
+    var ev = String(step.event || '').toLowerCase() === 'timer.on' ? '-1855810291' : emitOperand(step.event == null ? 0 : step.event, ctx.warnings, 'ON event');
     var v = sanitizeId(step.var || 'event');
     var loop = '_on' + (ctx.tempN++);
     var evid = '_ev' + (ctx.tempN++);
