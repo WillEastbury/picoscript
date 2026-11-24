@@ -530,12 +530,14 @@ NAMESPACE_MAP = {
         "Count": OP_NOOP,
         "Key": OP_NOOP,
     },
-    # Timers and scheduler (0x0290-0x0294)
+    # Timer.On is a host-delivered event name, never a guest-callable hook.
     "Timer": {
+        "Once": OP_NOOP,
         "After": OP_NOOP,
         "Every": OP_NOOP,
         "Cancel": OP_NOOP,
         "Elapsed": OP_NOOP,
+        "On": OP_NOOP,
     },
     "Scheduler": {
         "Tick": OP_NOOP,
@@ -1174,10 +1176,12 @@ HOST_HOOK_CODES = {
     ("Env", "Count"):            0x028A,   # rd=number of env vars
     ("Env", "Key"):              0x028B,   # rs1=index                    rd=key-span
     # Timer (0x0290-0x0293): one-shot and repeating timers.
-    ("Timer", "After"):          0x0290,   # rs1=ms                       rd=handle
+    ("Timer", "After"):          0x0290,   # legacy one-shot alias
+    ("Timer", "Once"):           0x0290,   # rs1=delay ms rs2=event_id    rd=handle
     ("Timer", "Every"):          0x0291,   # rs1=ms                       rd=handle
     ("Timer", "Cancel"):         0x0292,   # rs1=handle                   rd=ok
     ("Timer", "Elapsed"):        0x0293,   # rd=simulated elapsed ms
+    ("Timer", "On"):             0x0295,   # host-delivered EVENT ONLY; guest call forbidden
     # Scheduler (0x0294): deterministic time advancement (test helper).
     ("Scheduler", "Tick"):       0x0294,   # rs1=ms delta                 rd=number of timers fired
     # Principal (0x02A0-0x02A2): identity/role queries.
@@ -2824,6 +2828,8 @@ class Compiler:
           Storage.ReadCard(RpackCtx, Rid, Rout)      -> rs1=RpackCtx, rs2=Rid, rd=Rout
           Storage.QueryCard(RpackCtx, Rquery, Rout)  -> rs1=RpackCtx, rs2=Rquery, rd=Rout
         """
+        if namespace == "Timer" and method == "On":
+            raise SyntaxError("Timer.On is a host-delivered event, not a callable method")
         hook = HOST_HOOK_CODES.get((namespace, method))
         if hook is None:
             raise SyntaxError(f"Unknown {namespace} method: {method}")
