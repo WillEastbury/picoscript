@@ -37,6 +37,10 @@
     var ns = name.slice(0, dot), m = name.slice(dot + 1);
     HOOK_CANON[(ns + "." + m).toLowerCase()] = [ns, m];
   });
+  // 0x290 retains the existing Timer.After spelling for older source. New
+  // programs use Timer.Once(delay_ms, event_id).
+  HOOK_BY_NAME["Timer.After"] = 0x290;
+  HOOK_CANON["timer.after"] = ["Timer", "Once"];
   Object.keys(H.CONTENT_TYPES).forEach(function (v) {
     CT_BY_NAME[H.CONTENT_TYPES[v]] = parseInt(v, 10);
   });
