@@ -479,6 +479,7 @@
 #define PV_HOOK_TIMER_CANCEL                     0x292
 #define PV_HOOK_TIMER_ELAPSED                    0x293
 #define PV_HOOK_SCHEDULER_TICK                   0x294
+#define PV_HOOK_TIMER_ON                         0x295
 #define PV_HOOK_PRINCIPAL_CURRENT                0x2A0
 #define PV_HOOK_PRINCIPAL_HASROLE                0x2A1
 #define PV_HOOK_PRINCIPAL_CLAIMS                 0x2A2
