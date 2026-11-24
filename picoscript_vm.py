@@ -5370,12 +5370,13 @@ class HostApi:
     # -- Timer.*/Scheduler.* timers and deterministic scheduler ---------------
     def _timer_scheduler(self, vm: "PicoVM", ns: str, method: str, rd, rs1, rs2) -> bool:
         if ns == "Timer":
-            if method == "After":
+            if method in ("After", "Once"):
                 self._timer_seq += 1
                 h = self._timer_seq
                 ms = vm.regs[rs1] & MASK32
                 self._timers[h] = {"ms": ms, "repeat": False,
-                                   "remaining": ms, "active": True}
+                                   "remaining": ms, "active": True,
+                                   "event_id": vm.regs[rs2] & MASK32}
                 vm.regs[rd] = h
                 return True
             if method == "Every":
@@ -5383,7 +5384,8 @@ class HostApi:
                 h = self._timer_seq
                 ms = vm.regs[rs1] & MASK32
                 self._timers[h] = {"ms": ms, "repeat": True,
-                                   "remaining": ms, "active": True}
+                                   "remaining": ms, "active": True,
+                                   "event_id": vm.regs[rs2] & MASK32}
                 vm.regs[rd] = h
                 return True
             if method == "Cancel":
@@ -5409,14 +5411,24 @@ class HostApi:
                     t["remaining"] -= delta
                     while t["remaining"] <= 0 and t["active"]:
                         fired += 1
-                        # Inject EVENT_TIMER (type=100) with target=timer_handle
+                        event_id = t.get("event_id", 0)
+                        # Nonzero event IDs are delivered to ON Timer.On.
+                        # Legacy one-argument timers keep EVENT_TIMER(100).
                         self._event_seq += 1
                         ev = self._event_seq
-                        self.events[ev] = {"type": 100, "target": h,
+                        self.events[ev] = {"type": 0x9162950D if event_id else 100,
+                                           "target": event_id if event_id else h,
                                            "data": None, "span": 0}
                         self.event_queue.append(ev)
                         if t["repeat"]:
-                            t["remaining"] += t["ms"]
+                            if t["ms"] == 0:
+                                t["active"] = False
+                            elif event_id:
+                                # Coalesce delayed periodic notifications.
+                                t["remaining"] += (
+                                    ((-t["remaining"]) // t["ms"] + 1) * t["ms"])
+                            else:
+                                t["remaining"] += t["ms"]
                         else:
                             t["active"] = False
                             break
