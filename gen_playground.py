@@ -931,6 +931,20 @@ CONSTRUCTS = [
      "def add(a, b):\n    return a + b\nprint(add(10, 32))",
      None),
 
+    ("Timer.Once/Every: named on Timer.On events",
+     "One-shot, periodic and cancellable generation-owned timers. A nonzero "
+     "event ID is delivered to on Timer.On. Scheduler.Tick only advances the "
+     "reference simulator; PIOS delivers these events via capsvc/AIRQ.",
+     "int handle = Timer.Once(10, 42);\\n"
+     "Scheduler.Tick(10);\\n"
+     "on Timer.On { Io.WriteByte(Event.Target(__event__)); }",
+     "DIM HANDLE = Timer.Once(10,42)\\n"
+     "DIM FIRED = Scheduler.Tick(10)\\n"
+     "ON Timer.On\\n"
+     "  PRINT 42\\n"
+     "END ON",
+     None, None),
+
     ("OS-worker: Process + Timer",
      "Process lifecycle (Self/Spawn/Kill/Status) and deterministic timers "
      "(After/Every/Cancel). Scheduler.Tick advances simulated time and fires "
@@ -1522,7 +1536,7 @@ var GROUPS = [
   {name:'AI & Hardware', items:idxList(['AI tensors: matvec + bitlinear','Model block slices'])},
   {name:'Encoding', items:idxList(['Encoding round-trips'])},
   {name:'Functions & Errors', items:idxList(['Testing: PSUnit assertions (Assert.*)','Error handling (try / except)'])},
-  {name:'OS & Web Hooks', items:idxList(['OS-worker: Process + Timer','Base64 + Req.Param (web hooks)'])}
+  {name:'OS & Web Hooks', items:idxList(['OS-worker: Process + Timer','Base64 + Req.Param (web hooks)','Timer.Once/Every: named on Timer.On events'])}
 ];
 
 function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
