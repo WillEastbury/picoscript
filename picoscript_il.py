@@ -336,6 +336,8 @@ class ILBuilder:
 
     def host(self, ns: str, method: str, args: Tuple[Operand, ...] = (),
              dst: Optional[VReg] = None):
+        if ns.lower() == "timer" and method.lower() == "on":
+            raise SyntaxError("Timer.On is host-delivered only")
         if ns == "CatQ" and method == "CalibrateTarget":
             if len(args) != 3:
                 raise ValueError("CatQ.CalibrateTarget requires input, target, and options")
