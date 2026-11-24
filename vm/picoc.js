@@ -133,7 +133,7 @@
     labelAddr: function (d, l) { this._push(Inst("laddr", { dst: d, label: l })); },
     call: function (l) { this._push(Inst("call", { label: l })); },
     ret: function () { this._push(Inst("ret", {})); },
-    host: function (ns, m, args, d) { this._push(Inst("host", { ns: ns, method: m, args: args || [], dst: d || null })); },
+    host: function (ns, m, args, d) { if (String(ns).toLowerCase() === "timer" && String(m).toLowerCase() === "on") throw new Error("Timer.On is host-delivered only"); this._push(Inst("host", { ns: ns, method: m, args: args || [], dst: d || null })); },
     load: function (d, a) { this._push(Inst("load", { dst: d, imm: a })); },
     save: function (s, a) { this._push(Inst("save", { a: s, imm: a })); },
     pipe: function (s, a) { this._push(Inst("pipe", { a: s, imm: a })); },
