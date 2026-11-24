@@ -935,13 +935,13 @@ CONSTRUCTS = [
      "One-shot, periodic and cancellable generation-owned timers. A nonzero "
      "event ID is delivered to on Timer.On. Scheduler.Tick only advances the "
      "reference simulator; PIOS delivers these events via capsvc/AIRQ.",
-     "int handle = Timer.Once(10, 42);\\n"
-     "Scheduler.Tick(10);\\n"
+     "int handle = Timer.Once(10, 42);\n"
+     "Scheduler.Tick(10);\n"
      "on Timer.On { Io.WriteByte(Event.Target(__event__)); }",
-     "DIM HANDLE = Timer.Once(10,42)\\n"
-     "DIM FIRED = Scheduler.Tick(10)\\n"
-     "ON Timer.On\\n"
-     "  PRINT 42\\n"
+     "DIM HANDLE = Timer.Once(10,42)\n"
+     "DIM FIRED = Scheduler.Tick(10)\n"
+     "ON Timer.On\n"
+     "  PRINT 42\n"
      "END ON",
      None, None),
 
