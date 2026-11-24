@@ -338,6 +338,11 @@ class ILBuilder:
              dst: Optional[VReg] = None):
         if ns.lower() == "timer" and method.lower() == "on":
             raise SyntaxError("Timer.On is host-delivered only")
+        if ns.lower() == "timer" and method.lower() in ("once", "after", "every"):
+            if len(args) == 1:
+                args = tuple(args) + (Imm(0),)  # legacy timer: event ID 0
+            elif len(args) != 2:
+                raise SyntaxError("Timer.Once/Every requires delay and optional event ID")
         if ns == "CatQ" and method == "CalibrateTarget":
             if len(args) != 3:
                 raise ValueError("CatQ.CalibrateTarget requires input, target, and options")
